@@ -1,0 +1,483 @@
+/**
+ * *************************************************************************************
+ *  Copyright (c) 2009 Daniel Svärd <daniel.svard@gmail.com>                             *
+ *  Copyright (c) 2009 Nicolas Raoul <nicolas.raoul@gmail.com>                           *
+ *  Copyright (c) 2009 Andrew <andrewdubya@gmail.com>                                    *
+ *  Copyright (c) 2011 Norbert Nagold <norbert.nagold@gmail.com>                         *
+ *  Copyright (c) 2018 Mike Hardy <mike@mikehardy.net>                                   *
+ *                                                                                       *
+ *  This program is free software; you can redistribute it and/or modify it under        *
+ *  the terms of the GNU General Public License as published by the Free Software        *
+ *  Foundation; either version 3 of the License, or (at your option) any later           *
+ *  version.                                                                             *
+ *                                                                                       *
+ *  This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ *  WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ *  PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                       *
+ *  You should have received a copy of the GNU General Public License along with         *
+ *  this program.  If not, see <http://www.gnu.org/licenses/>.                           *
+ * **************************************************************************************
+ */
+package com.ichi2.libanki;
+
+import android.content.ContentValues;
+import android.database.Cursor;
+import android.database.SQLException;
+import android.database.sqlite.SQLiteDatabase;
+import android.widget.Toast;
+import com.ichi2.anki.AnkiDroidApp;
+import com.ichi2.anki.BuildConfig;
+import com.ichi2.anki.CollectionHelper;
+import com.ichi2.anki.dialogs.DatabaseErrorDialog;
+import com.ichi2.utils.DatabaseChangeDecorator;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.sqlite.db.SupportSQLiteDatabase;
+import androidx.sqlite.db.SupportSQLiteOpenHelper;
+import io.requery.android.database.sqlite.RequerySQLiteOpenHelperFactory;
+import timber.log.Timber;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+/**
+ * Database layer for AnkiDroid. Can read the native Anki format through Android's SQLite driver.
+ */
+@SuppressWarnings({ "PMD.AvoidThrowingRawExceptionTypes" })
+public class DB {
+
+    private static final String[] MOD_SQLS = new String[] { "insert", "update", "delete" };
+
+    /**
+     * may be injected to use a different sqlite implementation - null means use default
+     */
+    private static SupportSQLiteOpenHelper.Factory sqliteOpenHelperFactory = null;
+
+    /**
+     * The collection, which is actually an SQLite database.
+     */
+    private final SupportSQLiteDatabase mDatabase;
+
+    private boolean mMod = false;
+
+    /**
+     * Open a connection to the SQLite collection database.
+     */
+    public DB(String ankiFilename) {
+        SupportSQLiteOpenHelper.Configuration configuration = SupportSQLiteOpenHelper.Configuration.builder(AnkiDroidApp.getInstance()).name(ankiFilename).callback(getDBCallback()).build();
+        SupportSQLiteOpenHelper helper = getSqliteOpenHelperFactory().create(configuration);
+        mDatabase = new DatabaseChangeDecorator(helper.getWritableDatabase());
+        if (!ListenerUtil.mutListener.listen(22053)) {
+            mDatabase.disableWriteAheadLogging();
+        }
+        if (!ListenerUtil.mutListener.listen(22054)) {
+            mDatabase.query("PRAGMA synchronous = 2", null);
+        }
+        if (!ListenerUtil.mutListener.listen(22055)) {
+            mMod = false;
+        }
+    }
+
+    /**
+     * You may swap in your own SQLite implementation by altering the factory here. An
+     * example might be to use the framework implementation. If you set to null, we default
+     * to requery
+     * @param factory connection factory for the desired sqlite implementation, null for requery
+     */
+    public static void setSqliteOpenHelperFactory(@Nullable SupportSQLiteOpenHelper.Factory factory) {
+        if (!ListenerUtil.mutListener.listen(22056)) {
+            sqliteOpenHelperFactory = factory;
+        }
+    }
+
+    private SupportSQLiteOpenHelper.Factory getSqliteOpenHelperFactory() {
+        if (!ListenerUtil.mutListener.listen(22057)) {
+            if (sqliteOpenHelperFactory == null) {
+                return new RequerySQLiteOpenHelperFactory();
+            }
+        }
+        return sqliteOpenHelperFactory;
+    }
+
+    /**
+     * Get the SQLite callback object to use when creating connections - overridable for testability
+     */
+    protected SupportSQLiteOpenHelperCallback getDBCallback() {
+        return new SupportSQLiteOpenHelperCallback(1);
+    }
+
+    /**
+     * The default AnkiDroid SQLite database callback.
+     * We do not handle versioning or connection config using the framework APIs, so those methods
+     * do nothing in our implementation. However, we on corruption events we want to send messages but
+     * not delete the database.
+     */
+    public static class SupportSQLiteOpenHelperCallback extends SupportSQLiteOpenHelper.Callback {
+
+        protected SupportSQLiteOpenHelperCallback(int version) {
+            super(version);
+        }
+
+        public void onCreate(@NonNull SupportSQLiteDatabase db) {
+        }
+
+        public void onUpgrade(@NonNull SupportSQLiteDatabase db, int oldVersion, int newVersion) {
+        }
+
+        /**
+         * Send error message, but do not call super() which would delete the database
+         */
+        public void onCorruption(SupportSQLiteDatabase db) {
+            if (!ListenerUtil.mutListener.listen(22058)) {
+                Timber.e("The database has been corrupted: %s", db.getPath());
+            }
+            if (!ListenerUtil.mutListener.listen(22059)) {
+                AnkiDroidApp.sendExceptionReport(new RuntimeException("Database corrupted"), "DB.MyDbErrorHandler.onCorruption", "Db has been corrupted: " + db.getPath());
+            }
+            if (!ListenerUtil.mutListener.listen(22060)) {
+                CollectionHelper.getInstance().closeCollection(false, "Database corrupted");
+            }
+            if (!ListenerUtil.mutListener.listen(22061)) {
+                DatabaseErrorDialog.databaseCorruptFlag = true;
+            }
+        }
+    }
+
+    /**
+     * Closes a previously opened database connection.
+     */
+    public void close() {
+        try {
+            if (!ListenerUtil.mutListener.listen(22063)) {
+                mDatabase.close();
+            }
+            if (!ListenerUtil.mutListener.listen(22064)) {
+                Timber.d("Database %s closed = %s", mDatabase.getPath(), !mDatabase.isOpen());
+            }
+        } catch (Exception e) {
+            if (!ListenerUtil.mutListener.listen(22062)) {
+                // We may want to propagate it in the future, but for now maintain the old API and log.
+                Timber.e(e, "Failed to close database %s", this.getDatabase().getPath());
+            }
+        }
+    }
+
+    public void commit() {
+    }
+
+    public SupportSQLiteDatabase getDatabase() {
+        return mDatabase;
+    }
+
+    public void setMod(boolean mod) {
+        if (!ListenerUtil.mutListener.listen(22065)) {
+            mMod = mod;
+        }
+    }
+
+    public boolean getMod() {
+        return mMod;
+    }
+
+    // Allows to avoid using new Object[]
+    public Cursor query(String query, Object... selectionArgs) {
+        return mDatabase.query(query, selectionArgs);
+    }
+
+    /**
+     * Convenience method for querying the database for a single integer result.
+     *
+     * @param query The raw SQL query to use.
+     * @return The integer result of the query.
+     */
+    public int queryScalar(String query, Object... selectionArgs) {
+        Cursor cursor = null;
+        int scalar;
+        try {
+            if (!ListenerUtil.mutListener.listen(22068)) {
+                cursor = mDatabase.query(query, selectionArgs);
+            }
+            if (!ListenerUtil.mutListener.listen(22069)) {
+                if (!cursor.moveToNext()) {
+                    return 0;
+                }
+            }
+            scalar = cursor.getInt(0);
+        } finally {
+            if (!ListenerUtil.mutListener.listen(22067)) {
+                if (cursor != null) {
+                    if (!ListenerUtil.mutListener.listen(22066)) {
+                        cursor.close();
+                    }
+                }
+            }
+        }
+        return scalar;
+    }
+
+    public String queryString(String query, Object... bindArgs) throws SQLException {
+        try (Cursor cursor = mDatabase.query(query, bindArgs)) {
+            if (!ListenerUtil.mutListener.listen(22070)) {
+                if (!cursor.moveToNext()) {
+                    throw new SQLException("No result for query: " + query);
+                }
+            }
+            return cursor.getString(0);
+        }
+    }
+
+    public long queryLongScalar(String query, Object... bindArgs) {
+        long scalar;
+        try (Cursor cursor = mDatabase.query(query, bindArgs)) {
+            if (!ListenerUtil.mutListener.listen(22071)) {
+                if (!cursor.moveToNext()) {
+                    return 0;
+                }
+            }
+            scalar = cursor.getLong(0);
+        }
+        return scalar;
+    }
+
+    /**
+     * Convenience method for querying the database for an entire column of long.
+     *
+     * @param query The SQL query statement.
+     * @return An ArrayList with the contents of the specified column.
+     */
+    public ArrayList<Long> queryLongList(String query, Object... bindArgs) {
+        ArrayList<Long> results = new ArrayList<>();
+        try (Cursor cursor = mDatabase.query(query, bindArgs)) {
+            if (!ListenerUtil.mutListener.listen(22073)) {
+                {
+                    long _loopCounter488 = 0;
+                    while (cursor.moveToNext()) {
+                        ListenerUtil.loopListener.listen("_loopCounter488", ++_loopCounter488);
+                        if (!ListenerUtil.mutListener.listen(22072)) {
+                            results.add(cursor.getLong(0));
+                        }
+                    }
+                }
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Convenience method for querying the database for an entire column of String.
+     *
+     * @param query The SQL query statement.
+     * @return An ArrayList with the contents of the specified column.
+     */
+    public ArrayList<String> queryStringList(String query, Object... bindArgs) {
+        ArrayList<String> results = new ArrayList<>();
+        try (Cursor cursor = mDatabase.query(query, bindArgs)) {
+            if (!ListenerUtil.mutListener.listen(22075)) {
+                {
+                    long _loopCounter489 = 0;
+                    while (cursor.moveToNext()) {
+                        ListenerUtil.loopListener.listen("_loopCounter489", ++_loopCounter489);
+                        if (!ListenerUtil.mutListener.listen(22074)) {
+                            results.add(cursor.getString(0));
+                        }
+                    }
+                }
+            }
+        }
+        return results;
+    }
+
+    public void execute(String sql, Object... object) {
+        String s = sql.trim().toLowerCase(Locale.ROOT);
+        if (!ListenerUtil.mutListener.listen(22078)) {
+            {
+                long _loopCounter490 = 0;
+                // mark modified?
+                for (String mo : MOD_SQLS) {
+                    ListenerUtil.loopListener.listen("_loopCounter490", ++_loopCounter490);
+                    if (!ListenerUtil.mutListener.listen(22077)) {
+                        if (s.startsWith(mo)) {
+                            if (!ListenerUtil.mutListener.listen(22076)) {
+                                mMod = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (!ListenerUtil.mutListener.listen(22081)) {
+            if (object == null) {
+                if (!ListenerUtil.mutListener.listen(22080)) {
+                    this.getDatabase().execSQL(sql);
+                }
+            } else {
+                if (!ListenerUtil.mutListener.listen(22079)) {
+                    this.getDatabase().execSQL(sql, object);
+                }
+            }
+        }
+    }
+
+    /**
+     * WARNING: This is a convenience method that splits SQL scripts into separate queries with semicolons (;)
+     * as the delimiter. Only use this method on internal functions where we can guarantee that the script does
+     * not contain any non-statement-terminating semicolons.
+     */
+    public void executeScript(String sql) {
+        if (!ListenerUtil.mutListener.listen(22082)) {
+            mMod = true;
+        }
+        String[] queries = sql.split(";");
+        if (!ListenerUtil.mutListener.listen(22084)) {
+            {
+                long _loopCounter491 = 0;
+                for (String query : queries) {
+                    ListenerUtil.loopListener.listen("_loopCounter491", ++_loopCounter491);
+                    if (!ListenerUtil.mutListener.listen(22083)) {
+                        mDatabase.execSQL(query);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * update must always be called via DB in order to mark the db as changed
+     */
+    public int update(String table, ContentValues values) {
+        return update(table, values, null, null);
+    }
+
+    /**
+     * update must always be called via DB in order to mark the db as changed
+     */
+    public int update(String table, ContentValues values, String whereClause, String[] whereArgs) {
+        if (!ListenerUtil.mutListener.listen(22085)) {
+            mMod = true;
+        }
+        return getDatabase().update(table, SQLiteDatabase.CONFLICT_NONE, values, whereClause, whereArgs);
+    }
+
+    /**
+     * insert must always be called via DB in order to mark the db as changed
+     */
+    public long insert(String table, ContentValues values) {
+        if (!ListenerUtil.mutListener.listen(22086)) {
+            mMod = true;
+        }
+        return getDatabase().insert(table, SQLiteDatabase.CONFLICT_NONE, values);
+    }
+
+    public void executeMany(String sql, List<Object[]> list) {
+        if (!ListenerUtil.mutListener.listen(22087)) {
+            mMod = true;
+        }
+        if (!ListenerUtil.mutListener.listen(22095)) {
+            if (BuildConfig.DEBUG) {
+                if (!ListenerUtil.mutListener.listen(22094)) {
+                    if ((ListenerUtil.mutListener.listen(22092) ? (list.size() >= 1) : (ListenerUtil.mutListener.listen(22091) ? (list.size() > 1) : (ListenerUtil.mutListener.listen(22090) ? (list.size() < 1) : (ListenerUtil.mutListener.listen(22089) ? (list.size() != 1) : (ListenerUtil.mutListener.listen(22088) ? (list.size() == 1) : (list.size() <= 1))))))) {
+                        if (!ListenerUtil.mutListener.listen(22093)) {
+                            Timber.w("Query %s called with a list of at most one element. Usually that's not expected.", sql);
+                        }
+                    }
+                }
+            }
+        }
+        if (!ListenerUtil.mutListener.listen(22096)) {
+            executeInTransaction(() -> executeManyNoTransaction(sql, list));
+        }
+    }
+
+    /**
+     * Use this executeMany version with external transaction management
+     */
+    public void executeManyNoTransaction(String sql, List<Object[]> list) {
+        if (!ListenerUtil.mutListener.listen(22097)) {
+            mMod = true;
+        }
+        if (!ListenerUtil.mutListener.listen(22099)) {
+            {
+                long _loopCounter492 = 0;
+                for (Object[] o : list) {
+                    ListenerUtil.loopListener.listen("_loopCounter492", ++_loopCounter492);
+                    if (!ListenerUtil.mutListener.listen(22098)) {
+                        mDatabase.execSQL(sql, o);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @return The full path to this database file.
+     */
+    public String getPath() {
+        return mDatabase.getPath();
+    }
+
+    public void executeInTransaction(Runnable r) {
+        if (!ListenerUtil.mutListener.listen(22100)) {
+            // Ported from code which started the transaction outside the try..finally
+            getDatabase().beginTransaction();
+        }
+        try {
+            if (!ListenerUtil.mutListener.listen(22102)) {
+                r.run();
+            }
+            if (!ListenerUtil.mutListener.listen(22106)) {
+                if (getDatabase().inTransaction()) {
+                    try {
+                        if (!ListenerUtil.mutListener.listen(22105)) {
+                            getDatabase().setTransactionSuccessful();
+                        }
+                    } catch (Exception e) {
+                        if (!ListenerUtil.mutListener.listen(22104)) {
+                            // Unsure if this can happen - copied the structure from endTransaction()
+                            Timber.w(e);
+                        }
+                    }
+                } else {
+                    if (!ListenerUtil.mutListener.listen(22103)) {
+                        Timber.w("Not in a transaction. Cannot mark transaction successful.");
+                    }
+                }
+            }
+        } finally {
+            if (!ListenerUtil.mutListener.listen(22101)) {
+                safeEndInTransaction(getDatabase());
+            }
+        }
+    }
+
+    public static void safeEndInTransaction(DB database) {
+        if (!ListenerUtil.mutListener.listen(22107)) {
+            safeEndInTransaction(database.getDatabase());
+        }
+    }
+
+    public static void safeEndInTransaction(SupportSQLiteDatabase database) {
+        if (!ListenerUtil.mutListener.listen(22111)) {
+            if (database.inTransaction()) {
+                try {
+                    if (!ListenerUtil.mutListener.listen(22110)) {
+                        database.endTransaction();
+                    }
+                } catch (Exception e) {
+                    if (!ListenerUtil.mutListener.listen(22109)) {
+                        // endTransaction throws about invalid transaction even when you check first!
+                        Timber.w(e);
+                    }
+                }
+            } else {
+                if (!ListenerUtil.mutListener.listen(22108)) {
+                    Timber.w("Not in a transaction. Cannot end transaction.");
+                }
+            }
+        }
+    }
+}

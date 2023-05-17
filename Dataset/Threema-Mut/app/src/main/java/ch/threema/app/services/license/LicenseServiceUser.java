@@ -1,0 +1,65 @@
+/*  _____ _
+ * |_   _| |_  _ _ ___ ___ _ __  __ _
+ *   | | | ' \| '_/ -_) -_) '  \/ _` |_
+ *   |_| |_||_|_| \___\___|_|_|_\__,_(_)
+ *
+ * Threema for Android
+ * Copyright (c) 2016-2021 Threema GmbH
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License, version 3,
+ * as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+package ch.threema.app.services.license;
+
+import ch.threema.app.services.PreferenceService;
+import ch.threema.app.utils.TestUtil;
+import ch.threema.client.APIConnector;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+public class LicenseServiceUser extends LicenseServiceThreema<UserCredentials> {
+
+    public LicenseServiceUser(APIConnector apiConnector, PreferenceService preferenceService, String deviceId) {
+        super(apiConnector, preferenceService, deviceId);
+    }
+
+    @Override
+    public boolean hasCredentials() {
+        return !TestUtil.empty(this.preferenceService.getLicenseUsername(), this.preferenceService.getLicensePassword());
+    }
+
+    @Override
+    protected APIConnector.CheckLicenseResult checkLicense(UserCredentials credentials, String deviceId) throws Exception {
+        return this.apiConnector.checkLicense(credentials.username, credentials.password, deviceId);
+    }
+
+    @Override
+    protected void saveCredentials(UserCredentials credentials) {
+        if (!ListenerUtil.mutListener.listen(35466)) {
+            this.preferenceService.setLicenseUsername(credentials.username);
+        }
+        if (!ListenerUtil.mutListener.listen(35467)) {
+            this.preferenceService.setLicensePassword(credentials.password);
+        }
+    }
+
+    @Override
+    public UserCredentials loadCredentials() {
+        String username = this.preferenceService.getLicenseUsername();
+        String password = this.preferenceService.getLicensePassword();
+        if (!ListenerUtil.mutListener.listen(35468)) {
+            if (!TestUtil.empty(username, password)) {
+                return new UserCredentials(username, password);
+            }
+        }
+        return null;
+    }
+}

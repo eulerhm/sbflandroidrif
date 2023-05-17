@@ -1,0 +1,141 @@
+/*
+ * Copyright (c) 2015 PocketHub
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.github.pockethub.android.ui.issue;
+
+import android.content.Intent;
+import android.os.Bundle;
+import androidx.appcompat.app.ActionBar;
+import android.util.Log;
+import com.github.pockethub.android.rx.AutoDisposeUtils;
+import com.github.pockethub.android.rx.RxProgress;
+import com.meisolsson.githubsdk.core.ServiceGenerator;
+import com.meisolsson.githubsdk.model.GitHubComment;
+import com.meisolsson.githubsdk.model.Issue;
+import com.meisolsson.githubsdk.model.Repository;
+import com.meisolsson.githubsdk.model.User;
+import com.github.pockethub.android.Intents;
+import com.github.pockethub.android.Intents.Builder;
+import com.github.pockethub.android.R;
+import com.github.pockethub.android.ui.comment.CommentPreviewPagerAdapter;
+import com.github.pockethub.android.util.InfoUtils;
+import com.github.pockethub.android.util.ToastUtils;
+import com.meisolsson.githubsdk.model.request.CommentRequest;
+import com.meisolsson.githubsdk.service.issues.IssueCommentService;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.schedulers.Schedulers;
+import static com.github.pockethub.android.Intents.EXTRA_COMMENT;
+import static com.github.pockethub.android.Intents.EXTRA_ISSUE_NUMBER;
+import static com.github.pockethub.android.Intents.EXTRA_USER;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+/**
+ * Activity to edit a comment on an {@link Issue}
+ */
+public class EditCommentActivity extends com.github.pockethub.android.ui.comment.CreateCommentActivity {
+
+    private static final String TAG = "EditCommentActivity";
+
+    /**
+     * Create intent to edit a comment
+     *
+     * @param repoId
+     * @param issueNumber
+     * @param user
+     * @return intent
+     */
+    public static Intent createIntent(Repository repoId, int issueNumber, GitHubComment comment, User user) {
+        Builder builder = new Builder("issue.comment.edit.VIEW");
+        if (!ListenerUtil.mutListener.listen(897)) {
+            builder.repo(repoId);
+        }
+        if (!ListenerUtil.mutListener.listen(898)) {
+            builder.add(EXTRA_COMMENT, comment);
+        }
+        if (!ListenerUtil.mutListener.listen(899)) {
+            builder.add(EXTRA_ISSUE_NUMBER, issueNumber);
+        }
+        if (!ListenerUtil.mutListener.listen(900)) {
+            builder.add(EXTRA_USER, user);
+        }
+        return builder.toIntent();
+    }
+
+    private Repository repositoryId;
+
+    /**
+     * Comment to edit.
+     */
+    private GitHubComment comment;
+
+    private int issueNumber;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        if (!ListenerUtil.mutListener.listen(901)) {
+            comment = getIntent().getParcelableExtra(EXTRA_COMMENT);
+        }
+        if (!ListenerUtil.mutListener.listen(902)) {
+            issueNumber = getIntent().getIntExtra(EXTRA_ISSUE_NUMBER, -1);
+        }
+        if (!ListenerUtil.mutListener.listen(903)) {
+            repositoryId = getIntent().getParcelableExtra(Intents.EXTRA_REPOSITORY);
+        }
+        if (!ListenerUtil.mutListener.listen(904)) {
+            super.onCreate(savedInstanceState);
+        }
+        if (!ListenerUtil.mutListener.listen(905)) {
+            setContentView(R.layout.pager_with_tabs);
+        }
+        ActionBar actionBar = getSupportActionBar();
+        if (!ListenerUtil.mutListener.listen(906)) {
+            actionBar.setTitle(getString(R.string.issue_title) + issueNumber);
+        }
+        if (!ListenerUtil.mutListener.listen(907)) {
+            actionBar.setSubtitle(InfoUtils.createRepoId(repositoryId));
+        }
+    }
+
+    @Override
+    protected void createComment(String comment) {
+        if (!ListenerUtil.mutListener.listen(908)) {
+            editComment(comment);
+        }
+    }
+
+    /**
+     * Edit comment.
+     *
+     * @param commentText
+     */
+    protected void editComment(String commentText) {
+        CommentRequest commentRequest = CommentRequest.builder().body(commentText).build();
+        if (!ListenerUtil.mutListener.listen(909)) {
+            ServiceGenerator.createService(this, IssueCommentService.class).editIssueComment(repositoryId.owner().login(), repositoryId.name(), comment.id(), commentRequest).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).compose(RxProgress.bindToLifecycle(this, R.string.editing_comment)).as(AutoDisposeUtils.bindToLifecycle(this)).subscribe(response -> finish(response.body()), e -> {
+                Log.d(TAG, "Exception editing comment on issue", e);
+                ToastUtils.show(this, e.getMessage());
+            });
+        }
+    }
+
+    @Override
+    protected CommentPreviewPagerAdapter createAdapter() {
+        CommentPreviewPagerAdapter commentPreviewPagerAdapter = new CommentPreviewPagerAdapter(this, repositoryId);
+        if (!ListenerUtil.mutListener.listen(910)) {
+            commentPreviewPagerAdapter.setCommentText(comment != null ? comment.body() : null);
+        }
+        return commentPreviewPagerAdapter;
+    }
+}
