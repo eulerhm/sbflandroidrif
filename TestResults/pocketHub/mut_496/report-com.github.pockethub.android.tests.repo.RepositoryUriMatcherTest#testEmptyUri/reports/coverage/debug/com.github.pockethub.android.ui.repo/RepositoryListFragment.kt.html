@@ -1,0 +1,317 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RepositoryListFragment.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">debugAndroidTest</a> &gt; <a href="index.source.html" class="el_package">com.github.pockethub.android.ui.repo</a> &gt; <span class="el_source">RepositoryListFragment.kt</span></div><h1>RepositoryListFragment.kt</h1><pre class="source lang-java linenums">/*
+ * Copyright (c) 2015 PocketHub
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.github.pockethub.android.ui.repo
+
+import android.content.Intent
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import com.afollestad.materialdialogs.MaterialDialog
+import com.github.pockethub.android.Intents.EXTRA_USER
+import com.github.pockethub.android.ui.helpers.ItemListHandler
+import com.github.pockethub.android.ui.helpers.ListFetcher
+import com.github.pockethub.android.R
+import com.github.pockethub.android.RequestCodes.REPOSITORY_VIEW
+import com.github.pockethub.android.ResultCodes.RESOURCE_CHANGED
+import com.github.pockethub.android.persistence.AccountDataManager
+import com.github.pockethub.android.ui.base.BaseFragment
+import com.github.pockethub.android.ui.item.repository.RepositoryHeaderItem
+import com.github.pockethub.android.ui.item.repository.RepositoryItem
+import com.github.pockethub.android.ui.user.OrganizationSelectionListener
+import com.github.pockethub.android.ui.user.OrganizationSelectionProvider
+import com.github.pockethub.android.ui.user.UserViewActivity
+import com.github.pockethub.android.util.AvatarLoader
+import com.github.pockethub.android.util.InfoUtils
+import com.github.pockethub.android.util.ToastUtils
+import com.meisolsson.githubsdk.model.Repository
+import com.meisolsson.githubsdk.model.User
+import com.xwray.groupie.Item
+import com.xwray.groupie.OnItemClickListener
+import com.xwray.groupie.OnItemLongClickListener
+import io.reactivex.Observable
+import io.reactivex.Single
+import kotlinx.android.synthetic.main.fragment_item_list.view.*
+import kotlinx.android.synthetic.main.repo_dialog.view.*
+import java.util.Locale.US
+import java.util.concurrent.atomic.AtomicReference
+import javax.inject.Inject
+
+/**
+ * Fragment to display a list of [Repository] instances
+ */
+<span class="nc" id="L56">class RepositoryListFragment : BaseFragment(), OrganizationSelectionListener {</span>
+
+    @Inject
+<span class="nc bnc" id="L59" title="All 2 branches missed.">    protected lateinit var cache: AccountDataManager</span>
+
+    @Inject
+<span class="nc bnc" id="L62" title="All 2 branches missed.">    protected lateinit var avatars: AvatarLoader</span>
+
+    private lateinit var itemListHandler: ItemListHandler
+
+    private lateinit var listFetcher: ListFetcher&lt;Repository&gt;
+
+<span class="nc" id="L68">    private val org = AtomicReference&lt;User&gt;()</span>
+
+    private var recentRepos: RecentRepositories? = null
+
+    private val errorMessage: Int
+<span class="nc" id="L73">        get() = R.string.error_repos_load</span>
+
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View? {
+<span class="nc" id="L80">        return inflater.inflate(R.layout.fragment_item_list, container, false)</span>
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+<span class="nc" id="L84">        super.onViewCreated(view, savedInstanceState)</span>
+<span class="nc" id="L85">        itemListHandler = ItemListHandler(</span>
+<span class="nc" id="L86">            view.list,</span>
+<span class="nc" id="L87">            view.empty,</span>
+<span class="nc" id="L88">            lifecycle,</span>
+<span class="nc" id="L89">            activity,</span>
+<span class="nc" id="L90">            OnItemClickListener(this::onItemClick),</span>
+<span class="nc" id="L91">            OnItemLongClickListener(this::onItemLongClick)</span>
+        )
+
+<span class="nc" id="L94">        listFetcher = ListFetcher(</span>
+<span class="nc" id="L95">            view.swipe_item,</span>
+<span class="nc" id="L96">            lifecycle,</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">            itemListHandler,</span>
+<span class="nc" id="L98">            { t -&gt; ToastUtils.show(activity, errorMessage) },</span>
+<span class="nc" id="L99">            this::loadData,</span>
+<span class="nc" id="L100">            this::createItem</span>
+        )
+
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        listFetcher.onDataLoaded = this::onDataLoaded</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">        itemListHandler.setEmptyText(R.string.no_repositories)</span>
+<span class="nc" id="L105">    }</span>
+
+    override fun onSaveInstanceState(outState: Bundle) {
+<span class="nc" id="L108">        super.onSaveInstanceState(outState)</span>
+
+<span class="nc" id="L110">        val org = this.org.get()</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">        if (org != null) {</span>
+<span class="nc" id="L112">            outState.putParcelable(EXTRA_USER, org)</span>
+        }
+<span class="nc" id="L114">    }</span>
+
+    override fun onDetach() {
+<span class="nc bnc" id="L117" title="All 4 branches missed.">        if (activity != null &amp;&amp; activity is OrganizationSelectionProvider) {</span>
+<span class="nc" id="L118">            val selectionProvider = activity as OrganizationSelectionProvider?</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">            selectionProvider!!.removeListener(this)</span>
+        }
+
+<span class="nc" id="L122">        super.onDetach()</span>
+<span class="nc" id="L123">    }</span>
+
+    override fun onOrganizationSelected(organization: User) {
+<span class="nc" id="L126">        val previousOrg = org.get()</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        val previousOrgId = if (previousOrg != null) previousOrg.id() else -1</span>
+<span class="nc" id="L128">        org.set(organization)</span>
+
+<span class="nc bnc" id="L130" title="All 2 branches missed.">        if (recentRepos != null) {</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">            recentRepos!!.saveAsync()</span>
+        }
+
+        // Only hard refresh if view already created and org is changing
+<span class="nc bnc" id="L135" title="All 2 branches missed.">        if (previousOrgId != organization.id()) {</span>
+<span class="nc" id="L136">            val activity = activity</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">            if (activity != null) {</span>
+<span class="nc" id="L138">                recentRepos = RecentRepositories(activity, organization)</span>
+            }
+
+<span class="nc bnc" id="L141" title="All 2 branches missed.">            listFetcher.forceRefresh()</span>
+        }
+<span class="nc" id="L143">    }</span>
+
+    override fun onActivityCreated(savedInstanceState: Bundle?) {
+<span class="nc" id="L146">        val activity = activity</span>
+<span class="nc" id="L147">        var currentOrg: User? = null</span>
+
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        if (getActivity() is OrganizationSelectionProvider) {</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">            currentOrg = (activity as OrganizationSelectionProvider).addListener(this)</span>
+        }
+
+<span class="nc bnc" id="L153" title="All 6 branches missed.">        if (arguments != null &amp;&amp; arguments!!.containsKey(&quot;org&quot;)) {</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">            currentOrg = arguments!!.getParcelable(&quot;org&quot;)</span>
+        }
+
+<span class="nc bnc" id="L157" title="All 4 branches missed.">        if (currentOrg == null &amp;&amp; savedInstanceState != null) {</span>
+<span class="nc" id="L158">            currentOrg = savedInstanceState.getParcelable(EXTRA_USER)</span>
+        }
+
+<span class="nc" id="L161">        org.set(currentOrg)</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">        if (currentOrg != null) {</span>
+<span class="nc" id="L163">            recentRepos = RecentRepositories(activity, currentOrg)</span>
+        }
+
+<span class="nc" id="L166">        super.onActivityCreated(savedInstanceState)</span>
+<span class="nc" id="L167">    }</span>
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        // Refresh if the viewed repository was (un)starred
+<span class="nc bnc" id="L171" title="All 4 branches missed.">        if (requestCode == REPOSITORY_VIEW &amp;&amp; resultCode == RESOURCE_CHANGED) {</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">            listFetcher.forceRefresh()</span>
+<span class="nc" id="L173">            return</span>
+        }
+
+<span class="nc" id="L176">        super.onActivityResult(requestCode, resultCode, data)</span>
+<span class="nc" id="L177">    }</span>
+
+    private fun onItemClick(item: Item&lt;*&gt;, view: View) {
+<span class="nc bnc" id="L180" title="All 2 branches missed.">        if (item is RepositoryItem) {</span>
+<span class="nc" id="L181">            val repo = item.repo</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">            if (recentRepos != null) {</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                recentRepos!!.add(repo)</span>
+            }
+
+<span class="nc" id="L186">            startActivityForResult(RepositoryViewActivity.createIntent(repo),</span>
+<span class="nc" id="L187">                REPOSITORY_VIEW)</span>
+        }
+<span class="nc" id="L189">    }</span>
+
+    private fun onItemLongClick(item: Item&lt;*&gt;, view: View): Boolean {
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L193">            return false</span>
+        }
+
+<span class="nc bnc" id="L196" title="All 2 branches missed.">        if (item is RepositoryItem) {</span>
+<span class="nc" id="L197">            val repo = item.repo</span>
+
+<span class="nc bnc" id="L199" title="All 2 branches missed.">            val builder = MaterialDialog.Builder(activity!!).title(InfoUtils.createRepoId(repo))</span>
+<span class="nc" id="L200">            val dialogHolder = arrayOfNulls&lt;MaterialDialog&gt;(1)</span>
+
+<span class="nc" id="L202">            val dialogView = layoutInflater.inflate(R.layout.repo_dialog, null)</span>
+
+<span class="nc" id="L204">            val owner = repo.owner()</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">            avatars.bind(dialogView.iv_owner_avatar, owner)</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">            dialogView.tv_owner_name.text = getString(R.string.navigate_to_user, owner!!.login())</span>
+<span class="nc" id="L207">            dialogView.ll_owner_area.setOnClickListener { v1 -&gt;</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">                dialogHolder[0]!!.dismiss()</span>
+<span class="nc" id="L209">                viewUser(owner)</span>
+<span class="nc" id="L210">            }</span>
+
+<span class="nc bnc" id="L212" title="All 6 branches missed.">            if (recentRepos != null &amp;&amp; recentRepos!!.contains(repo)) {</span>
+<span class="nc" id="L213">                dialogView.divider.visibility = View.VISIBLE</span>
+<span class="nc" id="L214">                val recentRepoArea = dialogView.ll_recent_repo_area</span>
+<span class="nc" id="L215">                recentRepoArea.visibility = View.VISIBLE</span>
+<span class="nc" id="L216">                recentRepoArea.setOnClickListener { v1 -&gt;</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                    dialogHolder[0]!!.dismiss()</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">                    recentRepos!!.remove(repo)</span>
+<span class="nc" id="L219">                    listFetcher.refresh()</span>
+<span class="nc" id="L220">                }</span>
+            }
+
+<span class="nc" id="L223">            builder.customView(dialogView, false)</span>
+<span class="nc" id="L224">            val dialog = builder.build()</span>
+<span class="nc" id="L225">            dialogHolder[0] = dialog</span>
+<span class="nc" id="L226">            dialog.setCanceledOnTouchOutside(true)</span>
+<span class="nc" id="L227">            dialog.show()</span>
+
+<span class="nc" id="L229">            return true</span>
+        }
+
+<span class="nc" id="L232">        return false</span>
+    }
+
+    private fun viewUser(user: User) {
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        if (org.get().id() !== user.id()) {</span>
+<span class="nc" id="L237">            startActivity(UserViewActivity.createIntent(user))</span>
+        }
+<span class="nc" id="L239">    }</span>
+
+    override fun onStop() {
+<span class="nc" id="L242">        super.onStop()</span>
+
+<span class="nc bnc" id="L244" title="All 2 branches missed.">        if (recentRepos != null) {</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">            recentRepos!!.saveAsync()</span>
+        }
+<span class="nc" id="L247">    }</span>
+
+    private fun updateHeaders(repos: MutableList&lt;Item&lt;*&gt;&gt;) {
+<span class="nc bnc" id="L250" title="All 2 branches missed.">        if (repos.isEmpty()) {</span>
+<span class="nc" id="L251">            return</span>
+        }
+
+        // Add recent header if at least one recent repository
+<span class="nc bnc" id="L255" title="All 2 branches missed.">        val first = (repos[0] as RepositoryItem).repo</span>
+<span class="nc bnc" id="L256" title="All 4 branches missed.">        if (recentRepos!!.contains(first)) {</span>
+<span class="nc" id="L257">            repos.add(0, RepositoryHeaderItem(getString(R.string.recently_viewed)))</span>
+        }
+
+        // Advance past all recent repositories
+<span class="nc" id="L261">        var index = 0</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">        while (index &lt; repos.size) {</span>
+<span class="nc" id="L263">            val item = repos[index]</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">            if (item is RepositoryItem) {</span>
+<span class="nc" id="L265">                val repository = item.repo</span>
+<span class="nc bnc" id="L266" title="All 6 branches missed.">                if (!recentRepos!!.contains(repository.id()!!)) {</span>
+<span class="nc" id="L267">                    break</span>
+                }
+            }
+<span class="nc" id="L270">            index++</span>
+        }
+
+<span class="nc bnc" id="L273" title="All 2 branches missed.">        if (index &gt;= repos.size) {</span>
+<span class="nc" id="L274">            return</span>
+        }
+
+        // Register header for first character
+<span class="nc bnc" id="L278" title="All 2 branches missed.">        var current = (repos[index] as RepositoryItem).repo</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">        var start = Character.toLowerCase(current.name()!![0])</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">        repos.add(index, RepositoryHeaderItem(Character.toString(start).toUpperCase(US)))</span>
+
+<span class="nc" id="L282">        index += 1</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">        while (index &lt; repos.size) {</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">            current = (repos[index] as RepositoryItem).repo</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">            val repoStart = Character.toLowerCase(current.name()!![0])</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">            if (repoStart &lt;= start) {</span>
+<span class="nc" id="L287">                index++</span>
+<span class="nc" id="L288">                continue</span>
+            }
+
+<span class="nc bnc" id="L291" title="All 2 branches missed.">            repos.add(index, RepositoryHeaderItem(Character.toString(repoStart).toUpperCase(US)))</span>
+<span class="nc" id="L292">            start = repoStart</span>
+<span class="nc" id="L293">            index++</span>
+        }
+<span class="nc" id="L295">    }</span>
+
+    private fun loadData(forceRefresh: Boolean): Single&lt;List&lt;Repository&gt;&gt; {
+<span class="nc bnc" id="L298" title="All 2 branches missed.">        val org = this.org.get() ?: return Single.just(emptyList())</span>
+
+<span class="nc" id="L300">        return Single.fromCallable { cache.getRepos(org, forceRefresh) }</span>
+<span class="nc" id="L301">            .flatMap { repos -&gt;</span>
+<span class="nc" id="L302">                Observable.fromIterable(repos)</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                    .sorted(recentRepos!!)</span>
+<span class="nc" id="L304">                    .toList()</span>
+            }
+    }
+
+    private fun createItem(item: Repository): Item&lt;*&gt; {
+<span class="nc" id="L309">        return RepositoryItem(item, org.get())</span>
+    }
+
+    protected fun onDataLoaded(newItems: MutableList&lt;Item&lt;*&gt;&gt;): MutableList&lt;Item&lt;*&gt;&gt; {
+<span class="nc" id="L313">        updateHeaders(newItems)</span>
+<span class="nc" id="L314">        return newItems</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.7.9.201702052155</span>Generated by the Android Gradle plugin 3.6.1</div></body></html>

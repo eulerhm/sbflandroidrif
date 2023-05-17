@@ -1,0 +1,544 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>IssueFragment.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">debugAndroidTest</a> &gt; <a href="index.source.html" class="el_package">com.github.pockethub.android.ui.issue</a> &gt; <span class="el_source">IssueFragment.kt</span></div><h1>IssueFragment.kt</h1><pre class="source lang-java linenums">/*
+ * Copyright (c) 2015 PocketHub
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.github.pockethub.android.ui.issue
+
+import android.app.Activity.RESULT_OK
+import android.content.Intent
+import android.os.Bundle
+import android.util.Log
+import android.view.LayoutInflater
+import android.view.Menu
+import android.view.MenuInflater
+import android.view.MenuItem
+import android.view.View
+import android.view.View.GONE
+import android.view.View.VISIBLE
+import android.view.ViewGroup
+import androidx.recyclerview.widget.DividerItemDecoration
+import androidx.recyclerview.widget.LinearLayoutManager
+import com.github.pockethub.android.Intents.EXTRA_CAN_WRITE_REPO
+import com.github.pockethub.android.Intents.EXTRA_COMMENT
+import com.github.pockethub.android.Intents.EXTRA_ISSUE
+import com.github.pockethub.android.Intents.EXTRA_ISSUE_NUMBER
+import com.github.pockethub.android.Intents.EXTRA_REPOSITORY_NAME
+import com.github.pockethub.android.Intents.EXTRA_REPOSITORY_OWNER
+import com.github.pockethub.android.Intents.EXTRA_USER
+import com.github.pockethub.android.R
+import com.github.pockethub.android.RequestCodes.COMMENT_CREATE
+import com.github.pockethub.android.RequestCodes.COMMENT_DELETE
+import com.github.pockethub.android.RequestCodes.COMMENT_EDIT
+import com.github.pockethub.android.RequestCodes.ISSUE_ASSIGNEE_UPDATE
+import com.github.pockethub.android.RequestCodes.ISSUE_CLOSE
+import com.github.pockethub.android.RequestCodes.ISSUE_EDIT
+import com.github.pockethub.android.RequestCodes.ISSUE_LABELS_UPDATE
+import com.github.pockethub.android.RequestCodes.ISSUE_MILESTONE_UPDATE
+import com.github.pockethub.android.RequestCodes.ISSUE_REOPEN
+import com.github.pockethub.android.accounts.AccountUtils
+import com.github.pockethub.android.core.issue.IssueStore
+import com.github.pockethub.android.core.issue.IssueUtils
+import com.github.pockethub.android.core.issue.RefreshIssueTaskFactory
+import com.github.pockethub.android.rx.AutoDisposeUtils
+import com.github.pockethub.android.rx.RxProgress
+import com.github.pockethub.android.ui.base.BaseActivity
+import com.github.pockethub.android.ui.ConfirmDialogFragment
+import com.github.pockethub.android.ui.DialogResultListener
+import com.github.pockethub.android.ui.base.BaseFragment
+import com.github.pockethub.android.ui.comment.DeleteCommentListener
+import com.github.pockethub.android.ui.comment.EditCommentListener
+import com.github.pockethub.android.ui.commit.CommitCompareViewActivity
+import com.github.pockethub.android.ui.item.GitHubCommentItem
+import com.github.pockethub.android.ui.item.LoadingItem
+import com.github.pockethub.android.ui.item.issue.IssueEventItem
+import com.github.pockethub.android.ui.item.issue.IssueHeaderItem
+import com.github.pockethub.android.util.AvatarLoader
+import com.github.pockethub.android.util.HttpImageGetter
+import com.github.pockethub.android.util.InfoUtils
+import com.github.pockethub.android.util.ShareUtils
+import com.github.pockethub.android.util.ToastUtils
+import com.meisolsson.githubsdk.core.ServiceGenerator
+import com.meisolsson.githubsdk.model.GitHubComment
+import com.meisolsson.githubsdk.model.GitHubEvent
+import com.meisolsson.githubsdk.model.Issue
+import com.meisolsson.githubsdk.model.IssueEvent
+import com.meisolsson.githubsdk.model.IssueState
+import com.meisolsson.githubsdk.model.Repository
+import com.meisolsson.githubsdk.model.User
+import com.meisolsson.githubsdk.service.issues.IssueCommentService
+import com.xwray.groupie.GroupAdapter
+import com.xwray.groupie.Item
+import com.xwray.groupie.Section
+import com.xwray.groupie.ViewHolder
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.functions.Consumer
+import io.reactivex.schedulers.Schedulers
+import kotlinx.android.synthetic.main.fragment_comment_list.*
+import java.util.ArrayList
+import javax.inject.Inject
+
+/**
+ * Fragment to display an issue
+ */
+<span class="nc" id="L94">class IssueFragment : BaseFragment(), IssueHeaderItem.OnIssueHeaderActionListener, DialogResultListener {</span>
+
+    private var issueNumber: Int = 0
+
+<span class="nc" id="L98">    private val items: MutableList&lt;Any&gt; = ArrayList()</span>
+
+    private var repositoryId: Repository? = null
+
+    private var issue: Issue? = null
+
+    private var user: User? = null
+
+    private var canWrite: Boolean = false
+
+<span class="nc" id="L108">    private val adapter = GroupAdapter&lt;ViewHolder&gt;()</span>
+
+<span class="nc" id="L110">    private val mainSection = Section()</span>
+
+    private var milestoneTask: EditMilestoneTask? = null
+
+    private var assigneeTask: EditAssigneeTask? = null
+
+    private var labelsTask: EditLabelsTask? = null
+
+    private var stateTask: EditStateTask? = null
+
+    private var stateItem: MenuItem? = null
+
+    @Inject
+<span class="nc bnc" id="L123" title="All 2 branches missed.">    lateinit var avatars: AvatarLoader</span>
+
+    @Inject
+<span class="nc bnc" id="L126" title="All 2 branches missed.">    lateinit var store: IssueStore</span>
+
+    @Inject
+<span class="nc bnc" id="L129" title="All 2 branches missed.">    lateinit var refreshIssueTaskFactory: RefreshIssueTaskFactory</span>
+
+    @Inject
+<span class="nc bnc" id="L132" title="All 2 branches missed.">    lateinit var labelsTaskFactory: EditLabelsTaskFactory</span>
+
+    @Inject
+<span class="nc bnc" id="L135" title="All 2 branches missed.">    lateinit var milestoneTaskFactory: EditMilestoneTaskFactory</span>
+
+    @Inject
+<span class="nc bnc" id="L138" title="All 2 branches missed.">    lateinit var assigneeTaskFactory: EditAssigneeTaskFactory</span>
+
+    @Inject
+<span class="nc bnc" id="L141" title="All 2 branches missed.">    lateinit var stateTaskFactory: EditStateTaskFactory</span>
+
+    @Inject
+<span class="nc bnc" id="L144" title="All 2 branches missed.">    lateinit var bodyImageGetter: HttpImageGetter</span>
+
+    @Inject
+<span class="nc bnc" id="L147" title="All 2 branches missed.">    lateinit var commentImageGetter: HttpImageGetter</span>
+
+    /**
+     * Edit existing comment
+     */
+<span class="nc" id="L152">    private val editCommentListener: EditCommentListener = EditCommentListener { comment -&gt;</span>
+<span class="nc" id="L153">        startActivityForResult(EditCommentActivity.createIntent(</span>
+<span class="nc" id="L154">                repositoryId, issueNumber, comment, user), COMMENT_EDIT)</span>
+<span class="nc" id="L155">    }</span>
+
+    /**
+     * Delete existing comment
+     */
+<span class="nc" id="L160">    private val deleteCommentListener = DeleteCommentListener{ comment -&gt;</span>
+<span class="nc" id="L161">        val args = Bundle()</span>
+<span class="nc" id="L162">        args.putParcelable(EXTRA_COMMENT, comment)</span>
+<span class="nc" id="L163">        ConfirmDialogFragment.show(</span>
+<span class="nc" id="L164">                activity,</span>
+<span class="nc" id="L165">                COMMENT_DELETE,</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">                activity!!</span>
+<span class="nc" id="L167">                        .getString(R.string.confirm_comment_delete_title),</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">                activity!!.getString(</span>
+<span class="nc" id="L169">                        R.string.confirm_comment_delete_message), args)</span>
+<span class="nc" id="L170">    }</span>
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+<span class="nc" id="L173">        super.onCreate(savedInstanceState)</span>
+<span class="nc" id="L174">        setHasOptionsMenu(true)</span>
+
+<span class="nc" id="L176">        val args = arguments</span>
+<span class="nc" id="L177">        repositoryId = InfoUtils.createRepoFromData(</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">                args!!.getString(EXTRA_REPOSITORY_OWNER),</span>
+<span class="nc" id="L179">                args.getString(EXTRA_REPOSITORY_NAME))</span>
+<span class="nc" id="L180">        issueNumber = args.getInt(EXTRA_ISSUE_NUMBER)</span>
+<span class="nc" id="L181">        user = args.getParcelable(EXTRA_USER)</span>
+<span class="nc" id="L182">        canWrite = args.getBoolean(EXTRA_CAN_WRITE_REPO, false)</span>
+
+<span class="nc" id="L184">        val dialogActivity = activity as BaseActivity?</span>
+
+<span class="nc bnc" id="L186" title="All 2 branches missed.">        milestoneTask = milestoneTaskFactory.create(dialogActivity, repositoryId, issueNumber, createObserver())</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        labelsTask = labelsTaskFactory.create(dialogActivity, repositoryId, issueNumber, createObserver())</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">        assigneeTask = assigneeTaskFactory.create(dialogActivity, repositoryId, issueNumber, createObserver())</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">        stateTask = stateTaskFactory.create(dialogActivity, repositoryId, issueNumber, createObserver())</span>
+
+<span class="nc" id="L191">        adapter.add(mainSection)</span>
+<span class="nc" id="L192">    }</span>
+
+    private fun createObserver(): Consumer&lt;Issue&gt; {
+<span class="nc" id="L195">        return Consumer { issue -&gt;</span>
+<span class="nc" id="L196">            updateHeader(issue)</span>
+<span class="nc" id="L197">            refreshIssue()</span>
+<span class="nc" id="L198">        }</span>
+    }
+
+    override fun onActivityCreated(savedInstanceState: Bundle?) {
+<span class="nc" id="L202">        super.onActivityCreated(savedInstanceState)</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">        issue = store.getIssue(repositoryId, issueNumber)</span>
+
+<span class="nc bnc" id="L205" title="All 10 branches missed.">        if (issue == null || issue!!.comments()!! &gt; 0 &amp;&amp; items.isEmpty()) {</span>
+<span class="nc" id="L206">            mainSection.setFooter(LoadingItem())</span>
+        }
+
+<span class="nc bnc" id="L209" title="All 6 branches missed.">        if (issue != null &amp;&amp; items.isNotEmpty()) {</span>
+<span class="nc" id="L210">            updateList(issue, items)</span>
+        } else {
+<span class="nc bnc" id="L212" title="All 2 branches missed.">            if (issue != null) {</span>
+<span class="nc" id="L213">                updateHeader(issue)</span>
+            }
+<span class="nc" id="L215">            refreshIssue()</span>
+        }
+<span class="nc" id="L217">    }</span>
+
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?,
+                              savedInstanceState: Bundle?): View? {
+<span class="nc" id="L221">        return inflater.inflate(R.layout.fragment_comment_list, container, false)</span>
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+<span class="nc" id="L225">        super.onViewCreated(view, savedInstanceState)</span>
+
+<span class="nc bnc" id="L227" title="All 2 branches missed.">        val itemDecoration = DividerItemDecoration(activity!!, DividerItemDecoration.VERTICAL)</span>
+<span class="nc" id="L228">        itemDecoration.setDrawable(resources.getDrawable(R.drawable.list_divider_5dp))</span>
+
+<span class="nc" id="L230">        list.layoutManager = LinearLayoutManager(activity)</span>
+<span class="nc" id="L231">        list.addItemDecoration(itemDecoration)</span>
+<span class="nc" id="L232">        list.adapter = adapter</span>
+<span class="nc" id="L233">    }</span>
+
+    private fun updateHeader(issue: Issue?) {
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L237">            return</span>
+        }
+
+<span class="nc bnc" id="L240" title="All 2 branches missed.">        if (issue != null) {</span>
+<span class="nc bnc" id="L241" title="All 4 branches missed.">            mainSection.setHeader(IssueHeaderItem(avatars, bodyImageGetter, requireContext(), this, issue))</span>
+        }
+
+<span class="nc" id="L244">        pb_loading.visibility = GONE</span>
+<span class="nc" id="L245">        list.visibility = VISIBLE</span>
+<span class="nc" id="L246">        updateStateItem(issue)</span>
+<span class="nc" id="L247">    }</span>
+
+    private fun refreshIssue() {
+<span class="nc bnc" id="L250" title="All 2 branches missed.">        refreshIssueTaskFactory.create(repositoryId, issueNumber)</span>
+<span class="nc" id="L251">                .refresh()</span>
+<span class="nc" id="L252">                .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L253">                .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L254">                .filter { (_, _, _) -&gt; isAdded }</span>
+<span class="nc" id="L255">                .`as`(AutoDisposeUtils.bindToLifecycle(this))</span>
+<span class="nc" id="L256">                .subscribe({ fullIssue -&gt;</span>
+<span class="nc" id="L257">                    issue = fullIssue.issue</span>
+<span class="nc" id="L258">                    items.clear()</span>
+<span class="nc" id="L259">                    items.addAll(fullIssue.events)</span>
+<span class="nc" id="L260">                    items.addAll(fullIssue.comments)</span>
+<span class="nc" id="L261">                    updateList(fullIssue.issue, items)</span>
+<span class="nc" id="L262">                }, { _ -&gt;</span>
+<span class="nc" id="L263">                    ToastUtils.show(activity, R.string.error_issue_load)</span>
+<span class="nc" id="L264">                    pb_loading.visibility = GONE</span>
+<span class="nc" id="L265">                })</span>
+<span class="nc" id="L266">    }</span>
+
+    private fun updateList(issue: Issue?, items: MutableList&lt;Any&gt;) {
+<span class="nc" id="L269">        items.sortBy {</span>
+            when (it) {
+                is GitHubComment -&gt; it.createdAt()
+                is GitHubEvent -&gt; it.createdAt()
+                is IssueEvent -&gt; it.createdAt()
+                else -&gt; null
+            }
+        }
+
+<span class="nc" id="L278">        val listItems = ArrayList&lt;Item&lt;*&gt;&gt;()</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">        for (item in items) {</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">            if (item is IssueEvent) {</span>
+<span class="nc bnc" id="L281" title="All 6 branches missed.">                listItems.add(IssueEventItem(avatars, activity!!, issue!!, item))</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">            } else if (item is GitHubComment) {</span>
+<span class="nc" id="L283">                listItems.add(</span>
+<span class="nc bnc" id="L284" title="All 4 branches missed.">                        GitHubCommentItem(avatars, commentImageGetter,</span>
+<span class="nc" id="L285">                                editCommentListener, deleteCommentListener,</span>
+<span class="nc" id="L286">                                AccountUtils.getLogin(activity), canWrite,</span>
+<span class="nc" id="L287">                                item</span>
+                        )
+                )
+            }
+        }
+
+<span class="nc" id="L293">        mainSection.removeFooter()</span>
+<span class="nc" id="L294">        mainSection.update(listItems)</span>
+<span class="nc" id="L295">        updateHeader(issue)</span>
+<span class="nc" id="L296">    }</span>
+
+    override fun onDialogResult(requestCode: Int, resultCode: Int, arguments: Bundle) {
+<span class="nc bnc" id="L299" title="All 2 branches missed.">        if (RESULT_OK != resultCode) {</span>
+<span class="nc" id="L300">            return</span>
+        }
+
+<span class="nc bnc" id="L303" title="All 7 branches missed.">        when (requestCode) {</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">            ISSUE_MILESTONE_UPDATE -&gt; milestoneTask!!.edit(MilestoneDialogFragment.getSelected(arguments))</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">            ISSUE_ASSIGNEE_UPDATE -&gt; assigneeTask!!.edit(AssigneeDialogFragment.getSelected(arguments))</span>
+            ISSUE_LABELS_UPDATE -&gt; {
+<span class="nc" id="L307">                val labels = LabelsDialogFragment.getSelected(arguments)</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">                labelsTask!!.edit(labels)</span>
+            }
+<span class="nc bnc" id="L310" title="All 2 branches missed.">            ISSUE_CLOSE -&gt; stateTask!!.edit(true)</span>
+<span class="nc bnc" id="L311" title="All 2 branches missed.">            ISSUE_REOPEN -&gt; stateTask!!.edit(false)</span>
+            COMMENT_DELETE -&gt; {
+<span class="nc" id="L313">                val comment = arguments.getParcelable&lt;GitHubComment&gt;(EXTRA_COMMENT)</span>
+
+<span class="nc" id="L315">                ServiceGenerator.createService(activity, IssueCommentService::class.java)</span>
+<span class="nc bnc" id="L316" title="All 10 branches missed.">                        .deleteIssueComment(repositoryId!!.owner()!!.login(), repositoryId!!.name(), comment!!.id()!!)</span>
+<span class="nc" id="L317">                        .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L318">                        .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L319">                        .compose(RxProgress.bindToLifecycle(activity, R.string.deleting_comment))</span>
+<span class="nc" id="L320">                        .`as`(AutoDisposeUtils.bindToLifecycle(this))</span>
+<span class="nc" id="L321">                        .subscribe({ _ -&gt;</span>
+<span class="nc bnc" id="L322" title="All 4 branches missed.">                            if (items.isNotEmpty()) {</span>
+<span class="nc" id="L323">                                val commentPosition = findCommentPositionInItems(comment)</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">                                if (commentPosition &gt;= 0) {</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">                                    issue = issue!!.toBuilder()</span>
+<span class="nc bnc" id="L326" title="All 4 branches missed.">                                            .comments(issue!!.comments()!! - 1)</span>
+<span class="nc" id="L327">                                            .build()</span>
+
+<span class="nc" id="L329">                                    items.removeAt(commentPosition)</span>
+<span class="nc" id="L330">                                    updateList(issue, items)</span>
+                                }
+                            } else {
+<span class="nc" id="L333">                                refreshIssue()</span>
+                            }
+<span class="nc" id="L335">                        }, { e -&gt;</span>
+<span class="nc" id="L336">                            Log.d(TAG, &quot;Exception deleting comment on issue&quot;, e)</span>
+<span class="nc" id="L337">                            ToastUtils.show(activity, e.message)</span>
+<span class="nc" id="L338">                        })</span>
+            }
+        }
+<span class="nc" id="L341">    }</span>
+
+    private fun updateStateItem(issue: Issue?) {
+<span class="nc bnc" id="L344" title="All 4 branches missed.">        if (issue != null &amp;&amp; stateItem != null) {</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">            if (IssueState.Open == issue.state()) {</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">                stateItem!!.setTitle(R.string.close)</span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">                stateItem!!.setIcon(R.drawable.ic_github_issue_closed_white_24dp)</span>
+            } else {
+<span class="nc bnc" id="L349" title="All 2 branches missed.">                stateItem!!.setTitle(R.string.reopen)</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">                stateItem!!.setIcon(R.drawable.ic_github_issue_reopened_white_24dp)</span>
+            }
+        }
+<span class="nc" id="L353">    }</span>
+
+    override fun onPrepareOptionsMenu(menu: Menu) {
+<span class="nc" id="L356">        super.onPrepareOptionsMenu(menu)</span>
+<span class="nc" id="L357">        val editItem = menu.findItem(R.id.m_edit)</span>
+<span class="nc" id="L358">        val stateItem = menu.findItem(R.id.m_state)</span>
+<span class="nc bnc" id="L359" title="All 4 branches missed.">        if (editItem != null &amp;&amp; stateItem != null) {</span>
+<span class="nc" id="L360">            var isCreator = false</span>
+<span class="nc bnc" id="L361" title="All 2 branches missed.">            if (issue != null) {</span>
+<span class="nc bnc" id="L362" title="All 4 branches missed.">                isCreator = issue!!.user()!!.login() == AccountUtils.getLogin(activity)</span>
+            }
+<span class="nc bnc" id="L364" title="All 4 branches missed.">            editItem.isVisible = canWrite || isCreator</span>
+<span class="nc bnc" id="L365" title="All 4 branches missed.">            stateItem.isVisible = canWrite || isCreator</span>
+        }
+<span class="nc" id="L367">        updateStateItem(issue)</span>
+<span class="nc" id="L368">    }</span>
+
+    override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
+<span class="nc" id="L371">        super.onCreateOptionsMenu(menu, inflater)</span>
+<span class="nc" id="L372">        inflater.inflate(R.menu.fragment_issue_view, menu)</span>
+<span class="nc" id="L373">        stateItem = menu.findItem(R.id.m_state)</span>
+<span class="nc" id="L374">        updateStateItem(issue)</span>
+<span class="nc" id="L375">    }</span>
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+<span class="nc bnc" id="L378" title="All 4 branches missed.">        if (RESULT_OK != resultCode || data == null) {</span>
+<span class="nc" id="L379">            return</span>
+        }
+
+<span class="nc bnc" id="L382" title="All 4 branches missed.">        when (requestCode) {</span>
+            ISSUE_EDIT -&gt; {
+<span class="nc" id="L384">                val editedIssue = data.getParcelableExtra&lt;Issue&gt;(EXTRA_ISSUE)</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">                bodyImageGetter.encode(editedIssue.id(), editedIssue.bodyHtml())</span>
+<span class="nc" id="L386">                updateHeader(editedIssue)</span>
+<span class="nc" id="L387">                return</span>
+            }
+            COMMENT_CREATE -&gt; {
+<span class="nc" id="L390">                val comment: GitHubComment? = data.getParcelableExtra(EXTRA_COMMENT)</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">                if (comment != null) {</span>
+<span class="nc" id="L392">                    items += comment</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">                    issue = issue!!.toBuilder()</span>
+<span class="nc bnc" id="L394" title="All 4 branches missed.">                            .comments(issue!!.comments()!! + 1)</span>
+<span class="nc" id="L395">                            .build()</span>
+<span class="nc" id="L396">                    updateList(issue, items)</span>
+                }
+<span class="nc" id="L398">                return</span>
+            }
+            COMMENT_EDIT -&gt; {
+<span class="nc" id="L401">                val comment = data.getParcelableExtra&lt;GitHubComment&gt;(EXTRA_COMMENT)</span>
+<span class="nc bnc" id="L402" title="All 6 branches missed.">                if (comment != null &amp;&amp; items.isNotEmpty()) {</span>
+<span class="nc" id="L403">                    val commentPosition = findCommentPositionInItems(comment)</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">                    if (commentPosition &gt;= 0) {</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                        commentImageGetter.removeFromCache(comment.id())</span>
+<span class="nc" id="L406">                        replaceCommentInItems(commentPosition, comment)</span>
+<span class="nc" id="L407">                        updateList(issue, items)</span>
+                    }
+                } else {
+<span class="nc" id="L410">                    refreshIssue()</span>
+                }
+            }
+        }
+<span class="nc" id="L414">    }</span>
+
+    private fun shareIssue() {
+<span class="nc" id="L417">        val id = InfoUtils.createRepoId(repositoryId)</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">        if (IssueUtils.isPullRequest(issue)) {</span>
+<span class="nc" id="L419">            startActivity(ShareUtils.create(&quot;Pull Request &quot; + issueNumber</span>
+<span class="nc" id="L420">                    + &quot; on &quot; + id, &quot;https://github.com/&quot; + id + &quot;/pull/&quot;</span>
+<span class="nc" id="L421">                    + issueNumber))</span>
+        } else {
+<span class="nc" id="L423">            startActivity(ShareUtils</span>
+<span class="nc" id="L424">                    .create(&quot;Issue $issueNumber on $id&quot;,</span>
+<span class="nc" id="L425">                            &quot;https://github.com/&quot; + id + &quot;/issues/&quot;</span>
+<span class="nc" id="L426">                                    + issueNumber))</span>
+        }
+<span class="nc" id="L428">    }</span>
+
+    private fun openPullRequestCommits() {
+<span class="nc bnc" id="L431" title="All 2 branches missed.">        if (IssueUtils.isPullRequest(issue)) {</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">            val pullRequest = issue!!.pullRequest()</span>
+
+<span class="nc bnc" id="L434" title="All 4 branches missed.">            val base = pullRequest!!.base()!!.sha()</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">            val head = pullRequest.head()!!.sha()</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">            val repo = pullRequest.base()!!.repo()</span>
+<span class="nc" id="L437">            startActivity(CommitCompareViewActivity.createIntent(repo, base, head))</span>
+        }
+<span class="nc" id="L439">    }</span>
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+<span class="nc bnc" id="L442" title="All 6 branches missed.">        when (item.itemId) {</span>
+            R.id.m_edit -&gt; {
+<span class="nc bnc" id="L444" title="All 2 branches missed.">                if (issue != null) {</span>
+<span class="nc" id="L445">                    startActivityForResult(EditIssueActivity.createIntent(issue,</span>
+<span class="nc bnc" id="L446" title="All 6 branches missed.">                            repositoryId!!.owner()!!.login(), repositoryId!!.name(), user),</span>
+<span class="nc" id="L447">                            ISSUE_EDIT)</span>
+                }
+<span class="nc" id="L449">                return true</span>
+            }
+            R.id.m_comment -&gt; {
+<span class="nc bnc" id="L452" title="All 2 branches missed.">                if (issue != null) {</span>
+<span class="nc" id="L453">                    startActivityForResult(CreateCommentActivity.createIntent(</span>
+<span class="nc" id="L454">                            repositoryId, issueNumber, user), COMMENT_CREATE)</span>
+                }
+<span class="nc" id="L456">                return true</span>
+            }
+            R.id.m_refresh -&gt; {
+<span class="nc" id="L459">                refreshIssue()</span>
+<span class="nc" id="L460">                return true</span>
+            }
+            R.id.m_share -&gt; {
+<span class="nc bnc" id="L463" title="All 2 branches missed.">                if (issue != null) {</span>
+<span class="nc" id="L464">                    shareIssue()</span>
+                }
+<span class="nc" id="L466">                return true</span>
+            }
+            R.id.m_state -&gt; {
+<span class="nc bnc" id="L469" title="All 2 branches missed.">                if (issue != null) {</span>
+<span class="nc bnc" id="L470" title="All 6 branches missed.">                    stateTask!!.confirm(IssueState.Open == issue!!.state())</span>
+                }
+<span class="nc" id="L472">                return true</span>
+            }
+<span class="nc" id="L474">            else -&gt; return super.onOptionsItemSelected(item)</span>
+        }
+    }
+
+    /**
+     * Finds the position of the given comment in the list of this issue's items.
+     *
+     * @param comment The comment to look for.
+     * @return The position of the comment in the list, or -1 if not found.
+     */
+    private fun findCommentPositionInItems(comment: GitHubComment): Int {
+<span class="nc" id="L485">        val id = comment.id()</span>
+<span class="nc" id="L486">        return items.indexOfFirst {</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">            if (it is GitHubComment) {</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">                return@indexOfFirst it.id()!! == id</span>
+            }
+<span class="nc bnc" id="L490" title="All 2 branches missed.">            return@indexOfFirst false</span>
+        }
+    }
+
+    /**
+     * Replaces a comment in the list by another
+     *
+     * @param commentPosition The position of the comment in the list
+     * @param comment         The comment to replace
+     * @return True if successfully removed, false otherwise.
+     */
+    private fun replaceCommentInItems(commentPosition: Int, comment: GitHubComment): Boolean {
+<span class="nc" id="L502">        val item = items[commentPosition]</span>
+<span class="nc bnc" id="L503" title="All 2 branches missed.">        if (item is GitHubComment) {</span>
+<span class="nc" id="L504">            items[commentPosition] = comment</span>
+<span class="nc" id="L505">            return true</span>
+        }
+<span class="nc" id="L507">        return false</span>
+    }
+
+    override fun onCommitsClicked() {
+<span class="nc bnc" id="L511" title="All 2 branches missed.">        if (IssueUtils.isPullRequest(issue)) {</span>
+<span class="nc" id="L512">            openPullRequestCommits()</span>
+        }
+<span class="nc" id="L514">    }</span>
+
+    override fun onStateClicked() {
+<span class="nc bnc" id="L517" title="All 2 branches missed.">        if (issue != null) {</span>
+<span class="nc bnc" id="L518" title="All 6 branches missed.">            stateTask!!.confirm(IssueState.Open == issue!!.state())</span>
+        }
+<span class="nc" id="L520">    }</span>
+
+    override fun onMilestonesClicked() {
+<span class="nc bnc" id="L523" title="All 4 branches missed.">        if (issue != null &amp;&amp; canWrite) {</span>
+<span class="nc bnc" id="L524" title="All 4 branches missed.">            milestoneTask!!.prompt(issue!!.milestone())</span>
+        }
+<span class="nc" id="L526">    }</span>
+
+    override fun onAssigneesClicked() {
+<span class="nc bnc" id="L529" title="All 4 branches missed.">        if (issue != null &amp;&amp; canWrite) {</span>
+<span class="nc bnc" id="L530" title="All 4 branches missed.">            assigneeTask!!.prompt(issue!!.assignee())</span>
+        }
+<span class="nc" id="L532">    }</span>
+
+    override fun onLabelsClicked() {
+<span class="nc bnc" id="L535" title="All 4 branches missed.">        if (issue != null &amp;&amp; canWrite) {</span>
+<span class="nc bnc" id="L536" title="All 4 branches missed.">            labelsTask!!.prompt(issue!!.labels())</span>
+        }
+<span class="nc" id="L538">    }</span>
+
+<span class="nc" id="L540">    companion object {</span>
+<span class="nc" id="L541">        private val TAG = &quot;IssueFragment&quot;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.7.9.201702052155</span>Generated by the Android Gradle plugin 3.6.1</div></body></html>
