@@ -1,0 +1,1526 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Preferences.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.anki</a> &gt; <span class="el_source">Preferences.java</span></div><h1>Preferences.java</h1><pre class="source lang-java linenums">/**
+ * ************************************************************************************
+ *  Copyright (c) 2009 Nicolas Raoul &lt;nicolas.raoul@gmail.com&gt;                           *
+ *  Copyright (c) 2009 Edu Zamora &lt;edu.zasu@gmail.com&gt;                                   *
+ *  Copyright (c) 2010 Norbert Nagold &lt;norbert.nagold@gmail.com&gt;                         *
+ *  Copyright (c) 2012 Kostas Spyropoulos &lt;inigo.aldana@gmail.com&gt;                       *
+ *  Copyright (c) 2015 Timothy Rae &lt;perceptualchaos2@gmail.com&gt;                          *
+ *                                                                                       *
+ *  This program is free software; you can redistribute it and/or modify it under        *
+ *  the terms of the GNU General Public License as published by the Free Software        *
+ *  Foundation; either version 3 of the License, or (at your option) any later           *
+ *  version.                                                                             *
+ *                                                                                       *
+ *  This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ *  WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ *  PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                       *
+ *  You should have received a copy of the GNU General Public License along with         *
+ *  this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ * **************************************************************************************
+ */
+package com.ichi2.anki;
+
+import android.app.AlarmManager;
+import android.app.AlertDialog;
+import android.app.PendingIntent;
+import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.graphics.drawable.Drawable;
+import android.net.Uri;
+import android.os.Bundle;
+import android.provider.MediaStore;
+import android.text.TextUtils;
+import android.view.MenuItem;
+import android.view.WindowManager.BadTokenException;
+import android.webkit.URLUtil;
+import android.widget.Toast;
+import com.afollestad.materialdialogs.MaterialDialog;
+import com.ichi2.anim.ActivityTransitionAnimation;
+import com.ichi2.anki.contextmenu.AnkiCardContextMenu;
+import com.ichi2.anki.contextmenu.CardBrowserContextMenu;
+import com.ichi2.anki.debug.DatabaseLock;
+import com.ichi2.anki.exception.ConfirmModSchemaException;
+import com.ichi2.anki.exception.StorageAccessException;
+import com.ichi2.anki.services.BootService;
+import com.ichi2.anki.services.NotificationService;
+import com.ichi2.anki.web.CustomSyncServer;
+import com.ichi2.compat.CompatHelper;
+import com.ichi2.libanki.Collection;
+import com.ichi2.libanki.Utils;
+import com.ichi2.preferences.NumberRangePreference;
+import com.ichi2.themes.Themes;
+import com.ichi2.ui.AppCompatPreferenceActivity;
+import com.ichi2.ui.ConfirmationPreference;
+import com.ichi2.ui.SeekBarPreference;
+import com.ichi2.utils.AdaptionUtil;
+import com.ichi2.utils.LanguageUtil;
+import com.ichi2.anki.analytics.UsageAnalytics;
+import com.ichi2.utils.VersionUtils;
+import com.ichi2.utils.JSONObject;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.nio.channels.FileChannel;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import androidx.annotation.NonNull;
+import androidx.annotation.StringRes;
+import androidx.annotation.VisibleForTesting;
+import androidx.vectordrawable.graphics.drawable.VectorDrawableCompat;
+import timber.log.Timber;
+import static com.ichi2.anim.ActivityTransitionAnimation.Direction.FADE;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+// TODO Tracked in https://github.com/ankidroid/Anki-Android/issues/5019
+@SuppressWarnings(&quot;deprecation&quot;)
+interface PreferenceContext {
+
+    void addPreferencesFromResource(int preferencesResId);
+
+    android.preference.PreferenceScreen getPreferenceScreen();
+}
+
+/**
+ * Preferences dialog.
+ */
+// TODO Tracked in https://github.com/ankidroid/Anki-Android/issues/5019
+@SuppressWarnings(&quot;deprecation&quot;)
+<span class="nc" id="L102">public class Preferences extends AppCompatPreferenceActivity implements PreferenceContext, OnSharedPreferenceChangeListener {</span>
+
+    /**
+     * Key of the language preference
+     */
+    public static final String LANGUAGE = &quot;language&quot;;
+
+    /* Only enable AnkiDroid notifications unrelated to due reminders */
+    public static final int PENDING_NOTIFICATIONS_ONLY = 1000000;
+
+    // Other variables
+<span class="nc" id="L113">    private final HashMap&lt;String, String&gt; mOriginalSumarries = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L115">    private static final String[] sCollectionPreferences = { &quot;showEstimates&quot;, &quot;showProgress&quot;, &quot;learnCutoff&quot;, &quot;timeLimit&quot;, &quot;useCurrent&quot;, &quot;newSpread&quot;, &quot;dayOffset&quot;, &quot;schedVer&quot; };</span>
+
+    private static final int RESULT_LOAD_IMG = 111;
+
+    private android.preference.CheckBoxPreference backgroundImage;
+
+    private static long fileLength;
+
+    // ----------------------------------------------------------------------------
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+<span class="nc bnc" id="L126" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10366)) {</span>
+<span class="nc" id="L127">            Themes.setThemeLegacy(this);</span>
+        }
+<span class="nc bnc" id="L129" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10367)) {</span>
+<span class="nc" id="L130">            super.onCreate(savedInstanceState);</span>
+        }
+<span class="nc bnc" id="L132" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10368)) {</span>
+            // Add a home button to the actionbar
+<span class="nc" id="L134">            getSupportActionBar().setHomeButtonEnabled(true);</span>
+        }
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10369)) {</span>
+<span class="nc" id="L137">            getSupportActionBar().setDisplayHomeAsUpEnabled(true);</span>
+        }
+<span class="nc bnc" id="L139" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10370)) {</span>
+<span class="nc" id="L140">            setTitle(getResources().getText(R.string.preferences_title));</span>
+        }
+<span class="nc" id="L142">    }</span>
+
+    private Collection getCol() {
+<span class="nc" id="L145">        return CollectionHelper.getInstance().getCol(this);</span>
+    }
+
+    @Override
+    public void onBuildHeaders(List&lt;Header&gt; target) {
+<span class="nc bnc" id="L150" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10371)) {</span>
+<span class="nc" id="L151">            loadHeadersFromResource(R.xml.preference_headers, target);</span>
+        }
+<span class="nc" id="L153">        Iterator&lt;Header&gt; iterator = target.iterator();</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10375)) {</span>
+            {
+<span class="nc" id="L156">                long _loopCounter171 = 0;</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">                while (iterator.hasNext()) {</span>
+<span class="nc" id="L158">                    ListenerUtil.loopListener.listen(&quot;_loopCounter171&quot;, ++_loopCounter171);</span>
+<span class="nc" id="L159">                    Header header = iterator.next();</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10374)) {</span>
+<span class="nc bnc" id="L161" title="All 10 branches missed.">                        if ((ListenerUtil.mutListener.listen(10372) ? ((header.titleRes == R.string.pref_cat_advanced) || AdaptionUtil.isRestrictedLearningDevice()) : ((header.titleRes == R.string.pref_cat_advanced) &amp;&amp; AdaptionUtil.isRestrictedLearningDevice()))) {</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10373)) {</span>
+<span class="nc" id="L163">                                iterator.remove();</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L167">                }</span>
+            }
+        }
+<span class="nc" id="L170">    }</span>
+
+    @Override
+    protected boolean isValidFragment(String fragmentName) {
+<span class="nc" id="L174">        return SettingsFragment.class.getName().equals(fragmentName);</span>
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10377)) {</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">            if (item.getItemId() == android.R.id.home) {</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10376)) {</span>
+<span class="nc" id="L182">                    onBackPressed();</span>
+                }
+<span class="nc" id="L184">                return true;</span>
+            }
+        }
+<span class="nc" id="L187">        return false;</span>
+    }
+
+    @Override
+    public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10378)) {</span>
+<span class="nc" id="L193">            updatePreference(sharedPreferences, key, this);</span>
+        }
+<span class="nc" id="L195">    }</span>
+
+    public static Intent getPreferenceSubscreenIntent(Context context, String subscreen) {
+<span class="nc" id="L198">        Intent i = new Intent(context, Preferences.class);</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10379)) {</span>
+<span class="nc" id="L200">            i.putExtra(android.preference.PreferenceActivity.EXTRA_SHOW_FRAGMENT, &quot;com.ichi2.anki.Preferences$SettingsFragment&quot;);</span>
+        }
+<span class="nc" id="L202">        Bundle extras = new Bundle();</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10380)) {</span>
+<span class="nc" id="L204">            extras.putString(&quot;subscreen&quot;, subscreen);</span>
+        }
+<span class="nc bnc" id="L206" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10381)) {</span>
+<span class="nc" id="L207">            i.putExtra(android.preference.PreferenceActivity.EXTRA_SHOW_FRAGMENT_ARGUMENTS, extras);</span>
+        }
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10382)) {</span>
+<span class="nc" id="L210">            i.putExtra(android.preference.PreferenceActivity.EXTRA_NO_HEADERS, true);</span>
+        }
+<span class="nc" id="L212">        return i;</span>
+    }
+
+    private void initSubscreen(String action, PreferenceContext listener) {
+        android.preference.PreferenceScreen screen;
+<span class="nc bnc" id="L217" title="All 9 branches missed.">        switch(action) {</span>
+            case &quot;com.ichi2.anki.prefs.general&quot;:
+<span class="nc bnc" id="L219" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10383)) {</span>
+<span class="nc" id="L220">                    listener.addPreferencesFromResource(R.xml.preferences_general);</span>
+                }
+<span class="nc" id="L222">                screen = listener.getPreferenceScreen();</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10386)) {</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">                    if (AdaptionUtil.isRestrictedLearningDevice()) {</span>
+<span class="nc" id="L225">                        android.preference.CheckBoxPreference mCheckBoxPref_Vibrate = (android.preference.CheckBoxPreference) screen.findPreference(&quot;widgetVibrate&quot;);</span>
+<span class="nc" id="L226">                        android.preference.CheckBoxPreference mCheckBoxPref_Blink = (android.preference.CheckBoxPreference) screen.findPreference(&quot;widgetBlink&quot;);</span>
+<span class="nc" id="L227">                        android.preference.PreferenceCategory mCategory = (android.preference.PreferenceCategory) screen.findPreference(&quot;category_general_notification_pref&quot;);</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10384)) {</span>
+<span class="nc" id="L229">                            mCategory.removePreference(mCheckBoxPref_Vibrate);</span>
+                        }
+<span class="nc bnc" id="L231" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10385)) {</span>
+<span class="nc" id="L232">                            mCategory.removePreference(mCheckBoxPref_Blink);</span>
+                        }
+                    }
+                }
+                try {
+                    // See AppCompatDelegate.setCompatVectorFromResourcesEnabled() for more info.
+<span class="nc" id="L238">                    Drawable languageIcon = VectorDrawableCompat.create(getResources(), R.drawable.ic_language_black_24dp, getTheme());</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10388)) {</span>
+<span class="nc" id="L240">                        screen.findPreference(&quot;language&quot;).setIcon(languageIcon);</span>
+                    }
+<span class="nc" id="L242">                } catch (Exception e) {</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10387)) {</span>
+<span class="nc" id="L244">                        Timber.w(e, &quot;Failed to set language icon&quot;);</span>
+                    }
+<span class="nc" id="L246">                }</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10389)) {</span>
+                    // Build languages
+<span class="nc" id="L249">                    initializeLanguageDialog(screen);</span>
+                }
+                break;
+            case &quot;com.ichi2.anki.prefs.reviewing&quot;:
+<span class="nc bnc" id="L253" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10390)) {</span>
+<span class="nc" id="L254">                    listener.addPreferencesFromResource(R.xml.preferences_reviewing);</span>
+                }
+<span class="nc" id="L256">                screen = listener.getPreferenceScreen();</span>
+                // Show error toast if the user tries to disable answer button without gestures on
+<span class="nc" id="L258">                android.preference.ListPreference fullscreenPreference = (android.preference.ListPreference) screen.findPreference(&quot;fullscreenMode&quot;);</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10391)) {</span>
+<span class="nc" id="L260">                    fullscreenPreference.setOnPreferenceChangeListener((preference, newValue) -&gt; {</span>
+<span class="nc" id="L261">                        SharedPreferences prefs = AnkiDroidApp.getSharedPrefs(Preferences.this);</span>
+<span class="nc bnc" id="L262" title="All 4 branches missed.">                        if (prefs.getBoolean(&quot;gestures&quot;, false) || !&quot;2&quot;.equals(newValue)) {</span>
+<span class="nc" id="L263">                            return true;</span>
+                        } else {
+<span class="nc" id="L265">                            Toast.makeText(getApplicationContext(), R.string.full_screen_error_gestures, Toast.LENGTH_LONG).show();</span>
+<span class="nc" id="L266">                            return false;</span>
+                        }
+                    });
+                }
+                // Custom buttons options
+<span class="nc" id="L271">                android.preference.Preference customButtonsPreference = screen.findPreference(&quot;custom_buttons_link&quot;);</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10392)) {</span>
+<span class="nc" id="L273">                    customButtonsPreference.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc" id="L274">                        Intent i = getPreferenceSubscreenIntent(Preferences.this, &quot;com.ichi2.anki.prefs.custom_buttons&quot;);</span>
+<span class="nc" id="L275">                        startActivity(i);</span>
+<span class="nc" id="L276">                        return true;</span>
+                    });
+                }
+                break;
+            case &quot;com.ichi2.anki.prefs.appearance&quot;:
+<span class="nc bnc" id="L281" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10393)) {</span>
+<span class="nc" id="L282">                    listener.addPreferencesFromResource(R.xml.preferences_appearance);</span>
+                }
+<span class="nc" id="L284">                screen = listener.getPreferenceScreen();</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10394)) {</span>
+<span class="nc" id="L286">                    backgroundImage = (android.preference.CheckBoxPreference) screen.findPreference(&quot;deckPickerBackground&quot;);</span>
+                }
+<span class="nc bnc" id="L288" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10395)) {</span>
+<span class="nc" id="L289">                    backgroundImage.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">                        if (backgroundImage.isChecked()) {</span>
+                            try {
+<span class="nc" id="L292">                                Intent galleryIntent = new Intent(Intent.ACTION_PICK, android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI);</span>
+<span class="nc" id="L293">                                startActivityForResult(galleryIntent, RESULT_LOAD_IMG);</span>
+<span class="nc" id="L294">                                backgroundImage.setChecked(true);</span>
+<span class="nc" id="L295">                            } catch (Exception ex) {</span>
+<span class="nc" id="L296">                                Timber.e(&quot;%s&quot;, ex.getLocalizedMessage());</span>
+<span class="nc" id="L297">                            }</span>
+                        } else {
+<span class="nc" id="L299">                            backgroundImage.setChecked(false);</span>
+<span class="nc" id="L300">                            String currentAnkiDroidDirectory = CollectionHelper.getCurrentAnkiDroidDirectory(this);</span>
+<span class="nc" id="L301">                            File imgFile = new File(currentAnkiDroidDirectory, &quot;DeckPickerBackground.png&quot;);</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">                            if (imgFile.exists()) {</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                                if (imgFile.delete()) {</span>
+<span class="nc" id="L304">                                    UIUtils.showThemedToast(this, getString(R.string.background_image_removed), false);</span>
+                                } else {
+<span class="nc" id="L306">                                    UIUtils.showThemedToast(this, getString(R.string.error_deleting_image), false);</span>
+                                }
+                            } else {
+<span class="nc" id="L309">                                UIUtils.showThemedToast(this, getString(R.string.background_image_removed), false);</span>
+                            }
+                        }
+<span class="nc" id="L312">                        return true;</span>
+                    });
+                }
+<span class="nc bnc" id="L315" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10396)) {</span>
+<span class="nc" id="L316">                    initializeCustomFontsDialog(screen);</span>
+                }
+                break;
+            case &quot;com.ichi2.anki.prefs.gestures&quot;:
+<span class="nc bnc" id="L320" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10397)) {</span>
+<span class="nc" id="L321">                    listener.addPreferencesFromResource(R.xml.preferences_gestures);</span>
+                }
+<span class="nc" id="L323">                screen = listener.getPreferenceScreen();</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10398)) {</span>
+<span class="nc" id="L325">                    updateGestureCornerTouch(screen);</span>
+                }
+                break;
+            case &quot;com.ichi2.anki.prefs.custom_buttons&quot;:
+<span class="nc bnc" id="L329" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10399)) {</span>
+<span class="nc" id="L330">                    getSupportActionBar().setTitle(R.string.custom_buttons);</span>
+                }
+<span class="nc bnc" id="L332" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10400)) {</span>
+<span class="nc" id="L333">                    listener.addPreferencesFromResource(R.xml.preferences_custom_buttons);</span>
+                }
+<span class="nc" id="L335">                screen = listener.getPreferenceScreen();</span>
+                // Reset toolbar button customizations
+<span class="nc" id="L337">                android.preference.Preference reset_custom_buttons = screen.findPreference(&quot;reset_custom_buttons&quot;);</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10401)) {</span>
+<span class="nc" id="L339">                    reset_custom_buttons.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc" id="L340">                        SharedPreferences.Editor edit = AnkiDroidApp.getSharedPrefs(getBaseContext()).edit();</span>
+<span class="nc" id="L341">                        edit.remove(&quot;customButtonUndo&quot;);</span>
+<span class="nc" id="L342">                        edit.remove(&quot;customButtonScheduleCard&quot;);</span>
+<span class="nc" id="L343">                        edit.remove(&quot;customButtonEditCard&quot;);</span>
+<span class="nc" id="L344">                        edit.remove(&quot;customButtonTags&quot;);</span>
+<span class="nc" id="L345">                        edit.remove(&quot;customButtonAddCard&quot;);</span>
+<span class="nc" id="L346">                        edit.remove(&quot;customButtonReplay&quot;);</span>
+<span class="nc" id="L347">                        edit.remove(&quot;customButtonCardInfo&quot;);</span>
+<span class="nc" id="L348">                        edit.remove(&quot;customButtonSelectTts&quot;);</span>
+<span class="nc" id="L349">                        edit.remove(&quot;customButtonDeckOptions&quot;);</span>
+<span class="nc" id="L350">                        edit.remove(&quot;customButtonMarkCard&quot;);</span>
+<span class="nc" id="L351">                        edit.remove(&quot;customButtonToggleMicToolBar&quot;);</span>
+<span class="nc" id="L352">                        edit.remove(&quot;customButtonBury&quot;);</span>
+<span class="nc" id="L353">                        edit.remove(&quot;customButtonSuspend&quot;);</span>
+<span class="nc" id="L354">                        edit.remove(&quot;customButtonFlag&quot;);</span>
+<span class="nc" id="L355">                        edit.remove(&quot;customButtonDelete&quot;);</span>
+<span class="nc" id="L356">                        edit.remove(&quot;customButtonEnableWhiteboard&quot;);</span>
+<span class="nc" id="L357">                        edit.remove(&quot;customButtonSaveWhiteboard&quot;);</span>
+<span class="nc" id="L358">                        edit.remove(&quot;customButtonWhiteboardPenColor&quot;);</span>
+<span class="nc" id="L359">                        edit.remove(&quot;customButtonClearWhiteboard&quot;);</span>
+<span class="nc" id="L360">                        edit.remove(&quot;customButtonShowHideWhiteboard&quot;);</span>
+<span class="nc" id="L361">                        edit.apply();</span>
+                        // TODO: Should reload the preferences screen on completion
+<span class="nc" id="L363">                        return true;</span>
+                    });
+                }
+                break;
+            case &quot;com.ichi2.anki.prefs.advanced&quot;:
+<span class="nc bnc" id="L368" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10402)) {</span>
+<span class="nc" id="L369">                    listener.addPreferencesFromResource(R.xml.preferences_advanced);</span>
+                }
+<span class="nc" id="L371">                screen = listener.getPreferenceScreen();</span>
+                // Check that input is valid before committing change in the collection path
+<span class="nc" id="L373">                android.preference.EditTextPreference collectionPathPreference = (android.preference.EditTextPreference) screen.findPreference(&quot;deckPath&quot;);</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10403)) {</span>
+<span class="nc" id="L375">                    collectionPathPreference.setOnPreferenceChangeListener((preference, newValue) -&gt; {</span>
+<span class="nc" id="L376">                        final String newPath = (String) newValue;</span>
+                        try {
+<span class="nc" id="L378">                            CollectionHelper.initializeAnkiDroidDirectory(newPath);</span>
+<span class="nc" id="L379">                            return true;</span>
+<span class="nc" id="L380">                        } catch (StorageAccessException e) {</span>
+<span class="nc" id="L381">                            Timber.e(e, &quot;Could not initialize directory: %s&quot;, newPath);</span>
+<span class="nc" id="L382">                            Toast.makeText(getApplicationContext(), R.string.dialog_collection_path_not_dir, Toast.LENGTH_LONG).show();</span>
+<span class="nc" id="L383">                            return false;</span>
+                        }
+                    });
+                }
+                // Custom sync server option
+<span class="nc" id="L388">                android.preference.Preference customSyncServerPreference = screen.findPreference(&quot;custom_sync_server_link&quot;);</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10404)) {</span>
+<span class="nc" id="L390">                    customSyncServerPreference.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc" id="L391">                        Intent i = getPreferenceSubscreenIntent(Preferences.this, &quot;com.ichi2.anki.prefs.custom_sync_server&quot;);</span>
+<span class="nc" id="L392">                        startActivity(i);</span>
+<span class="nc" id="L393">                        return true;</span>
+                    });
+                }
+                // Advanced statistics option
+<span class="nc" id="L397">                android.preference.Preference advancedStatisticsPreference = screen.findPreference(&quot;advanced_statistics_link&quot;);</span>
+<span class="nc bnc" id="L398" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10405)) {</span>
+<span class="nc" id="L399">                    advancedStatisticsPreference.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc" id="L400">                        Intent i = getPreferenceSubscreenIntent(Preferences.this, &quot;com.ichi2.anki.prefs.advanced_statistics&quot;);</span>
+<span class="nc" id="L401">                        startActivity(i);</span>
+<span class="nc" id="L402">                        return true;</span>
+                    });
+                }
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10406)) {</span>
+<span class="nc" id="L406">                    setupContextMenuPreference(screen, CardBrowserContextMenu.CARD_BROWSER_CONTEXT_MENU_PREF_KEY, R.string.card_browser_context_menu);</span>
+                }
+<span class="nc bnc" id="L408" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10407)) {</span>
+<span class="nc" id="L409">                    setupContextMenuPreference(screen, AnkiCardContextMenu.ANKI_CARD_CONTEXT_MENU_PREF_KEY, R.string.context_menu_anki_card_label);</span>
+                }
+<span class="nc bnc" id="L411" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10415)) {</span>
+                    // Make it possible to test crash reporting, but only for DEBUG builds
+<span class="nc bnc" id="L413" title="All 10 branches missed.">                    if ((ListenerUtil.mutListener.listen(10408) ? (BuildConfig.DEBUG || !AdaptionUtil.isUserATestClient()) : (BuildConfig.DEBUG &amp;&amp; !AdaptionUtil.isUserATestClient()))) {</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10409)) {</span>
+<span class="nc" id="L415">                            Timber.i(&quot;Debug mode, allowing for test crashes&quot;);</span>
+                        }
+<span class="nc" id="L417">                        android.preference.Preference triggerTestCrashPreference = new android.preference.Preference(this);</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10410)) {</span>
+<span class="nc" id="L419">                            triggerTestCrashPreference.setKey(&quot;trigger_crash_preference&quot;);</span>
+                        }
+<span class="nc bnc" id="L421" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10411)) {</span>
+<span class="nc" id="L422">                            triggerTestCrashPreference.setTitle(&quot;Trigger test crash&quot;);</span>
+                        }
+<span class="nc bnc" id="L424" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10412)) {</span>
+<span class="nc" id="L425">                            triggerTestCrashPreference.setSummary(&quot;Touch here for an immediate test crash&quot;);</span>
+                        }
+<span class="nc bnc" id="L427" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10413)) {</span>
+<span class="nc" id="L428">                            triggerTestCrashPreference.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc" id="L429">                                Timber.w(&quot;Crash triggered on purpose from advanced preferences in debug mode&quot;);</span>
+<span class="nc" id="L430">                                throw new RuntimeException(&quot;This is a test crash&quot;);</span>
+                            });
+                        }
+<span class="nc bnc" id="L433" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10414)) {</span>
+<span class="nc" id="L434">                            screen.addPreference(triggerTestCrashPreference);</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L438" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10422)) {</span>
+                    // Make it possible to test analytics, but only for DEBUG builds
+<span class="nc bnc" id="L440" title="All 2 branches missed.">                    if (BuildConfig.DEBUG) {</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10416)) {</span>
+<span class="nc" id="L442">                            Timber.i(&quot;Debug mode, allowing for dynamic analytics config&quot;);</span>
+                        }
+<span class="nc" id="L444">                        android.preference.Preference analyticsDebugMode = new android.preference.Preference(this);</span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10417)) {</span>
+<span class="nc" id="L446">                            analyticsDebugMode.setKey(&quot;analytics_debug_preference&quot;);</span>
+                        }
+<span class="nc bnc" id="L448" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10418)) {</span>
+<span class="nc" id="L449">                            analyticsDebugMode.setTitle(&quot;Switch Analytics to dev mode&quot;);</span>
+                        }
+<span class="nc bnc" id="L451" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10419)) {</span>
+<span class="nc" id="L452">                            analyticsDebugMode.setSummary(&quot;Touch here to use Analytics dev tag and 100% sample rate&quot;);</span>
+                        }
+<span class="nc bnc" id="L454" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10420)) {</span>
+<span class="nc" id="L455">                            analyticsDebugMode.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc bnc" id="L456" title="All 2 branches missed.">                                if (UsageAnalytics.isEnabled()) {</span>
+<span class="nc" id="L457">                                    UIUtils.showThemedToast(this, &quot;Analytics set to dev mode&quot;, true);</span>
+                                } else {
+<span class="nc" id="L459">                                    UIUtils.showThemedToast(this, &quot;Done! Enable Analytics in 'General' settings to use.&quot;, true);</span>
+                                }
+<span class="nc" id="L461">                                UsageAnalytics.setDevMode();</span>
+<span class="nc" id="L462">                                return true;</span>
+                            });
+                        }
+<span class="nc bnc" id="L465" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10421)) {</span>
+<span class="nc" id="L466">                            screen.addPreference(analyticsDebugMode);</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L470" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10429)) {</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">                    if (BuildConfig.DEBUG) {</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10423)) {</span>
+<span class="nc" id="L473">                            Timber.i(&quot;Debug mode, allowing database lock preference&quot;);</span>
+                        }
+<span class="nc" id="L475">                        android.preference.Preference lockDbPreference = new android.preference.Preference(this);</span>
+<span class="nc bnc" id="L476" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10424)) {</span>
+<span class="nc" id="L477">                            lockDbPreference.setKey(&quot;debug_lock_database&quot;);</span>
+                        }
+<span class="nc bnc" id="L479" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10425)) {</span>
+<span class="nc" id="L480">                            lockDbPreference.setTitle(&quot;Lock Database&quot;);</span>
+                        }
+<span class="nc bnc" id="L482" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10426)) {</span>
+<span class="nc" id="L483">                            lockDbPreference.setSummary(&quot;Touch here to lock the database (all threads block in-process, exception if using second process)&quot;);</span>
+                        }
+<span class="nc bnc" id="L485" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10427)) {</span>
+<span class="nc" id="L486">                            lockDbPreference.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc" id="L487">                                DatabaseLock.engage(this);</span>
+<span class="nc" id="L488">                                return true;</span>
+                            });
+                        }
+<span class="nc bnc" id="L491" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10428)) {</span>
+<span class="nc" id="L492">                            screen.addPreference(lockDbPreference);</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L496" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10435)) {</span>
+<span class="nc bnc" id="L497" title="All 2 branches missed.">                    if (BuildConfig.DEBUG) {</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10430)) {</span>
+<span class="nc" id="L499">                            Timber.i(&quot;Debug mode, adding show changelog&quot;);</span>
+                        }
+<span class="nc" id="L501">                        android.preference.Preference changelogPreference = new android.preference.Preference(this);</span>
+<span class="nc bnc" id="L502" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10431)) {</span>
+<span class="nc" id="L503">                            changelogPreference.setTitle(&quot;Open Changelog&quot;);</span>
+                        }
+<span class="nc" id="L505">                        Intent infoIntent = new Intent(this, Info.class);</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10432)) {</span>
+<span class="nc" id="L507">                            infoIntent.putExtra(Info.TYPE_EXTRA, Info.TYPE_NEW_VERSION);</span>
+                        }
+<span class="nc bnc" id="L509" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10433)) {</span>
+<span class="nc" id="L510">                            changelogPreference.setIntent(infoIntent);</span>
+                        }
+<span class="nc bnc" id="L512" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10434)) {</span>
+<span class="nc" id="L513">                            screen.addPreference(changelogPreference);</span>
+                        }
+                    }
+                }
+                // Force full sync option
+<span class="nc" id="L518">                ConfirmationPreference fullSyncPreference = (ConfirmationPreference) screen.findPreference(&quot;force_full_sync&quot;);</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10436)) {</span>
+<span class="nc" id="L520">                    fullSyncPreference.setDialogMessage(R.string.force_full_sync_summary);</span>
+                }
+<span class="nc bnc" id="L522" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10437)) {</span>
+<span class="nc" id="L523">                    fullSyncPreference.setDialogTitle(R.string.force_full_sync_title);</span>
+                }
+<span class="nc bnc" id="L525" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10438)) {</span>
+<span class="nc" id="L526">                    fullSyncPreference.setOkHandler(() -&gt; {</span>
+<span class="nc bnc" id="L527" title="All 2 branches missed.">                        if (getCol() == null) {</span>
+<span class="nc" id="L528">                            Toast.makeText(getApplicationContext(), R.string.directory_inaccessible, Toast.LENGTH_LONG).show();</span>
+<span class="nc" id="L529">                            return;</span>
+                        }
+<span class="nc" id="L531">                        getCol().modSchemaNoCheck();</span>
+<span class="nc" id="L532">                        getCol().setMod();</span>
+<span class="nc" id="L533">                        Toast.makeText(getApplicationContext(), android.R.string.ok, Toast.LENGTH_SHORT).show();</span>
+<span class="nc" id="L534">                    });</span>
+                }
+<span class="nc bnc" id="L536" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10439)) {</span>
+                    // Workaround preferences
+<span class="nc" id="L538">                    removeUnnecessaryAdvancedPrefs(screen);</span>
+                }
+<span class="nc bnc" id="L540" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10440)) {</span>
+<span class="nc" id="L541">                    addThirdPartyAppsListener(screen);</span>
+                }
+                break;
+            case &quot;com.ichi2.anki.prefs.custom_sync_server&quot;:
+<span class="nc bnc" id="L545" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10441)) {</span>
+<span class="nc" id="L546">                    getSupportActionBar().setTitle(R.string.custom_sync_server_title);</span>
+                }
+<span class="nc bnc" id="L548" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10442)) {</span>
+<span class="nc" id="L549">                    listener.addPreferencesFromResource(R.xml.preferences_custom_sync_server);</span>
+                }
+<span class="nc" id="L551">                screen = listener.getPreferenceScreen();</span>
+<span class="nc" id="L552">                android.preference.Preference syncUrlPreference = screen.findPreference(&quot;syncBaseUrl&quot;);</span>
+<span class="nc" id="L553">                android.preference.Preference mSyncUrlPreference = screen.findPreference(&quot;syncMediaUrl&quot;);</span>
+<span class="nc bnc" id="L554" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10443)) {</span>
+<span class="nc" id="L555">                    syncUrlPreference.setOnPreferenceChangeListener((preference, newValue) -&gt; {</span>
+<span class="nc" id="L556">                        String newUrl = newValue.toString();</span>
+<span class="nc bnc" id="L557" title="All 2 branches missed.">                        if (!URLUtil.isValidUrl(newUrl)) {</span>
+<span class="nc" id="L558">                            new AlertDialog.Builder(this).setTitle(R.string.custom_sync_server_base_url_invalid).setPositiveButton(R.string.dialog_ok, null).show();</span>
+<span class="nc" id="L559">                            return false;</span>
+                        }
+<span class="nc" id="L561">                        return true;</span>
+                    });
+                }
+<span class="nc bnc" id="L564" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10444)) {</span>
+<span class="nc" id="L565">                    mSyncUrlPreference.setOnPreferenceChangeListener((preference, newValue) -&gt; {</span>
+<span class="nc" id="L566">                        String newUrl = newValue.toString();</span>
+<span class="nc bnc" id="L567" title="All 2 branches missed.">                        if (!URLUtil.isValidUrl(newUrl)) {</span>
+<span class="nc" id="L568">                            new AlertDialog.Builder(this).setTitle(R.string.custom_sync_server_media_url_invalid).setPositiveButton(R.string.dialog_ok, null).show();</span>
+<span class="nc" id="L569">                            return false;</span>
+                        }
+<span class="nc" id="L571">                        return true;</span>
+                    });
+                }
+                break;
+            case &quot;com.ichi2.anki.prefs.advanced_statistics&quot;:
+<span class="nc bnc" id="L576" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10445)) {</span>
+<span class="nc" id="L577">                    getSupportActionBar().setTitle(R.string.advanced_statistics_title);</span>
+                }
+<span class="nc bnc" id="L579" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10446)) {</span>
+<span class="nc" id="L580">                    listener.addPreferencesFromResource(R.xml.preferences_advanced_statistics);</span>
+                }
+                break;
+        }
+<span class="nc" id="L584">    }</span>
+
+    private void setupContextMenuPreference(android.preference.PreferenceScreen screen, String key, @StringRes int contextMenuName) {
+        // different than the app language
+<span class="nc" id="L588">        android.preference.CheckBoxPreference cardBrowserContextMenuPreference = (android.preference.CheckBoxPreference) screen.findPreference(key);</span>
+<span class="nc" id="L589">        String menuName = getString(contextMenuName);</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10447)) {</span>
+            // Note: The below format strings are generic, not card browser specific despite the name
+<span class="nc" id="L592">            cardBrowserContextMenuPreference.setTitle(getString(R.string.card_browser_enable_external_context_menu, menuName));</span>
+        }
+<span class="nc bnc" id="L594" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10448)) {</span>
+<span class="nc" id="L595">            cardBrowserContextMenuPreference.setSummary(getString(R.string.card_browser_enable_external_context_menu_summary, menuName));</span>
+        }
+<span class="nc" id="L597">    }</span>
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+<span class="nc bnc" id="L601" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10449)) {</span>
+<span class="nc" id="L602">            super.onActivityResult(requestCode, resultCode, data);</span>
+        }
+        // DEFECT #5973: Does not handle Google Drive downloads
+        try {
+<span class="nc bnc" id="L606" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10479)) {</span>
+<span class="nc bnc" id="L607" title="All 106 branches missed.">                if ((ListenerUtil.mutListener.listen(10457) ? ((ListenerUtil.mutListener.listen(10456) ? ((ListenerUtil.mutListener.listen(10455) ? (requestCode &gt;= RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10454) ? (requestCode &lt;= RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10453) ? (requestCode &gt; RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10452) ? (requestCode &lt; RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10451) ? (requestCode != RESULT_LOAD_IMG) : (requestCode == RESULT_LOAD_IMG)))))) || resultCode == RESULT_OK) : ((ListenerUtil.mutListener.listen(10455) ? (requestCode &gt;= RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10454) ? (requestCode &lt;= RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10453) ? (requestCode &gt; RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10452) ? (requestCode &lt; RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10451) ? (requestCode != RESULT_LOAD_IMG) : (requestCode == RESULT_LOAD_IMG)))))) &amp;&amp; resultCode == RESULT_OK)) || null != data) : ((ListenerUtil.mutListener.listen(10456) ? ((ListenerUtil.mutListener.listen(10455) ? (requestCode &gt;= RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10454) ? (requestCode &lt;= RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10453) ? (requestCode &gt; RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10452) ? (requestCode &lt; RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10451) ? (requestCode != RESULT_LOAD_IMG) : (requestCode == RESULT_LOAD_IMG)))))) || resultCode == RESULT_OK) : ((ListenerUtil.mutListener.listen(10455) ? (requestCode &gt;= RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10454) ? (requestCode &lt;= RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10453) ? (requestCode &gt; RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10452) ? (requestCode &lt; RESULT_LOAD_IMG) : (ListenerUtil.mutListener.listen(10451) ? (requestCode != RESULT_LOAD_IMG) : (requestCode == RESULT_LOAD_IMG)))))) &amp;&amp; resultCode == RESULT_OK)) &amp;&amp; null != data))) {</span>
+<span class="nc" id="L608">                    Uri selectedImage = data.getData();</span>
+<span class="nc" id="L609">                    String[] filePathColumn = { MediaStore.Images.Media.DATA };</span>
+<span class="nc" id="L610">                    try (Cursor cursor = getContentResolver().query(selectedImage, filePathColumn, null, null, null)) {</span>
+<span class="nc bnc" id="L611" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10460)) {</span>
+<span class="nc" id="L612">                            cursor.moveToFirst();</span>
+                        }
+<span class="nc" id="L614">                        int columnIndex = cursor.getColumnIndex(filePathColumn[0]);</span>
+<span class="nc" id="L615">                        String imgPathString = cursor.getString(columnIndex);</span>
+<span class="nc" id="L616">                        File sourceFile = new File(imgPathString);</span>
+                        // file size in MB
+<span class="nc bnc" id="L618" title="All 48 branches missed.">                        long fileLength = (ListenerUtil.mutListener.listen(10468) ? (sourceFile.length() % ((ListenerUtil.mutListener.listen(10464) ? (1024 % 1024) : (ListenerUtil.mutListener.listen(10463) ? (1024 / 1024) : (ListenerUtil.mutListener.listen(10462) ? (1024 - 1024) : (ListenerUtil.mutListener.listen(10461) ? (1024 + 1024) : (1024 * 1024))))))) : (ListenerUtil.mutListener.listen(10467) ? (sourceFile.length() * ((ListenerUtil.mutListener.listen(10464) ? (1024 % 1024) : (ListenerUtil.mutListener.listen(10463) ? (1024 / 1024) : (ListenerUtil.mutListener.listen(10462) ? (1024 - 1024) : (ListenerUtil.mutListener.listen(10461) ? (1024 + 1024) : (1024 * 1024))))))) : (ListenerUtil.mutListener.listen(10466) ? (sourceFile.length() - ((ListenerUtil.mutListener.listen(10464) ? (1024 % 1024) : (ListenerUtil.mutListener.listen(10463) ? (1024 / 1024) : (ListenerUtil.mutListener.listen(10462) ? (1024 - 1024) : (ListenerUtil.mutListener.listen(10461) ? (1024 + 1024) : (1024 * 1024))))))) : (ListenerUtil.mutListener.listen(10465) ? (sourceFile.length() + ((ListenerUtil.mutListener.listen(10464) ? (1024 % 1024) : (ListenerUtil.mutListener.listen(10463) ? (1024 / 1024) : (ListenerUtil.mutListener.listen(10462) ? (1024 - 1024) : (ListenerUtil.mutListener.listen(10461) ? (1024 + 1024) : (1024 * 1024))))))) : (sourceFile.length() / ((ListenerUtil.mutListener.listen(10464) ? (1024 % 1024) : (ListenerUtil.mutListener.listen(10463) ? (1024 / 1024) : (ListenerUtil.mutListener.listen(10462) ? (1024 - 1024) : (ListenerUtil.mutListener.listen(10461) ? (1024 + 1024) : (1024 * 1024)))))))))));</span>
+<span class="nc" id="L619">                        String currentAnkiDroidDirectory = CollectionHelper.getCurrentAnkiDroidDirectory(this);</span>
+<span class="nc" id="L620">                        String imageName = &quot;DeckPickerBackground.png&quot;;</span>
+<span class="nc" id="L621">                        File destFile = new File(currentAnkiDroidDirectory, imageName);</span>
+<span class="nc bnc" id="L622" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10478)) {</span>
+                            // Image size less than 10 MB copied to AnkiDroid folder
+<span class="nc bnc" id="L624" title="All 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(10473) ? (fileLength &gt;= 10) : (ListenerUtil.mutListener.listen(10472) ? (fileLength &lt;= 10) : (ListenerUtil.mutListener.listen(10471) ? (fileLength &gt; 10) : (ListenerUtil.mutListener.listen(10470) ? (fileLength != 10) : (ListenerUtil.mutListener.listen(10469) ? (fileLength == 10) : (fileLength &lt; 10))))))) {</span>
+<span class="nc" id="L625">                                try (FileChannel sourceChannel = new FileInputStream(sourceFile).getChannel();</span>
+<span class="nc" id="L626">                                    FileChannel destChannel = new FileOutputStream(destFile).getChannel()) {</span>
+<span class="nc bnc" id="L627" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10476)) {</span>
+<span class="nc" id="L628">                                        destChannel.transferFrom(sourceChannel, 0, sourceChannel.size());</span>
+                                    }
+<span class="nc bnc" id="L630" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10477)) {</span>
+<span class="nc" id="L631">                                        UIUtils.showThemedToast(this, getString(R.string.background_image_applied), false);</span>
+                                    }
+                                }
+                            } else {
+<span class="nc bnc" id="L635" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(10474)) {</span>
+<span class="nc" id="L636">                                    backgroundImage.setChecked(false);</span>
+                                }
+<span class="nc bnc" id="L638" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(10475)) {</span>
+<span class="nc" id="L639">                                    UIUtils.showThemedToast(this, getString(R.string.image_max_size_allowed, 10), false);</span>
+                                }
+                            }
+                        }
+                    }
+<span class="nc" id="L644">                } else {</span>
+<span class="nc bnc" id="L645" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10458)) {</span>
+<span class="nc" id="L646">                        backgroundImage.setChecked(false);</span>
+                    }
+<span class="nc bnc" id="L648" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10459)) {</span>
+<span class="nc" id="L649">                        UIUtils.showThemedToast(this, getString(R.string.no_image_selected), false);</span>
+                    }
+                }
+            }
+<span class="nc" id="L653">        } catch (OutOfMemoryError | Exception e) {</span>
+<span class="nc bnc" id="L654" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10450)) {</span>
+<span class="nc" id="L655">                UIUtils.showThemedToast(this, getString(R.string.error_selecting_image, e.getLocalizedMessage()), false);</span>
+            }
+<span class="nc" id="L657">        }</span>
+<span class="nc" id="L658">    }</span>
+
+    private void addThirdPartyAppsListener(android.preference.PreferenceScreen screen) {
+        // and need to handle the keypress ourself.
+<span class="nc" id="L662">        android.preference.Preference showThirdParty = screen.findPreference(&quot;thirdpartyapps_link&quot;);</span>
+<span class="nc" id="L663">        final String githubThirdPartyAppsUrl = &quot;https://github.com/ankidroid/Anki-Android/wiki/Third-Party-Apps&quot;;</span>
+<span class="nc bnc" id="L664" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10480)) {</span>
+<span class="nc" id="L665">            showThirdParty.setOnPreferenceClickListener((preference) -&gt; {</span>
+                try {
+<span class="nc" id="L667">                    Intent openThirdPartyAppsIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(githubThirdPartyAppsUrl));</span>
+<span class="nc" id="L668">                    super.startActivity(openThirdPartyAppsIntent);</span>
+<span class="nc" id="L669">                } catch (ActivityNotFoundException e) {</span>
+                    // We use a different message here. We have limited space in the snackbar
+<span class="nc" id="L671">                    String error = getString(R.string.activity_start_failed_load_url, githubThirdPartyAppsUrl);</span>
+<span class="nc" id="L672">                    UIUtils.showSimpleSnackbar(this, error, false);</span>
+<span class="nc" id="L673">                }</span>
+<span class="nc" id="L674">                return true;</span>
+            });
+        }
+<span class="nc" id="L677">    }</span>
+
+    /**
+     * Loop over every preference in the list and set the summary text
+     */
+    private void initAllPreferences(android.preference.PreferenceScreen screen) {
+<span class="nc bnc" id="L683" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10503)) {</span>
+            {
+<span class="nc" id="L685">                long _loopCounter174 = 0;</span>
+<span class="nc bnc" id="L686" title="All 22 branches missed.">                for (int i = 0; (ListenerUtil.mutListener.listen(10502) ? (i &gt;= screen.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10501) ? (i &lt;= screen.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10500) ? (i &gt; screen.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10499) ? (i != screen.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10498) ? (i == screen.getPreferenceCount()) : (i &lt; screen.getPreferenceCount())))))); ++i) {</span>
+<span class="nc" id="L687">                    ListenerUtil.loopListener.listen(&quot;_loopCounter174&quot;, ++_loopCounter174);</span>
+<span class="nc" id="L688">                    android.preference.Preference preference = screen.getPreference(i);</span>
+<span class="nc bnc" id="L689" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10497)) {</span>
+<span class="nc bnc" id="L690" title="All 2 branches missed.">                        if (preference instanceof android.preference.PreferenceGroup) {</span>
+<span class="nc" id="L691">                            android.preference.PreferenceGroup preferenceGroup = (android.preference.PreferenceGroup) preference;</span>
+<span class="nc bnc" id="L692" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10496)) {</span>
+                                {
+<span class="nc" id="L694">                                    long _loopCounter173 = 0;</span>
+<span class="nc bnc" id="L695" title="All 22 branches missed.">                                    for (int j = 0; (ListenerUtil.mutListener.listen(10495) ? (j &gt;= preferenceGroup.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10494) ? (j &lt;= preferenceGroup.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10493) ? (j &gt; preferenceGroup.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10492) ? (j != preferenceGroup.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10491) ? (j == preferenceGroup.getPreferenceCount()) : (j &lt; preferenceGroup.getPreferenceCount())))))); ++j) {</span>
+<span class="nc" id="L696">                                        ListenerUtil.loopListener.listen(&quot;_loopCounter173&quot;, ++_loopCounter173);</span>
+<span class="nc" id="L697">                                        android.preference.Preference nestedPreference = preferenceGroup.getPreference(j);</span>
+<span class="nc bnc" id="L698" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(10490)) {</span>
+<span class="nc bnc" id="L699" title="All 2 branches missed.">                                            if (nestedPreference instanceof android.preference.PreferenceGroup) {</span>
+<span class="nc" id="L700">                                                android.preference.PreferenceGroup nestedPreferenceGroup = (android.preference.PreferenceGroup) nestedPreference;</span>
+<span class="nc bnc" id="L701" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(10489)) {</span>
+                                                    {
+<span class="nc" id="L703">                                                        long _loopCounter172 = 0;</span>
+<span class="nc bnc" id="L704" title="All 22 branches missed.">                                                        for (int k = 0; (ListenerUtil.mutListener.listen(10488) ? (k &gt;= nestedPreferenceGroup.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10487) ? (k &lt;= nestedPreferenceGroup.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10486) ? (k &gt; nestedPreferenceGroup.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10485) ? (k != nestedPreferenceGroup.getPreferenceCount()) : (ListenerUtil.mutListener.listen(10484) ? (k == nestedPreferenceGroup.getPreferenceCount()) : (k &lt; nestedPreferenceGroup.getPreferenceCount())))))); ++k) {</span>
+<span class="nc" id="L705">                                                            ListenerUtil.loopListener.listen(&quot;_loopCounter172&quot;, ++_loopCounter172);</span>
+<span class="nc bnc" id="L706" title="All 2 branches missed.">                                                            if (!ListenerUtil.mutListener.listen(10483)) {</span>
+<span class="nc" id="L707">                                                                initPreference(nestedPreferenceGroup.getPreference(k));</span>
+                                                            }
+                                                        }
+                                                    }
+                                                }
+<span class="nc" id="L712">                                            } else {</span>
+<span class="nc bnc" id="L713" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(10482)) {</span>
+<span class="nc" id="L714">                                                    initPreference(preferenceGroup.getPreference(j));</span>
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+<span class="nc" id="L721">                        } else {</span>
+<span class="nc bnc" id="L722" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10481)) {</span>
+<span class="nc" id="L723">                                initPreference(preference);</span>
+                            }
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L730">    }</span>
+
+    private void initPreference(android.preference.Preference pref) {
+<span class="nc bnc" id="L733" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10524)) {</span>
+            // Load stored values from Preferences which are stored in the Collection
+<span class="nc bnc" id="L735" title="All 2 branches missed.">            if (Arrays.asList(sCollectionPreferences).contains(pref.getKey())) {</span>
+<span class="nc" id="L736">                Collection col = getCol();</span>
+<span class="nc bnc" id="L737" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10523)) {</span>
+<span class="nc bnc" id="L738" title="All 2 branches missed.">                    if (col != null) {</span>
+                        try {
+<span class="nc" id="L740">                            JSONObject conf = col.getConf();</span>
+<span class="nc bnc" id="L741" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10522)) {</span>
+<span class="nc bnc" id="L742" title="All 9 branches missed.">                                switch(pref.getKey()) {</span>
+                                    case &quot;showEstimates&quot;:
+<span class="nc bnc" id="L744" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(10506)) {</span>
+<span class="nc" id="L745">                                            ((android.preference.CheckBoxPreference) pref).setChecked(conf.getBoolean(&quot;estTimes&quot;));</span>
+                                        }
+                                        break;
+                                    case &quot;showProgress&quot;:
+<span class="nc bnc" id="L749" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(10507)) {</span>
+<span class="nc" id="L750">                                            ((android.preference.CheckBoxPreference) pref).setChecked(conf.getBoolean(&quot;dueCounts&quot;));</span>
+                                        }
+                                        break;
+                                    case &quot;learnCutoff&quot;:
+<span class="nc bnc" id="L754" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(10512)) {</span>
+<span class="nc bnc" id="L755" title="All 8 branches missed.">                                            ((NumberRangePreference) pref).setValue((ListenerUtil.mutListener.listen(10511) ? (conf.getInt(&quot;collapseTime&quot;) % 60) : (ListenerUtil.mutListener.listen(10510) ? (conf.getInt(&quot;collapseTime&quot;) * 60) : (ListenerUtil.mutListener.listen(10509) ? (conf.getInt(&quot;collapseTime&quot;) - 60) : (ListenerUtil.mutListener.listen(10508) ? (conf.getInt(&quot;collapseTime&quot;) + 60) : (conf.getInt(&quot;collapseTime&quot;) / 60))))));</span>
+                                        }
+                                        break;
+                                    case &quot;timeLimit&quot;:
+<span class="nc bnc" id="L759" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(10517)) {</span>
+<span class="nc bnc" id="L760" title="All 8 branches missed.">                                            ((NumberRangePreference) pref).setValue((ListenerUtil.mutListener.listen(10516) ? (conf.getInt(&quot;timeLim&quot;) % 60) : (ListenerUtil.mutListener.listen(10515) ? (conf.getInt(&quot;timeLim&quot;) * 60) : (ListenerUtil.mutListener.listen(10514) ? (conf.getInt(&quot;timeLim&quot;) - 60) : (ListenerUtil.mutListener.listen(10513) ? (conf.getInt(&quot;timeLim&quot;) + 60) : (conf.getInt(&quot;timeLim&quot;) / 60))))));</span>
+                                        }
+                                        break;
+                                    case &quot;useCurrent&quot;:
+<span class="nc bnc" id="L764" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(10518)) {</span>
+<span class="nc bnc" id="L765" title="All 2 branches missed.">                                            ((android.preference.ListPreference) pref).setValueIndex(conf.optBoolean(&quot;addToCur&quot;, true) ? 0 : 1);</span>
+                                        }
+                                        break;
+                                    case &quot;newSpread&quot;:
+<span class="nc bnc" id="L769" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(10519)) {</span>
+<span class="nc" id="L770">                                            ((android.preference.ListPreference) pref).setValueIndex(conf.getInt(&quot;newSpread&quot;));</span>
+                                        }
+                                        break;
+                                    case &quot;dayOffset&quot;:
+<span class="nc" id="L774">                                        Calendar calendar = col.crtGregorianCalendar();</span>
+<span class="nc bnc" id="L775" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(10520)) {</span>
+<span class="nc" id="L776">                                            ((SeekBarPreference) pref).setValue(calendar.get(Calendar.HOUR_OF_DAY));</span>
+                                        }
+                                        break;
+                                    case &quot;schedVer&quot;:
+<span class="nc bnc" id="L780" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(10521)) {</span>
+<span class="nc bnc" id="L781" title="All 2 branches missed.">                                            ((android.preference.CheckBoxPreference) pref).setChecked(conf.optInt(&quot;schedVer&quot;, 1) == 2);</span>
+                                        }
+                                }
+                            }
+<span class="nc" id="L785">                        } catch (NumberFormatException e) {</span>
+<span class="nc" id="L786">                            throw new RuntimeException(e);</span>
+<span class="nc" id="L787">                        }</span>
+                    } else {
+<span class="nc bnc" id="L789" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10505)) {</span>
+                            // Disable Col preferences if Collection closed
+<span class="nc" id="L791">                            pref.setEnabled(false);</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L795" title="All 2 branches missed.">            } else if (&quot;minimumCardsDueForNotification&quot;.equals(pref.getKey())) {</span>
+<span class="nc bnc" id="L796" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10504)) {</span>
+<span class="nc" id="L797">                    updateNotificationPreference((android.preference.ListPreference) pref);</span>
+                }
+            }
+        }
+        // Set the value from the summary cache
+<span class="nc" id="L802">        CharSequence s = pref.getSummary();</span>
+<span class="nc bnc" id="L803" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10525)) {</span>
+<span class="nc bnc" id="L804" title="All 2 branches missed.">            mOriginalSumarries.put(pref.getKey(), (s != null) ? s.toString() : &quot;&quot;);</span>
+        }
+<span class="nc bnc" id="L806" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10526)) {</span>
+            // Update summary
+<span class="nc" id="L808">            updateSummary(pref);</span>
+        }
+<span class="nc" id="L810">    }</span>
+
+    /**
+     * Code which is run when a SharedPreference change has been detected
+     * @param prefs instance of SharedPreferences
+     * @param key key in prefs which is being updated
+     * @param listener PreferenceActivity of PreferenceFragment which is hosting the preference
+     */
+    // Tracked as #5019 on github - convert to fragments
+    @SuppressWarnings(&quot;deprecation&quot;)
+    private void updatePreference(SharedPreferences prefs, String key, PreferenceContext listener) {
+        try {
+<span class="nc" id="L822">            android.preference.PreferenceScreen screen = listener.getPreferenceScreen();</span>
+<span class="nc" id="L823">            android.preference.Preference pref = screen.findPreference(key);</span>
+<span class="nc bnc" id="L824" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10529)) {</span>
+<span class="nc bnc" id="L825" title="All 2 branches missed.">                if (pref == null) {</span>
+<span class="nc bnc" id="L826" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10528)) {</span>
+<span class="nc" id="L827">                        Timber.e(&quot;Preferences: no preference found for the key: %s&quot;, key);</span>
+                    }
+<span class="nc" id="L829">                    return;</span>
+                }
+            }
+<span class="nc bnc" id="L832" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10601)) {</span>
+                // Handle special cases
+<span class="nc bnc" id="L834" title="All 19 branches missed.">                switch(key) {</span>
+                    case CustomSyncServer.PREFERENCE_CUSTOM_MEDIA_SYNC_URL:
+                    case CustomSyncServer.PREFERENCE_CUSTOM_SYNC_BASE:
+                    case CustomSyncServer.PREFERENCE_ENABLE_CUSTOM_SYNC_SERVER:
+<span class="nc bnc" id="L838" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10530)) {</span>
+                            // This may be a tad hasty - performed before &quot;back&quot; is pressed.
+<span class="nc" id="L840">                            CustomSyncServer.handleSyncServerPreferenceChange(getBaseContext());</span>
+                        }
+                        break;
+                    case &quot;timeoutAnswer&quot;:
+                        {
+<span class="nc" id="L845">                            android.preference.CheckBoxPreference keepScreenOn = (android.preference.CheckBoxPreference) screen.findPreference(&quot;keepScreenOn&quot;);</span>
+<span class="nc bnc" id="L846" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10531)) {</span>
+<span class="nc" id="L847">                                keepScreenOn.setChecked(((android.preference.CheckBoxPreference) pref).isChecked());</span>
+                            }
+                            break;
+                        }
+                    case LANGUAGE:
+<span class="nc bnc" id="L852" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10532)) {</span>
+<span class="nc" id="L853">                            closePreferences();</span>
+                        }
+                        break;
+                    case &quot;showProgress&quot;:
+<span class="nc bnc" id="L857" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10533)) {</span>
+<span class="nc" id="L858">                            getCol().getConf().put(&quot;dueCounts&quot;, ((android.preference.CheckBoxPreference) pref).isChecked());</span>
+                        }
+<span class="nc bnc" id="L860" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10534)) {</span>
+<span class="nc" id="L861">                            getCol().setMod();</span>
+                        }
+                        break;
+                    case &quot;showEstimates&quot;:
+<span class="nc bnc" id="L865" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10535)) {</span>
+<span class="nc" id="L866">                            getCol().getConf().put(&quot;estTimes&quot;, ((android.preference.CheckBoxPreference) pref).isChecked());</span>
+                        }
+<span class="nc bnc" id="L868" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10536)) {</span>
+<span class="nc" id="L869">                            getCol().setMod();</span>
+                        }
+                        break;
+                    case &quot;newSpread&quot;:
+<span class="nc bnc" id="L873" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10537)) {</span>
+<span class="nc" id="L874">                            getCol().getConf().put(&quot;newSpread&quot;, Integer.parseInt(((android.preference.ListPreference) pref).getValue()));</span>
+                        }
+<span class="nc bnc" id="L876" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10538)) {</span>
+<span class="nc" id="L877">                            getCol().setMod();</span>
+                        }
+                        break;
+                    case &quot;timeLimit&quot;:
+<span class="nc bnc" id="L881" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10543)) {</span>
+<span class="nc bnc" id="L882" title="All 8 branches missed.">                            getCol().getConf().put(&quot;timeLim&quot;, (ListenerUtil.mutListener.listen(10542) ? (((NumberRangePreference) pref).getValue() % 60) : (ListenerUtil.mutListener.listen(10541) ? (((NumberRangePreference) pref).getValue() / 60) : (ListenerUtil.mutListener.listen(10540) ? (((NumberRangePreference) pref).getValue() - 60) : (ListenerUtil.mutListener.listen(10539) ? (((NumberRangePreference) pref).getValue() + 60) : (((NumberRangePreference) pref).getValue() * 60))))));</span>
+                        }
+<span class="nc bnc" id="L884" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10544)) {</span>
+<span class="nc" id="L885">                            getCol().setMod();</span>
+                        }
+                        break;
+                    case &quot;learnCutoff&quot;:
+<span class="nc bnc" id="L889" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10549)) {</span>
+<span class="nc bnc" id="L890" title="All 8 branches missed.">                            getCol().getConf().put(&quot;collapseTime&quot;, (ListenerUtil.mutListener.listen(10548) ? (((NumberRangePreference) pref).getValue() % 60) : (ListenerUtil.mutListener.listen(10547) ? (((NumberRangePreference) pref).getValue() / 60) : (ListenerUtil.mutListener.listen(10546) ? (((NumberRangePreference) pref).getValue() - 60) : (ListenerUtil.mutListener.listen(10545) ? (((NumberRangePreference) pref).getValue() + 60) : (((NumberRangePreference) pref).getValue() * 60))))));</span>
+                        }
+<span class="nc bnc" id="L892" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10550)) {</span>
+<span class="nc" id="L893">                            getCol().setMod();</span>
+                        }
+                        break;
+                    case &quot;useCurrent&quot;:
+<span class="nc bnc" id="L897" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10551)) {</span>
+<span class="nc" id="L898">                            getCol().getConf().put(&quot;addToCur&quot;, &quot;0&quot;.equals(((android.preference.ListPreference) pref).getValue()));</span>
+                        }
+<span class="nc bnc" id="L900" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10552)) {</span>
+<span class="nc" id="L901">                            getCol().setMod();</span>
+                        }
+                        break;
+                    case &quot;dayOffset&quot;:
+                        {
+<span class="nc" id="L906">                            int hours = ((SeekBarPreference) pref).getValue();</span>
+<span class="nc" id="L907">                            Calendar date = getCol().crtGregorianCalendar();</span>
+<span class="nc bnc" id="L908" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10553)) {</span>
+<span class="nc" id="L909">                                date.set(Calendar.HOUR_OF_DAY, hours);</span>
+                            }
+<span class="nc bnc" id="L911" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10558)) {</span>
+<span class="nc bnc" id="L912" title="All 8 branches missed.">                                getCol().setCrt((ListenerUtil.mutListener.listen(10557) ? (date.getTimeInMillis() % 1000) : (ListenerUtil.mutListener.listen(10556) ? (date.getTimeInMillis() * 1000) : (ListenerUtil.mutListener.listen(10555) ? (date.getTimeInMillis() - 1000) : (ListenerUtil.mutListener.listen(10554) ? (date.getTimeInMillis() + 1000) : (date.getTimeInMillis() / 1000))))));</span>
+                            }
+<span class="nc bnc" id="L914" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10559)) {</span>
+<span class="nc" id="L915">                                getCol().setMod();</span>
+                            }
+<span class="nc bnc" id="L917" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10560)) {</span>
+<span class="nc" id="L918">                                BootService.scheduleNotification(getCol().getTime(), this);</span>
+                            }
+                            break;
+                        }
+                    case &quot;minimumCardsDueForNotification&quot;:
+                        {
+<span class="nc" id="L924">                            android.preference.ListPreference listpref = (android.preference.ListPreference) screen.findPreference(&quot;minimumCardsDueForNotification&quot;);</span>
+<span class="nc bnc" id="L925" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10570)) {</span>
+<span class="nc bnc" id="L926" title="All 2 branches missed.">                                if (listpref != null) {</span>
+<span class="nc bnc" id="L927" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10561)) {</span>
+<span class="nc" id="L928">                                        updateNotificationPreference(listpref);</span>
+                                    }
+<span class="nc bnc" id="L930" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10569)) {</span>
+<span class="nc bnc" id="L931" title="All 22 branches missed.">                                        if ((ListenerUtil.mutListener.listen(10566) ? (Integer.parseInt(listpref.getValue()) &gt;= PENDING_NOTIFICATIONS_ONLY) : (ListenerUtil.mutListener.listen(10565) ? (Integer.parseInt(listpref.getValue()) &lt;= PENDING_NOTIFICATIONS_ONLY) : (ListenerUtil.mutListener.listen(10564) ? (Integer.parseInt(listpref.getValue()) &gt; PENDING_NOTIFICATIONS_ONLY) : (ListenerUtil.mutListener.listen(10563) ? (Integer.parseInt(listpref.getValue()) != PENDING_NOTIFICATIONS_ONLY) : (ListenerUtil.mutListener.listen(10562) ? (Integer.parseInt(listpref.getValue()) == PENDING_NOTIFICATIONS_ONLY) : (Integer.parseInt(listpref.getValue()) &lt; PENDING_NOTIFICATIONS_ONLY))))))) {</span>
+<span class="nc bnc" id="L932" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(10568)) {</span>
+<span class="nc" id="L933">                                                BootService.scheduleNotification(getCol().getTime(), this);</span>
+                                            }
+                                        } else {
+<span class="nc" id="L936">                                            PendingIntent intent = PendingIntent.getBroadcast(this, 0, new Intent(this, NotificationService.class), 0);</span>
+<span class="nc" id="L937">                                            final AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);</span>
+<span class="nc bnc" id="L938" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(10567)) {</span>
+<span class="nc" id="L939">                                                alarmManager.cancel(intent);</span>
+                                            }
+<span class="nc" id="L941">                                        }</span>
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    case AnkiDroidApp.FEEDBACK_REPORT_KEY:
+                        {
+<span class="nc" id="L949">                            String value = prefs.getString(AnkiDroidApp.FEEDBACK_REPORT_KEY, &quot;&quot;);</span>
+<span class="nc bnc" id="L950" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10571)) {</span>
+<span class="nc" id="L951">                                AnkiDroidApp.getInstance().setAcraReportingMode(value);</span>
+                            }
+<span class="nc bnc" id="L953" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10572)) {</span>
+                                // If the user changed error reporting, make sure future reports have a chance to post
+<span class="nc" id="L955">                                AnkiDroidApp.deleteACRALimiterData(this);</span>
+                            }
+<span class="nc bnc" id="L957" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10573)) {</span>
+                                // We also need to re-chain our UncaughtExceptionHandlers
+<span class="nc" id="L959">                                UsageAnalytics.reInitialize();</span>
+                            }
+                            break;
+                        }
+                    case &quot;syncAccount&quot;:
+                        {
+<span class="nc" id="L965">                            SharedPreferences preferences = AnkiDroidApp.getSharedPrefs(getBaseContext());</span>
+<span class="nc" id="L966">                            String username = preferences.getString(&quot;username&quot;, &quot;&quot;);</span>
+<span class="nc" id="L967">                            android.preference.Preference syncAccount = screen.findPreference(&quot;syncAccount&quot;);</span>
+<span class="nc bnc" id="L968" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10577)) {</span>
+<span class="nc bnc" id="L969" title="All 2 branches missed.">                                if (syncAccount != null) {</span>
+<span class="nc bnc" id="L970" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10576)) {</span>
+<span class="nc bnc" id="L971" title="All 2 branches missed.">                                        if (TextUtils.isEmpty(username)) {</span>
+<span class="nc bnc" id="L972" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(10575)) {</span>
+<span class="nc" id="L973">                                                syncAccount.setSummary(R.string.sync_account_summ_logged_out);</span>
+                                            }
+                                        } else {
+<span class="nc bnc" id="L976" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(10574)) {</span>
+<span class="nc" id="L977">                                                syncAccount.setSummary(getString(R.string.sync_account_summ_logged_in, username));</span>
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    case &quot;providerEnabled&quot;:
+                        {
+<span class="nc" id="L987">                            ComponentName providerName = new ComponentName(this, &quot;com.ichi2.anki.provider.CardContentProvider&quot;);</span>
+<span class="nc" id="L988">                            PackageManager pm = getPackageManager();</span>
+                            int state;
+<span class="nc bnc" id="L990" title="All 2 branches missed.">                            if (((android.preference.CheckBoxPreference) pref).isChecked()) {</span>
+<span class="nc" id="L991">                                state = PackageManager.COMPONENT_ENABLED_STATE_ENABLED;</span>
+<span class="nc bnc" id="L992" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(10579)) {</span>
+<span class="nc" id="L993">                                    Timber.i(&quot;AnkiDroid ContentProvider enabled by user&quot;);</span>
+                                }
+                            } else {
+<span class="nc" id="L996">                                state = PackageManager.COMPONENT_ENABLED_STATE_DISABLED;</span>
+<span class="nc bnc" id="L997" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(10578)) {</span>
+<span class="nc" id="L998">                                    Timber.i(&quot;AnkiDroid ContentProvider disabled by user&quot;);</span>
+                                }
+                            }
+<span class="nc bnc" id="L1001" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10580)) {</span>
+<span class="nc" id="L1002">                                pm.setComponentEnabledSetting(providerName, state, PackageManager.DONT_KILL_APP);</span>
+                            }
+                            break;
+                        }
+                    case &quot;schedVer&quot;:
+                        {
+<span class="nc" id="L1008">                            boolean wantNew = ((android.preference.CheckBoxPreference) pref).isChecked();</span>
+<span class="nc bnc" id="L1009" title="All 2 branches missed.">                            boolean haveNew = getCol().schedVer() == 2;</span>
+<span class="nc bnc" id="L1010" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10581)) {</span>
+                                // northing to do?
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">                                if (haveNew == wantNew) {</span>
+<span class="nc" id="L1013">                                    break;</span>
+                                }
+                            }
+<span class="nc" id="L1016">                            MaterialDialog.Builder builder = new MaterialDialog.Builder(this);</span>
+<span class="nc bnc" id="L1017" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10590)) {</span>
+<span class="nc bnc" id="L1018" title="All 10 branches missed.">                                if ((ListenerUtil.mutListener.listen(10582) ? (haveNew || !wantNew) : (haveNew &amp;&amp; !wantNew))) {</span>
+<span class="nc bnc" id="L1019" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10583)) {</span>
+                                        // Going back to V1
+<span class="nc" id="L1021">                                        builder.title(R.string.sched_ver_toggle_title);</span>
+                                    }
+<span class="nc bnc" id="L1023" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10584)) {</span>
+<span class="nc" id="L1024">                                        builder.content(R.string.sched_ver_2to1);</span>
+                                    }
+<span class="nc bnc" id="L1026" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10585)) {</span>
+<span class="nc" id="L1027">                                        builder.onPositive((dialog, which) -&gt; {</span>
+<span class="nc" id="L1028">                                            getCol().modSchemaNoCheck();</span>
+                                            try {
+<span class="nc" id="L1030">                                                getCol().changeSchedulerVer(1);</span>
+<span class="nc" id="L1031">                                                ((android.preference.CheckBoxPreference) pref).setChecked(false);</span>
+<span class="nc" id="L1032">                                            } catch (ConfirmModSchemaException e2) {</span>
+                                                // This should never be reached as we explicitly called modSchemaNoCheck()
+<span class="nc" id="L1034">                                                throw new RuntimeException(e2);</span>
+<span class="nc" id="L1035">                                            }</span>
+<span class="nc" id="L1036">                                        });</span>
+                                    }
+<span class="nc bnc" id="L1038" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10586)) {</span>
+<span class="nc" id="L1039">                                        builder.onNegative((dialog, which) -&gt; ((android.preference.CheckBoxPreference) pref).setChecked(true));</span>
+                                    }
+<span class="nc bnc" id="L1041" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10587)) {</span>
+<span class="nc" id="L1042">                                        builder.positiveText(R.string.dialog_ok);</span>
+                                    }
+<span class="nc bnc" id="L1044" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10588)) {</span>
+<span class="nc" id="L1045">                                        builder.negativeText(R.string.dialog_cancel);</span>
+                                    }
+<span class="nc bnc" id="L1047" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(10589)) {</span>
+<span class="nc" id="L1048">                                        builder.show();</span>
+                                    }
+                                    break;
+                                }
+                            }
+<span class="nc bnc" id="L1053" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10591)) {</span>
+                                // Going to V2
+<span class="nc" id="L1055">                                builder.title(R.string.sched_ver_toggle_title);</span>
+                            }
+<span class="nc bnc" id="L1057" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10592)) {</span>
+<span class="nc" id="L1058">                                builder.content(R.string.sched_ver_1to2);</span>
+                            }
+<span class="nc bnc" id="L1060" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10593)) {</span>
+<span class="nc" id="L1061">                                builder.onPositive((dialog, which) -&gt; {</span>
+<span class="nc" id="L1062">                                    getCol().modSchemaNoCheck();</span>
+                                    try {
+<span class="nc" id="L1064">                                        getCol().changeSchedulerVer(2);</span>
+<span class="nc" id="L1065">                                        ((android.preference.CheckBoxPreference) pref).setChecked(true);</span>
+<span class="nc" id="L1066">                                    } catch (ConfirmModSchemaException e2) {</span>
+                                        // This should never be reached as we explicitly called modSchemaNoCheck()
+<span class="nc" id="L1068">                                        throw new RuntimeException(e2);</span>
+<span class="nc" id="L1069">                                    }</span>
+<span class="nc" id="L1070">                                });</span>
+                            }
+<span class="nc bnc" id="L1072" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10594)) {</span>
+<span class="nc" id="L1073">                                builder.onNegative((dialog, which) -&gt; ((android.preference.CheckBoxPreference) pref).setChecked(false));</span>
+                            }
+<span class="nc bnc" id="L1075" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10595)) {</span>
+<span class="nc" id="L1076">                                builder.positiveText(R.string.dialog_ok);</span>
+                            }
+<span class="nc bnc" id="L1078" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10596)) {</span>
+<span class="nc" id="L1079">                                builder.negativeText(R.string.dialog_cancel);</span>
+                            }
+<span class="nc bnc" id="L1081" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10597)) {</span>
+<span class="nc" id="L1082">                                builder.show();</span>
+                            }
+                            break;
+                        }
+                    case CardBrowserContextMenu.CARD_BROWSER_CONTEXT_MENU_PREF_KEY:
+<span class="nc bnc" id="L1087" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10598)) {</span>
+<span class="nc" id="L1088">                            CardBrowserContextMenu.ensureConsistentStateWithSharedPreferences(this);</span>
+                        }
+                        break;
+                    case AnkiCardContextMenu.ANKI_CARD_CONTEXT_MENU_PREF_KEY:
+<span class="nc bnc" id="L1092" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10599)) {</span>
+<span class="nc" id="L1093">                            AnkiCardContextMenu.ensureConsistentStateWithSharedPreferences(this);</span>
+                        }
+                        break;
+                    case &quot;gestureCornerTouch&quot;:
+                        {
+<span class="nc bnc" id="L1098" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10600)) {</span>
+<span class="nc" id="L1099">                                updateGestureCornerTouch(screen);</span>
+                            }
+                        }
+                }
+            }
+<span class="nc bnc" id="L1104" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10602)) {</span>
+                // Update the summary text to reflect new value
+<span class="nc" id="L1106">                updateSummary(pref);</span>
+            }
+<span class="nc" id="L1108">        } catch (BadTokenException e) {</span>
+<span class="nc bnc" id="L1109" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10527)) {</span>
+<span class="nc" id="L1110">                Timber.e(e, &quot;Preferences: BadTokenException on showDialog&quot;);</span>
+            }
+<span class="nc" id="L1112">        } catch (NumberFormatException e) {</span>
+<span class="nc" id="L1113">            throw new RuntimeException(e);</span>
+<span class="nc" id="L1114">        }</span>
+<span class="nc" id="L1115">    }</span>
+
+    private void updateGestureCornerTouch(android.preference.PreferenceScreen screen) {
+<span class="nc" id="L1118">        boolean gestureCornerTouch = AnkiDroidApp.getSharedPrefs(this).getBoolean(&quot;gestureCornerTouch&quot;, false);</span>
+<span class="nc bnc" id="L1119" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10611)) {</span>
+<span class="nc bnc" id="L1120" title="All 2 branches missed.">            if (gestureCornerTouch) {</span>
+<span class="nc bnc" id="L1121" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10607)) {</span>
+<span class="nc" id="L1122">                    screen.findPreference(&quot;gestureTapTop&quot;).setTitle(R.string.gestures_corner_tap_top_center);</span>
+                }
+<span class="nc bnc" id="L1124" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10608)) {</span>
+<span class="nc" id="L1125">                    screen.findPreference(&quot;gestureTapLeft&quot;).setTitle(R.string.gestures_corner_tap_middle_left);</span>
+                }
+<span class="nc bnc" id="L1127" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10609)) {</span>
+<span class="nc" id="L1128">                    screen.findPreference(&quot;gestureTapRight&quot;).setTitle(R.string.gestures_corner_tap_middle_right);</span>
+                }
+<span class="nc bnc" id="L1130" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10610)) {</span>
+<span class="nc" id="L1131">                    screen.findPreference(&quot;gestureTapBottom&quot;).setTitle(R.string.gestures_corner_tap_bottom_center);</span>
+                }
+            } else {
+<span class="nc bnc" id="L1134" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10603)) {</span>
+<span class="nc" id="L1135">                    screen.findPreference(&quot;gestureTapTop&quot;).setTitle(R.string.gestures_tap_top);</span>
+                }
+<span class="nc bnc" id="L1137" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10604)) {</span>
+<span class="nc" id="L1138">                    screen.findPreference(&quot;gestureTapLeft&quot;).setTitle(R.string.gestures_tap_left);</span>
+                }
+<span class="nc bnc" id="L1140" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10605)) {</span>
+<span class="nc" id="L1141">                    screen.findPreference(&quot;gestureTapRight&quot;).setTitle(R.string.gestures_tap_right);</span>
+                }
+<span class="nc bnc" id="L1143" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10606)) {</span>
+<span class="nc" id="L1144">                    screen.findPreference(&quot;gestureTapBottom&quot;).setTitle(R.string.gestures_tap_bottom);</span>
+                }
+            }
+        }
+<span class="nc" id="L1148">    }</span>
+
+    public void updateNotificationPreference(android.preference.ListPreference listpref) {
+<span class="nc" id="L1151">        CharSequence[] entries = listpref.getEntries();</span>
+<span class="nc" id="L1152">        CharSequence[] values = listpref.getEntryValues();</span>
+<span class="nc bnc" id="L1153" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10619)) {</span>
+            {
+<span class="nc" id="L1155">                long _loopCounter175 = 0;</span>
+<span class="nc bnc" id="L1156" title="All 22 branches missed.">                for (int i = 0; (ListenerUtil.mutListener.listen(10618) ? (i &gt;= entries.length) : (ListenerUtil.mutListener.listen(10617) ? (i &lt;= entries.length) : (ListenerUtil.mutListener.listen(10616) ? (i &gt; entries.length) : (ListenerUtil.mutListener.listen(10615) ? (i != entries.length) : (ListenerUtil.mutListener.listen(10614) ? (i == entries.length) : (i &lt; entries.length)))))); i++) {</span>
+<span class="nc" id="L1157">                    ListenerUtil.loopListener.listen(&quot;_loopCounter175&quot;, ++_loopCounter175);</span>
+<span class="nc" id="L1158">                    int value = Integer.parseInt(values[i].toString());</span>
+<span class="nc bnc" id="L1159" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10613)) {</span>
+<span class="nc bnc" id="L1160" title="All 2 branches missed.">                        if (entries[i].toString().contains(&quot;%d&quot;)) {</span>
+<span class="nc bnc" id="L1161" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10612)) {</span>
+<span class="nc" id="L1162">                                entries[i] = String.format(entries[i].toString(), value);</span>
+                            }
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L1169" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10620)) {</span>
+<span class="nc" id="L1170">            listpref.setEntries(entries);</span>
+        }
+<span class="nc bnc" id="L1172" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10621)) {</span>
+<span class="nc" id="L1173">            listpref.setSummary(listpref.getEntry().toString());</span>
+        }
+<span class="nc" id="L1175">    }</span>
+
+    private void updateSummary(android.preference.Preference pref) {
+<span class="nc bnc" id="L1178" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10623)) {</span>
+<span class="nc bnc" id="L1179" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(10622) ? (pref == null &amp;&amp; pref.getKey() == null) : (pref == null || pref.getKey() == null))) {</span>
+<span class="nc" id="L1180">                return;</span>
+            }
+        }
+<span class="nc bnc" id="L1183" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10631)) {</span>
+            // Handle special cases
+<span class="nc bnc" id="L1185" title="All 4 branches missed.">            switch(pref.getKey()) {</span>
+                case &quot;about_dialog_preference&quot;:
+<span class="nc bnc" id="L1187" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10624)) {</span>
+<span class="nc" id="L1188">                        pref.setSummary(getResources().getString(R.string.about_version) + &quot; &quot; + VersionUtils.getPkgVersionName());</span>
+                    }
+                    break;
+                case &quot;custom_sync_server_link&quot;:
+<span class="nc" id="L1192">                    SharedPreferences preferences = AnkiDroidApp.getSharedPrefs(this);</span>
+<span class="nc bnc" id="L1193" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10627)) {</span>
+<span class="nc bnc" id="L1194" title="All 2 branches missed.">                        if (!CustomSyncServer.isEnabled(preferences)) {</span>
+<span class="nc bnc" id="L1195" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10626)) {</span>
+<span class="nc" id="L1196">                                pref.setSummary(R.string.disabled);</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L1199" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10625)) {</span>
+<span class="nc" id="L1200">                                pref.setSummary(CustomSyncServer.getSyncBaseUrlOrDefault(preferences, &quot;&quot;));</span>
+                            }
+                        }
+                    }
+                    break;
+                case &quot;advanced_statistics_link&quot;:
+<span class="nc bnc" id="L1206" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(10630)) {</span>
+<span class="nc bnc" id="L1207" title="All 2 branches missed.">                        if (!AnkiDroidApp.getSharedPrefs(this).getBoolean(&quot;advanced_statistics_enabled&quot;, false)) {</span>
+<span class="nc bnc" id="L1208" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10629)) {</span>
+<span class="nc" id="L1209">                                pref.setSummary(R.string.disabled);</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L1212" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10628)) {</span>
+<span class="nc" id="L1213">                                pref.setSummary(R.string.enabled);</span>
+                            }
+                        }
+                    }
+                    break;
+            }
+        }
+        // Get value text
+        String value;
+        try {
+<span class="nc bnc" id="L1223" title="All 2 branches missed.">            if (pref instanceof NumberRangePreference) {</span>
+<span class="nc" id="L1224">                value = Integer.toString(((NumberRangePreference) pref).getValue());</span>
+<span class="nc bnc" id="L1225" title="All 2 branches missed.">            } else if (pref instanceof SeekBarPreference) {</span>
+<span class="nc" id="L1226">                value = Integer.toString(((SeekBarPreference) pref).getValue());</span>
+<span class="nc bnc" id="L1227" title="All 2 branches missed.">            } else if (pref instanceof android.preference.ListPreference) {</span>
+<span class="nc" id="L1228">                value = ((android.preference.ListPreference) pref).getEntry().toString();</span>
+<span class="nc bnc" id="L1229" title="All 2 branches missed.">            } else if (pref instanceof android.preference.EditTextPreference) {</span>
+<span class="nc" id="L1230">                value = ((android.preference.EditTextPreference) pref).getText();</span>
+            } else {
+<span class="nc" id="L1232">                return;</span>
+            }
+<span class="nc" id="L1234">        } catch (NullPointerException e) {</span>
+<span class="nc" id="L1235">            value = &quot;&quot;;</span>
+<span class="nc" id="L1236">        }</span>
+        // Get summary text
+<span class="nc" id="L1238">        String oldSummary = mOriginalSumarries.get(pref.getKey());</span>
+<span class="nc bnc" id="L1239" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10636)) {</span>
+            // Replace summary text with value according to some rules
+<span class="nc bnc" id="L1241" title="All 2 branches missed.">            if (&quot;&quot;.equals(oldSummary)) {</span>
+<span class="nc bnc" id="L1242" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10635)) {</span>
+<span class="nc" id="L1243">                    pref.setSummary(value);</span>
+                }
+<span class="nc bnc" id="L1245" title="All 2 branches missed.">            } else if (&quot;&quot;.equals(value)) {</span>
+<span class="nc bnc" id="L1246" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10634)) {</span>
+<span class="nc" id="L1247">                    pref.setSummary(oldSummary);</span>
+                }
+<span class="nc bnc" id="L1249" title="All 2 branches missed.">            } else if (&quot;minimumCardsDueForNotification&quot;.equals(pref.getKey())) {</span>
+<span class="nc bnc" id="L1250" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10633)) {</span>
+<span class="nc" id="L1251">                    pref.setSummary(replaceStringIfNumeric(oldSummary, value));</span>
+                }
+            } else {
+<span class="nc bnc" id="L1254" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10632)) {</span>
+<span class="nc" id="L1255">                    pref.setSummary(replaceString(oldSummary, value));</span>
+                }
+            }
+        }
+<span class="nc" id="L1259">    }</span>
+
+    private String replaceString(String str, String value) {
+<span class="nc bnc" id="L1262" title="All 2 branches missed.">        if (str.contains(&quot;XXX&quot;)) {</span>
+<span class="nc" id="L1263">            return str.replace(&quot;XXX&quot;, value);</span>
+        } else {
+<span class="nc" id="L1265">            return str;</span>
+        }
+    }
+
+    @SuppressWarnings(&quot;ResultOfMethodCallIgnored&quot;)
+    private String replaceStringIfNumeric(String str, String value) {
+        try {
+<span class="nc bnc" id="L1272" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10637)) {</span>
+<span class="nc" id="L1273">                Double.parseDouble(value);</span>
+            }
+<span class="nc" id="L1275">            return replaceString(str, value);</span>
+<span class="nc" id="L1276">        } catch (NumberFormatException e) {</span>
+<span class="nc" id="L1277">            return value;</span>
+        }
+    }
+
+    private void initializeLanguageDialog(android.preference.PreferenceScreen screen) {
+<span class="nc" id="L1282">        android.preference.ListPreference languageSelection = (android.preference.ListPreference) screen.findPreference(LANGUAGE);</span>
+<span class="nc bnc" id="L1283" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10656)) {</span>
+<span class="nc bnc" id="L1284" title="All 2 branches missed.">            if (languageSelection != null) {</span>
+<span class="nc" id="L1285">                Map&lt;String, String&gt; items = new TreeMap&lt;&gt;(String.CASE_INSENSITIVE_ORDER);</span>
+<span class="nc bnc" id="L1286" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10639)) {</span>
+                    {
+<span class="nc" id="L1288">                        long _loopCounter176 = 0;</span>
+<span class="nc bnc" id="L1289" title="All 2 branches missed.">                        for (String localeCode : LanguageUtil.APP_LANGUAGES) {</span>
+<span class="nc" id="L1290">                            ListenerUtil.loopListener.listen(&quot;_loopCounter176&quot;, ++_loopCounter176);</span>
+<span class="nc" id="L1291">                            Locale loc = LanguageUtil.getLocale(localeCode);</span>
+<span class="nc bnc" id="L1292" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10638)) {</span>
+<span class="nc" id="L1293">                                items.put(loc.getDisplayName(loc), loc.toString());</span>
+                            }
+                        }
+                    }
+                }
+<span class="nc bnc" id="L1298" title="All 8 branches missed.">                CharSequence[] languageDialogLabels = new CharSequence[(ListenerUtil.mutListener.listen(10643) ? (items.size() % 1) : (ListenerUtil.mutListener.listen(10642) ? (items.size() / 1) : (ListenerUtil.mutListener.listen(10641) ? (items.size() * 1) : (ListenerUtil.mutListener.listen(10640) ? (items.size() - 1) : (items.size() + 1)))))];</span>
+<span class="nc bnc" id="L1299" title="All 8 branches missed.">                CharSequence[] languageDialogValues = new CharSequence[(ListenerUtil.mutListener.listen(10647) ? (items.size() % 1) : (ListenerUtil.mutListener.listen(10646) ? (items.size() / 1) : (ListenerUtil.mutListener.listen(10645) ? (items.size() * 1) : (ListenerUtil.mutListener.listen(10644) ? (items.size() - 1) : (items.size() + 1)))))];</span>
+<span class="nc bnc" id="L1300" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10648)) {</span>
+<span class="nc" id="L1301">                    languageDialogLabels[0] = getResources().getString(R.string.language_system);</span>
+                }
+<span class="nc bnc" id="L1303" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10649)) {</span>
+<span class="nc" id="L1304">                    languageDialogValues[0] = &quot;&quot;;</span>
+                }
+<span class="nc" id="L1306">                int i = 1;</span>
+<span class="nc bnc" id="L1307" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10653)) {</span>
+                    {
+<span class="nc" id="L1309">                        long _loopCounter177 = 0;</span>
+<span class="nc bnc" id="L1310" title="All 2 branches missed.">                        for (Map.Entry&lt;String, String&gt; e : items.entrySet()) {</span>
+<span class="nc" id="L1311">                            ListenerUtil.loopListener.listen(&quot;_loopCounter177&quot;, ++_loopCounter177);</span>
+<span class="nc bnc" id="L1312" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10650)) {</span>
+<span class="nc" id="L1313">                                languageDialogLabels[i] = e.getKey();</span>
+                            }
+<span class="nc bnc" id="L1315" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10651)) {</span>
+<span class="nc" id="L1316">                                languageDialogValues[i] = e.getValue();</span>
+                            }
+<span class="nc bnc" id="L1318" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10652)) {</span>
+<span class="nc" id="L1319">                                i++;</span>
+                            }
+<span class="nc" id="L1321">                        }</span>
+                    }
+                }
+<span class="nc bnc" id="L1324" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10654)) {</span>
+<span class="nc" id="L1325">                    languageSelection.setEntries(languageDialogLabels);</span>
+                }
+<span class="nc bnc" id="L1327" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10655)) {</span>
+<span class="nc" id="L1328">                    languageSelection.setEntryValues(languageDialogValues);</span>
+                }
+            }
+        }
+<span class="nc" id="L1332">    }</span>
+
+    private void removeUnnecessaryAdvancedPrefs(android.preference.PreferenceScreen screen) {
+<span class="nc" id="L1335">        android.preference.PreferenceCategory plugins = (android.preference.PreferenceCategory) screen.findPreference(&quot;category_plugins&quot;);</span>
+<span class="nc bnc" id="L1336" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10660)) {</span>
+            // Disable the emoji/kana buttons to scroll preference if those keys don't exist
+<span class="nc bnc" id="L1338" title="All 2 branches missed.">            if (!CompatHelper.hasKanaAndEmojiKeys()) {</span>
+<span class="nc" id="L1339">                android.preference.CheckBoxPreference emojiScrolling = (android.preference.CheckBoxPreference) screen.findPreference(&quot;scrolling_buttons&quot;);</span>
+<span class="nc bnc" id="L1340" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10659)) {</span>
+<span class="nc bnc" id="L1341" title="All 10 branches missed.">                    if ((ListenerUtil.mutListener.listen(10657) ? (emojiScrolling != null || plugins != null) : (emojiScrolling != null &amp;&amp; plugins != null))) {</span>
+<span class="nc bnc" id="L1342" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10658)) {</span>
+<span class="nc" id="L1343">                            plugins.removePreference(emojiScrolling);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L1349" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10665)) {</span>
+            // Disable the double scroll preference if no scrolling keys
+<span class="nc bnc" id="L1351" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(10661) ? (!CompatHelper.hasScrollKeys() || !CompatHelper.hasKanaAndEmojiKeys()) : (!CompatHelper.hasScrollKeys() &amp;&amp; !CompatHelper.hasKanaAndEmojiKeys()))) {</span>
+<span class="nc" id="L1352">                android.preference.CheckBoxPreference doubleScrolling = (android.preference.CheckBoxPreference) screen.findPreference(&quot;double_scrolling&quot;);</span>
+<span class="nc bnc" id="L1353" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10664)) {</span>
+<span class="nc bnc" id="L1354" title="All 10 branches missed.">                    if ((ListenerUtil.mutListener.listen(10662) ? (doubleScrolling != null || plugins != null) : (doubleScrolling != null &amp;&amp; plugins != null))) {</span>
+<span class="nc bnc" id="L1355" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(10663)) {</span>
+<span class="nc" id="L1356">                            plugins.removePreference(doubleScrolling);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L1362">    }</span>
+
+    /**
+     * Initializes the list of custom fonts shown in the preferences.
+     */
+    private void initializeCustomFontsDialog(android.preference.PreferenceScreen screen) {
+<span class="nc" id="L1368">        android.preference.ListPreference defaultFontPreference = (android.preference.ListPreference) screen.findPreference(&quot;defaultFont&quot;);</span>
+<span class="nc bnc" id="L1369" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10668)) {</span>
+<span class="nc bnc" id="L1370" title="All 2 branches missed.">            if (defaultFontPreference != null) {</span>
+<span class="nc bnc" id="L1371" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10666)) {</span>
+<span class="nc" id="L1372">                    defaultFontPreference.setEntries(getCustomFonts(&quot;System default&quot;));</span>
+                }
+<span class="nc bnc" id="L1374" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10667)) {</span>
+<span class="nc" id="L1375">                    defaultFontPreference.setEntryValues(getCustomFonts(&quot;&quot;));</span>
+                }
+            }
+        }
+<span class="nc" id="L1379">        android.preference.ListPreference browserEditorCustomFontsPreference = (android.preference.ListPreference) screen.findPreference(&quot;browserEditorFont&quot;);</span>
+<span class="nc bnc" id="L1380" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10669)) {</span>
+<span class="nc" id="L1381">            browserEditorCustomFontsPreference.setEntries(getCustomFonts(&quot;System default&quot;));</span>
+        }
+<span class="nc bnc" id="L1383" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10670)) {</span>
+<span class="nc" id="L1384">            browserEditorCustomFontsPreference.setEntryValues(getCustomFonts(&quot;&quot;, true));</span>
+        }
+<span class="nc" id="L1386">    }</span>
+
+    /**
+     * Returns a list of the names of the installed custom fonts.
+     */
+    private String[] getCustomFonts(String defaultValue) {
+<span class="nc" id="L1392">        return getCustomFonts(defaultValue, false);</span>
+    }
+
+    private String[] getCustomFonts(String defaultValue, boolean useFullPath) {
+<span class="nc" id="L1396">        List&lt;AnkiFont&gt; mFonts = Utils.getCustomFonts(this);</span>
+<span class="nc" id="L1397">        int count = mFonts.size();</span>
+<span class="nc bnc" id="L1398" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10671)) {</span>
+<span class="nc" id="L1399">            Timber.d(&quot;There are %d custom fonts&quot;, count);</span>
+        }
+<span class="nc bnc" id="L1401" title="All 8 branches missed.">        String[] names = new String[(ListenerUtil.mutListener.listen(10675) ? (count % 1) : (ListenerUtil.mutListener.listen(10674) ? (count / 1) : (ListenerUtil.mutListener.listen(10673) ? (count * 1) : (ListenerUtil.mutListener.listen(10672) ? (count - 1) : (count + 1)))))];</span>
+<span class="nc bnc" id="L1402" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10676)) {</span>
+<span class="nc" id="L1403">            names[0] = defaultValue;</span>
+        }
+<span class="nc bnc" id="L1405" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10709)) {</span>
+<span class="nc bnc" id="L1406" title="All 2 branches missed.">            if (useFullPath) {</span>
+<span class="nc bnc" id="L1407" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10708)) {</span>
+                    {
+<span class="nc" id="L1409">                        long _loopCounter179 = 0;</span>
+<span class="nc bnc" id="L1410" title="All 70 branches missed.">                        for (int index = 1; (ListenerUtil.mutListener.listen(10707) ? (index &gt;= (ListenerUtil.mutListener.listen(10702) ? (count % 1) : (ListenerUtil.mutListener.listen(10701) ? (count / 1) : (ListenerUtil.mutListener.listen(10700) ? (count * 1) : (ListenerUtil.mutListener.listen(10699) ? (count - 1) : (count + 1)))))) : (ListenerUtil.mutListener.listen(10706) ? (index &lt;= (ListenerUtil.mutListener.listen(10702) ? (count % 1) : (ListenerUtil.mutListener.listen(10701) ? (count / 1) : (ListenerUtil.mutListener.listen(10700) ? (count * 1) : (ListenerUtil.mutListener.listen(10699) ? (count - 1) : (count + 1)))))) : (ListenerUtil.mutListener.listen(10705) ? (index &gt; (ListenerUtil.mutListener.listen(10702) ? (count % 1) : (ListenerUtil.mutListener.listen(10701) ? (count / 1) : (ListenerUtil.mutListener.listen(10700) ? (count * 1) : (ListenerUtil.mutListener.listen(10699) ? (count - 1) : (count + 1)))))) : (ListenerUtil.mutListener.listen(10704) ? (index != (ListenerUtil.mutListener.listen(10702) ? (count % 1) : (ListenerUtil.mutListener.listen(10701) ? (count / 1) : (ListenerUtil.mutListener.listen(10700) ? (count * 1) : (ListenerUtil.mutListener.listen(10699) ? (count - 1) : (count + 1)))))) : (ListenerUtil.mutListener.listen(10703) ? (index == (ListenerUtil.mutListener.listen(10702) ? (count % 1) : (ListenerUtil.mutListener.listen(10701) ? (count / 1) : (ListenerUtil.mutListener.listen(10700) ? (count * 1) : (ListenerUtil.mutListener.listen(10699) ? (count - 1) : (count + 1)))))) : (index &lt; (ListenerUtil.mutListener.listen(10702) ? (count % 1) : (ListenerUtil.mutListener.listen(10701) ? (count / 1) : (ListenerUtil.mutListener.listen(10700) ? (count * 1) : (ListenerUtil.mutListener.listen(10699) ? (count - 1) : (count + 1))))))))))); ++index) {</span>
+<span class="nc" id="L1411">                            ListenerUtil.loopListener.listen(&quot;_loopCounter179&quot;, ++_loopCounter179);</span>
+<span class="nc bnc" id="L1412" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10697)) {</span>
+<span class="nc bnc" id="L1413" title="All 8 branches missed.">                                names[index] = mFonts.get((ListenerUtil.mutListener.listen(10696) ? (index % 1) : (ListenerUtil.mutListener.listen(10695) ? (index / 1) : (ListenerUtil.mutListener.listen(10694) ? (index * 1) : (ListenerUtil.mutListener.listen(10693) ? (index + 1) : (index - 1)))))).getPath();</span>
+                            }
+<span class="nc bnc" id="L1415" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10698)) {</span>
+<span class="nc" id="L1416">                                Timber.d(&quot;Adding custom font: %s&quot;, names[index]);</span>
+                            }
+                        }
+<span class="nc" id="L1419">                    }</span>
+                }
+            } else {
+<span class="nc bnc" id="L1422" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10692)) {</span>
+                    {
+<span class="nc" id="L1424">                        long _loopCounter178 = 0;</span>
+<span class="nc bnc" id="L1425" title="All 70 branches missed.">                        for (int index = 1; (ListenerUtil.mutListener.listen(10691) ? (index &gt;= (ListenerUtil.mutListener.listen(10686) ? (count % 1) : (ListenerUtil.mutListener.listen(10685) ? (count / 1) : (ListenerUtil.mutListener.listen(10684) ? (count * 1) : (ListenerUtil.mutListener.listen(10683) ? (count - 1) : (count + 1)))))) : (ListenerUtil.mutListener.listen(10690) ? (index &lt;= (ListenerUtil.mutListener.listen(10686) ? (count % 1) : (ListenerUtil.mutListener.listen(10685) ? (count / 1) : (ListenerUtil.mutListener.listen(10684) ? (count * 1) : (ListenerUtil.mutListener.listen(10683) ? (count - 1) : (count + 1)))))) : (ListenerUtil.mutListener.listen(10689) ? (index &gt; (ListenerUtil.mutListener.listen(10686) ? (count % 1) : (ListenerUtil.mutListener.listen(10685) ? (count / 1) : (ListenerUtil.mutListener.listen(10684) ? (count * 1) : (ListenerUtil.mutListener.listen(10683) ? (count - 1) : (count + 1)))))) : (ListenerUtil.mutListener.listen(10688) ? (index != (ListenerUtil.mutListener.listen(10686) ? (count % 1) : (ListenerUtil.mutListener.listen(10685) ? (count / 1) : (ListenerUtil.mutListener.listen(10684) ? (count * 1) : (ListenerUtil.mutListener.listen(10683) ? (count - 1) : (count + 1)))))) : (ListenerUtil.mutListener.listen(10687) ? (index == (ListenerUtil.mutListener.listen(10686) ? (count % 1) : (ListenerUtil.mutListener.listen(10685) ? (count / 1) : (ListenerUtil.mutListener.listen(10684) ? (count * 1) : (ListenerUtil.mutListener.listen(10683) ? (count - 1) : (count + 1)))))) : (index &lt; (ListenerUtil.mutListener.listen(10686) ? (count % 1) : (ListenerUtil.mutListener.listen(10685) ? (count / 1) : (ListenerUtil.mutListener.listen(10684) ? (count * 1) : (ListenerUtil.mutListener.listen(10683) ? (count - 1) : (count + 1))))))))))); ++index) {</span>
+<span class="nc" id="L1426">                            ListenerUtil.loopListener.listen(&quot;_loopCounter178&quot;, ++_loopCounter178);</span>
+<span class="nc bnc" id="L1427" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10681)) {</span>
+<span class="nc bnc" id="L1428" title="All 8 branches missed.">                                names[index] = mFonts.get((ListenerUtil.mutListener.listen(10680) ? (index % 1) : (ListenerUtil.mutListener.listen(10679) ? (index / 1) : (ListenerUtil.mutListener.listen(10678) ? (index * 1) : (ListenerUtil.mutListener.listen(10677) ? (index + 1) : (index - 1)))))).getName();</span>
+                            }
+<span class="nc bnc" id="L1430" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(10682)) {</span>
+<span class="nc" id="L1431">                                Timber.d(&quot;Adding custom font: %s&quot;, names[index]);</span>
+                            }
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L1438">        return names;</span>
+    }
+
+    private void closePreferences() {
+<span class="nc bnc" id="L1442" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10710)) {</span>
+<span class="nc" id="L1443">            finish();</span>
+        }
+<span class="nc bnc" id="L1445" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10711)) {</span>
+<span class="nc" id="L1446">            ActivityTransitionAnimation.slide(this, FADE);</span>
+        }
+<span class="nc bnc" id="L1448" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(10714)) {</span>
+<span class="nc bnc" id="L1449" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(10712) ? (getCol() != null || getCol().getDb() != null) : (getCol() != null &amp;&amp; getCol().getDb() != null))) {</span>
+<span class="nc bnc" id="L1450" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(10713)) {</span>
+<span class="nc" id="L1451">                    getCol().save();</span>
+                }
+            }
+        }
+<span class="nc" id="L1455">    }</span>
+
+    /**
+     * This is not fit for purpose (other than testing a single screen)
+     */
+    @NonNull
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    public Set&lt;String&gt; getLoadedPreferenceKeys() {
+<span class="nc" id="L1463">        return mOriginalSumarries.keySet();</span>
+    }
+
+    // Tracked as #5019 on github
+    @SuppressWarnings(&quot;deprecation&quot;)
+<span class="nc" id="L1468">    public static class SettingsFragment extends android.preference.PreferenceFragment implements PreferenceContext, OnSharedPreferenceChangeListener {</span>
+
+        @Override
+        public void onCreate(Bundle savedInstanceState) {
+<span class="nc bnc" id="L1472" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10715)) {</span>
+<span class="nc" id="L1473">                super.onCreate(savedInstanceState);</span>
+            }
+<span class="nc" id="L1475">            String subscreen = getArguments().getString(&quot;subscreen&quot;);</span>
+<span class="nc bnc" id="L1476" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10716)) {</span>
+<span class="nc" id="L1477">                UsageAnalytics.sendAnalyticsScreenView(subscreen.replaceFirst(&quot;^com.ichi2.anki.&quot;, &quot;&quot;));</span>
+            }
+<span class="nc bnc" id="L1479" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10717)) {</span>
+<span class="nc" id="L1480">                ((Preferences) getActivity()).initSubscreen(subscreen, this);</span>
+            }
+<span class="nc bnc" id="L1482" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10718)) {</span>
+<span class="nc" id="L1483">                ((Preferences) getActivity()).initAllPreferences(getPreferenceScreen());</span>
+            }
+<span class="nc" id="L1485">        }</span>
+
+        @Override
+        public void onResume() {
+<span class="nc bnc" id="L1489" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10719)) {</span>
+<span class="nc" id="L1490">                super.onResume();</span>
+            }
+<span class="nc" id="L1492">            SharedPreferences prefs = getPreferenceManager().getSharedPreferences();</span>
+<span class="nc bnc" id="L1493" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10720)) {</span>
+<span class="nc" id="L1494">                prefs.registerOnSharedPreferenceChangeListener(this);</span>
+            }
+<span class="nc bnc" id="L1496" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10721)) {</span>
+                // in from preferences screen), so we need to update it here.
+<span class="nc" id="L1498">                ((Preferences) getActivity()).updatePreference(prefs, &quot;syncAccount&quot;, this);</span>
+            }
+<span class="nc bnc" id="L1500" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10722)) {</span>
+<span class="nc" id="L1501">                ((Preferences) getActivity()).updatePreference(prefs, &quot;custom_sync_server_link&quot;, this);</span>
+            }
+<span class="nc bnc" id="L1503" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10723)) {</span>
+<span class="nc" id="L1504">                ((Preferences) getActivity()).updatePreference(prefs, &quot;advanced_statistics_link&quot;, this);</span>
+            }
+<span class="nc" id="L1506">        }</span>
+
+        @Override
+        public void onPause() {
+<span class="nc bnc" id="L1510" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10724)) {</span>
+<span class="nc" id="L1511">                getPreferenceManager().getSharedPreferences().unregisterOnSharedPreferenceChangeListener(this);</span>
+            }
+<span class="nc bnc" id="L1513" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10725)) {</span>
+<span class="nc" id="L1514">                super.onPause();</span>
+            }
+<span class="nc" id="L1516">        }</span>
+
+        @Override
+        public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
+<span class="nc bnc" id="L1520" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(10726)) {</span>
+<span class="nc" id="L1521">                ((Preferences) getActivity()).updatePreference(sharedPreferences, key, this);</span>
+            }
+<span class="nc" id="L1523">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

@@ -1,0 +1,699 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Sound.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.libanki</a> &gt; <span class="el_source">Sound.java</span></div><h1>Sound.java</h1><pre class="source lang-java linenums">/**
+ * *************************************************************************************
+ *  Copyright (c) 2009 Edu Zamora &lt;edu.zasu@gmail.com&gt;                                   *
+ *  Copyright (c) 2014 Timothy rae &lt;perceptualchaos2@gmail.com&gt;                          *
+ *                                                                                       *
+ *  This program is free software; you can redistribute it and/or modify it under        *
+ *  the terms of the GNU General Public License as published by the Free Software        *
+ *  Foundation; either version 3 of the License, or (at your option) any later           *
+ *  version.                                                                             *
+ *                                                                                       *
+ *  This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ *  WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ *  PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                       *
+ *  You should have received a copy of the GNU General Public License along with         *
+ *  this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ * **************************************************************************************
+ */
+package com.ichi2.libanki;
+
+import android.app.Activity;
+import android.content.Context;
+import android.graphics.Point;
+import android.media.AudioManager;
+import android.media.MediaPlayer;
+import android.media.MediaMetadataRetriever;
+import android.media.MediaPlayer.OnCompletionListener;
+import android.media.ThumbnailUtils;
+import android.net.Uri;
+import android.provider.MediaStore;
+import android.view.Display;
+import android.view.WindowManager;
+import android.webkit.MimeTypeMap;
+import android.widget.VideoView;
+import com.ichi2.anki.AbstractFlashcardViewer;
+import com.ichi2.anki.AnkiDroidApp;
+import com.ichi2.anki.ReadText;
+import com.ichi2.utils.StringUtil;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import androidx.annotation.Nullable;
+import timber.log.Timber;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+/**
+ * Class used to parse, load and play sound files on AnkiDroid.
+ */
+@SuppressWarnings({ &quot;PMD.NPathComplexity&quot;, &quot;PMD.CollapsibleIfStatements&quot; })
+<span class="nc" id="L54">public class Sound {</span>
+
+    /**
+     * Pattern used to identify the markers for sound files
+     */
+<span class="nc" id="L59">    public static final Pattern sSoundPattern = Pattern.compile(&quot;\\[sound:([^\\[\\]]*)]&quot;);</span>
+
+    /**
+     * Pattern used to parse URI (according to http://tools.ietf.org/html/rfc3986#page-50)
+     */
+<span class="nc" id="L64">    private static final Pattern sUriPattern = Pattern.compile(&quot;^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\\?([^#]*))?(#(.*))?$&quot;);</span>
+
+    /**
+     * Media player used to play the sounds
+     */
+    private MediaPlayer mMediaPlayer;
+
+    /**
+     * AudioManager to request/release audio focus
+     */
+    private AudioManager mAudioManager;
+
+    /**
+     * OnCompletionListener so that external video player can notify to play next sound
+     */
+    private static OnCompletionListener mPlayAllListener;
+
+    /**
+     * Weak reference to the activity which is attempting to play the sound
+     */
+    private WeakReference&lt;Activity&gt; mCallingActivity;
+
+    /**
+     * Subset Flags: Flags that indicate the subset of sounds to involve
+     */
+<span class="nc" id="L89">    public enum SoundSide {</span>
+
+<span class="nc" id="L91">        QUESTION(0), ANSWER(1), QUESTION_AND_ANSWER(2);</span>
+
+        private final int mInt;
+
+<span class="nc" id="L95">        SoundSide(int i) {</span>
+<span class="nc" id="L96">            mInt = i;</span>
+<span class="nc" id="L97">        }</span>
+
+        public int getInt() {
+<span class="nc" id="L100">            return mInt;</span>
+        }
+    }
+
+    /**
+     * Stores sounds for the current card, key is one of the subset flags. It is intended that it not contain empty lists, and code assumes this will be true.
+     */
+<span class="nc" id="L107">    private final HashMap&lt;SoundSide, ArrayList&lt;String&gt;&gt; mSoundPaths = new HashMap&lt;&gt;();</span>
+
+    /**
+     * Whitelist for video extensions
+     */
+<span class="nc" id="L112">    private static final String[] VIDEO_WHITELIST = { &quot;3gp&quot;, &quot;mp4&quot;, &quot;webm&quot;, &quot;mkv&quot;, &quot;flv&quot; };</span>
+
+    /**
+     * Listener to handle audio focus. Currently blank because we're not respecting losing focus from other apps.
+     */
+<span class="nc" id="L117">    private static final AudioManager.OnAudioFocusChangeListener afChangeListener = focusChange -&gt; {</span>
+<span class="nc" id="L118">    };</span>
+
+    // Clears current sound paths; call before parseSounds() calls
+    public void resetSounds() {
+<span class="nc bnc" id="L122" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23694)) {</span>
+<span class="nc" id="L123">            mSoundPaths.clear();</span>
+        }
+<span class="nc" id="L125">    }</span>
+
+    /**
+     * The function addSounds() parses content for sound files, and stores entries to the filepaths for them,
+     * categorized as belonging to the front (question) or back (answer) of cards. Note that all sounds embedded in
+     * the content will be given the same base categorization of question or answer. Additionally, the result is to be
+     * sorted by the order of appearance on the card.
+     * @param soundDir -- base path to the media files
+     * @param content -- parsed for sound entries, the entries expected in display order
+     * @param qa -- the base categorization of the sounds in the content, SoundSide.SOUNDS_QUESTION or SoundSide.SOUNDS_ANSWER
+     */
+    public void addSounds(String soundDir, String content, SoundSide qa) {
+<span class="nc" id="L137">        Matcher matcher = sSoundPattern.matcher(content);</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23699)) {</span>
+            {
+<span class="nc" id="L140">                long _loopCounter609 = 0;</span>
+                // While there is matches of the pattern for sound markers
+<span class="nc bnc" id="L142" title="All 2 branches missed.">                while (matcher.find()) {</span>
+<span class="nc" id="L143">                    ListenerUtil.loopListener.listen(&quot;_loopCounter609&quot;, ++_loopCounter609);</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23696)) {</span>
+                        // Create appropriate list if needed; list must not be empty so long as code does no check
+<span class="nc bnc" id="L146" title="All 2 branches missed.">                        if (!mSoundPaths.containsKey(qa)) {</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23695)) {</span>
+<span class="nc" id="L148">                                mSoundPaths.put(qa, new ArrayList&lt;&gt;(0));</span>
+                            }
+                        }
+                    }
+                    // Get the sound file name
+<span class="nc" id="L153">                    String sound = matcher.group(1);</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23697)) {</span>
+                        // Construct the sound path and store it
+<span class="nc" id="L156">                        Timber.d(&quot;Adding Sound to side: %s&quot;, qa);</span>
+                    }
+<span class="nc bnc" id="L158" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23698)) {</span>
+<span class="nc" id="L159">                        mSoundPaths.get(qa).add(getSoundPath(soundDir, sound));</span>
+                    }
+<span class="nc" id="L161">                }</span>
+            }
+        }
+<span class="nc" id="L164">    }</span>
+
+    /**
+     * makeQuestionAnswerSoundList creates a single list of both the question and answer audio only if it does not
+     * already exist. It's intended for lazy evaluation, only in the rare cases when both sides are fully played
+     * together, which even when configured as supported may not be instigated
+     * @return True if a non-null list was created, or false otherwise
+     */
+    private Boolean makeQuestionAnswerList() {
+<span class="nc bnc" id="L173" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23700)) {</span>
+            // if combined list already exists, don't recreate
+<span class="nc bnc" id="L175" title="All 2 branches missed.">            if (mSoundPaths.containsKey(SoundSide.QUESTION_AND_ANSWER)) {</span>
+                // combined list already exists
+<span class="nc" id="L177">                return false;</span>
+            }
+        }
+<span class="nc bnc" id="L180" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23703)) {</span>
+            // make combined list only if necessary to avoid an empty combined list
+<span class="nc bnc" id="L182" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(23701) ? (mSoundPaths.containsKey(SoundSide.QUESTION) &amp;&amp; mSoundPaths.containsKey(SoundSide.ANSWER)) : (mSoundPaths.containsKey(SoundSide.QUESTION) || mSoundPaths.containsKey(SoundSide.ANSWER)))) {</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23702)) {</span>
+                    // some list exists to place into combined list
+<span class="nc" id="L185">                    mSoundPaths.put(SoundSide.QUESTION_AND_ANSWER, new ArrayList&lt;&gt;(0));</span>
+                }
+            } else {
+                // no need to make list
+<span class="nc" id="L189">                return false;</span>
+            }
+        }
+<span class="nc" id="L192">        ArrayList&lt;String&gt; combinedSounds = mSoundPaths.get(SoundSide.QUESTION_AND_ANSWER);</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23705)) {</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">            if (mSoundPaths.containsKey(SoundSide.QUESTION)) {</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23704)) {</span>
+<span class="nc" id="L196">                    combinedSounds.addAll(mSoundPaths.get(SoundSide.QUESTION));</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23707)) {</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">            if (mSoundPaths.containsKey(SoundSide.ANSWER)) {</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23706)) {</span>
+<span class="nc" id="L203">                    combinedSounds.addAll(mSoundPaths.get(SoundSide.ANSWER));</span>
+                }
+            }
+        }
+<span class="nc" id="L207">        return true;</span>
+    }
+
+    /**
+     * expandSounds takes content with embedded sound file placeholders and expands them to reference the actual media
+     * file
+     *
+     * @param soundDir -- the base path of the media files
+     * @param content -- card content to be rendered that may contain embedded audio
+     * @return -- the same content but in a format that will render working play buttons when audio was embedded
+     */
+    public static String expandSounds(String soundDir, String content) {
+<span class="nc" id="L219">        StringBuilder stringBuilder = new StringBuilder();</span>
+<span class="nc" id="L220">        String contentLeft = content;</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23708)) {</span>
+<span class="nc" id="L222">            Timber.d(&quot;expandSounds&quot;);</span>
+        }
+<span class="nc" id="L224">        Matcher matcher = sSoundPattern.matcher(content);</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23717)) {</span>
+            {
+<span class="nc" id="L227">                long _loopCounter610 = 0;</span>
+                // While there is matches of the pattern for sound markers
+<span class="nc bnc" id="L229" title="All 2 branches missed.">                while (matcher.find()) {</span>
+<span class="nc" id="L230">                    ListenerUtil.loopListener.listen(&quot;_loopCounter610&quot;, ++_loopCounter610);</span>
+                    // Get the sound file name
+<span class="nc" id="L232">                    String sound = matcher.group(1);</span>
+                    // Construct the sound path
+<span class="nc" id="L234">                    String soundPath = getSoundPath(soundDir, sound);</span>
+                    // and then appending the html code to add the play button
+<span class="nc" id="L236">                    String button = &quot;&lt;svg viewBox=\&quot;0 0 32 32\&quot;&gt;&lt;polygon points=\&quot;11,25 25,16 11,7\&quot;/&gt;Replay&lt;/svg&gt;&quot;;</span>
+<span class="nc" id="L237">                    String soundMarker = matcher.group();</span>
+<span class="nc" id="L238">                    int markerStart = contentLeft.indexOf(soundMarker);</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23709)) {</span>
+<span class="nc" id="L240">                        stringBuilder.append(contentLeft.substring(0, markerStart));</span>
+                    }
+<span class="nc bnc" id="L242" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23710)) {</span>
+                        // The &lt;span&gt; around the button (SVG or PNG image) is needed to make the vertical alignment work.
+<span class="nc" id="L244">                        stringBuilder.append(&quot;&lt;a class='replaybutton' href=\&quot;playsound:&quot;).append(soundPath).append(&quot;\&quot;&gt;&quot;).append(&quot;&lt;span&gt;&quot;).append(button).append(&quot;&lt;/span&gt;&lt;/a&gt;&quot;);</span>
+                    }
+<span class="nc bnc" id="L246" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23715)) {</span>
+<span class="nc bnc" id="L247" title="All 8 branches missed.">                        contentLeft = contentLeft.substring((ListenerUtil.mutListener.listen(23714) ? (markerStart % soundMarker.length()) : (ListenerUtil.mutListener.listen(23713) ? (markerStart / soundMarker.length()) : (ListenerUtil.mutListener.listen(23712) ? (markerStart * soundMarker.length()) : (ListenerUtil.mutListener.listen(23711) ? (markerStart - soundMarker.length()) : (markerStart + soundMarker.length()))))));</span>
+                    }
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23716)) {</span>
+<span class="nc" id="L250">                        Timber.v(&quot;Content left = %s&quot;, contentLeft);</span>
+                    }
+<span class="nc" id="L252">                }</span>
+            }
+        }
+<span class="nc bnc" id="L255" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23718)) {</span>
+<span class="nc" id="L256">            stringBuilder.append(contentLeft);</span>
+        }
+<span class="nc" id="L258">        return stringBuilder.toString();</span>
+    }
+
+    /**
+     * Plays the sounds for the indicated sides
+     * @param qa -- One of SoundSide.SOUNDS_QUESTION, SoundSide.SOUNDS_ANSWER, or SoundSide.SOUNDS_QUESTION_AND_ANSWER
+     */
+    public void playSounds(SoundSide qa, @Nullable OnErrorListener errorListener) {
+<span class="nc bnc" id="L266" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23727)) {</span>
+            // If there are sounds to play for the current card, start with the first one
+<span class="nc bnc" id="L268" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(23719) ? (mSoundPaths != null || mSoundPaths.containsKey(qa)) : (mSoundPaths != null &amp;&amp; mSoundPaths.containsKey(qa)))) {</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23725)) {</span>
+<span class="nc" id="L270">                    Timber.d(&quot;playSounds %s&quot;, qa);</span>
+                }
+<span class="nc bnc" id="L272" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23726)) {</span>
+<span class="nc" id="L273">                    playSoundInternal(mSoundPaths.get(qa).get(0), new PlayAllCompletionListener(qa, errorListener), null, errorListener);</span>
+                }
+<span class="nc bnc" id="L275" title="All 10 branches missed.">            } else if ((ListenerUtil.mutListener.listen(23720) ? (mSoundPaths != null || qa == SoundSide.QUESTION_AND_ANSWER) : (mSoundPaths != null &amp;&amp; qa == SoundSide.QUESTION_AND_ANSWER))) {</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23724)) {</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">                    if (makeQuestionAnswerList()) {</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23722)) {</span>
+<span class="nc" id="L279">                            Timber.d(&quot;playSounds: playing both question and answer&quot;);</span>
+                        }
+<span class="nc bnc" id="L281" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23723)) {</span>
+<span class="nc" id="L282">                            playSoundInternal(mSoundPaths.get(qa).get(0), new PlayAllCompletionListener(qa, errorListener), null, errorListener);</span>
+                        }
+                    } else {
+<span class="nc bnc" id="L285" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23721)) {</span>
+<span class="nc" id="L286">                            Timber.d(&quot;playSounds: No question answer list, not playing sound&quot;);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L292">    }</span>
+
+    /**
+     * Returns length in milliseconds.
+     * @param qa -- One of SoundSide.SOUNDS_QUESTION, SoundSide.SOUNDS_ANSWER, or SoundSide.SOUNDS_QUESTION_AND_ANSWER
+     */
+    public long getSoundsLength(SoundSide qa) {
+<span class="nc" id="L299">        long length = 0;</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23735)) {</span>
+<span class="nc bnc" id="L301" title="All 58 branches missed.">            if ((ListenerUtil.mutListener.listen(23730) ? (mSoundPaths != null || ((ListenerUtil.mutListener.listen(23729) ? ((ListenerUtil.mutListener.listen(23728) ? (qa == SoundSide.QUESTION_AND_ANSWER || makeQuestionAnswerList()) : (qa == SoundSide.QUESTION_AND_ANSWER &amp;&amp; makeQuestionAnswerList())) &amp;&amp; mSoundPaths.containsKey(qa)) : ((ListenerUtil.mutListener.listen(23728) ? (qa == SoundSide.QUESTION_AND_ANSWER || makeQuestionAnswerList()) : (qa == SoundSide.QUESTION_AND_ANSWER &amp;&amp; makeQuestionAnswerList())) || mSoundPaths.containsKey(qa))))) : (mSoundPaths != null &amp;&amp; ((ListenerUtil.mutListener.listen(23729) ? ((ListenerUtil.mutListener.listen(23728) ? (qa == SoundSide.QUESTION_AND_ANSWER || makeQuestionAnswerList()) : (qa == SoundSide.QUESTION_AND_ANSWER &amp;&amp; makeQuestionAnswerList())) &amp;&amp; mSoundPaths.containsKey(qa)) : ((ListenerUtil.mutListener.listen(23728) ? (qa == SoundSide.QUESTION_AND_ANSWER || makeQuestionAnswerList()) : (qa == SoundSide.QUESTION_AND_ANSWER &amp;&amp; makeQuestionAnswerList())) || mSoundPaths.containsKey(qa))))))) {</span>
+<span class="nc" id="L302">                MediaMetadataRetriever metaRetriever = new MediaMetadataRetriever();</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23734)) {</span>
+                    {
+<span class="nc" id="L305">                        long _loopCounter611 = 0;</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">                        for (String uri_string : mSoundPaths.get(qa)) {</span>
+<span class="nc" id="L307">                            ListenerUtil.loopListener.listen(&quot;_loopCounter611&quot;, ++_loopCounter611);</span>
+<span class="nc" id="L308">                            Uri soundUri = Uri.parse(uri_string);</span>
+                            try {
+<span class="nc bnc" id="L310" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(23732)) {</span>
+<span class="nc" id="L311">                                    metaRetriever.setDataSource(AnkiDroidApp.getInstance().getApplicationContext(), soundUri);</span>
+                                }
+<span class="nc bnc" id="L313" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(23733)) {</span>
+<span class="nc" id="L314">                                    length += Long.parseLong(metaRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION));</span>
+                                }
+<span class="nc" id="L316">                            } catch (Exception e) {</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(23731)) {</span>
+<span class="nc" id="L318">                                    Timber.e(e, &quot;metaRetriever - Error setting Data Source for mediaRetriever (media doesn't exist or forbidden?).&quot;);</span>
+                                }
+<span class="nc" id="L320">                            }</span>
+<span class="nc" id="L321">                        }</span>
+                    }
+                }
+            }
+        }
+<span class="nc" id="L326">        return length;</span>
+    }
+
+    /**
+     * Plays the given sound or video and sets playAllListener if available on media player to start next media.
+     * If videoView is null and the media is a video, then a request is sent to start the VideoPlayer Activity
+     */
+    public void playSound(String soundPath, OnCompletionListener playAllListener, final VideoView videoView, @Nullable OnErrorListener errorListener) {
+<span class="nc bnc" id="L334" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23736)) {</span>
+<span class="nc" id="L335">            Timber.d(&quot;Playing single sound&quot;);</span>
+        }
+<span class="nc" id="L337">        SingleSoundCompletionListener completionListener = new SingleSoundCompletionListener(playAllListener);</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23737)) {</span>
+<span class="nc" id="L339">            playSoundInternal(soundPath, completionListener, videoView, errorListener);</span>
+        }
+<span class="nc" id="L341">    }</span>
+
+    /**
+     * Plays a sound without ensuring that the playAllListener will release the audio
+     */
+    // audio API deprecation tracked on github as #5022
+    @SuppressWarnings({ &quot;PMD.EmptyIfStmt&quot;, &quot;PMD.CollapsibleIfStatements&quot;, &quot;deprecation&quot; })
+    private void playSoundInternal(String soundPath, OnCompletionListener playAllListener, VideoView videoView, OnErrorListener errorListener) {
+<span class="nc bnc" id="L349" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23738)) {</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">            Timber.d(&quot;Playing %s has listener? %b&quot;, soundPath, playAllListener != null);</span>
+        }
+<span class="nc" id="L352">        Uri soundUri = Uri.parse(soundPath);</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">        final OnErrorListener errorHandler = errorListener == null ? (mp, what, extra, path) -&gt; {</span>
+<span class="nc" id="L354">            Timber.w(&quot;Media Error: (%d, %d). Calling OnCompletionListener&quot;, what, extra);</span>
+<span class="nc" id="L355">            return false;</span>
+<span class="nc" id="L356">        } : errorListener;</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23777)) {</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">            if (&quot;tts&quot;.equals(soundPath.substring(0, 3))) {</span>
+            } else {
+                // Check if the file extension is that of a known video format
+<span class="nc bnc" id="L361" title="All 8 branches missed.">                final String extension = soundPath.substring((ListenerUtil.mutListener.listen(23742) ? (soundPath.lastIndexOf(&quot;.&quot;) % 1) : (ListenerUtil.mutListener.listen(23741) ? (soundPath.lastIndexOf(&quot;.&quot;) / 1) : (ListenerUtil.mutListener.listen(23740) ? (soundPath.lastIndexOf(&quot;.&quot;) * 1) : (ListenerUtil.mutListener.listen(23739) ? (soundPath.lastIndexOf(&quot;.&quot;) - 1) : (soundPath.lastIndexOf(&quot;.&quot;) + 1)))))).toLowerCase(Locale.getDefault());</span>
+<span class="nc" id="L362">                boolean isVideo = Arrays.asList(VIDEO_WHITELIST).contains(extension);</span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23745)) {</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">                    if (!isVideo) {</span>
+<span class="nc" id="L365">                        final String guessedType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23744)) {</span>
+<span class="nc bnc" id="L367" title="All 10 branches missed.">                            isVideo = (ListenerUtil.mutListener.listen(23743) ? ((guessedType != null) || guessedType.startsWith(&quot;video/&quot;)) : ((guessedType != null) &amp;&amp; guessedType.startsWith(&quot;video/&quot;)));</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L371" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23747)) {</span>
+                    // Also check that there is a video thumbnail, as some formats like mp4 can be audio only
+<span class="nc bnc" id="L373" title="All 10 branches missed.">                    isVideo = (ListenerUtil.mutListener.listen(23746) ? (isVideo || ThumbnailUtils.createVideoThumbnail(soundUri.getPath(), MediaStore.Images.Thumbnails.MINI_KIND) != null) : (isVideo &amp;&amp; ThumbnailUtils.createVideoThumbnail(soundUri.getPath(), MediaStore.Images.Thumbnails.MINI_KIND) != null));</span>
+                }
+<span class="nc bnc" id="L375" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23754)) {</span>
+                    // holder
+<span class="nc bnc" id="L377" title="All 58 branches missed.">                    if ((ListenerUtil.mutListener.listen(23750) ? ((ListenerUtil.mutListener.listen(23749) ? ((ListenerUtil.mutListener.listen(23748) ? (isVideo || videoView == null) : (isVideo &amp;&amp; videoView == null)) || mCallingActivity != null) : ((ListenerUtil.mutListener.listen(23748) ? (isVideo || videoView == null) : (isVideo &amp;&amp; videoView == null)) &amp;&amp; mCallingActivity != null)) || mCallingActivity.get() != null) : ((ListenerUtil.mutListener.listen(23749) ? ((ListenerUtil.mutListener.listen(23748) ? (isVideo || videoView == null) : (isVideo &amp;&amp; videoView == null)) || mCallingActivity != null) : ((ListenerUtil.mutListener.listen(23748) ? (isVideo || videoView == null) : (isVideo &amp;&amp; videoView == null)) &amp;&amp; mCallingActivity != null)) &amp;&amp; mCallingActivity.get() != null))) {</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23751)) {</span>
+<span class="nc" id="L379">                            Timber.d(&quot;Requesting AbstractFlashcardViewer play video - no SurfaceHolder&quot;);</span>
+                        }
+<span class="nc bnc" id="L381" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23752)) {</span>
+<span class="nc" id="L382">                            mPlayAllListener = playAllListener;</span>
+                        }
+<span class="nc bnc" id="L384" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23753)) {</span>
+<span class="nc" id="L385">                            ((AbstractFlashcardViewer) mCallingActivity.get()).playVideo(soundPath);</span>
+                        }
+<span class="nc" id="L387">                        return;</span>
+                    }
+                }
+                // Play media
+                try {
+<span class="nc bnc" id="L392" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23761)) {</span>
+                        // Create media player
+<span class="nc bnc" id="L394" title="All 2 branches missed.">                        if (mMediaPlayer == null) {</span>
+<span class="nc bnc" id="L395" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23759)) {</span>
+<span class="nc" id="L396">                                Timber.d(&quot;Creating media player for playback&quot;);</span>
+                            }
+<span class="nc bnc" id="L398" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23760)) {</span>
+<span class="nc" id="L399">                                mMediaPlayer = new MediaPlayer();</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L402" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23757)) {</span>
+<span class="nc" id="L403">                                Timber.d(&quot;Resetting media for playback&quot;);</span>
+                            }
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23758)) {</span>
+<span class="nc" id="L406">                                mMediaPlayer.reset();</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L410" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23763)) {</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">                        if (mAudioManager == null) {</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23762)) {</span>
+<span class="nc" id="L413">                                mAudioManager = (AudioManager) AnkiDroidApp.getInstance().getApplicationContext().getSystemService(Context.AUDIO_SERVICE);</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L417" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23767)) {</span>
+                        // Provide a VideoView to the MediaPlayer if valid video file
+<span class="nc bnc" id="L419" title="All 10 branches missed.">                        if ((ListenerUtil.mutListener.listen(23764) ? (isVideo || videoView != null) : (isVideo &amp;&amp; videoView != null))) {</span>
+<span class="nc bnc" id="L420" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23765)) {</span>
+<span class="nc" id="L421">                                mMediaPlayer.setDisplay(videoView.getHolder());</span>
+                            }
+<span class="nc bnc" id="L423" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23766)) {</span>
+<span class="nc" id="L424">                                mMediaPlayer.setOnVideoSizeChangedListener((mp, width, height) -&gt; configureVideo(videoView, width, height));</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L428" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23768)) {</span>
+<span class="nc" id="L429">                        mMediaPlayer.setOnErrorListener((mp, which, extra) -&gt; errorHandler.onError(mp, which, extra, soundPath));</span>
+                    }
+<span class="nc bnc" id="L431" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23769)) {</span>
+                        // Setup the MediaPlayer
+<span class="nc" id="L433">                        mMediaPlayer.setDataSource(AnkiDroidApp.getInstance().getApplicationContext(), soundUri);</span>
+                    }
+<span class="nc bnc" id="L435" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23770)) {</span>
+<span class="nc" id="L436">                        mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);</span>
+                    }
+<span class="nc bnc" id="L438" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23771)) {</span>
+<span class="nc" id="L439">                        mMediaPlayer.setOnPreparedListener(mp -&gt; {</span>
+<span class="nc" id="L440">                            Timber.d(&quot;Starting media player&quot;);</span>
+<span class="nc" id="L441">                            mMediaPlayer.start();</span>
+<span class="nc" id="L442">                        });</span>
+                    }
+<span class="nc bnc" id="L444" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23773)) {</span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">                        if (playAllListener != null) {</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23772)) {</span>
+<span class="nc" id="L447">                                mMediaPlayer.setOnCompletionListener(playAllListener);</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L451" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23774)) {</span>
+<span class="nc" id="L452">                        mMediaPlayer.prepareAsync();</span>
+                    }
+<span class="nc bnc" id="L454" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23775)) {</span>
+<span class="nc" id="L455">                        Timber.d(&quot;Requesting audio focus&quot;);</span>
+                    }
+<span class="nc bnc" id="L457" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23776)) {</span>
+<span class="nc" id="L458">                        mAudioManager.requestAudioFocus(afChangeListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);</span>
+                    }
+<span class="nc" id="L460">                } catch (Exception e) {</span>
+<span class="nc bnc" id="L461" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23755)) {</span>
+<span class="nc" id="L462">                        Timber.e(e, &quot;playSounds - Error reproducing sound %s&quot;, soundPath);</span>
+                    }
+<span class="nc bnc" id="L464" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23756)) {</span>
+<span class="nc" id="L465">                        releaseSound();</span>
+                    }
+<span class="nc" id="L467">                }</span>
+            }
+        }
+<span class="nc" id="L470">    }</span>
+
+    private static void configureVideo(VideoView videoView, int videoWidth, int videoHeight) {
+        // get the display
+<span class="nc" id="L474">        Context context = AnkiDroidApp.getInstance().getApplicationContext();</span>
+<span class="nc" id="L475">        WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);</span>
+<span class="nc" id="L476">        Display display = wm.getDefaultDisplay();</span>
+        // adjust the size of the video so it fits on the screen
+<span class="nc bnc" id="L478" title="All 8 branches missed.">        float videoProportion = (ListenerUtil.mutListener.listen(23781) ? ((float) videoWidth % (float) videoHeight) : (ListenerUtil.mutListener.listen(23780) ? ((float) videoWidth * (float) videoHeight) : (ListenerUtil.mutListener.listen(23779) ? ((float) videoWidth - (float) videoHeight) : (ListenerUtil.mutListener.listen(23778) ? ((float) videoWidth + (float) videoHeight) : ((float) videoWidth / (float) videoHeight)))));</span>
+<span class="nc" id="L479">        Point point = new Point();</span>
+<span class="nc bnc" id="L480" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23782)) {</span>
+<span class="nc" id="L481">            display.getSize(point);</span>
+        }
+<span class="nc" id="L483">        int screenWidth = point.x;</span>
+<span class="nc" id="L484">        int screenHeight = point.y;</span>
+<span class="nc bnc" id="L485" title="All 8 branches missed.">        float screenProportion = (ListenerUtil.mutListener.listen(23786) ? ((float) screenWidth % (float) screenHeight) : (ListenerUtil.mutListener.listen(23785) ? ((float) screenWidth * (float) screenHeight) : (ListenerUtil.mutListener.listen(23784) ? ((float) screenWidth - (float) screenHeight) : (ListenerUtil.mutListener.listen(23783) ? ((float) screenWidth + (float) screenHeight) : ((float) screenWidth / (float) screenHeight)))));</span>
+<span class="nc" id="L486">        android.view.ViewGroup.LayoutParams lp = videoView.getLayoutParams();</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23804)) {</span>
+<span class="nc bnc" id="L488" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(23791) ? (videoProportion &gt;= screenProportion) : (ListenerUtil.mutListener.listen(23790) ? (videoProportion &lt;= screenProportion) : (ListenerUtil.mutListener.listen(23789) ? (videoProportion &lt; screenProportion) : (ListenerUtil.mutListener.listen(23788) ? (videoProportion != screenProportion) : (ListenerUtil.mutListener.listen(23787) ? (videoProportion == screenProportion) : (videoProportion &gt; screenProportion))))))) {</span>
+<span class="nc bnc" id="L489" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23798)) {</span>
+<span class="nc" id="L490">                    lp.width = screenWidth;</span>
+                }
+<span class="nc bnc" id="L492" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23803)) {</span>
+<span class="nc bnc" id="L493" title="All 8 branches missed.">                    lp.height = (int) ((ListenerUtil.mutListener.listen(23802) ? ((float) screenWidth % videoProportion) : (ListenerUtil.mutListener.listen(23801) ? ((float) screenWidth * videoProportion) : (ListenerUtil.mutListener.listen(23800) ? ((float) screenWidth - videoProportion) : (ListenerUtil.mutListener.listen(23799) ? ((float) screenWidth + videoProportion) : ((float) screenWidth / videoProportion))))));</span>
+                }
+            } else {
+<span class="nc bnc" id="L496" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23796)) {</span>
+<span class="nc bnc" id="L497" title="All 8 branches missed.">                    lp.width = (int) ((ListenerUtil.mutListener.listen(23795) ? (videoProportion % (float) screenHeight) : (ListenerUtil.mutListener.listen(23794) ? (videoProportion / (float) screenHeight) : (ListenerUtil.mutListener.listen(23793) ? (videoProportion - (float) screenHeight) : (ListenerUtil.mutListener.listen(23792) ? (videoProportion + (float) screenHeight) : (videoProportion * (float) screenHeight))))));</span>
+                }
+<span class="nc bnc" id="L499" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23797)) {</span>
+<span class="nc" id="L500">                    lp.height = screenHeight;</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L504" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23805)) {</span>
+<span class="nc" id="L505">            videoView.setLayoutParams(lp);</span>
+        }
+<span class="nc" id="L507">    }</span>
+
+    public void notifyConfigurationChanged(VideoView videoView) {
+<span class="nc bnc" id="L510" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23807)) {</span>
+<span class="nc bnc" id="L511" title="All 2 branches missed.">            if (mMediaPlayer != null) {</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23806)) {</span>
+<span class="nc" id="L513">                    configureVideo(videoView, mMediaPlayer.getVideoWidth(), mMediaPlayer.getVideoHeight());</span>
+                }
+            }
+        }
+<span class="nc" id="L517">    }</span>
+
+    /**
+     * #5414 - Ensures playing a single sound performs cleanup
+     */
+    private final class SingleSoundCompletionListener implements OnCompletionListener {
+
+        @Nullable
+        private final OnCompletionListener userCallback;
+
+<span class="nc" id="L527">        public SingleSoundCompletionListener(@Nullable OnCompletionListener userCallback) {</span>
+<span class="nc" id="L528">            this.userCallback = userCallback;</span>
+<span class="nc" id="L529">        }</span>
+
+        @Override
+        public void onCompletion(MediaPlayer mp) {
+<span class="nc bnc" id="L533" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23808)) {</span>
+<span class="nc" id="L534">                Timber.d(&quot;Single Sound completed&quot;);</span>
+            }
+<span class="nc bnc" id="L536" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23811)) {</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">                if (userCallback != null) {</span>
+<span class="nc bnc" id="L538" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23810)) {</span>
+<span class="nc" id="L539">                        userCallback.onCompletion(mp);</span>
+                    }
+                } else {
+<span class="nc bnc" id="L542" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23809)) {</span>
+<span class="nc" id="L543">                        releaseSound();</span>
+                    }
+                }
+            }
+<span class="nc" id="L547">        }</span>
+    }
+
+    /**
+     * Class used to play all sounds for a given card side
+     */
+    private final class PlayAllCompletionListener implements OnCompletionListener {
+
+        /**
+         * Question/Answer
+         */
+        private final SoundSide mQa;
+
+        private final OnErrorListener mErrorListener;
+
+        /**
+         * next sound to play (onCompletion() is first called after the first (0) has been played)
+         */
+<span class="nc" id="L565">        private int mNextToPlay = 1;</span>
+
+<span class="nc" id="L567">        private PlayAllCompletionListener(SoundSide qa, @Nullable OnErrorListener errorListener) {</span>
+<span class="nc" id="L568">            mQa = qa;</span>
+<span class="nc" id="L569">            mErrorListener = errorListener;</span>
+<span class="nc" id="L570">        }</span>
+
+        @Override
+        public void onCompletion(MediaPlayer mp) {
+<span class="nc bnc" id="L574" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23822)) {</span>
+                // If there is still more sounds to play for the current card, play the next one
+<span class="nc bnc" id="L576" title="All 50 branches missed.">                if ((ListenerUtil.mutListener.listen(23817) ? (mSoundPaths.containsKey(mQa) || (ListenerUtil.mutListener.listen(23816) ? (mNextToPlay &gt;= mSoundPaths.get(mQa).size()) : (ListenerUtil.mutListener.listen(23815) ? (mNextToPlay &lt;= mSoundPaths.get(mQa).size()) : (ListenerUtil.mutListener.listen(23814) ? (mNextToPlay &gt; mSoundPaths.get(mQa).size()) : (ListenerUtil.mutListener.listen(23813) ? (mNextToPlay != mSoundPaths.get(mQa).size()) : (ListenerUtil.mutListener.listen(23812) ? (mNextToPlay == mSoundPaths.get(mQa).size()) : (mNextToPlay &lt; mSoundPaths.get(mQa).size()))))))) : (mSoundPaths.containsKey(mQa) &amp;&amp; (ListenerUtil.mutListener.listen(23816) ? (mNextToPlay &gt;= mSoundPaths.get(mQa).size()) : (ListenerUtil.mutListener.listen(23815) ? (mNextToPlay &lt;= mSoundPaths.get(mQa).size()) : (ListenerUtil.mutListener.listen(23814) ? (mNextToPlay &gt; mSoundPaths.get(mQa).size()) : (ListenerUtil.mutListener.listen(23813) ? (mNextToPlay != mSoundPaths.get(mQa).size()) : (ListenerUtil.mutListener.listen(23812) ? (mNextToPlay == mSoundPaths.get(mQa).size()) : (mNextToPlay &lt; mSoundPaths.get(mQa).size()))))))))) {</span>
+<span class="nc bnc" id="L577" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23820)) {</span>
+<span class="nc" id="L578">                        Timber.i(&quot;Play all: Playing next sound&quot;);</span>
+                    }
+<span class="nc bnc" id="L580" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23821)) {</span>
+<span class="nc" id="L581">                        playSound(mSoundPaths.get(mQa).get(mNextToPlay++), this, null, mErrorListener);</span>
+                    }
+                } else {
+<span class="nc bnc" id="L584" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23818)) {</span>
+<span class="nc" id="L585">                        Timber.i(&quot;Play all: Completed - releasing sound&quot;);</span>
+                    }
+<span class="nc bnc" id="L587" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23819)) {</span>
+<span class="nc" id="L588">                        releaseSound();</span>
+                    }
+                }
+            }
+<span class="nc" id="L592">        }</span>
+    }
+
+    /**
+     * Releases the sound.
+     */
+    // Tracked on github as #5022
+    @SuppressWarnings(&quot;deprecation&quot;)
+    private void releaseSound() {
+<span class="nc bnc" id="L601" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23823)) {</span>
+<span class="nc" id="L602">            Timber.d(&quot;Releasing sounds and abandoning audio focus&quot;);</span>
+        }
+<span class="nc bnc" id="L604" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23827)) {</span>
+<span class="nc bnc" id="L605" title="All 2 branches missed.">            if (mMediaPlayer != null) {</span>
+<span class="nc bnc" id="L606" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23824)) {</span>
+                    // https://stackoverflow.com/questions/9609479/android-mediaplayer-went-away-with-unhandled-events
+<span class="nc" id="L608">                    mMediaPlayer.reset();</span>
+                }
+<span class="nc bnc" id="L610" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23825)) {</span>
+<span class="nc" id="L611">                    mMediaPlayer.release();</span>
+                }
+<span class="nc bnc" id="L613" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23826)) {</span>
+<span class="nc" id="L614">                    mMediaPlayer = null;</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L618" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23830)) {</span>
+<span class="nc bnc" id="L619" title="All 2 branches missed.">            if (mAudioManager != null) {</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23828)) {</span>
+<span class="nc" id="L621">                    mAudioManager.abandonAudioFocus(afChangeListener);</span>
+                }
+<span class="nc bnc" id="L623" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23829)) {</span>
+<span class="nc" id="L624">                    mAudioManager = null;</span>
+                }
+            }
+        }
+<span class="nc" id="L628">    }</span>
+
+    /**
+     * Stops the playing sounds.
+     */
+    public void stopSounds() {
+<span class="nc bnc" id="L634" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23833)) {</span>
+<span class="nc bnc" id="L635" title="All 2 branches missed.">            if (mMediaPlayer != null) {</span>
+<span class="nc bnc" id="L636" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23831)) {</span>
+<span class="nc" id="L637">                    mMediaPlayer.stop();</span>
+                }
+<span class="nc bnc" id="L639" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23832)) {</span>
+<span class="nc" id="L640">                    releaseSound();</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L644" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23834)) {</span>
+<span class="nc" id="L645">            ReadText.stopTts();</span>
+        }
+<span class="nc" id="L647">    }</span>
+
+    /**
+     * @param soundDir -- base path to the media files.
+     * @param sound -- path to the sound file from the card content.
+     * @return absolute URI to the sound file.
+     */
+    private static String getSoundPath(String soundDir, String sound) {
+<span class="nc" id="L655">        String trimmedSound = sound.trim();</span>
+<span class="nc bnc" id="L656" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23835)) {</span>
+<span class="nc bnc" id="L657" title="All 2 branches missed.">            if (hasURIScheme(trimmedSound)) {</span>
+<span class="nc" id="L658">                return trimmedSound;</span>
+            }
+        }
+<span class="nc" id="L661">        return soundDir + Uri.encode(StringUtil.trimRight(sound));</span>
+    }
+
+    /**
+     * @param path -- path to the sound file from the card content.
+     * @return true if path is well-formed URI and contains URI scheme.
+     */
+    private static boolean hasURIScheme(String path) {
+<span class="nc" id="L669">        Matcher uriMatcher = sUriPattern.matcher(path.trim());</span>
+<span class="nc bnc" id="L670" title="All 10 branches missed.">        return (ListenerUtil.mutListener.listen(23836) ? (uriMatcher.matches() || uriMatcher.group(2) != null) : (uriMatcher.matches() &amp;&amp; uriMatcher.group(2) != null));</span>
+    }
+
+    /**
+     * Set the context for the calling activity (necessary for playing videos)
+     */
+    public void setContext(WeakReference&lt;Activity&gt; activityRef) {
+<span class="nc bnc" id="L677" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23837)) {</span>
+<span class="nc" id="L678">            mCallingActivity = activityRef;</span>
+        }
+<span class="nc" id="L680">    }</span>
+
+    public OnCompletionListener getMediaCompletionListener() {
+<span class="nc" id="L683">        return mPlayAllListener;</span>
+    }
+
+    public boolean hasQuestion() {
+<span class="nc" id="L687">        return mSoundPaths.containsKey(SoundSide.QUESTION);</span>
+    }
+
+    public boolean hasAnswer() {
+<span class="nc" id="L691">        return mSoundPaths.containsKey(SoundSide.ANSWER);</span>
+    }
+
+    public interface OnErrorListener {
+
+        boolean onError(MediaPlayer mp, int which, int extra, String path);
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

@@ -1,0 +1,1612 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Decks.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.libanki</a> &gt; <span class="el_source">Decks.java</span></div><h1>Decks.java</h1><pre class="source lang-java linenums">/**
+ * *************************************************************************************
+ *  Copyright (c) 2009 Daniel Svärd &lt;daniel.svard@gmail.com&gt;                             *
+ *  Copyright (c) 2009 Casey Link &lt;unnamedrambler@gmail.com&gt;                             *
+ *  Copyright (c) 2009 Edu Zamora &lt;edu.zasu@gmail.com&gt;                                   *
+ *  Copyright (c) 2010 Norbert Nagold &lt;norbert.nagold@gmail.com&gt;                         *
+ *  Copyright (c) 2015 Houssam Salem &lt;houssam.salem.au@gmail.com&gt;                        *
+ *  Copyright (c) 2018 Chris Williams &lt;chris@chrispwill.com&gt;                             *
+ *                                                                                       *
+ *  This program is free software; you can redistribute it and/or modify it under        *
+ *  the terms of the GNU General Public License as published by the Free Software        *
+ *  Foundation; either version 3 of the License, or (at your option) any later           *
+ *  version.                                                                             *
+ *                                                                                       *
+ *  This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ *  WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ *  PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                       *
+ *  You should have received a copy of the GNU General Public License along with         *
+ *  this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ * **************************************************************************************
+ */
+package com.ichi2.libanki;
+
+import android.content.ContentValues;
+import android.text.TextUtils;
+import com.ichi2.anki.AnkiDroidApp;
+import com.ichi2.anki.exception.ConfirmModSchemaException;
+import com.ichi2.anki.exception.DeckRenameException;
+import com.ichi2.libanki.exception.NoSuchDeckException;
+import com.ichi2.utils.DeckComparator;
+import com.ichi2.utils.DeckNameComparator;
+import com.ichi2.utils.JSONArray;
+import com.ichi2.utils.JSONObject;
+import com.ichi2.utils.SyncStatus;
+import java.text.Normalizer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.regex.Pattern;
+import androidx.annotation.CheckResult;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
+import timber.log.Timber;
+import static com.ichi2.libanki.Consts.DECK_DYN;
+import static com.ichi2.libanki.Consts.DECK_STD;
+import static com.ichi2.utils.CollectionUtils.addAll;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+<span class="pc bpc" id="L59" title="1 of 2 branches missed.">@SuppressWarnings({ &quot;PMD.AvoidThrowingRawExceptionTypes&quot;, &quot;PMD.MethodNamingConventions&quot;, &quot;PMD.AvoidReassigningParameters&quot;, &quot;PMD.SimplifyBooleanReturns&quot; })</span>
+public class Decks {
+
+    // Invalid id, represents an id on an unfound deck
+    public static final long NOT_FOUND_DECK_ID = -1L;
+
+    // not in libAnki
+    @SuppressWarnings(&quot;WeakerAccess&quot;)
+    public static final String DECK_SEPARATOR = &quot;::&quot;;
+
+    public static final String defaultDeck = &quot;&quot; + &quot;{&quot; + // currentDay, count
+    &quot;'newToday': [0, 0],&quot; + &quot;'revToday': [0, 0],&quot; + &quot;'lrnToday': [0, 0],&quot; + // time in ms
+    &quot;'timeToday': [0, 0],&quot; + &quot;'conf': 1,&quot; + &quot;'usn': 0,&quot; + &quot;'desc': \&quot;\&quot;,&quot; + // anki uses int/bool interchangably here
+    &quot;'dyn': 0,&quot; + &quot;'collapsed': False,&quot; + // added in beta11
+    &quot;'extendNew': 10,&quot; + &quot;'extendRev': 50&quot; + &quot;}&quot;;
+
+    private static final String defaultDynamicDeck = &quot;&quot; + &quot;{&quot; + &quot;'newToday': [0, 0],&quot; + &quot;'revToday': [0, 0],&quot; + &quot;'lrnToday': [0, 0],&quot; + &quot;'timeToday': [0, 0],&quot; + &quot;'collapsed': False,&quot; + &quot;'dyn': 1,&quot; + &quot;'desc': \&quot;\&quot;,&quot; + &quot;'usn': 0,&quot; + &quot;'delays': null,&quot; + &quot;'separate': True,&quot; + // list of (search, limit, order); we only use first element for now
+    &quot;'terms': [[\&quot;\&quot;, 100, 0]],&quot; + &quot;'resched': True,&quot; + // currently unused
+    &quot;'return': True&quot; + &quot;}&quot;;
+
+    public static final String defaultConf = &quot;&quot; + &quot;{&quot; + &quot;'name': \&quot;Default\&quot;,&quot; + &quot;'new': {&quot; + &quot;'delays': [1, 10],&quot; + // 7 is not currently used
+    &quot;'ints': [1, 4, 7],&quot; + &quot;'initialFactor': &quot; + Consts.STARTING_FACTOR + &quot;,&quot; + &quot;'separate': True,&quot; + &quot;'order': &quot; + Consts.NEW_CARDS_DUE + &quot;,&quot; + &quot;'perDay': 20,&quot; + // may not be set on old decks
+    &quot;'bury': False&quot; + &quot;},&quot; + &quot;'lapse': {&quot; + &quot;'delays': [10],&quot; + &quot;'mult': 0,&quot; + &quot;'minInt': 1,&quot; + &quot;'leechFails': 8,&quot; + // type 0=suspend, 1=tagonly
+    &quot;'leechAction': &quot; + Consts.LEECH_SUSPEND + &quot;},&quot; + &quot;'rev': {&quot; + &quot;'perDay': 100,&quot; + &quot;'ease4': 1.3,&quot; + &quot;'fuzz': 0.05,&quot; + // not currently used
+    &quot;'minSpace': 1,&quot; + &quot;'ivlFct': 1,&quot; + &quot;'maxIvl': 36500,&quot; + // may not be set on old decks
+    &quot;'bury': False&quot; + &quot;},&quot; + &quot;'maxTaken': 60,&quot; + &quot;'timer': 0,&quot; + &quot;'autoplay': True,&quot; + &quot;'replayq': True,&quot; + &quot;'mod': 0,&quot; + &quot;'usn': 0&quot; + &quot;}&quot;;
+
+    private final Collection mCol;
+
+    private HashMap&lt;Long, Deck&gt; mDecks;
+
+    private HashMap&lt;Long, DeckConfig&gt; mDconf;
+
+    // Never access mNameMap directly. Uses byName
+    private NameMap mNameMap;
+
+    private boolean mChanged;
+
+    private static class NameMap {
+
+        private final HashMap&lt;String, Deck&gt; mNameMap;
+
+<span class="fc" id="L101">        private NameMap(int size) {</span>
+<span class="fc" id="L102">            mNameMap = new HashMap&lt;&gt;(size);</span>
+<span class="fc" id="L103">        }</span>
+
+        public static NameMap constructor(java.util.Collection&lt;Deck&gt; decks) {
+<span class="pc bpc" id="L106" title="4 of 8 branches missed.">            NameMap map = new NameMap((ListenerUtil.mutListener.listen(22122) ? (2 % decks.size()) : (ListenerUtil.mutListener.listen(22121) ? (2 / decks.size()) : (ListenerUtil.mutListener.listen(22120) ? (2 - decks.size()) : (ListenerUtil.mutListener.listen(22119) ? (2 + decks.size()) : (2 * decks.size()))))));</span>
+<span class="pc bpc" id="L107" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(22124)) {</span>
+                {
+<span class="fc" id="L109">                    long _loopCounter493 = 0;</span>
+<span class="fc bfc" id="L110" title="All 2 branches covered.">                    for (Deck deck : decks) {</span>
+<span class="fc" id="L111">                        ListenerUtil.loopListener.listen(&quot;_loopCounter493&quot;, ++_loopCounter493);</span>
+<span class="pc bpc" id="L112" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22123)) {</span>
+<span class="fc" id="L113">                            map.add(deck);</span>
+                        }
+<span class="fc" id="L115">                    }</span>
+                }
+            }
+<span class="fc" id="L118">            return map;</span>
+        }
+
+        public synchronized Deck get(String name) {
+<span class="fc" id="L122">            String normalized = normalizeName(name);</span>
+<span class="fc" id="L123">            Deck deck = mNameMap.get(normalized);</span>
+<span class="pc bpc" id="L124" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(22125)) {</span>
+<span class="fc bfc" id="L125" title="All 2 branches covered.">                if (deck == null) {</span>
+<span class="fc" id="L126">                    return null;</span>
+                }
+            }
+<span class="fc" id="L129">            String foundName = deck.getString(&quot;name&quot;);</span>
+<span class="pc bpc" id="L130" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(22127)) {</span>
+<span class="pc bpc" id="L131" title="1 of 2 branches missed.">                if (!equalName(name, foundName)) {</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22126)) {</span>
+<span class="nc" id="L133">                        AnkiDroidApp.sendExceptionReport(&quot;We looked for deck \&quot;&quot; + name + &quot;\&quot; and instead got deck \&quot;&quot; + foundName + &quot;\&quot;.&quot;, &quot;Decks - byName&quot;);</span>
+                    }
+                }
+            }
+<span class="fc" id="L137">            return deck;</span>
+        }
+
+        public synchronized void add(Deck g) {
+<span class="fc" id="L141">            String name = g.getString(&quot;name&quot;);</span>
+<span class="pc bpc" id="L142" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(22128)) {</span>
+<span class="fc" id="L143">                mNameMap.put(name, g);</span>
+            }
+<span class="pc bpc" id="L145" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(22129)) {</span>
+                // Non normalized is kept for Parent
+<span class="fc" id="L147">                mNameMap.put(normalizeName(name), g);</span>
+            }
+<span class="fc" id="L149">        }</span>
+
+        /**
+         *           Remove name from nameMap if it is equal to expectedDeck.
+         *
+         *           It is possible that another deck has been given name `name`,
+         *           in which case we don't want to remove it from nameMap.
+         *
+         *           E.g. if A is renamed to A::B and A::B already existed and get
+         *           renamed to A::B::B, then we don't want to remove A::B from
+         *           nameMap when A::B is renamed to A::B::B, since A::B is
+         *           potentially the correct value.
+         */
+        public synchronized void remove(String name, JSONObject expectedDeck) {
+<span class="fc" id="L163">            String[] names = new String[] { name, normalizeName(name) };</span>
+<span class="pc bpc" id="L164" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(22138)) {</span>
+                {
+<span class="fc" id="L166">                    long _loopCounter494 = 0;</span>
+<span class="fc bfc" id="L167" title="All 2 branches covered.">                    for (String name_ : names) {</span>
+<span class="fc" id="L168">                        ListenerUtil.loopListener.listen(&quot;_loopCounter494&quot;, ++_loopCounter494);</span>
+<span class="fc" id="L169">                        JSONObject currentDeck = mNameMap.get(name_);</span>
+<span class="pc bpc" id="L170" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22137)) {</span>
+<span class="pc bpc" id="L171" title="42 of 50 branches missed.">                            if ((ListenerUtil.mutListener.listen(22135) ? (currentDeck != null || (ListenerUtil.mutListener.listen(22134) ? (currentDeck.getLong(&quot;id&quot;) &gt;= expectedDeck.getLong(&quot;id&quot;)) : (ListenerUtil.mutListener.listen(22133) ? (currentDeck.getLong(&quot;id&quot;) &lt;= expectedDeck.getLong(&quot;id&quot;)) : (ListenerUtil.mutListener.listen(22132) ? (currentDeck.getLong(&quot;id&quot;) &gt; expectedDeck.getLong(&quot;id&quot;)) : (ListenerUtil.mutListener.listen(22131) ? (currentDeck.getLong(&quot;id&quot;) &lt; expectedDeck.getLong(&quot;id&quot;)) : (ListenerUtil.mutListener.listen(22130) ? (currentDeck.getLong(&quot;id&quot;) != expectedDeck.getLong(&quot;id&quot;)) : (currentDeck.getLong(&quot;id&quot;) == expectedDeck.getLong(&quot;id&quot;)))))))) : (currentDeck != null &amp;&amp; (ListenerUtil.mutListener.listen(22134) ? (currentDeck.getLong(&quot;id&quot;) &gt;= expectedDeck.getLong(&quot;id&quot;)) : (ListenerUtil.mutListener.listen(22133) ? (currentDeck.getLong(&quot;id&quot;) &lt;= expectedDeck.getLong(&quot;id&quot;)) : (ListenerUtil.mutListener.listen(22132) ? (currentDeck.getLong(&quot;id&quot;) &gt; expectedDeck.getLong(&quot;id&quot;)) : (ListenerUtil.mutListener.listen(22131) ? (currentDeck.getLong(&quot;id&quot;) &lt; expectedDeck.getLong(&quot;id&quot;)) : (ListenerUtil.mutListener.listen(22130) ? (currentDeck.getLong(&quot;id&quot;) != expectedDeck.getLong(&quot;id&quot;)) : (currentDeck.getLong(&quot;id&quot;) == expectedDeck.getLong(&quot;id&quot;)))))))))) {</span>
+<span class="pc bpc" id="L172" title="1 of 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(22136)) {</span>
+                                    /* Remove name from mapping only if it still maps to
+                     * expectedDeck. I.e. no other deck had been given this
+                     * name yet. */
+<span class="fc" id="L176">                                    mNameMap.remove(name_);</span>
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+<span class="fc" id="L183">        }</span>
+    }
+
+<span class="fc" id="L186">    public Decks(Collection col) {</span>
+<span class="fc" id="L187">        mCol = col;</span>
+<span class="fc" id="L188">    }</span>
+
+    public void load(String decks, String dconf) {
+<span class="fc" id="L191">        JSONObject decksarray = new JSONObject(decks);</span>
+<span class="fc" id="L192">        JSONArray ids = decksarray.names();</span>
+<span class="pc bpc" id="L193" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22139)) {</span>
+<span class="fc" id="L194">            mDecks = new HashMap&lt;&gt;(decksarray.length());</span>
+        }
+<span class="pc bpc" id="L196" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22141)) {</span>
+            {
+<span class="fc" id="L198">                long _loopCounter495 = 0;</span>
+<span class="fc bfc" id="L199" title="All 2 branches covered.">                for (String id : ids.stringIterable()) {</span>
+<span class="fc" id="L200">                    ListenerUtil.loopListener.listen(&quot;_loopCounter495&quot;, ++_loopCounter495);</span>
+<span class="fc" id="L201">                    Deck o = new Deck(decksarray.getJSONObject(id));</span>
+<span class="fc" id="L202">                    long longId = Long.parseLong(id);</span>
+<span class="pc bpc" id="L203" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22140)) {</span>
+<span class="fc" id="L204">                        mDecks.put(longId, o);</span>
+                    }
+<span class="fc" id="L206">                }</span>
+            }
+        }
+<span class="pc bpc" id="L209" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22142)) {</span>
+<span class="fc" id="L210">            mNameMap = NameMap.constructor(mDecks.values());</span>
+        }
+<span class="fc" id="L212">        JSONObject confarray = new JSONObject(dconf);</span>
+<span class="pc bpc" id="L213" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22143)) {</span>
+<span class="fc" id="L214">            ids = confarray.names();</span>
+        }
+<span class="pc bpc" id="L216" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22144)) {</span>
+<span class="fc" id="L217">            mDconf = new HashMap&lt;&gt;(confarray.length());</span>
+        }
+<span class="pc bpc" id="L219" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22147)) {</span>
+<span class="pc bpc" id="L220" title="1 of 2 branches missed.">            if (ids != null) {</span>
+<span class="pc bpc" id="L221" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22146)) {</span>
+                    {
+<span class="fc" id="L223">                        long _loopCounter496 = 0;</span>
+<span class="fc bfc" id="L224" title="All 2 branches covered.">                        for (String id : ids.stringIterable()) {</span>
+<span class="fc" id="L225">                            ListenerUtil.loopListener.listen(&quot;_loopCounter496&quot;, ++_loopCounter496);</span>
+<span class="pc bpc" id="L226" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22145)) {</span>
+<span class="fc" id="L227">                                mDconf.put(Long.parseLong(id), new DeckConfig(confarray.getJSONObject(id)));</span>
+                            }
+<span class="fc" id="L229">                        }</span>
+                    }
+                }
+            }
+        }
+<span class="pc bpc" id="L234" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22148)) {</span>
+<span class="fc" id="L235">            mChanged = false;</span>
+        }
+<span class="fc" id="L237">    }</span>
+
+    public void save() {
+<span class="pc bpc" id="L240" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22149)) {</span>
+<span class="fc" id="L241">            save(null);</span>
+        }
+<span class="fc" id="L243">    }</span>
+
+    /**
+     * Can be called with either a deck or a deck configuration.
+     */
+    public void save(JSONObject g) {
+<span class="pc bpc" id="L249" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22152)) {</span>
+<span class="fc bfc" id="L250" title="All 2 branches covered.">            if (g != null) {</span>
+<span class="pc bpc" id="L251" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22150)) {</span>
+<span class="fc" id="L252">                    g.put(&quot;mod&quot;, mCol.getTime().intTime());</span>
+                }
+<span class="pc bpc" id="L254" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22151)) {</span>
+<span class="fc" id="L255">                    g.put(&quot;usn&quot;, mCol.usn());</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L259" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22153)) {</span>
+<span class="fc" id="L260">            mChanged = true;</span>
+        }
+<span class="fc" id="L262">    }</span>
+
+    public void flush() {
+<span class="fc" id="L265">        ContentValues values = new ContentValues();</span>
+<span class="pc bpc" id="L266" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22162)) {</span>
+<span class="pc bpc" id="L267" title="1 of 2 branches missed.">            if (mChanged) {</span>
+<span class="fc" id="L268">                JSONObject decksarray = new JSONObject();</span>
+<span class="pc bpc" id="L269" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22155)) {</span>
+                    {
+<span class="fc" id="L271">                        long _loopCounter497 = 0;</span>
+<span class="fc bfc" id="L272" title="All 2 branches covered.">                        for (Map.Entry&lt;Long, Deck&gt; d : mDecks.entrySet()) {</span>
+<span class="fc" id="L273">                            ListenerUtil.loopListener.listen(&quot;_loopCounter497&quot;, ++_loopCounter497);</span>
+<span class="pc bpc" id="L274" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22154)) {</span>
+<span class="fc" id="L275">                                decksarray.put(Long.toString(d.getKey()), d.getValue());</span>
+                            }
+<span class="fc" id="L277">                        }</span>
+                    }
+                }
+<span class="pc bpc" id="L280" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22156)) {</span>
+<span class="fc" id="L281">                    values.put(&quot;decks&quot;, Utils.jsonToString(decksarray));</span>
+                }
+<span class="fc" id="L283">                JSONObject confarray = new JSONObject();</span>
+<span class="pc bpc" id="L284" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22158)) {</span>
+                    {
+<span class="fc" id="L286">                        long _loopCounter498 = 0;</span>
+<span class="fc bfc" id="L287" title="All 2 branches covered.">                        for (Map.Entry&lt;Long, DeckConfig&gt; d : mDconf.entrySet()) {</span>
+<span class="fc" id="L288">                            ListenerUtil.loopListener.listen(&quot;_loopCounter498&quot;, ++_loopCounter498);</span>
+<span class="pc bpc" id="L289" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22157)) {</span>
+<span class="fc" id="L290">                                confarray.put(Long.toString(d.getKey()), d.getValue());</span>
+                            }
+<span class="fc" id="L292">                        }</span>
+                    }
+                }
+<span class="pc bpc" id="L295" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22159)) {</span>
+<span class="fc" id="L296">                    values.put(&quot;dconf&quot;, Utils.jsonToString(confarray));</span>
+                }
+<span class="pc bpc" id="L298" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22160)) {</span>
+<span class="fc" id="L299">                    mCol.getDb().update(&quot;col&quot;, values);</span>
+                }
+<span class="pc bpc" id="L301" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22161)) {</span>
+<span class="fc" id="L302">                    mChanged = false;</span>
+                }
+            }
+        }
+<span class="fc" id="L306">    }</span>
+
+    public Long id(String name) {
+<span class="fc" id="L309">        return id(name, true);</span>
+    }
+
+    public Long id(String name, boolean create) {
+<span class="fc" id="L313">        return id(name, create, defaultDeck);</span>
+    }
+
+    public Long id(String name, String type) {
+<span class="nc" id="L317">        return id(name, true, type);</span>
+    }
+
+    /**
+     * Add a deck with NAME. Reuse deck if already exists. Return id as int.
+     */
+    public Long id(String name, boolean create, String type) {
+<span class="pc bpc" id="L324" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22163)) {</span>
+<span class="fc" id="L325">            name = strip(name);</span>
+        }
+<span class="pc bpc" id="L327" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22164)) {</span>
+<span class="fc" id="L328">            name = name.replace(&quot;\&quot;&quot;, &quot;&quot;);</span>
+        }
+<span class="pc bpc" id="L330" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22165)) {</span>
+<span class="fc" id="L331">            name = Normalizer.normalize(name, Normalizer.Form.NFC);</span>
+        }
+<span class="fc" id="L333">        Deck deck = byName(name);</span>
+<span class="pc bpc" id="L334" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22166)) {</span>
+<span class="pc bpc" id="L335" title="1 of 2 branches missed.">            if (deck != null) {</span>
+<span class="nc" id="L336">                return deck.getLong(&quot;id&quot;);</span>
+            }
+        }
+<span class="pc bpc" id="L339" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22167)) {</span>
+<span class="pc bpc" id="L340" title="1 of 2 branches missed.">            if (!create) {</span>
+<span class="nc" id="L341">                return null;</span>
+            }
+        }
+<span class="pc bpc" id="L344" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22169)) {</span>
+<span class="pc bpc" id="L345" title="1 of 2 branches missed.">            if (name.contains(&quot;::&quot;)) {</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22168)) {</span>
+                    // not top level; ensure all parents exist
+<span class="nc" id="L348">                    name = _ensureParents(name);</span>
+                }
+            }
+        }
+        long id;
+<span class="fc" id="L353">        Deck g = new Deck(type);</span>
+<span class="pc bpc" id="L354" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22170)) {</span>
+<span class="fc" id="L355">            g.put(&quot;name&quot;, name);</span>
+        }
+        {
+<span class="fc" id="L358">            long _loopCounter499 = 0;</span>
+            do {
+<span class="fc" id="L360">                ListenerUtil.loopListener.listen(&quot;_loopCounter499&quot;, ++_loopCounter499);</span>
+<span class="fc" id="L361">                id = mCol.getTime().intTimeMS();</span>
+<span class="pc bpc" id="L362" title="1 of 2 branches missed.">            } while (mDecks.containsKey(id));</span>
+        }
+<span class="pc bpc" id="L364" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22171)) {</span>
+<span class="fc" id="L365">            g.put(&quot;id&quot;, id);</span>
+        }
+<span class="pc bpc" id="L367" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22172)) {</span>
+<span class="fc" id="L368">            mDecks.put(id, g);</span>
+        }
+<span class="pc bpc" id="L370" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22173)) {</span>
+<span class="fc" id="L371">            save(g);</span>
+        }
+<span class="pc bpc" id="L373" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22174)) {</span>
+<span class="fc" id="L374">            maybeAddToActive();</span>
+        }
+<span class="pc bpc" id="L376" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22175)) {</span>
+<span class="fc" id="L377">            mNameMap.add(g);</span>
+        }
+        // runHook(&quot;newDeck&quot;); // TODO
+<span class="fc" id="L380">        return id;</span>
+    }
+
+    public void rem(long did) {
+<span class="nc bnc" id="L384" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22176)) {</span>
+<span class="nc" id="L385">            rem(did, true);</span>
+        }
+<span class="nc" id="L387">    }</span>
+
+    public void rem(long did, boolean cardsToo) {
+<span class="nc bnc" id="L390" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22177)) {</span>
+<span class="nc" id="L391">            rem(did, cardsToo, true);</span>
+        }
+<span class="nc" id="L393">    }</span>
+
+    /**
+     * Remove the deck. If cardsToo, delete any cards inside.
+     */
+    public void rem(long did, boolean cardsToo, boolean childrenToo) {
+<span class="fc" id="L399">        JSONObject deck = get(did, false);</span>
+<span class="pc bpc" id="L400" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22187)) {</span>
+<span class="pc bpc" id="L401" title="16 of 22 branches missed.">            if ((ListenerUtil.mutListener.listen(22182) ? (did &gt;= 1) : (ListenerUtil.mutListener.listen(22181) ? (did &lt;= 1) : (ListenerUtil.mutListener.listen(22180) ? (did &gt; 1) : (ListenerUtil.mutListener.listen(22179) ? (did &lt; 1) : (ListenerUtil.mutListener.listen(22178) ? (did != 1) : (did == 1))))))) {</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22186)) {</span>
+                    // child of an existing deck then it needs to be renamed
+<span class="nc bnc" id="L404" title="All 10 branches missed.">                    if ((ListenerUtil.mutListener.listen(22183) ? (deck != null || deck.getString(&quot;name&quot;).contains(&quot;::&quot;)) : (deck != null &amp;&amp; deck.getString(&quot;name&quot;).contains(&quot;::&quot;)))) {</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22184)) {</span>
+<span class="nc" id="L406">                            deck.put(&quot;name&quot;, &quot;Default&quot;);</span>
+                        }
+<span class="nc bnc" id="L408" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22185)) {</span>
+<span class="nc" id="L409">                            save(deck);</span>
+                        }
+                    }
+                }
+<span class="nc" id="L413">                return;</span>
+            }
+        }
+<span class="pc bpc" id="L416" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22188)) {</span>
+            // log the removal regardless of whether we have the deck or not
+<span class="fc" id="L418">            mCol._logRem(new long[] { did }, Consts.REM_DECK);</span>
+        }
+<span class="pc bpc" id="L420" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22189)) {</span>
+            // do nothing else if doesn't exist
+<span class="pc bpc" id="L422" title="1 of 2 branches missed.">            if (deck == null) {</span>
+<span class="nc" id="L423">                return;</span>
+            }
+        }
+<span class="pc bpc" id="L426" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22204)) {</span>
+<span class="pc bpc" id="L427" title="16 of 22 branches missed.">            if ((ListenerUtil.mutListener.listen(22194) ? (deck.getInt(&quot;dyn&quot;) &gt;= DECK_DYN) : (ListenerUtil.mutListener.listen(22193) ? (deck.getInt(&quot;dyn&quot;) &lt;= DECK_DYN) : (ListenerUtil.mutListener.listen(22192) ? (deck.getInt(&quot;dyn&quot;) &gt; DECK_DYN) : (ListenerUtil.mutListener.listen(22191) ? (deck.getInt(&quot;dyn&quot;) &lt; DECK_DYN) : (ListenerUtil.mutListener.listen(22190) ? (deck.getInt(&quot;dyn&quot;) != DECK_DYN) : (deck.getInt(&quot;dyn&quot;) == DECK_DYN))))))) {</span>
+<span class="nc bnc" id="L428" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22200)) {</span>
+                    // rather than deleting the cards
+<span class="nc" id="L430">                    mCol.getSched().emptyDyn(did);</span>
+                }
+<span class="nc bnc" id="L432" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22203)) {</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">                    if (childrenToo) {</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22202)) {</span>
+                            {
+<span class="nc" id="L436">                                long _loopCounter501 = 0;</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">                                for (long id : children(did).values()) {</span>
+<span class="nc" id="L438">                                    ListenerUtil.loopListener.listen(&quot;_loopCounter501&quot;, ++_loopCounter501);</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(22201)) {</span>
+<span class="nc" id="L440">                                        rem(id, cardsToo, false);</span>
+                                    }
+<span class="nc" id="L442">                                }</span>
+<span class="nc" id="L443">                            }</span>
+                        }
+                    }
+                }
+            } else {
+<span class="pc bpc" id="L448" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22197)) {</span>
+                    // delete children first
+<span class="pc bpc" id="L450" title="1 of 2 branches missed.">                    if (childrenToo) {</span>
+<span class="pc bpc" id="L451" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22196)) {</span>
+                            {
+<span class="fc" id="L453">                                long _loopCounter500 = 0;</span>
+                                // we don't want to delete children when syncing
+<span class="pc bpc" id="L455" title="1 of 2 branches missed.">                                for (long id : children(did).values()) {</span>
+<span class="nc" id="L456">                                    ListenerUtil.loopListener.listen(&quot;_loopCounter500&quot;, ++_loopCounter500);</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(22195)) {</span>
+<span class="nc" id="L458">                                        rem(id, cardsToo, false);</span>
+                                    }
+<span class="nc" id="L460">                                }</span>
+                            }
+                        }
+                    }
+                }
+<span class="pc bpc" id="L465" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22199)) {</span>
+                    // delete cards too?
+<span class="pc bpc" id="L467" title="1 of 2 branches missed.">                    if (cardsToo) {</span>
+                        // don't use cids(), as we want cards in cram decks too
+<span class="fc" id="L469">                        ArrayList&lt;Long&gt; cids = mCol.getDb().queryLongList(&quot;SELECT id FROM cards WHERE did = ? OR odid = ?&quot;, did, did);</span>
+<span class="pc bpc" id="L470" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22198)) {</span>
+<span class="fc" id="L471">                            mCol.remCards(cids);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="pc bpc" id="L477" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22205)) {</span>
+            // delete the deck and add a grave
+<span class="fc" id="L479">            mDecks.remove(did);</span>
+        }
+<span class="pc bpc" id="L481" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22206)) {</span>
+<span class="fc" id="L482">            mNameMap.remove(deck.getString(&quot;name&quot;), deck);</span>
+        }
+<span class="pc bpc" id="L484" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22208)) {</span>
+            // ensure we have an active deck
+<span class="pc bpc" id="L486" title="1 of 2 branches missed.">            if (active().contains(did)) {</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22207)) {</span>
+<span class="nc" id="L488">                    select(mDecks.keySet().iterator().next());</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L492" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22209)) {</span>
+<span class="fc" id="L493">            save();</span>
+        }
+<span class="fc" id="L495">    }</span>
+
+    public ArrayList&lt;String&gt; allNames() {
+<span class="nc" id="L498">        return allNames(true);</span>
+    }
+
+    /**
+     * An unsorted list of all deck names.
+     */
+    public ArrayList&lt;String&gt; allNames(boolean dyn) {
+<span class="nc" id="L505">        ArrayList&lt;String&gt; list = new ArrayList&lt;&gt;(mDecks.size());</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22215)) {</span>
+<span class="nc bnc" id="L507" title="All 2 branches missed.">            if (dyn) {</span>
+<span class="nc bnc" id="L508" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22214)) {</span>
+                    {
+<span class="nc" id="L510">                        long _loopCounter503 = 0;</span>
+<span class="nc bnc" id="L511" title="All 2 branches missed.">                        for (Deck x : mDecks.values()) {</span>
+<span class="nc" id="L512">                            ListenerUtil.loopListener.listen(&quot;_loopCounter503&quot;, ++_loopCounter503);</span>
+<span class="nc bnc" id="L513" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22213)) {</span>
+<span class="nc" id="L514">                                list.add(x.getString(&quot;name&quot;));</span>
+                            }
+<span class="nc" id="L516">                        }</span>
+<span class="nc" id="L517">                    }</span>
+                }
+            } else {
+<span class="nc bnc" id="L520" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22212)) {</span>
+                    {
+<span class="nc" id="L522">                        long _loopCounter502 = 0;</span>
+<span class="nc bnc" id="L523" title="All 2 branches missed.">                        for (Deck x : mDecks.values()) {</span>
+<span class="nc" id="L524">                            ListenerUtil.loopListener.listen(&quot;_loopCounter502&quot;, ++_loopCounter502);</span>
+<span class="nc bnc" id="L525" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22211)) {</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">                                if (x.getInt(&quot;dyn&quot;) == DECK_STD) {</span>
+<span class="nc bnc" id="L527" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(22210)) {</span>
+<span class="nc" id="L528">                                        list.add(x.getString(&quot;name&quot;));</span>
+                                    }
+                                }
+                            }
+<span class="nc" id="L532">                        }</span>
+                    }
+                }
+            }
+        }
+<span class="nc" id="L537">        return list;</span>
+    }
+
+    /**
+     * A list of all decks.
+     */
+    public ArrayList&lt;Deck&gt; all() {
+<span class="fc" id="L544">        return new ArrayList&lt;&gt;(mDecks.values());</span>
+    }
+
+    /**
+     * Return the same deck list from all() but sorted using a comparator that ensures the same
+     * sorting order for decks as the desktop client.
+     *
+     * This method does not exist in the original python module but *must* be used for any user
+     * interface components that display a deck list to ensure the ordering is consistent.
+     */
+    public ArrayList&lt;Deck&gt; allSorted() {
+<span class="nc" id="L555">        ArrayList&lt;Deck&gt; decks = all();</span>
+<span class="nc bnc" id="L556" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22216)) {</span>
+<span class="nc" id="L557">            Collections.sort(decks, DeckComparator.instance);</span>
+        }
+<span class="nc" id="L559">        return decks;</span>
+    }
+
+    @VisibleForTesting
+    public List&lt;String&gt; allSortedNames() {
+<span class="nc" id="L564">        List&lt;String&gt; names = allNames();</span>
+<span class="nc bnc" id="L565" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22217)) {</span>
+<span class="nc" id="L566">            Collections.sort(names, DeckNameComparator.instance);</span>
+        }
+<span class="nc" id="L568">        return names;</span>
+    }
+
+    public Set&lt;Long&gt; allIds() {
+<span class="nc" id="L572">        return mDecks.keySet();</span>
+    }
+
+    public void collapse(long did) {
+<span class="nc" id="L576">        Deck deck = get(did);</span>
+<span class="nc bnc" id="L577" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22218)) {</span>
+<span class="nc bnc" id="L578" title="All 2 branches missed.">            deck.put(&quot;collapsed&quot;, !deck.getBoolean(&quot;collapsed&quot;));</span>
+        }
+<span class="nc bnc" id="L580" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22219)) {</span>
+<span class="nc" id="L581">            save(deck);</span>
+        }
+<span class="nc" id="L583">    }</span>
+
+    public void collapseBrowser(long did) {
+<span class="nc" id="L586">        Deck deck = get(did);</span>
+<span class="nc" id="L587">        boolean collapsed = deck.optBoolean(&quot;browserCollapsed&quot;, false);</span>
+<span class="nc bnc" id="L588" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22220)) {</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">            deck.put(&quot;browserCollapsed&quot;, !collapsed);</span>
+        }
+<span class="nc bnc" id="L591" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22221)) {</span>
+<span class="nc" id="L592">            save(deck);</span>
+        }
+<span class="nc" id="L594">    }</span>
+
+    /**
+     * Return the number of decks.
+     */
+    public int count() {
+<span class="fc" id="L600">        return mDecks.size();</span>
+    }
+
+    /**
+     * Obtains the deck from the DeckID, or default if the deck was not found
+     */
+    @CheckResult
+    @NonNull
+    public Deck get(long did) {
+<span class="fc" id="L609">        return get(did, true);</span>
+    }
+
+    @CheckResult
+    public Deck get(long did, boolean _default) {
+<span class="pc bpc" id="L614" title="1 of 2 branches missed.">        if (mDecks.containsKey(did)) {</span>
+<span class="fc" id="L615">            return mDecks.get(did);</span>
+<span class="nc bnc" id="L616" title="All 2 branches missed.">        } else if (_default) {</span>
+<span class="nc" id="L617">            return mDecks.get(1L);</span>
+        } else {
+<span class="nc" id="L619">            return null;</span>
+        }
+    }
+
+    /**
+     * Get deck with NAME, ignoring case.
+     */
+    @CheckResult
+    @Nullable
+    public Deck byName(String name) {
+<span class="fc" id="L629">        return mNameMap.get(name);</span>
+    }
+
+    /**
+     * Add or update an existing deck. Used for syncing and merging.
+     */
+    public void update(Deck g) {
+<span class="nc" id="L636">        long id = g.getLong(&quot;id&quot;);</span>
+<span class="nc" id="L637">        JSONObject oldDeck = get(id, false);</span>
+<span class="nc bnc" id="L638" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22223)) {</span>
+<span class="nc bnc" id="L639" title="All 2 branches missed.">            if (oldDeck != null) {</span>
+<span class="nc bnc" id="L640" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22222)) {</span>
+                    // `oldName`, it would be a mistake to remove it from nameMap
+<span class="nc" id="L642">                    mNameMap.remove(oldDeck.getString(&quot;name&quot;), oldDeck);</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L646" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22224)) {</span>
+<span class="nc" id="L647">            mNameMap.add(g);</span>
+        }
+<span class="nc bnc" id="L649" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22225)) {</span>
+<span class="nc" id="L650">            mDecks.put(g.getLong(&quot;id&quot;), g);</span>
+        }
+<span class="nc bnc" id="L652" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22226)) {</span>
+<span class="nc" id="L653">            maybeAddToActive();</span>
+        }
+<span class="nc bnc" id="L655" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22227)) {</span>
+            // mark registry changed, but don't bump mod time
+<span class="nc" id="L657">            save();</span>
+        }
+<span class="nc" id="L659">    }</span>
+
+    /**
+     * Rename deck prefix to NAME if not exists. Updates children.
+     */
+    public void rename(Deck g, String newName) throws DeckRenameException {
+<span class="nc bnc" id="L665" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22228)) {</span>
+<span class="nc" id="L666">            newName = strip(newName);</span>
+        }
+        // make sure target node doesn't already exist
+<span class="nc" id="L669">        Deck deckWithThisName = byName(newName);</span>
+<span class="nc bnc" id="L670" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22230)) {</span>
+<span class="nc bnc" id="L671" title="All 2 branches missed.">            if (deckWithThisName != null) {</span>
+<span class="nc bnc" id="L672" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22229)) {</span>
+<span class="nc bnc" id="L673" title="All 2 branches missed.">                    if (deckWithThisName.getLong(&quot;id&quot;) != g.getLong(&quot;id&quot;)) {</span>
+<span class="nc" id="L674">                        throw new DeckRenameException(DeckRenameException.ALREADY_EXISTS);</span>
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L679" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22231)) {</span>
+            // ensure we have parents
+<span class="nc" id="L681">            newName = _ensureParents(newName);</span>
+        }
+<span class="nc bnc" id="L683" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22237)) {</span>
+            // make sure we're not nesting under a filtered deck
+<span class="nc bnc" id="L685" title="All 2 branches missed.">            if (newName.contains(&quot;::&quot;)) {</span>
+<span class="nc" id="L686">                List&lt;String&gt; parts = Arrays.asList(path(newName));</span>
+<span class="nc bnc" id="L687" title="All 8 branches missed.">                String newParent = TextUtils.join(&quot;::&quot;, parts.subList(0, (ListenerUtil.mutListener.listen(22235) ? (parts.size() % 1) : (ListenerUtil.mutListener.listen(22234) ? (parts.size() / 1) : (ListenerUtil.mutListener.listen(22233) ? (parts.size() * 1) : (ListenerUtil.mutListener.listen(22232) ? (parts.size() + 1) : (parts.size() - 1)))))));</span>
+<span class="nc bnc" id="L688" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22236)) {</span>
+<span class="nc bnc" id="L689" title="All 2 branches missed.">                    if (byName(newParent).getInt(&quot;dyn&quot;) == DECK_DYN) {</span>
+<span class="nc" id="L690">                        throw new DeckRenameException(DeckRenameException.FILTERED_NOSUBDEKCS);</span>
+                    }
+                }
+            }
+        }
+        // rename children
+<span class="nc" id="L696">        String oldName = g.getString(&quot;name&quot;);</span>
+<span class="nc bnc" id="L697" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22243)) {</span>
+            {
+<span class="nc" id="L699">                long _loopCounter504 = 0;</span>
+<span class="nc bnc" id="L700" title="All 2 branches missed.">                for (Deck grp : all()) {</span>
+<span class="nc" id="L701">                    ListenerUtil.loopListener.listen(&quot;_loopCounter504&quot;, ++_loopCounter504);</span>
+<span class="nc" id="L702">                    String grpOldName = grp.getString(&quot;name&quot;);</span>
+<span class="nc bnc" id="L703" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22242)) {</span>
+<span class="nc bnc" id="L704" title="All 2 branches missed.">                        if (grpOldName.startsWith(oldName + &quot;::&quot;)) {</span>
+<span class="nc" id="L705">                            String grpNewName = grpOldName.replaceFirst(Pattern.quote(oldName + &quot;::&quot;), newName + &quot;::&quot;);</span>
+<span class="nc bnc" id="L706" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22238)) {</span>
+                                // In Java, String.replaceFirst consumes a regex so we need to quote the pattern to be safe
+<span class="nc" id="L708">                                mNameMap.remove(grpOldName, grp);</span>
+                            }
+<span class="nc bnc" id="L710" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22239)) {</span>
+<span class="nc" id="L711">                                grp.put(&quot;name&quot;, grpNewName);</span>
+                            }
+<span class="nc bnc" id="L713" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22240)) {</span>
+<span class="nc" id="L714">                                mNameMap.add(grp);</span>
+                            }
+<span class="nc bnc" id="L716" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22241)) {</span>
+<span class="nc" id="L717">                                save(grp);</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L721">                }</span>
+            }
+        }
+<span class="nc bnc" id="L724" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22244)) {</span>
+<span class="nc" id="L725">            mNameMap.remove(oldName, g);</span>
+        }
+<span class="nc bnc" id="L727" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22245)) {</span>
+            // adjust name
+<span class="nc" id="L729">            g.put(&quot;name&quot;, newName);</span>
+        }
+<span class="nc bnc" id="L731" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22246)) {</span>
+            // ensure we have parents again, as we may have renamed parent-&gt;child
+<span class="nc" id="L733">            newName = _ensureParents(newName);</span>
+        }
+<span class="nc bnc" id="L735" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22247)) {</span>
+<span class="nc" id="L736">            mNameMap.add(g);</span>
+        }
+<span class="nc bnc" id="L738" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22248)) {</span>
+<span class="nc" id="L739">            save(g);</span>
+        }
+<span class="nc bnc" id="L741" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22249)) {</span>
+            // renaming may have altered active did order
+<span class="nc" id="L743">            maybeAddToActive();</span>
+        }
+<span class="nc" id="L745">    }</span>
+
+    private boolean _isParent(String parentDeckName, String childDeckName) {
+<span class="nc" id="L748">        String[] parentDeckPath = path(parentDeckName);</span>
+<span class="nc" id="L749">        String[] childDeckPath = path(childDeckName);</span>
+<span class="nc bnc" id="L750" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22259)) {</span>
+<span class="nc bnc" id="L751" title="All 70 branches missed.">            if ((ListenerUtil.mutListener.listen(22258) ? ((ListenerUtil.mutListener.listen(22253) ? (parentDeckPath.length % 1) : (ListenerUtil.mutListener.listen(22252) ? (parentDeckPath.length / 1) : (ListenerUtil.mutListener.listen(22251) ? (parentDeckPath.length * 1) : (ListenerUtil.mutListener.listen(22250) ? (parentDeckPath.length - 1) : (parentDeckPath.length + 1))))) &gt;= childDeckPath.length) : (ListenerUtil.mutListener.listen(22257) ? ((ListenerUtil.mutListener.listen(22253) ? (parentDeckPath.length % 1) : (ListenerUtil.mutListener.listen(22252) ? (parentDeckPath.length / 1) : (ListenerUtil.mutListener.listen(22251) ? (parentDeckPath.length * 1) : (ListenerUtil.mutListener.listen(22250) ? (parentDeckPath.length - 1) : (parentDeckPath.length + 1))))) &lt;= childDeckPath.length) : (ListenerUtil.mutListener.listen(22256) ? ((ListenerUtil.mutListener.listen(22253) ? (parentDeckPath.length % 1) : (ListenerUtil.mutListener.listen(22252) ? (parentDeckPath.length / 1) : (ListenerUtil.mutListener.listen(22251) ? (parentDeckPath.length * 1) : (ListenerUtil.mutListener.listen(22250) ? (parentDeckPath.length - 1) : (parentDeckPath.length + 1))))) &gt; childDeckPath.length) : (ListenerUtil.mutListener.listen(22255) ? ((ListenerUtil.mutListener.listen(22253) ? (parentDeckPath.length % 1) : (ListenerUtil.mutListener.listen(22252) ? (parentDeckPath.length / 1) : (ListenerUtil.mutListener.listen(22251) ? (parentDeckPath.length * 1) : (ListenerUtil.mutListener.listen(22250) ? (parentDeckPath.length - 1) : (parentDeckPath.length + 1))))) &lt; childDeckPath.length) : (ListenerUtil.mutListener.listen(22254) ? ((ListenerUtil.mutListener.listen(22253) ? (parentDeckPath.length % 1) : (ListenerUtil.mutListener.listen(22252) ? (parentDeckPath.length / 1) : (ListenerUtil.mutListener.listen(22251) ? (parentDeckPath.length * 1) : (ListenerUtil.mutListener.listen(22250) ? (parentDeckPath.length - 1) : (parentDeckPath.length + 1))))) == childDeckPath.length) : ((ListenerUtil.mutListener.listen(22253) ? (parentDeckPath.length % 1) : (ListenerUtil.mutListener.listen(22252) ? (parentDeckPath.length / 1) : (ListenerUtil.mutListener.listen(22251) ? (parentDeckPath.length * 1) : (ListenerUtil.mutListener.listen(22250) ? (parentDeckPath.length - 1) : (parentDeckPath.length + 1))))) != childDeckPath.length))))))) {</span>
+<span class="nc" id="L752">                return false;</span>
+            }
+        }
+<span class="nc bnc" id="L755" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22266)) {</span>
+            {
+<span class="nc" id="L757">                long _loopCounter505 = 0;</span>
+<span class="nc bnc" id="L758" title="All 22 branches missed.">                for (int i = 0; (ListenerUtil.mutListener.listen(22265) ? (i &gt;= parentDeckPath.length) : (ListenerUtil.mutListener.listen(22264) ? (i &lt;= parentDeckPath.length) : (ListenerUtil.mutListener.listen(22263) ? (i &gt; parentDeckPath.length) : (ListenerUtil.mutListener.listen(22262) ? (i != parentDeckPath.length) : (ListenerUtil.mutListener.listen(22261) ? (i == parentDeckPath.length) : (i &lt; parentDeckPath.length)))))); i++) {</span>
+<span class="nc" id="L759">                    ListenerUtil.loopListener.listen(&quot;_loopCounter505&quot;, ++_loopCounter505);</span>
+<span class="nc bnc" id="L760" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22260)) {</span>
+<span class="nc bnc" id="L761" title="All 2 branches missed.">                        if (!parentDeckPath[i].equals(childDeckPath[i])) {</span>
+<span class="nc" id="L762">                            return false;</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L768">        return true;</span>
+    }
+
+    private boolean _isAncestor(String ancestorDeckName, String descendantDeckName) {
+<span class="nc" id="L772">        String[] ancestorDeckPath = path(ancestorDeckName);</span>
+<span class="nc" id="L773">        String[] descendantDeckPath = path(descendantDeckName);</span>
+<span class="nc bnc" id="L774" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22272)) {</span>
+<span class="nc bnc" id="L775" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(22271) ? (ancestorDeckPath.length &gt;= descendantDeckPath.length) : (ListenerUtil.mutListener.listen(22270) ? (ancestorDeckPath.length &lt;= descendantDeckPath.length) : (ListenerUtil.mutListener.listen(22269) ? (ancestorDeckPath.length &lt; descendantDeckPath.length) : (ListenerUtil.mutListener.listen(22268) ? (ancestorDeckPath.length != descendantDeckPath.length) : (ListenerUtil.mutListener.listen(22267) ? (ancestorDeckPath.length == descendantDeckPath.length) : (ancestorDeckPath.length &gt; descendantDeckPath.length))))))) {</span>
+<span class="nc" id="L776">                return false;</span>
+            }
+        }
+<span class="nc bnc" id="L779" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22279)) {</span>
+            {
+<span class="nc" id="L781">                long _loopCounter506 = 0;</span>
+<span class="nc bnc" id="L782" title="All 22 branches missed.">                for (int i = 0; (ListenerUtil.mutListener.listen(22278) ? (i &gt;= ancestorDeckPath.length) : (ListenerUtil.mutListener.listen(22277) ? (i &lt;= ancestorDeckPath.length) : (ListenerUtil.mutListener.listen(22276) ? (i &gt; ancestorDeckPath.length) : (ListenerUtil.mutListener.listen(22275) ? (i != ancestorDeckPath.length) : (ListenerUtil.mutListener.listen(22274) ? (i == ancestorDeckPath.length) : (i &lt; ancestorDeckPath.length)))))); i++) {</span>
+<span class="nc" id="L783">                    ListenerUtil.loopListener.listen(&quot;_loopCounter506&quot;, ++_loopCounter506);</span>
+<span class="nc bnc" id="L784" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22273)) {</span>
+<span class="nc bnc" id="L785" title="All 2 branches missed.">                        if (!Utils.equals(ancestorDeckPath[i], descendantDeckPath[i])) {</span>
+<span class="nc" id="L786">                            return false;</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L792">        return true;</span>
+    }
+
+<span class="fc" id="L795">    private static final HashMap&lt;String, String[]&gt; pathCache = new HashMap&lt;&gt;();</span>
+
+    public static String[] path(String name) {
+<span class="pc bpc" id="L798" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22281)) {</span>
+<span class="fc bfc" id="L799" title="All 2 branches covered.">            if (!pathCache.containsKey(name)) {</span>
+<span class="pc bpc" id="L800" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22280)) {</span>
+<span class="fc" id="L801">                    pathCache.put(name, name.split(&quot;::&quot;, -1));</span>
+                }
+            }
+        }
+<span class="fc" id="L805">        return pathCache.get(name);</span>
+    }
+
+    public static String basename(String name) {
+<span class="fc" id="L809">        String[] path = path(name);</span>
+<span class="pc bpc" id="L810" title="4 of 8 branches missed.">        return path[(ListenerUtil.mutListener.listen(22285) ? (path.length % 1) : (ListenerUtil.mutListener.listen(22284) ? (path.length / 1) : (ListenerUtil.mutListener.listen(22283) ? (path.length * 1) : (ListenerUtil.mutListener.listen(22282) ? (path.length + 1) : (path.length - 1)))))];</span>
+    }
+
+    /**
+     * Ensure parents exist, and return name with case matching parents.
+     */
+    public String _ensureParents(String name) {
+<span class="nc" id="L817">        String s = &quot;&quot;;</span>
+<span class="nc" id="L818">        String[] path = path(name);</span>
+<span class="nc bnc" id="L819" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22291)) {</span>
+<span class="nc bnc" id="L820" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(22290) ? (path.length &gt;= 2) : (ListenerUtil.mutListener.listen(22289) ? (path.length &lt;= 2) : (ListenerUtil.mutListener.listen(22288) ? (path.length &gt; 2) : (ListenerUtil.mutListener.listen(22287) ? (path.length != 2) : (ListenerUtil.mutListener.listen(22286) ? (path.length == 2) : (path.length &lt; 2))))))) {</span>
+<span class="nc" id="L821">                return name;</span>
+            }
+        }
+<span class="nc bnc" id="L824" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22305)) {</span>
+            {
+<span class="nc" id="L826">                long _loopCounter507 = 0;</span>
+<span class="nc bnc" id="L827" title="All 70 branches missed.">                for (int i = 0; (ListenerUtil.mutListener.listen(22304) ? (i &gt;= (ListenerUtil.mutListener.listen(22299) ? (path.length % 1) : (ListenerUtil.mutListener.listen(22298) ? (path.length / 1) : (ListenerUtil.mutListener.listen(22297) ? (path.length * 1) : (ListenerUtil.mutListener.listen(22296) ? (path.length + 1) : (path.length - 1)))))) : (ListenerUtil.mutListener.listen(22303) ? (i &lt;= (ListenerUtil.mutListener.listen(22299) ? (path.length % 1) : (ListenerUtil.mutListener.listen(22298) ? (path.length / 1) : (ListenerUtil.mutListener.listen(22297) ? (path.length * 1) : (ListenerUtil.mutListener.listen(22296) ? (path.length + 1) : (path.length - 1)))))) : (ListenerUtil.mutListener.listen(22302) ? (i &gt; (ListenerUtil.mutListener.listen(22299) ? (path.length % 1) : (ListenerUtil.mutListener.listen(22298) ? (path.length / 1) : (ListenerUtil.mutListener.listen(22297) ? (path.length * 1) : (ListenerUtil.mutListener.listen(22296) ? (path.length + 1) : (path.length - 1)))))) : (ListenerUtil.mutListener.listen(22301) ? (i != (ListenerUtil.mutListener.listen(22299) ? (path.length % 1) : (ListenerUtil.mutListener.listen(22298) ? (path.length / 1) : (ListenerUtil.mutListener.listen(22297) ? (path.length * 1) : (ListenerUtil.mutListener.listen(22296) ? (path.length + 1) : (path.length - 1)))))) : (ListenerUtil.mutListener.listen(22300) ? (i == (ListenerUtil.mutListener.listen(22299) ? (path.length % 1) : (ListenerUtil.mutListener.listen(22298) ? (path.length / 1) : (ListenerUtil.mutListener.listen(22297) ? (path.length * 1) : (ListenerUtil.mutListener.listen(22296) ? (path.length + 1) : (path.length - 1)))))) : (i &lt; (ListenerUtil.mutListener.listen(22299) ? (path.length % 1) : (ListenerUtil.mutListener.listen(22298) ? (path.length / 1) : (ListenerUtil.mutListener.listen(22297) ? (path.length * 1) : (ListenerUtil.mutListener.listen(22296) ? (path.length + 1) : (path.length - 1))))))))))); i++) {</span>
+<span class="nc" id="L828">                    ListenerUtil.loopListener.listen(&quot;_loopCounter507&quot;, ++_loopCounter507);</span>
+<span class="nc" id="L829">                    String p = path[i];</span>
+<span class="nc bnc" id="L830" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22294)) {</span>
+<span class="nc bnc" id="L831" title="All 2 branches missed.">                        if (TextUtils.isEmpty(s)) {</span>
+<span class="nc bnc" id="L832" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22293)) {</span>
+<span class="nc" id="L833">                                s += p;</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L836" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22292)) {</span>
+<span class="nc" id="L837">                                s += &quot;::&quot; + p;</span>
+                            }
+                        }
+                    }
+                    // fetch or create
+<span class="nc" id="L842">                    long did = id(s);</span>
+<span class="nc bnc" id="L843" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22295)) {</span>
+                        // get original case
+<span class="nc" id="L845">                        s = name(did);</span>
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L850" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22310)) {</span>
+<span class="nc bnc" id="L851" title="All 8 branches missed.">            name = s + &quot;::&quot; + path[(ListenerUtil.mutListener.listen(22309) ? (path.length % 1) : (ListenerUtil.mutListener.listen(22308) ? (path.length / 1) : (ListenerUtil.mutListener.listen(22307) ? (path.length * 1) : (ListenerUtil.mutListener.listen(22306) ? (path.length + 1) : (path.length - 1)))))];</span>
+        }
+<span class="nc" id="L853">        return name;</span>
+    }
+
+    /**
+     * A list of all deck config.
+     */
+    public ArrayList&lt;DeckConfig&gt; allConf() {
+<span class="fc" id="L860">        return new ArrayList&lt;&gt;(mDconf.values());</span>
+    }
+
+    public DeckConfig confForDid(long did) {
+<span class="fc" id="L864">        Deck deck = get(did, false);</span>
+<span class="pc bpc" id="L865" title="3 of 4 branches missed.">        assert deck != null;</span>
+<span class="pc bpc" id="L866" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22312)) {</span>
+<span class="pc bpc" id="L867" title="1 of 2 branches missed.">            if (deck.has(&quot;conf&quot;)) {</span>
+<span class="fc" id="L868">                DeckConfig conf = getConf(deck.getLong(&quot;conf&quot;));</span>
+<span class="pc bpc" id="L869" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22311)) {</span>
+<span class="fc" id="L870">                    conf.put(&quot;dyn&quot;, DECK_STD);</span>
+                }
+<span class="fc" id="L872">                return conf;</span>
+            }
+        }
+        // dynamic decks have embedded conf
+<span class="nc" id="L876">        return new DeckConfig(deck);</span>
+    }
+
+    public DeckConfig getConf(long confId) {
+<span class="fc" id="L880">        return mDconf.get(confId);</span>
+    }
+
+    public void updateConf(DeckConfig g) {
+<span class="nc bnc" id="L884" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22313)) {</span>
+<span class="nc" id="L885">            mDconf.put(g.getLong(&quot;id&quot;), g);</span>
+        }
+<span class="nc bnc" id="L887" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22314)) {</span>
+<span class="nc" id="L888">            save();</span>
+        }
+<span class="nc" id="L890">    }</span>
+
+    public long confId(String name) {
+<span class="nc" id="L893">        return confId(name, defaultConf);</span>
+    }
+
+    /**
+     * Create a new configuration and return id.
+     */
+    public long confId(String name, String cloneFrom) {
+        long id;
+<span class="nc" id="L901">        DeckConfig c = new DeckConfig(cloneFrom);</span>
+        {
+<span class="nc" id="L903">            long _loopCounter508 = 0;</span>
+            do {
+<span class="nc" id="L905">                ListenerUtil.loopListener.listen(&quot;_loopCounter508&quot;, ++_loopCounter508);</span>
+<span class="nc" id="L906">                id = mCol.getTime().intTimeMS();</span>
+<span class="nc bnc" id="L907" title="All 2 branches missed.">            } while (mDconf.containsKey(id));</span>
+        }
+<span class="nc bnc" id="L909" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22315)) {</span>
+<span class="nc" id="L910">            c.put(&quot;id&quot;, id);</span>
+        }
+<span class="nc bnc" id="L912" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22316)) {</span>
+<span class="nc" id="L913">            c.put(&quot;name&quot;, name);</span>
+        }
+<span class="nc bnc" id="L915" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22317)) {</span>
+<span class="nc" id="L916">            mDconf.put(id, c);</span>
+        }
+<span class="nc bnc" id="L918" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22318)) {</span>
+<span class="nc" id="L919">            save(c);</span>
+        }
+<span class="nc" id="L921">        return id;</span>
+    }
+
+    /**
+     * Remove a configuration and update all decks using it.
+     * @throws ConfirmModSchemaException
+     */
+    public void remConf(long id) throws ConfirmModSchemaException {
+<span class="nc bnc" id="L929" title="All 24 branches missed.">        assert (ListenerUtil.mutListener.listen(22323) ? (id &gt;= 1) : (ListenerUtil.mutListener.listen(22322) ? (id &lt;= 1) : (ListenerUtil.mutListener.listen(22321) ? (id &gt; 1) : (ListenerUtil.mutListener.listen(22320) ? (id &lt; 1) : (ListenerUtil.mutListener.listen(22319) ? (id == 1) : (id != 1))))));</span>
+<span class="nc bnc" id="L930" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22324)) {</span>
+<span class="nc" id="L931">            mCol.modSchema();</span>
+        }
+<span class="nc bnc" id="L933" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22325)) {</span>
+<span class="nc" id="L934">            mDconf.remove(id);</span>
+        }
+<span class="nc bnc" id="L936" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22330)) {</span>
+            {
+<span class="nc" id="L938">                long _loopCounter509 = 0;</span>
+<span class="nc bnc" id="L939" title="All 2 branches missed.">                for (Deck g : all()) {</span>
+<span class="nc" id="L940">                    ListenerUtil.loopListener.listen(&quot;_loopCounter509&quot;, ++_loopCounter509);</span>
+<span class="nc bnc" id="L941" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22326)) {</span>
+                        // ignore cram decks
+<span class="nc bnc" id="L943" title="All 2 branches missed.">                        if (!g.has(&quot;conf&quot;)) {</span>
+<span class="nc" id="L944">                            continue;</span>
+                        }
+                    }
+<span class="nc bnc" id="L947" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22329)) {</span>
+<span class="nc bnc" id="L948" title="All 2 branches missed.">                        if (g.getString(&quot;conf&quot;).equals(Long.toString(id))) {</span>
+<span class="nc bnc" id="L949" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22327)) {</span>
+<span class="nc" id="L950">                                g.put(&quot;conf&quot;, 1);</span>
+                            }
+<span class="nc bnc" id="L952" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22328)) {</span>
+<span class="nc" id="L953">                                save(g);</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L957">                }</span>
+            }
+        }
+<span class="nc" id="L960">    }</span>
+
+    public void setConf(Deck grp, long id) {
+<span class="nc bnc" id="L963" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22331)) {</span>
+<span class="nc" id="L964">            grp.put(&quot;conf&quot;, id);</span>
+        }
+<span class="nc bnc" id="L966" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22332)) {</span>
+<span class="nc" id="L967">            save(grp);</span>
+        }
+<span class="nc" id="L969">    }</span>
+
+    public List&lt;Long&gt; didsForConf(DeckConfig conf) {
+<span class="nc" id="L972">        List&lt;Long&gt; dids = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L973" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22336)) {</span>
+            {
+<span class="nc" id="L975">                long _loopCounter510 = 0;</span>
+<span class="nc bnc" id="L976" title="All 2 branches missed.">                for (Deck deck : mDecks.values()) {</span>
+<span class="nc" id="L977">                    ListenerUtil.loopListener.listen(&quot;_loopCounter510&quot;, ++_loopCounter510);</span>
+<span class="nc bnc" id="L978" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22335)) {</span>
+<span class="nc bnc" id="L979" title="All 10 branches missed.">                        if ((ListenerUtil.mutListener.listen(22333) ? (deck.has(&quot;conf&quot;) || deck.getLong(&quot;conf&quot;) == conf.getLong(&quot;id&quot;)) : (deck.has(&quot;conf&quot;) &amp;&amp; deck.getLong(&quot;conf&quot;) == conf.getLong(&quot;id&quot;)))) {</span>
+<span class="nc bnc" id="L980" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22334)) {</span>
+<span class="nc" id="L981">                                dids.add(deck.getLong(&quot;id&quot;));</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L985">                }</span>
+            }
+        }
+<span class="nc" id="L988">        return dids;</span>
+    }
+
+    public void restoreToDefault(DeckConfig conf) {
+<span class="nc" id="L992">        int oldOrder = conf.getJSONObject(&quot;new&quot;).getInt(&quot;order&quot;);</span>
+<span class="nc" id="L993">        DeckConfig _new = new DeckConfig(defaultConf);</span>
+<span class="nc bnc" id="L994" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22337)) {</span>
+<span class="nc" id="L995">            _new.put(&quot;id&quot;, conf.getLong(&quot;id&quot;));</span>
+        }
+<span class="nc bnc" id="L997" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22338)) {</span>
+<span class="nc" id="L998">            _new.put(&quot;name&quot;, conf.getString(&quot;name&quot;));</span>
+        }
+<span class="nc bnc" id="L1000" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22339)) {</span>
+<span class="nc" id="L1001">            mDconf.put(conf.getLong(&quot;id&quot;), _new);</span>
+        }
+<span class="nc bnc" id="L1003" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22340)) {</span>
+<span class="nc" id="L1004">            save(_new);</span>
+        }
+<span class="nc bnc" id="L1006" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22347)) {</span>
+            // if it was previously randomized, resort
+<span class="nc bnc" id="L1008" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(22345) ? (oldOrder &gt;= 0) : (ListenerUtil.mutListener.listen(22344) ? (oldOrder &lt;= 0) : (ListenerUtil.mutListener.listen(22343) ? (oldOrder &gt; 0) : (ListenerUtil.mutListener.listen(22342) ? (oldOrder &lt; 0) : (ListenerUtil.mutListener.listen(22341) ? (oldOrder != 0) : (oldOrder == 0))))))) {</span>
+<span class="nc bnc" id="L1009" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22346)) {</span>
+<span class="nc" id="L1010">                    mCol.getSched().resortConf(_new);</span>
+                }
+            }
+        }
+<span class="nc" id="L1014">    }</span>
+
+    public String name(long did) {
+<span class="fc" id="L1017">        return name(did, false);</span>
+    }
+
+    public String name(long did, boolean _default) {
+<span class="fc" id="L1021">        Deck deck = get(did, _default);</span>
+<span class="pc bpc" id="L1022" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22348)) {</span>
+<span class="pc bpc" id="L1023" title="1 of 2 branches missed.">            if (deck != null) {</span>
+<span class="fc" id="L1024">                return deck.getString(&quot;name&quot;);</span>
+            }
+        }
+<span class="nc" id="L1027">        return &quot;[no deck]&quot;;</span>
+    }
+
+    public String nameOrNone(long did) {
+<span class="nc" id="L1031">        Deck deck = get(did, false);</span>
+<span class="nc bnc" id="L1032" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22349)) {</span>
+<span class="nc bnc" id="L1033" title="All 2 branches missed.">            if (deck != null) {</span>
+<span class="nc" id="L1034">                return deck.getString(&quot;name&quot;);</span>
+            }
+        }
+<span class="nc" id="L1037">        return null;</span>
+    }
+
+    public void setDeck(long[] cids, long did) {
+<span class="nc bnc" id="L1041" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22350)) {</span>
+<span class="nc" id="L1042">            mCol.getDb().execute(&quot;update cards set did=?,usn=?,mod=? where id in &quot; + Utils.ids2str(cids), did, mCol.usn(), mCol.getTime().intTime());</span>
+        }
+<span class="nc" id="L1044">    }</span>
+
+    private void maybeAddToActive() {
+        // reselect current deck, or default if current has disappeared
+<span class="fc" id="L1048">        Deck c = current();</span>
+<span class="pc bpc" id="L1049" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22351)) {</span>
+<span class="fc" id="L1050">            select(c.getLong(&quot;id&quot;));</span>
+        }
+<span class="fc" id="L1052">    }</span>
+
+    public Long[] cids(long did) {
+<span class="nc" id="L1055">        return cids(did, false);</span>
+    }
+
+    public Long[] cids(long did, boolean children) {
+<span class="nc bnc" id="L1059" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22352)) {</span>
+<span class="nc bnc" id="L1060" title="All 2 branches missed.">            if (!children) {</span>
+<span class="nc" id="L1061">                return Utils.list2ObjectArray(mCol.getDb().queryLongList(&quot;select id from cards where did=?&quot;, did));</span>
+            }
+        }
+<span class="nc" id="L1064">        java.util.Collection&lt;Long&gt; values = children(did).values();</span>
+<span class="nc bnc" id="L1065" title="All 8 branches missed.">        List&lt;Long&gt; dids = new ArrayList&lt;&gt;((ListenerUtil.mutListener.listen(22356) ? (values.size() % 1) : (ListenerUtil.mutListener.listen(22355) ? (values.size() / 1) : (ListenerUtil.mutListener.listen(22354) ? (values.size() * 1) : (ListenerUtil.mutListener.listen(22353) ? (values.size() - 1) : (values.size() + 1))))));</span>
+<span class="nc bnc" id="L1066" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22357)) {</span>
+<span class="nc" id="L1067">            dids.add(did);</span>
+        }
+<span class="nc bnc" id="L1069" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22358)) {</span>
+<span class="nc" id="L1070">            dids.addAll(values);</span>
+        }
+<span class="nc" id="L1072">        return Utils.list2ObjectArray(mCol.getDb().queryLongList(&quot;select id from cards where did in &quot; + Utils.ids2str(dids)));</span>
+    }
+
+<span class="fc" id="L1075">    private static final Pattern spaceAroundSeparator = Pattern.compile(&quot;\\s*::\\s*&quot;);</span>
+
+    @VisibleForTesting
+    static String strip(String deckName) {
+<span class="pc bpc" id="L1079" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22359)) {</span>
+            // Deal with all spaces around ::
+<span class="fc" id="L1081">            deckName = spaceAroundSeparator.matcher(deckName).replaceAll(&quot;::&quot;);</span>
+        }
+<span class="pc bpc" id="L1083" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22360)) {</span>
+            // Deal with spaces at start/end of the deck name.
+<span class="fc" id="L1085">            deckName = deckName.trim();</span>
+        }
+<span class="fc" id="L1087">        return deckName;</span>
+    }
+
+    private void _recoverOrphans() {
+<span class="nc" id="L1091">        boolean mod = mCol.getDb().getMod();</span>
+<span class="nc bnc" id="L1092" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22361)) {</span>
+<span class="nc" id="L1093">            SyncStatus.ignoreDatabaseModification(() -&gt; mCol.getDb().execute(&quot;update cards set did = 1 where did not in &quot; + Utils.ids2str(allIds())));</span>
+        }
+<span class="nc bnc" id="L1095" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22362)) {</span>
+<span class="nc" id="L1096">            mCol.getDb().setMod(mod);</span>
+        }
+<span class="nc" id="L1098">    }</span>
+
+    private void _checkDeckTree() {
+<span class="nc" id="L1101">        ArrayList&lt;Deck&gt; decks = allSorted();</span>
+<span class="nc" id="L1102">        Map&lt;String, Deck&gt; names = new HashMap&lt;&gt;(decks.size());</span>
+<span class="nc bnc" id="L1103" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22398)) {</span>
+            {
+<span class="nc" id="L1105">                long _loopCounter513 = 0;</span>
+<span class="nc bnc" id="L1106" title="All 2 branches missed.">                for (Deck deck : decks) {</span>
+<span class="nc" id="L1107">                    ListenerUtil.loopListener.listen(&quot;_loopCounter513&quot;, ++_loopCounter513);</span>
+<span class="nc" id="L1108">                    String deckName = deck.getString(&quot;name&quot;);</span>
+                    /* With 2.1.28, anki started strips whitespace of deck name.  This method paragraph is here for
+              compatibility while we wait for rust.  It should be executed before other changes, because both &quot;FOO &quot;
+              and &quot;FOO&quot; will be renamed to the same name, and so this will need to be renamed again in case of
+              duplicate.*/
+<span class="nc" id="L1113">                    String strippedName = strip(deckName);</span>
+<span class="nc bnc" id="L1114" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22368)) {</span>
+<span class="nc bnc" id="L1115" title="All 2 branches missed.">                        if (!deckName.equals(strippedName)) {</span>
+<span class="nc bnc" id="L1116" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22363)) {</span>
+<span class="nc" id="L1117">                                mNameMap.remove(deckName, deck);</span>
+                            }
+<span class="nc bnc" id="L1119" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22364)) {</span>
+<span class="nc" id="L1120">                                deckName = strippedName;</span>
+                            }
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22365)) {</span>
+<span class="nc" id="L1123">                                deck.put(&quot;name&quot;, deckName);</span>
+                            }
+<span class="nc bnc" id="L1125" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22366)) {</span>
+<span class="nc" id="L1126">                                mNameMap.add(deck);</span>
+                            }
+<span class="nc bnc" id="L1128" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22367)) {</span>
+<span class="nc" id="L1129">                                save(deck);</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L1133" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22375)) {</span>
+                        // ensure no sections are blank
+<span class="nc bnc" id="L1135" title="All 2 branches missed.">                        if (&quot;&quot;.equals(deckName)) {</span>
+<span class="nc bnc" id="L1136" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22369)) {</span>
+<span class="nc" id="L1137">                                Timber.i(&quot;Fix deck with empty name&quot;);</span>
+                            }
+<span class="nc bnc" id="L1139" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22370)) {</span>
+<span class="nc" id="L1140">                                mNameMap.remove(deckName, deck);</span>
+                            }
+<span class="nc bnc" id="L1142" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22371)) {</span>
+<span class="nc" id="L1143">                                deckName = &quot;blank&quot;;</span>
+                            }
+<span class="nc bnc" id="L1145" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22372)) {</span>
+<span class="nc" id="L1146">                                deck.put(&quot;name&quot;, &quot;blank&quot;);</span>
+                            }
+<span class="nc bnc" id="L1148" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22373)) {</span>
+<span class="nc" id="L1149">                                mNameMap.add(deck);</span>
+                            }
+<span class="nc bnc" id="L1151" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22374)) {</span>
+<span class="nc" id="L1152">                                save(deck);</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L1156" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22383)) {</span>
+<span class="nc bnc" id="L1157" title="All 2 branches missed.">                        if (deckName.contains(&quot;::::&quot;)) {</span>
+<span class="nc bnc" id="L1158" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22376)) {</span>
+<span class="nc" id="L1159">                                Timber.i(&quot;fix deck with missing sections %s&quot;, deck.getString(&quot;name&quot;));</span>
+                            }
+<span class="nc bnc" id="L1161" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22377)) {</span>
+<span class="nc" id="L1162">                                mNameMap.remove(deckName, deck);</span>
+                            }
+<span class="nc bnc" id="L1164" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22379)) {</span>
+                                {
+<span class="nc" id="L1166">                                    long _loopCounter511 = 0;</span>
+                                    do {
+<span class="nc" id="L1168">                                        ListenerUtil.loopListener.listen(&quot;_loopCounter511&quot;, ++_loopCounter511);</span>
+<span class="nc bnc" id="L1169" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(22378)) {</span>
+<span class="nc" id="L1170">                                            deckName = deck.getString(&quot;name&quot;).replace(&quot;::::&quot;, &quot;::blank::&quot;);</span>
+                                        }
+<span class="nc bnc" id="L1172" title="All 2 branches missed.">                                    } while (deckName.contains(&quot;::::&quot;));</span>
+                                }
+                            }
+<span class="nc bnc" id="L1175" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22380)) {</span>
+<span class="nc" id="L1176">                                deck.put(&quot;name&quot;, deckName);</span>
+                            }
+<span class="nc bnc" id="L1178" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22381)) {</span>
+<span class="nc" id="L1179">                                mNameMap.add(deck);</span>
+                            }
+<span class="nc bnc" id="L1181" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22382)) {</span>
+<span class="nc" id="L1182">                                save(deck);</span>
+                            }
+                        }
+                    }
+                    // two decks with the same name?
+<span class="nc" id="L1187">                    Deck homonym = names.get(normalizeName(deckName));</span>
+<span class="nc bnc" id="L1188" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22391)) {</span>
+<span class="nc bnc" id="L1189" title="All 2 branches missed.">                        if (homonym != null) {</span>
+<span class="nc bnc" id="L1190" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22384)) {</span>
+<span class="nc" id="L1191">                                Timber.i(&quot;fix duplicate deck name %s&quot;, deckName);</span>
+                            }
+<span class="nc bnc" id="L1193" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22387)) {</span>
+                                {
+<span class="nc" id="L1195">                                    long _loopCounter512 = 0;</span>
+                                    do {
+<span class="nc" id="L1197">                                        ListenerUtil.loopListener.listen(&quot;_loopCounter512&quot;, ++_loopCounter512);</span>
+<span class="nc bnc" id="L1198" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(22385)) {</span>
+<span class="nc" id="L1199">                                            deckName += &quot;+&quot;;</span>
+                                        }
+<span class="nc bnc" id="L1201" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(22386)) {</span>
+<span class="nc" id="L1202">                                            deck.put(&quot;name&quot;, deckName);</span>
+                                        }
+<span class="nc bnc" id="L1204" title="All 2 branches missed.">                                    } while (names.containsKey(normalizeName(deckName)));</span>
+                                }
+                            }
+<span class="nc bnc" id="L1207" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22388)) {</span>
+<span class="nc" id="L1208">                                mNameMap.add(deck);</span>
+                            }
+<span class="nc bnc" id="L1210" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22389)) {</span>
+                                // Ensuring both names are correctly in mNameMap
+<span class="nc" id="L1212">                                mNameMap.add(homonym);</span>
+                            }
+<span class="nc bnc" id="L1214" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22390)) {</span>
+<span class="nc" id="L1215">                                save(deck);</span>
+                            }
+                        }
+                    }
+                    // immediate parent must exist
+<span class="nc" id="L1220">                    String immediateParent = parent(deckName);</span>
+<span class="nc bnc" id="L1221" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22396)) {</span>
+<span class="nc bnc" id="L1222" title="All 10 branches missed.">                        if ((ListenerUtil.mutListener.listen(22392) ? (immediateParent != null || !names.containsKey(normalizeName(immediateParent))) : (immediateParent != null &amp;&amp; !names.containsKey(normalizeName(immediateParent))))) {</span>
+<span class="nc bnc" id="L1223" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22393)) {</span>
+<span class="nc" id="L1224">                                Timber.i(&quot;fix deck with missing parent %s&quot;, deckName);</span>
+                            }
+<span class="nc" id="L1226">                            Deck parent = byName(immediateParent);</span>
+<span class="nc bnc" id="L1227" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22394)) {</span>
+<span class="nc" id="L1228">                                _ensureParents(deckName);</span>
+                            }
+<span class="nc bnc" id="L1230" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22395)) {</span>
+<span class="nc" id="L1231">                                names.put(normalizeName(immediateParent), parent);</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L1235" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22397)) {</span>
+<span class="nc" id="L1236">                        names.put(normalizeName(deckName), deck);</span>
+                    }
+<span class="nc" id="L1238">                }</span>
+            }
+        }
+<span class="nc" id="L1241">    }</span>
+
+    public void checkIntegrity() {
+<span class="nc bnc" id="L1244" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22399)) {</span>
+<span class="nc" id="L1245">            _recoverOrphans();</span>
+        }
+<span class="nc bnc" id="L1247" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22400)) {</span>
+<span class="nc" id="L1248">            _checkDeckTree();</span>
+        }
+<span class="nc" id="L1250">    }</span>
+
+    /**
+     * The currently active dids. Make sure to copy before modifying.
+     */
+    public LinkedList&lt;Long&gt; active() {
+<span class="fc" id="L1256">        JSONArray activeDecks = mCol.getConf().getJSONArray(&quot;activeDecks&quot;);</span>
+<span class="fc" id="L1257">        LinkedList&lt;Long&gt; result = new LinkedList&lt;&gt;();</span>
+<span class="pc bpc" id="L1258" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22401)) {</span>
+<span class="fc" id="L1259">            addAll(result, activeDecks.longIterable());</span>
+        }
+<span class="fc" id="L1261">        return result;</span>
+    }
+
+    /**
+     * The currently selected did.
+     */
+    public long selected() {
+<span class="fc" id="L1268">        return mCol.getConf().getLong(&quot;curDeck&quot;);</span>
+    }
+
+    public Deck current() {
+<span class="fc" id="L1272">        return get(selected());</span>
+    }
+
+    /**
+     * Select a new branch.
+     */
+    public void select(long did) {
+<span class="fc" id="L1279">        String name = mDecks.get(did).getString(&quot;name&quot;);</span>
+<span class="pc bpc" id="L1280" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22402)) {</span>
+            // current deck
+<span class="fc" id="L1282">            mCol.getConf().put(&quot;curDeck&quot;, Long.toString(did));</span>
+        }
+        // Note: TreeMap is already sorted
+<span class="fc" id="L1285">        TreeMap&lt;String, Long&gt; actv = children(did);</span>
+<span class="pc bpc" id="L1286" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22403)) {</span>
+<span class="fc" id="L1287">            actv.put(name, did);</span>
+        }
+<span class="fc" id="L1289">        JSONArray activeDecks = new JSONArray();</span>
+<span class="pc bpc" id="L1290" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22405)) {</span>
+            {
+<span class="fc" id="L1292">                long _loopCounter514 = 0;</span>
+<span class="fc bfc" id="L1293" title="All 2 branches covered.">                for (Long n : actv.values()) {</span>
+<span class="fc" id="L1294">                    ListenerUtil.loopListener.listen(&quot;_loopCounter514&quot;, ++_loopCounter514);</span>
+<span class="pc bpc" id="L1295" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22404)) {</span>
+<span class="fc" id="L1296">                        activeDecks.put(n);</span>
+                    }
+<span class="fc" id="L1298">                }</span>
+            }
+        }
+<span class="pc bpc" id="L1301" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22406)) {</span>
+<span class="fc" id="L1302">            mCol.getConf().put(&quot;activeDecks&quot;, activeDecks);</span>
+        }
+<span class="pc bpc" id="L1304" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22407)) {</span>
+<span class="fc" id="L1305">            mCol.setMod();</span>
+        }
+<span class="fc" id="L1307">    }</span>
+
+    /**
+     * All children of did as nodes of (key:name, value:id)
+     *
+     * TODO: There is likely no need for this collection to be a TreeMap. This method should not
+     * need to sort on behalf of select().
+     */
+    public TreeMap&lt;String, Long&gt; children(long did) {
+<span class="fc" id="L1316">        String name = get(did).getString(&quot;name&quot;);</span>
+<span class="fc" id="L1317">        TreeMap&lt;String, Long&gt; actv = new TreeMap&lt;&gt;();</span>
+<span class="pc bpc" id="L1318" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22410)) {</span>
+            {
+<span class="fc" id="L1320">                long _loopCounter515 = 0;</span>
+<span class="fc bfc" id="L1321" title="All 2 branches covered.">                for (Deck g : all()) {</span>
+<span class="fc" id="L1322">                    ListenerUtil.loopListener.listen(&quot;_loopCounter515&quot;, ++_loopCounter515);</span>
+<span class="pc bpc" id="L1323" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22409)) {</span>
+<span class="pc bpc" id="L1324" title="1 of 2 branches missed.">                        if (g.getString(&quot;name&quot;).startsWith(name + &quot;::&quot;)) {</span>
+<span class="nc bnc" id="L1325" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22408)) {</span>
+<span class="nc" id="L1326">                                actv.put(g.getString(&quot;name&quot;), g.getLong(&quot;id&quot;));</span>
+                            }
+                        }
+                    }
+<span class="fc" id="L1330">                }</span>
+            }
+        }
+<span class="fc" id="L1333">        return actv;</span>
+    }
+
+<span class="nc" id="L1336">    public static class Node extends HashMap&lt;Long, Node&gt; {</span>
+    }
+
+    private void gather(Node node, List&lt;Long&gt; arr) {
+<span class="nc bnc" id="L1340" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22413)) {</span>
+            {
+<span class="nc" id="L1342">                long _loopCounter516 = 0;</span>
+<span class="nc bnc" id="L1343" title="All 2 branches missed.">                for (Map.Entry&lt;Long, Node&gt; entry : node.entrySet()) {</span>
+<span class="nc" id="L1344">                    ListenerUtil.loopListener.listen(&quot;_loopCounter516&quot;, ++_loopCounter516);</span>
+<span class="nc" id="L1345">                    Node child = entry.getValue();</span>
+<span class="nc bnc" id="L1346" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22411)) {</span>
+<span class="nc" id="L1347">                        arr.add(entry.getKey());</span>
+                    }
+<span class="nc bnc" id="L1349" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22412)) {</span>
+<span class="nc" id="L1350">                        gather(child, arr);</span>
+                    }
+<span class="nc" id="L1352">                }</span>
+            }
+        }
+<span class="nc" id="L1355">    }</span>
+
+    public List&lt;Long&gt; childDids(long did, Node childMap) {
+<span class="nc" id="L1358">        List&lt;Long&gt; arr = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L1359" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22414)) {</span>
+<span class="nc" id="L1360">            gather(childMap.get(did), arr);</span>
+        }
+<span class="nc" id="L1362">        return arr;</span>
+    }
+
+    public Node childMap() {
+<span class="nc" id="L1366">        Node childMap = new Node();</span>
+        // Go through all decks, sorted by name
+<span class="nc" id="L1368">        ArrayList&lt;Deck&gt; decks = all();</span>
+<span class="nc bnc" id="L1369" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22415)) {</span>
+<span class="nc" id="L1370">            Collections.sort(decks, DeckComparator.instance);</span>
+        }
+<span class="nc bnc" id="L1372" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22428)) {</span>
+            {
+<span class="nc" id="L1374">                long _loopCounter517 = 0;</span>
+<span class="nc bnc" id="L1375" title="All 2 branches missed.">                for (Deck deck : decks) {</span>
+<span class="nc" id="L1376">                    ListenerUtil.loopListener.listen(&quot;_loopCounter517&quot;, ++_loopCounter517);</span>
+<span class="nc" id="L1377">                    Node node = new Node();</span>
+<span class="nc bnc" id="L1378" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22416)) {</span>
+<span class="nc" id="L1379">                        childMap.put(deck.getLong(&quot;id&quot;), node);</span>
+                    }
+<span class="nc" id="L1381">                    List&lt;String&gt; parts = Arrays.asList(path(deck.getString(&quot;name&quot;)));</span>
+<span class="nc bnc" id="L1382" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22427)) {</span>
+<span class="nc bnc" id="L1383" title="All 22 branches missed.">                        if ((ListenerUtil.mutListener.listen(22421) ? (parts.size() &gt;= 1) : (ListenerUtil.mutListener.listen(22420) ? (parts.size() &lt;= 1) : (ListenerUtil.mutListener.listen(22419) ? (parts.size() &lt; 1) : (ListenerUtil.mutListener.listen(22418) ? (parts.size() != 1) : (ListenerUtil.mutListener.listen(22417) ? (parts.size() == 1) : (parts.size() &gt; 1))))))) {</span>
+<span class="nc bnc" id="L1384" title="All 8 branches missed.">                            String immediateParent = TextUtils.join(&quot;::&quot;, parts.subList(0, (ListenerUtil.mutListener.listen(22425) ? (parts.size() % 1) : (ListenerUtil.mutListener.listen(22424) ? (parts.size() / 1) : (ListenerUtil.mutListener.listen(22423) ? (parts.size() * 1) : (ListenerUtil.mutListener.listen(22422) ? (parts.size() + 1) : (parts.size() - 1)))))));</span>
+<span class="nc" id="L1385">                            long pid = byName(immediateParent).getLong(&quot;id&quot;);</span>
+<span class="nc bnc" id="L1386" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22426)) {</span>
+<span class="nc" id="L1387">                                childMap.get(pid).put(deck.getLong(&quot;id&quot;), node);</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L1391">                }</span>
+            }
+        }
+<span class="nc" id="L1394">        return childMap;</span>
+    }
+
+    /**
+     * @return Names of ancestors of parents of name.
+     */
+    private String[] parentsNames(String name) {
+<span class="fc" id="L1401">        String[] parts = path(name);</span>
+<span class="pc bpc" id="L1402" title="4 of 8 branches missed.">        String[] parentsNames = new String[(ListenerUtil.mutListener.listen(22432) ? (parts.length % 1) : (ListenerUtil.mutListener.listen(22431) ? (parts.length / 1) : (ListenerUtil.mutListener.listen(22430) ? (parts.length * 1) : (ListenerUtil.mutListener.listen(22429) ? (parts.length + 1) : (parts.length - 1)))))];</span>
+        // So the array size is 1 less than the number of parts.
+<span class="fc" id="L1404">        String prefix = &quot;&quot;;</span>
+<span class="pc bpc" id="L1405" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22445)) {</span>
+            {
+<span class="fc" id="L1407">                long _loopCounter518 = 0;</span>
+<span class="pc bpc" id="L1408" title="60 of 70 branches missed.">                for (int i = 0; (ListenerUtil.mutListener.listen(22444) ? (i &gt;= (ListenerUtil.mutListener.listen(22439) ? (parts.length % 1) : (ListenerUtil.mutListener.listen(22438) ? (parts.length / 1) : (ListenerUtil.mutListener.listen(22437) ? (parts.length * 1) : (ListenerUtil.mutListener.listen(22436) ? (parts.length + 1) : (parts.length - 1)))))) : (ListenerUtil.mutListener.listen(22443) ? (i &lt;= (ListenerUtil.mutListener.listen(22439) ? (parts.length % 1) : (ListenerUtil.mutListener.listen(22438) ? (parts.length / 1) : (ListenerUtil.mutListener.listen(22437) ? (parts.length * 1) : (ListenerUtil.mutListener.listen(22436) ? (parts.length + 1) : (parts.length - 1)))))) : (ListenerUtil.mutListener.listen(22442) ? (i &gt; (ListenerUtil.mutListener.listen(22439) ? (parts.length % 1) : (ListenerUtil.mutListener.listen(22438) ? (parts.length / 1) : (ListenerUtil.mutListener.listen(22437) ? (parts.length * 1) : (ListenerUtil.mutListener.listen(22436) ? (parts.length + 1) : (parts.length - 1)))))) : (ListenerUtil.mutListener.listen(22441) ? (i != (ListenerUtil.mutListener.listen(22439) ? (parts.length % 1) : (ListenerUtil.mutListener.listen(22438) ? (parts.length / 1) : (ListenerUtil.mutListener.listen(22437) ? (parts.length * 1) : (ListenerUtil.mutListener.listen(22436) ? (parts.length + 1) : (parts.length - 1)))))) : (ListenerUtil.mutListener.listen(22440) ? (i == (ListenerUtil.mutListener.listen(22439) ? (parts.length % 1) : (ListenerUtil.mutListener.listen(22438) ? (parts.length / 1) : (ListenerUtil.mutListener.listen(22437) ? (parts.length * 1) : (ListenerUtil.mutListener.listen(22436) ? (parts.length + 1) : (parts.length - 1)))))) : (i &lt; (ListenerUtil.mutListener.listen(22439) ? (parts.length % 1) : (ListenerUtil.mutListener.listen(22438) ? (parts.length / 1) : (ListenerUtil.mutListener.listen(22437) ? (parts.length * 1) : (ListenerUtil.mutListener.listen(22436) ? (parts.length + 1) : (parts.length - 1))))))))))); i++) {</span>
+<span class="nc" id="L1409">                    ListenerUtil.loopListener.listen(&quot;_loopCounter518&quot;, ++_loopCounter518);</span>
+<span class="nc bnc" id="L1410" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22433)) {</span>
+<span class="nc" id="L1411">                        prefix += parts[i];</span>
+                    }
+<span class="nc bnc" id="L1413" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22434)) {</span>
+<span class="nc" id="L1414">                        parentsNames[i] = prefix;</span>
+                    }
+<span class="nc bnc" id="L1416" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22435)) {</span>
+<span class="nc" id="L1417">                        prefix += &quot;::&quot;;</span>
+                    }
+                }
+            }
+        }
+<span class="fc" id="L1422">        return parentsNames;</span>
+    }
+
+    /**
+     * All parents of did.
+     */
+    public List&lt;Deck&gt; parents(long did) {
+        // get parent and grandparent names
+<span class="fc" id="L1430">        String[] parents = parentsNames(get(did).getString(&quot;name&quot;));</span>
+        // convert to objects
+<span class="fc" id="L1432">        List&lt;Deck&gt; oParents = new ArrayList&lt;&gt;(parents.length);</span>
+<span class="pc bpc" id="L1433" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22452)) {</span>
+            {
+<span class="fc" id="L1435">                long _loopCounter519 = 0;</span>
+<span class="pc bpc" id="L1436" title="16 of 22 branches missed.">                for (int i = 0; (ListenerUtil.mutListener.listen(22451) ? (i &gt;= parents.length) : (ListenerUtil.mutListener.listen(22450) ? (i &lt;= parents.length) : (ListenerUtil.mutListener.listen(22449) ? (i &gt; parents.length) : (ListenerUtil.mutListener.listen(22448) ? (i != parents.length) : (ListenerUtil.mutListener.listen(22447) ? (i == parents.length) : (i &lt; parents.length)))))); i++) {</span>
+<span class="nc" id="L1437">                    ListenerUtil.loopListener.listen(&quot;_loopCounter519&quot;, ++_loopCounter519);</span>
+<span class="nc" id="L1438">                    String parentName = parents[i];</span>
+<span class="nc" id="L1439">                    Deck deck = mNameMap.get(parentName);</span>
+<span class="nc bnc" id="L1440" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22446)) {</span>
+<span class="nc" id="L1441">                        oParents.add(i, deck);</span>
+                    }
+                }
+            }
+        }
+<span class="fc" id="L1446">        return oParents;</span>
+    }
+
+    public void beforeUpload() {
+<span class="nc" id="L1450">        boolean changed_decks = Utils.markAsUploaded(all());</span>
+<span class="nc" id="L1451">        boolean changed_conf = Utils.markAsUploaded(allConf());</span>
+<span class="nc bnc" id="L1452" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22455)) {</span>
+<span class="nc bnc" id="L1453" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(22453) ? (changed_decks &amp;&amp; changed_conf) : (changed_decks || changed_conf))) {</span>
+<span class="nc bnc" id="L1454" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22454)) {</span>
+                    // directly applied to the methods.
+<span class="nc" id="L1456">                    save();</span>
+                }
+            }
+        }
+<span class="nc" id="L1460">    }</span>
+
+    /**
+     * Return a new dynamic deck and set it as the current deck.
+     */
+    public long newDyn(String name) {
+<span class="nc" id="L1466">        long did = id(name, defaultDynamicDeck);</span>
+<span class="nc bnc" id="L1467" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22456)) {</span>
+<span class="nc" id="L1468">            select(did);</span>
+        }
+<span class="nc" id="L1470">        return did;</span>
+    }
+
+    public boolean isDyn(long did) {
+<span class="nc bnc" id="L1474" title="All 2 branches missed.">        return get(did).getInt(&quot;dyn&quot;) == DECK_DYN;</span>
+    }
+
+    /*
+     * ******************************
+     * utils methods
+     * **************************************
+     */
+<span class="fc" id="L1482">    private static final HashMap&lt;String, String&gt; normalized = new HashMap&lt;&gt;();</span>
+
+    public static String normalizeName(String name) {
+<span class="pc bpc" id="L1485" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22458)) {</span>
+<span class="fc bfc" id="L1486" title="All 2 branches covered.">            if (!normalized.containsKey(name)) {</span>
+<span class="pc bpc" id="L1487" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22457)) {</span>
+<span class="fc" id="L1488">                    normalized.put(name, Normalizer.normalize(name, Normalizer.Form.NFC).toLowerCase(Locale.ROOT));</span>
+                }
+            }
+        }
+<span class="fc" id="L1492">        return normalized.get(name);</span>
+    }
+
+    public static boolean equalName(String name1, String name2) {
+<span class="fc" id="L1496">        return normalizeName(name1).equals(normalizeName(name2));</span>
+    }
+
+    public static boolean isValidDeckName(@Nullable String deckName) {
+<span class="nc bnc" id="L1500" title="All 10 branches missed.">        return (ListenerUtil.mutListener.listen(22459) ? (deckName != null || !deckName.trim().isEmpty()) : (deckName != null &amp;&amp; !deckName.trim().isEmpty()));</span>
+    }
+
+<span class="fc" id="L1503">    private static final HashMap&lt;String, String&gt; sParentCache = new HashMap&lt;&gt;();</span>
+
+    public static String parent(String deckName) {
+<span class="nc bnc" id="L1506" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22473)) {</span>
+            // method parent, from sched's method deckDueList in python
+<span class="nc bnc" id="L1508" title="All 2 branches missed.">            if (!sParentCache.containsKey(deckName)) {</span>
+<span class="nc" id="L1509">                List&lt;String&gt; parts = Arrays.asList(path(deckName));</span>
+<span class="nc bnc" id="L1510" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22472)) {</span>
+<span class="nc bnc" id="L1511" title="All 22 branches missed.">                    if ((ListenerUtil.mutListener.listen(22464) ? (parts.size() &gt;= 2) : (ListenerUtil.mutListener.listen(22463) ? (parts.size() &lt;= 2) : (ListenerUtil.mutListener.listen(22462) ? (parts.size() &gt; 2) : (ListenerUtil.mutListener.listen(22461) ? (parts.size() != 2) : (ListenerUtil.mutListener.listen(22460) ? (parts.size() == 2) : (parts.size() &lt; 2))))))) {</span>
+<span class="nc bnc" id="L1512" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22471)) {</span>
+<span class="nc" id="L1513">                            sParentCache.put(deckName, null);</span>
+                        }
+                    } else {
+<span class="nc bnc" id="L1516" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22469)) {</span>
+<span class="nc bnc" id="L1517" title="All 8 branches missed.">                            parts = parts.subList(0, (ListenerUtil.mutListener.listen(22468) ? (parts.size() % 1) : (ListenerUtil.mutListener.listen(22467) ? (parts.size() / 1) : (ListenerUtil.mutListener.listen(22466) ? (parts.size() * 1) : (ListenerUtil.mutListener.listen(22465) ? (parts.size() + 1) : (parts.size() - 1))))));</span>
+                        }
+<span class="nc" id="L1519">                        String parentName = TextUtils.join(&quot;::&quot;, parts);</span>
+<span class="nc bnc" id="L1520" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22470)) {</span>
+<span class="nc" id="L1521">                            sParentCache.put(deckName, parentName);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L1527">        return sParentCache.get(deckName);</span>
+    }
+
+    public String getActualDescription() {
+<span class="nc" id="L1531">        return current().optString(&quot;desc&quot;, &quot;&quot;);</span>
+    }
+
+    public HashMap&lt;Long, Deck&gt; getDecks() {
+<span class="nc" id="L1535">        return mDecks;</span>
+    }
+
+    public Long[] allDynamicDeckIds() {
+<span class="nc" id="L1539">        Set&lt;Long&gt; ids = allIds();</span>
+<span class="nc" id="L1540">        ArrayList&lt;Long&gt; validValues = new ArrayList&lt;&gt;(ids.size());</span>
+<span class="nc bnc" id="L1541" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22476)) {</span>
+            {
+<span class="nc" id="L1543">                long _loopCounter520 = 0;</span>
+<span class="nc bnc" id="L1544" title="All 2 branches missed.">                for (Long did : ids) {</span>
+<span class="nc" id="L1545">                    ListenerUtil.loopListener.listen(&quot;_loopCounter520&quot;, ++_loopCounter520);</span>
+<span class="nc bnc" id="L1546" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22475)) {</span>
+<span class="nc bnc" id="L1547" title="All 2 branches missed.">                        if (isDyn(did)) {</span>
+<span class="nc bnc" id="L1548" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22474)) {</span>
+<span class="nc" id="L1549">                                validValues.add(did);</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L1553">                }</span>
+            }
+        }
+<span class="nc" id="L1556">        return validValues.toArray(new Long[0]);</span>
+    }
+
+    private Deck getDeckOrFail(long deckId) throws NoSuchDeckException {
+<span class="nc" id="L1560">        Deck deck = get(deckId, false);</span>
+<span class="nc bnc" id="L1561" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22477)) {</span>
+<span class="nc bnc" id="L1562" title="All 2 branches missed.">            if (deck == null) {</span>
+<span class="nc" id="L1563">                throw new NoSuchDeckException(deckId);</span>
+            }
+        }
+<span class="nc" id="L1566">        return deck;</span>
+    }
+
+    public boolean hasDeckOptions(long deckId) throws NoSuchDeckException {
+<span class="nc" id="L1570">        return getDeckOrFail(deckId).has(&quot;conf&quot;);</span>
+    }
+
+    public void removeDeckOptions(long deckId) throws NoSuchDeckException {
+<span class="nc bnc" id="L1574" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22478)) {</span>
+<span class="nc" id="L1575">            getDeckOrFail(deckId).remove(&quot;conf&quot;);</span>
+        }
+<span class="nc" id="L1577">    }</span>
+
+    public static boolean isDynamic(Collection col, long deckId) {
+<span class="nc" id="L1580">        return Decks.isDynamic(col.getDecks().get(deckId));</span>
+    }
+
+    public static boolean isDynamic(Deck deck) {
+<span class="nc bnc" id="L1584" title="All 2 branches missed.">        return deck.getInt(&quot;dyn&quot;) == DECK_DYN;</span>
+    }
+
+    /**
+     * Retruns the fully qualified name of the subdeck, or null if unavailable
+     */
+    @Nullable
+    public String getSubdeckName(long did, @Nullable String subdeckName) {
+<span class="nc bnc" id="L1592" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22479)) {</span>
+<span class="nc bnc" id="L1593" title="All 2 branches missed.">            if (TextUtils.isEmpty(subdeckName)) {</span>
+<span class="nc" id="L1594">                return null;</span>
+            }
+        }
+<span class="nc" id="L1597">        String newName = subdeckName.replaceAll(&quot;\&quot;&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L1598" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22480)) {</span>
+<span class="nc bnc" id="L1599" title="All 2 branches missed.">            if (TextUtils.isEmpty(newName)) {</span>
+<span class="nc" id="L1600">                return null;</span>
+            }
+        }
+<span class="nc" id="L1603">        Deck deck = get(did, false);</span>
+<span class="nc bnc" id="L1604" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22481)) {</span>
+<span class="nc bnc" id="L1605" title="All 2 branches missed.">            if (deck == null) {</span>
+<span class="nc" id="L1606">                return null;</span>
+            }
+        }
+<span class="nc" id="L1609">        return deck.getString(&quot;name&quot;) + DECK_SEPARATOR + subdeckName;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

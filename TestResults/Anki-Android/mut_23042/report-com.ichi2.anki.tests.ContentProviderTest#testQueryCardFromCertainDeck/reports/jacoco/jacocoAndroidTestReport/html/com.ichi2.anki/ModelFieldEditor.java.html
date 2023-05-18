@@ -1,0 +1,613 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ModelFieldEditor.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.anki</a> &gt; <span class="el_source">ModelFieldEditor.java</span></div><h1>ModelFieldEditor.java</h1><pre class="source lang-java linenums">/****************************************************************************************
+ * Copyright (c) 2015 Ryan Annis &lt;squeenix@live.ca&gt;                                     *
+ * Copyright (c) 2015 Timothy Rae &lt;perceptualchaos2@gmail.com&gt;                          *
+ *                                                                                      *
+ * This program is free software; you can redistribute it and/or modify it under        *
+ * the terms of the GNU General Public License as published by the Free Software        *
+ * Foundation; either version 3 of the License, or (at your option) any later           *
+ * version.                                                                             *
+ *                                                                                      *
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                      *
+ * You should have received a copy of the GNU General Public License along with         *
+ * this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ ****************************************************************************************/
+package com.ichi2.anki;
+
+import android.os.Build;
+import android.os.Bundle;
+
+import android.text.InputType;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.widget.ArrayAdapter;
+import android.widget.EditText;
+import android.widget.ListView;
+
+import com.afollestad.materialdialogs.MaterialDialog;
+import com.ichi2.anki.dialogs.ConfirmationDialog;
+import com.ichi2.anki.dialogs.LocaleSelectionDialog;
+import com.ichi2.anki.dialogs.ModelEditorContextMenu;
+import com.ichi2.anki.exception.ConfirmModSchemaException;
+import com.ichi2.async.CollectionTask;
+import com.ichi2.async.TaskListenerWithContext;
+import com.ichi2.async.TaskManager;
+import com.ichi2.libanki.Collection;
+import com.ichi2.libanki.Model;
+import com.ichi2.themes.StyledProgressDialog;
+import com.ichi2.ui.FixedEditText;
+import com.ichi2.widget.WidgetStatus;
+
+import com.ichi2.utils.JSONArray;
+import com.ichi2.utils.JSONException;
+import com.ichi2.utils.JSONObject;
+
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Locale;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
+import androidx.fragment.app.DialogFragment;
+import timber.log.Timber;
+import static com.ichi2.anim.ActivityTransitionAnimation.Direction.*;
+
+<span class="nc" id="L60">public class ModelFieldEditor extends AnkiActivity implements LocaleSelectionDialog.LocaleSelectionDialogHandler {</span>
+
+    private final static int NORMAL_EXIT = 100001;
+
+    //Position of the current field selected
+    private int mCurrentPos;
+
+    private ListView mFieldLabelView;
+    private List&lt;String&gt; mFieldLabels;
+    private MaterialDialog mProgressDialog;
+
+    private Collection mCol;
+    private JSONArray mNoteFields;
+    private Model mMod;
+
+    private ModelEditorContextMenu mContextMenu;
+    private EditText mFieldNameInput;
+
+<span class="nc" id="L78">    private final Runnable mConfirmDialogCancel = this::dismissContextMenu;</span>
+
+    // ----------------------------------------------------------------------------
+    // ANDROID METHODS
+    // ----------------------------------------------------------------------------
+
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+<span class="nc bnc" id="L87" title="All 2 branches missed.">        if (showedActivityFailedScreen(savedInstanceState)) {</span>
+<span class="nc" id="L88">            return;</span>
+        }
+<span class="nc" id="L90">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L91">        setContentView(R.layout.model_field_editor);</span>
+
+<span class="nc" id="L93">        mFieldLabelView = findViewById(R.id.note_type_editor_fields);</span>
+<span class="nc" id="L94">        enableToolbar();</span>
+
+<span class="nc bnc" id="L96" title="All 2 branches missed.">        if (getSupportActionBar() != null) {</span>
+<span class="nc" id="L97">            getSupportActionBar().setTitle(R.string.model_field_editor_title);</span>
+<span class="nc" id="L98">            getSupportActionBar().setSubtitle(getIntent().getStringExtra(&quot;title&quot;));</span>
+        }
+<span class="nc" id="L100">        startLoadingCollection();</span>
+<span class="nc" id="L101">    }</span>
+
+
+    @Override
+    protected void onStop() {
+<span class="nc" id="L106">        super.onStop();</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">        if (!isFinishing()) {</span>
+<span class="nc" id="L108">            WidgetStatus.update(this);</span>
+<span class="nc" id="L109">            UIUtils.saveCollectionInBackground();</span>
+        }
+<span class="nc" id="L111">    }</span>
+
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+<span class="nc" id="L116">        super.onCreateOptionsMenu(menu);</span>
+<span class="nc" id="L117">        getMenuInflater().inflate(R.menu.model_editor, menu);</span>
+<span class="nc" id="L118">        return true;</span>
+    }
+
+
+    // ----------------------------------------------------------------------------
+    // ANKI METHODS
+    // ----------------------------------------------------------------------------
+
+
+    @Override
+    protected void onCollectionLoaded(Collection col) {
+<span class="nc" id="L129">        super.onCollectionLoaded(col);</span>
+<span class="nc" id="L130">        this.mCol = col;</span>
+<span class="nc" id="L131">        setupLabels();</span>
+<span class="nc" id="L132">        createfieldLabels();</span>
+<span class="nc" id="L133">    }</span>
+
+
+    // ----------------------------------------------------------------------------
+    // UI SETUP
+    // ----------------------------------------------------------------------------
+
+
+    /*
+     * Sets up the main ListView and ArrayAdapters
+     * Containing clickable labels for the fields
+     */
+    private void createfieldLabels() {
+<span class="nc" id="L146">        ArrayAdapter&lt;String&gt; mFieldLabelAdapter = new ArrayAdapter&lt;&gt;(this, R.layout.model_field_editor_list_item, mFieldLabels);</span>
+<span class="nc" id="L147">        mFieldLabelView.setAdapter(mFieldLabelAdapter);</span>
+<span class="nc" id="L148">        mFieldLabelView.setOnItemClickListener((parent, view, position, id) -&gt; {</span>
+<span class="nc" id="L149">            mContextMenu = ModelEditorContextMenu.newInstance(mFieldLabels.get(position), mContextMenuListener);</span>
+<span class="nc" id="L150">            showDialogFragment(mContextMenu);</span>
+<span class="nc" id="L151">            mCurrentPos = position;</span>
+<span class="nc" id="L152">        });</span>
+<span class="nc" id="L153">    }</span>
+
+
+    /*
+      * Sets up the ArrayList containing the text for the main ListView
+      */
+    private void setupLabels() {
+<span class="nc" id="L160">        long noteTypeID = getIntent().getLongExtra(&quot;noteTypeID&quot;, 0);</span>
+<span class="nc" id="L161">        mMod = mCol.getModels().get(noteTypeID);</span>
+
+<span class="nc" id="L163">        mNoteFields = mMod.getJSONArray(&quot;flds&quot;);</span>
+<span class="nc" id="L164">        mFieldLabels = mNoteFields.toStringList(&quot;name&quot;);</span>
+<span class="nc" id="L165">    }</span>
+
+
+    // ----------------------------------------------------------------------------
+    // CONTEXT MENU DIALOGUES
+    // ----------------------------------------------------------------------------
+
+
+    /**
+     * Clean the input field or explain why it's rejected
+     * @param mFieldNameInput Editor to get the input
+     * @return The value to use, or null in case of failure
+     */
+    private @Nullable String _uniqueName(@NonNull EditText mFieldNameInput) {
+<span class="nc" id="L179">        String input = mFieldNameInput.getText().toString()</span>
+<span class="nc" id="L180">                .replaceAll(&quot;[\\n\\r{}:\&quot;]&quot;, &quot;&quot;);</span>
+        // The number of #, ^, /, space, tab, starting the input
+        int offset;
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        for (offset = 0; offset &lt; input.length(); offset++) {</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">            if (!Arrays.asList('#', '^', '/',' ', '\t').contains(input.charAt(offset))) {</span>
+<span class="nc" id="L185">                break;</span>
+            }
+        }
+<span class="nc" id="L188">        input = input.substring(offset).trim();</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">        if (input.length() == 0) {</span>
+<span class="nc" id="L190">            UIUtils.showThemedToast(this, getResources().getString(R.string.toast_empty_name), true);</span>
+<span class="nc" id="L191">            return null;</span>
+        }
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        if (containsField(input)) {</span>
+<span class="nc" id="L194">            UIUtils.showThemedToast(this, getResources().getString(R.string.toast_duplicate_field), true);</span>
+<span class="nc" id="L195">            return null;</span>
+        }
+<span class="nc" id="L197">        return input;</span>
+    }
+
+    /*
+    * Creates a dialog to create a field
+    */
+    private void addFieldDialog() {
+<span class="nc" id="L204">        mFieldNameInput = new FixedEditText(this);</span>
+<span class="nc" id="L205">        mFieldNameInput.setSingleLine(true);</span>
+
+<span class="nc" id="L207">        new MaterialDialog.Builder(this)</span>
+<span class="nc" id="L208">                .title(R.string.model_field_editor_add)</span>
+<span class="nc" id="L209">                .positiveText(R.string.dialog_ok)</span>
+<span class="nc" id="L210">                .customView(mFieldNameInput, true)</span>
+<span class="nc" id="L211">                .onPositive((dialog, which) -&gt; {</span>
+<span class="nc" id="L212">                    String fieldName = _uniqueName(mFieldNameInput);</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                    if (fieldName == null) {</span>
+<span class="nc" id="L214">                        return;</span>
+                    }
+                    //Name is valid, now field is added
+<span class="nc" id="L217">                    changeHandler listener = changeFieldHandler();</span>
+                    try {
+<span class="nc" id="L219">                        mCol.modSchema();</span>
+<span class="nc" id="L220">                        TaskManager.launchCollectionTask(new CollectionTask.AddField(mMod, fieldName), listener);</span>
+<span class="nc" id="L221">                    } catch (ConfirmModSchemaException e) {</span>
+
+                        //Create dialogue to for schema change
+<span class="nc" id="L224">                        ConfirmationDialog c = new ConfirmationDialog();</span>
+<span class="nc" id="L225">                        c.setArgs(getResources().getString(R.string.full_sync_confirmation));</span>
+<span class="nc" id="L226">                        Runnable confirm = () -&gt; {</span>
+<span class="nc" id="L227">                            mCol.modSchemaNoCheck();</span>
+<span class="nc" id="L228">                            String fieldName1 = mFieldNameInput.getText().toString()</span>
+<span class="nc" id="L229">                                    .replaceAll(&quot;[\\n\\r]&quot;, &quot;&quot;);</span>
+<span class="nc" id="L230">                            TaskManager.launchCollectionTask(new CollectionTask.AddField(mMod, fieldName1), listener);</span>
+<span class="nc" id="L231">                            dismissContextMenu();</span>
+<span class="nc" id="L232">                        };</span>
+
+<span class="nc" id="L234">                        c.setConfirm(confirm);</span>
+<span class="nc" id="L235">                        c.setCancel(mConfirmDialogCancel);</span>
+<span class="nc" id="L236">                        ModelFieldEditor.this.showDialogFragment(c);</span>
+<span class="nc" id="L237">                    }</span>
+<span class="nc" id="L238">                    mCol.getModels().update(mMod);</span>
+<span class="nc" id="L239">                    fullRefreshList();</span>
+<span class="nc" id="L240">                })</span>
+<span class="nc" id="L241">                .negativeText(R.string.dialog_cancel)</span>
+<span class="nc" id="L242">                .show();</span>
+<span class="nc" id="L243">    }</span>
+
+
+    /*
+     * Creates a dialog to delete the currently selected field
+     */
+    private void deleteFieldDialog() {
+<span class="nc" id="L250">        Runnable confirm = () -&gt; {</span>
+<span class="nc" id="L251">            mCol.modSchemaNoCheck();</span>
+<span class="nc" id="L252">            deleteField();</span>
+<span class="nc" id="L253">            dismissContextMenu();</span>
+<span class="nc" id="L254">        };</span>
+
+
+<span class="nc bnc" id="L257" title="All 2 branches missed.">        if (mFieldLabels.size() &lt; 2) {</span>
+<span class="nc" id="L258">            UIUtils.showThemedToast(this, getResources().getString(R.string.toast_last_field), true);</span>
+        } else {
+            try {
+<span class="nc" id="L261">                mCol.modSchema();</span>
+<span class="nc" id="L262">                ConfirmationDialog d = new ConfirmationDialog();</span>
+<span class="nc" id="L263">                d.setArgs(getResources().getString(R.string.field_delete_warning));</span>
+<span class="nc" id="L264">                d.setConfirm(confirm);</span>
+<span class="nc" id="L265">                d.setCancel(mConfirmDialogCancel);</span>
+<span class="nc" id="L266">                showDialogFragment(d);</span>
+<span class="nc" id="L267">            } catch (ConfirmModSchemaException e) {</span>
+<span class="nc" id="L268">                ConfirmationDialog c = new ConfirmationDialog();</span>
+<span class="nc" id="L269">                c.setConfirm(confirm);</span>
+<span class="nc" id="L270">                c.setCancel(mConfirmDialogCancel);</span>
+<span class="nc" id="L271">                c.setArgs(getResources().getString(R.string.full_sync_confirmation));</span>
+<span class="nc" id="L272">                showDialogFragment(c);</span>
+<span class="nc" id="L273">            }</span>
+        }
+<span class="nc" id="L275">    }</span>
+
+    private void deleteField() {
+<span class="nc" id="L278">        TaskManager.launchCollectionTask(new CollectionTask.DeleteField(mMod, mNoteFields.getJSONObject(mCurrentPos)), changeFieldHandler());</span>
+<span class="nc" id="L279">    }</span>
+
+
+    /*
+     * Creates a dialog to rename the currently selected field
+     * Processing time is constant
+     */
+    private void renameFieldDialog() {
+<span class="nc" id="L287">        mFieldNameInput = new FixedEditText(this);</span>
+<span class="nc" id="L288">        mFieldNameInput.setSingleLine(true);</span>
+<span class="nc" id="L289">        mFieldNameInput.setText(mFieldLabels.get(mCurrentPos));</span>
+<span class="nc" id="L290">        mFieldNameInput.setSelection(mFieldNameInput.getText().length());</span>
+<span class="nc" id="L291">        new MaterialDialog.Builder(this)</span>
+<span class="nc" id="L292">                .title(R.string.model_field_editor_rename)</span>
+<span class="nc" id="L293">                .positiveText(R.string.rename)</span>
+<span class="nc" id="L294">                .customView(mFieldNameInput, true)</span>
+<span class="nc" id="L295">                .onPositive((dialog, which) -&gt; {</span>
+<span class="nc" id="L296">                    String fieldName = _uniqueName(mFieldNameInput);</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">                    if (fieldName == null) {</span>
+<span class="nc" id="L298">                        return;</span>
+                    }
+                    //Field is valid, now rename
+                    try {
+<span class="nc" id="L302">                        renameField();</span>
+<span class="nc" id="L303">                    } catch (ConfirmModSchemaException e) {</span>
+
+                        // Handler mod schema confirmation
+<span class="nc" id="L306">                        ConfirmationDialog c = new ConfirmationDialog();</span>
+<span class="nc" id="L307">                        c.setArgs(getResources().getString(R.string.full_sync_confirmation));</span>
+<span class="nc" id="L308">                        Runnable confirm = () -&gt; {</span>
+<span class="nc" id="L309">                            mCol.modSchemaNoCheck();</span>
+                            try {
+<span class="nc" id="L311">                                renameField();</span>
+<span class="nc" id="L312">                            } catch (ConfirmModSchemaException e1) {</span>
+                                //This should never be thrown
+<span class="nc" id="L314">                            }</span>
+<span class="nc" id="L315">                            dismissContextMenu();</span>
+<span class="nc" id="L316">                        };</span>
+<span class="nc" id="L317">                        c.setConfirm(confirm);</span>
+<span class="nc" id="L318">                        c.setCancel(mConfirmDialogCancel);</span>
+<span class="nc" id="L319">                        ModelFieldEditor.this.showDialogFragment(c);</span>
+<span class="nc" id="L320">                    }</span>
+<span class="nc" id="L321">                })</span>
+<span class="nc" id="L322">                .negativeText(R.string.dialog_cancel)</span>
+<span class="nc" id="L323">                .show();</span>
+<span class="nc" id="L324">    }</span>
+
+
+    /*
+     * Allows the user to select a number less than the number of fields in the current model to
+     * reposition the current field to
+     * Processing time is scales with number of items
+     */
+    private void repositionFieldDialog() {
+<span class="nc" id="L333">        mFieldNameInput = new FixedEditText(this);</span>
+<span class="nc" id="L334">        mFieldNameInput.setRawInputType(InputType.TYPE_CLASS_NUMBER);</span>
+<span class="nc" id="L335">        new MaterialDialog.Builder(this)</span>
+<span class="nc" id="L336">                .title(String.format(getResources().getString(R.string.model_field_editor_reposition), 1, mFieldLabels.size()))</span>
+<span class="nc" id="L337">                .positiveText(R.string.dialog_ok)</span>
+<span class="nc" id="L338">                .customView(mFieldNameInput, true)</span>
+<span class="nc" id="L339">                .onPositive((dialog, which) -&gt; {</span>
+<span class="nc" id="L340">                        String newPosition = mFieldNameInput.getText().toString();</span>
+                        int pos;
+                        try {
+<span class="nc" id="L343">                            pos = Integer.parseInt(newPosition);</span>
+<span class="nc" id="L344">                        } catch (NumberFormatException n) {</span>
+<span class="nc" id="L345">                            UIUtils.showThemedToast(this, getResources().getString(R.string.toast_out_of_range), true);</span>
+<span class="nc" id="L346">                            return;</span>
+<span class="nc" id="L347">                        }</span>
+
+<span class="nc bnc" id="L349" title="All 4 branches missed.">                        if (pos &lt; 1 || pos &gt; mFieldLabels.size()) {</span>
+<span class="nc" id="L350">                            UIUtils.showThemedToast(this, getResources().getString(R.string.toast_out_of_range), true);</span>
+                        } else {
+<span class="nc" id="L352">                            changeHandler listener = changeFieldHandler();</span>
+                            // Input is valid, now attempt to modify
+                            try {
+<span class="nc" id="L355">                                mCol.modSchema();</span>
+<span class="nc" id="L356">                                TaskManager.launchCollectionTask(new CollectionTask.RepositionField(mMod,mNoteFields.getJSONObject(mCurrentPos), pos - 1));</span>
+<span class="nc" id="L357">                            } catch (ConfirmModSchemaException e) {</span>
+
+                                // Handle mod schema confirmation
+<span class="nc" id="L360">                                ConfirmationDialog c = new ConfirmationDialog();</span>
+<span class="nc" id="L361">                                c.setArgs(getResources().getString(R.string.full_sync_confirmation));</span>
+<span class="nc" id="L362">                                Runnable confirm = () -&gt; {</span>
+                                    try {
+<span class="nc" id="L364">                                        mCol.modSchemaNoCheck();</span>
+<span class="nc" id="L365">                                        String newPosition1 = mFieldNameInput.getText().toString();</span>
+<span class="nc" id="L366">                                        int pos1 = Integer.parseInt(newPosition1);</span>
+<span class="nc" id="L367">                                        TaskManager.launchCollectionTask(new CollectionTask.RepositionField(mMod,</span>
+<span class="nc" id="L368">                                                mNoteFields.getJSONObject(mCurrentPos), pos1 - 1),</span>
+                                                listener);
+<span class="nc" id="L370">                                        dismissContextMenu();</span>
+<span class="nc" id="L371">                                    } catch (JSONException e1) {</span>
+<span class="nc" id="L372">                                        throw new RuntimeException(e1);</span>
+<span class="nc" id="L373">                                    }</span>
+<span class="nc" id="L374">                                };</span>
+<span class="nc" id="L375">                                c.setConfirm(confirm);</span>
+<span class="nc" id="L376">                                c.setCancel(mConfirmDialogCancel);</span>
+<span class="nc" id="L377">                                ModelFieldEditor.this.showDialogFragment(c);</span>
+<span class="nc" id="L378">                            }</span>
+                        }
+<span class="nc" id="L380">                    })</span>
+<span class="nc" id="L381">                .negativeText(R.string.dialog_cancel)</span>
+<span class="nc" id="L382">                .show();</span>
+<span class="nc" id="L383">    }</span>
+
+
+    // ----------------------------------------------------------------------------
+    // HELPER METHODS
+    // ----------------------------------------------------------------------------
+
+
+    /*
+     * Useful when a confirmation dialog is created within another dialog
+     */
+    private void dismissContextMenu() {
+<span class="nc bnc" id="L395" title="All 2 branches missed.">        if (mContextMenu != null) {</span>
+<span class="nc" id="L396">            mContextMenu.dismiss();</span>
+<span class="nc" id="L397">            mContextMenu = null;</span>
+        }
+<span class="nc" id="L399">    }</span>
+
+
+    private void dismissProgressBar() {
+<span class="nc bnc" id="L403" title="All 2 branches missed.">        if (mProgressDialog != null) {</span>
+<span class="nc" id="L404">            mProgressDialog.dismiss();</span>
+        }
+<span class="nc" id="L406">        mProgressDialog = null;</span>
+<span class="nc" id="L407">    }</span>
+
+
+    /*
+     * Renames the current field
+     */
+    private void renameField() throws ConfirmModSchemaException {
+<span class="nc" id="L414">        String fieldLabel = mFieldNameInput.getText().toString()</span>
+<span class="nc" id="L415">                .replaceAll(&quot;[\\n\\r]&quot;, &quot;&quot;);</span>
+<span class="nc" id="L416">        JSONObject field = mNoteFields.getJSONObject(mCurrentPos);</span>
+<span class="nc" id="L417">        mCol.getModels().renameField(mMod, field, fieldLabel);</span>
+<span class="nc" id="L418">        mCol.getModels().save();</span>
+<span class="nc" id="L419">        fullRefreshList();</span>
+<span class="nc" id="L420">    }</span>
+
+
+    /*
+     * Changes the sort field (that displays in card browser) to the current field
+     */
+    private void sortByField() {
+<span class="nc" id="L427">        changeHandler listener = changeFieldHandler();</span>
+        try {
+<span class="nc" id="L429">            mCol.modSchema();</span>
+<span class="nc" id="L430">            TaskManager.launchCollectionTask(new CollectionTask.ChangeSortField(mMod, mCurrentPos), listener);</span>
+<span class="nc" id="L431">        } catch (ConfirmModSchemaException e) {</span>
+            // Handler mMod schema confirmation
+<span class="nc" id="L433">            ConfirmationDialog c = new ConfirmationDialog();</span>
+<span class="nc" id="L434">            c.setArgs(getResources().getString(R.string.full_sync_confirmation));</span>
+<span class="nc" id="L435">            Runnable confirm = () -&gt; {</span>
+<span class="nc" id="L436">                mCol.modSchemaNoCheck();</span>
+<span class="nc" id="L437">                TaskManager.launchCollectionTask(new CollectionTask.ChangeSortField(mMod, mCurrentPos), listener);</span>
+<span class="nc" id="L438">                dismissContextMenu();</span>
+<span class="nc" id="L439">            };</span>
+<span class="nc" id="L440">            c.setConfirm(confirm);</span>
+<span class="nc" id="L441">            c.setCancel(mConfirmDialogCancel);</span>
+<span class="nc" id="L442">            ModelFieldEditor.this.showDialogFragment(c);</span>
+<span class="nc" id="L443">        }</span>
+<span class="nc" id="L444">    }</span>
+
+    /*
+     * Toggle the &quot;Remember last input&quot; setting AKA the &quot;Sticky&quot; setting
+     */
+    private void toggleStickyField() {
+        // Get the current field
+<span class="nc" id="L451">        JSONObject field = mNoteFields.getJSONObject(mCurrentPos);</span>
+        // If the sticky setting is enabled then disable it, otherwise enable it
+<span class="nc bnc" id="L453" title="All 2 branches missed.">        field.put(&quot;sticky&quot;, !field.getBoolean(&quot;sticky&quot;));</span>
+<span class="nc" id="L454">    }</span>
+
+
+    /*
+     * Reloads everything
+     */
+    private void fullRefreshList() {
+<span class="nc" id="L461">        setupLabels();</span>
+<span class="nc" id="L462">        createfieldLabels();</span>
+<span class="nc" id="L463">    }</span>
+
+
+    /*
+     * Checks if there exists a field with this name in the current model
+     */
+    private boolean containsField(String field) {
+<span class="nc bnc" id="L470" title="All 2 branches missed.">        for (String s : mFieldLabels) {</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">            if (field.compareTo(s) == 0) {</span>
+<span class="nc" id="L472">                return true;</span>
+            }
+<span class="nc" id="L474">        }</span>
+<span class="nc" id="L475">        return false;</span>
+    }
+
+
+    // ----------------------------------------------------------------------------
+    // HANDLERS
+    // ----------------------------------------------------------------------------
+
+
+    /*
+     * Called during the desk task when any field is modified
+     */
+    private changeHandler changeFieldHandler() {
+<span class="nc" id="L488">        return new changeHandler(this);</span>
+    }
+
+    private static class changeHandler extends TaskListenerWithContext&lt;ModelFieldEditor, Void, Boolean&gt; {
+        public changeHandler(ModelFieldEditor modelFieldEditor) {
+<span class="nc" id="L493">            super(modelFieldEditor);</span>
+<span class="nc" id="L494">        }</span>
+
+        @Override
+        public void actualOnPreExecute(@NonNull ModelFieldEditor modelFieldEditor) {
+<span class="nc bnc" id="L498" title="All 4 branches missed.">            if (modelFieldEditor != null &amp;&amp; modelFieldEditor.mProgressDialog == null) {</span>
+<span class="nc" id="L499">                modelFieldEditor.mProgressDialog = StyledProgressDialog.show(modelFieldEditor, modelFieldEditor.getIntent().getStringExtra(&quot;title&quot;),</span>
+<span class="nc" id="L500">                        modelFieldEditor.getResources().getString(R.string.model_field_editor_changing), false);</span>
+            }
+<span class="nc" id="L502">        }</span>
+
+        @Override
+        public void actualOnPostExecute(@NonNull ModelFieldEditor modelFieldEditor, Boolean result) {
+<span class="nc bnc" id="L506" title="All 2 branches missed.">            if (!result) {</span>
+<span class="nc" id="L507">                modelFieldEditor.closeActivity(DeckPicker.RESULT_DB_ERROR);</span>
+            }
+
+<span class="nc" id="L510">            modelFieldEditor.dismissProgressBar();</span>
+<span class="nc" id="L511">            modelFieldEditor.fullRefreshList();</span>
+<span class="nc" id="L512">        }</span>
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc" id="L517">        int itemId = item.getItemId();</span>
+<span class="nc bnc" id="L518" title="All 2 branches missed.">        if (itemId == android.R.id.home) {</span>
+<span class="nc" id="L519">            onBackPressed();</span>
+<span class="nc" id="L520">            return true;</span>
+<span class="nc bnc" id="L521" title="All 2 branches missed.">        } else if (itemId == R.id.action_add_new_model) {</span>
+<span class="nc" id="L522">            addFieldDialog();</span>
+<span class="nc" id="L523">            return true;</span>
+        }
+<span class="nc" id="L525">        return super.onOptionsItemSelected(item);</span>
+    }
+
+
+    public void closeActivity() {
+<span class="nc" id="L530">        closeActivity(NORMAL_EXIT);</span>
+<span class="nc" id="L531">    }</span>
+
+
+    private void closeActivity(int reason) {
+<span class="nc" id="L535">        finishWithAnimation(RIGHT);</span>
+<span class="nc" id="L536">    }</span>
+
+
+    @Override
+    public void onBackPressed() {
+<span class="nc" id="L541">        closeActivity();</span>
+<span class="nc" id="L542">    }</span>
+
+
+<span class="nc" id="L545">    private final MaterialDialog.ListCallback mContextMenuListener = (materialDialog, view, selection, charSequence) -&gt; {</span>
+<span class="nc bnc" id="L546" title="All 6 branches missed.">        switch (selection) {</span>
+            case ModelEditorContextMenu.SORT_FIELD:
+<span class="nc" id="L548">                sortByField();</span>
+<span class="nc" id="L549">                break;</span>
+            case ModelEditorContextMenu.FIELD_REPOSITION:
+<span class="nc" id="L551">                repositionFieldDialog();</span>
+<span class="nc" id="L552">                break;</span>
+            case ModelEditorContextMenu.FIELD_DELETE:
+<span class="nc" id="L554">                deleteFieldDialog();</span>
+<span class="nc" id="L555">                break;</span>
+            case ModelEditorContextMenu.FIELD_RENAME:
+<span class="nc" id="L557">                renameFieldDialog();</span>
+<span class="nc" id="L558">                break;</span>
+            case ModelEditorContextMenu.FIELD_TOGGLE_STICKY:
+<span class="nc" id="L560">                toggleStickyField();</span>
+<span class="nc" id="L561">                break;</span>
+            default: {
+                //need this as we can't switch on a @RequiresApi
+<span class="nc bnc" id="L564" title="All 4 branches missed.">                if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.N &amp;&amp; selection == ModelEditorContextMenu.FIELD_ADD_LANGUAGE_HINT) {</span>
+<span class="nc" id="L565">                    Timber.i(&quot;displaying locale hint dialog&quot;);</span>
+<span class="nc" id="L566">                    localeHintDialog();</span>
+                    break;
+                }
+            }
+        }
+<span class="nc" id="L571">    };</span>
+
+
+    @RequiresApi(api = Build.VERSION_CODES.N)
+    private void localeHintDialog() {
+        //We don't currently show the current value, but we may want to in the future
+<span class="nc" id="L577">        DialogFragment dialogFragment = LocaleSelectionDialog.newInstance(this);</span>
+<span class="nc" id="L578">        showDialogFragment(dialogFragment);</span>
+<span class="nc" id="L579">    }</span>
+
+
+    /*
+     * Sets the Locale Hint of the field to the provided value.
+     * This allows some keyboard (GBoard) to change language
+     */
+    @RequiresApi(api = Build.VERSION_CODES.N)
+    private void addFieldLocaleHint(@NonNull Locale selectedLocale) {
+<span class="nc" id="L588">        String input = selectedLocale.toLanguageTag();</span>
+<span class="nc" id="L589">        JSONObject field = (JSONObject) mNoteFields.get(mCurrentPos);</span>
+<span class="nc" id="L590">        field.put(&quot;ad-hint-locale&quot;, input);</span>
+<span class="nc" id="L591">        mCol.getModels().save();</span>
+<span class="nc" id="L592">        Timber.i(&quot;Set field locale to %s&quot;, selectedLocale);</span>
+<span class="nc" id="L593">        String format = getString(R.string.model_field_editor_language_hint_dialog_success_result, selectedLocale.getDisplayName());</span>
+<span class="nc" id="L594">        UIUtils.showSimpleSnackbar(this, format, true);</span>
+<span class="nc" id="L595">    }</span>
+
+
+
+    @Override
+    @RequiresApi(api = Build.VERSION_CODES.N)
+    public void onSelectedLocale(@NonNull Locale selectedLocale) {
+<span class="nc" id="L602">        addFieldLocaleHint(selectedLocale);</span>
+<span class="nc" id="L603">        dismissAllDialogFragments();</span>
+<span class="nc" id="L604">    }</span>
+
+
+    @Override
+    @RequiresApi(api = Build.VERSION_CODES.N)
+    public void onLocaleSelectionCancelled() {
+<span class="nc" id="L610">        dismissAllDialogFragments();</span>
+<span class="nc" id="L611">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

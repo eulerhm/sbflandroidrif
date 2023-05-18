@@ -1,0 +1,2876 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CardBrowser.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.anki</a> &gt; <span class="el_source">CardBrowser.java</span></div><h1>CardBrowser.java</h1><pre class="source lang-java linenums">/****************************************************************************************
+ * Copyright (c) 2010 Norbert Nagold &lt;norbert.nagold@gmail.com&gt;                         *
+ * Copyright (c) 2012 Kostas Spyropoulos &lt;inigo.aldana@gmail.com&gt;                       *
+ * Copyright (c) 2014 Timothy Rae &lt;perceptualchaos2@gmail.com&gt;                          *
+ *                                                                                      *
+ * This program is free software; you can redistribute it and/or modify it under        *
+ * the terms of the GNU General Public License as published by the Free Software        *
+ * Foundation; either version 3 of the License, or (at your option) any later           *
+ * version.                                                                             *
+ *                                                                                      *
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                      *
+ * You should have received a copy of the GNU General Public License along with         *
+ * this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ ****************************************************************************************/
+
+package com.ichi2.anki;
+
+import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.graphics.Typeface;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.SystemClock;
+
+import androidx.annotation.CheckResult;
+import androidx.annotation.NonNull;
+import com.google.android.material.snackbar.Snackbar;
+
+import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.widget.SearchView;
+import android.text.TextUtils;
+import android.util.Pair;
+import android.util.TypedValue;
+import android.view.KeyEvent;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.widget.AbsListView;
+import android.widget.AdapterView;
+import android.widget.AdapterView.OnItemSelectedListener;
+import android.widget.ArrayAdapter;
+import android.widget.BaseAdapter;
+import android.widget.CheckBox;
+import android.widget.ListView;
+import android.widget.Spinner;
+import android.widget.TextView;
+
+import com.afollestad.materialdialogs.MaterialDialog;
+import com.ichi2.anki.dialogs.CardBrowserMySearchesDialog;
+import com.ichi2.anki.dialogs.CardBrowserOrderDialog;
+import com.ichi2.anki.dialogs.ConfirmationDialog;
+import com.ichi2.anki.dialogs.IntegerDialog;
+import com.ichi2.anki.dialogs.RescheduleDialog;
+import com.ichi2.anki.dialogs.SimpleMessageDialog;
+import com.ichi2.anki.dialogs.TagsDialog;
+import com.ichi2.anki.receiver.SdCardReceiver;
+import com.ichi2.anki.widgets.DeckDropDownAdapter;
+import com.ichi2.async.CollectionTask;
+import com.ichi2.async.TaskListenerWithContext;
+import com.ichi2.async.TaskManager;
+import com.ichi2.compat.Compat;
+import com.ichi2.compat.CompatHelper;
+import com.ichi2.libanki.Card;
+import com.ichi2.libanki.Collection;
+import com.ichi2.libanki.Consts;
+import com.ichi2.libanki.Decks;
+import com.ichi2.libanki.Utils;
+import com.ichi2.libanki.Deck;
+import com.ichi2.themes.Themes;
+import com.ichi2.upgrade.Upgrade;
+import com.ichi2.utils.BooleanGetter;
+import com.ichi2.utils.FunctionalInterfaces;
+import com.ichi2.utils.LanguageUtil;
+import com.ichi2.utils.PairWithBoolean;
+import com.ichi2.utils.PairWithCard;
+import com.ichi2.utils.Permissions;
+import com.ichi2.widget.WidgetStatus;
+
+import com.ichi2.utils.JSONException;
+import com.ichi2.utils.JSONObject;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+import timber.log.Timber;
+
+import static com.ichi2.anki.CardBrowser.Column.*;
+import static com.ichi2.libanki.stats.Stats.SECONDS_PER_DAY;
+import static com.ichi2.anim.ActivityTransitionAnimation.Direction.*;
+
+<span class="nc" id="L113">public class CardBrowser extends NavigationDrawerActivity implements</span>
+        DeckDropDownAdapter.SubtitleListener {
+
+<span class="fc" id="L116">    enum Column {</span>
+<span class="fc" id="L117">        QUESTION,</span>
+<span class="fc" id="L118">        ANSWER,</span>
+<span class="fc" id="L119">        FLAGS,</span>
+<span class="fc" id="L120">        SUSPENDED,</span>
+<span class="fc" id="L121">        MARKED,</span>
+<span class="fc" id="L122">        SFLD,</span>
+<span class="fc" id="L123">        DECK,</span>
+<span class="fc" id="L124">        TAGS,</span>
+<span class="fc" id="L125">        ID,</span>
+<span class="fc" id="L126">        CARD,</span>
+<span class="fc" id="L127">        DUE,</span>
+<span class="fc" id="L128">        EASE,</span>
+<span class="fc" id="L129">        CHANGED,</span>
+<span class="fc" id="L130">        CREATED,</span>
+<span class="fc" id="L131">        EDITED,</span>
+<span class="fc" id="L132">        INTERVAL,</span>
+<span class="fc" id="L133">        LAPSES,</span>
+<span class="fc" id="L134">        NOTE_TYPE,</span>
+<span class="fc" id="L135">        REVIEWS</span>
+    }
+
+    /** List of cards in the browser.
+    * When the list is changed, the position member of its elements should get changed.*/
+<span class="nc" id="L140">    @NonNull</span>
+    private CardCollection&lt;CardCache&gt; mCards = new CardCollection&lt;&gt;();
+    private ArrayList&lt;Deck&gt; mDropDownDecks;
+    private ListView mCardsListView;
+    private SearchView mSearchView;
+    private MultiColumnListAdapter mCardsAdapter;
+    private String mSearchTerms;
+    private String mRestrictOnDeck;
+    private int mCurrentFlag;
+
+    private MenuItem mSearchItem;
+    private MenuItem mSaveSearchItem;
+    private MenuItem mMySearchesItem;
+    private MenuItem mPreviewItem;
+
+    private Snackbar mUndoSnackbar;
+
+    public static Card sCardBrowserCard;
+
+    // card that was clicked (not marked)
+    private long mCurrentCardId;
+
+    private int mOrder;
+    private boolean mOrderAsc;
+    private int mColumn1Index;
+    private int mColumn2Index;
+
+    //DEFECT: Doesn't need to be a local
+    /** The next deck for the &quot;Change Deck&quot; operation */
+    private long mNewDid;
+
+    private static final int EDIT_CARD = 0;
+    private static final int ADD_NOTE = 1;
+    private static final int PREVIEW_CARDS = 2;
+
+    private static final int DEFAULT_FONT_SIZE_RATIO = 100;
+    // Should match order of R.array.card_browser_order_labels
+    public static final int CARD_ORDER_NONE = 0;
+<span class="fc" id="L178">    private static final String[] fSortTypes = new String[] {</span>
+        &quot;&quot;,
+        &quot;noteFld&quot;,
+        &quot;noteCrt&quot;,
+        &quot;noteMod&quot;,
+        &quot;cardMod&quot;,
+        &quot;cardDue&quot;,
+        &quot;cardIvl&quot;,
+        &quot;cardEase&quot;,
+        &quot;cardReps&quot;,
+        &quot;cardLapses&quot;};
+<span class="fc" id="L189">    private static final Column[] COLUMN1_KEYS = {QUESTION, SFLD};</span>
+
+    // list of available keys in mCards corresponding to the column names in R.array.browser_column2_headings.
+    // Note: the last 6 are currently hidden
+<span class="fc" id="L193">    private static final Column[] COLUMN2_KEYS = {ANSWER,</span>
+        CARD,
+        DECK,
+        NOTE_TYPE,
+        QUESTION,
+        TAGS,
+        LAPSES,
+        REVIEWS,
+        INTERVAL,
+        EASE,
+        DUE,
+        CHANGED,
+        CREATED,
+        EDITED,
+    };
+<span class="nc" id="L208">    private long mLastRenderStart = 0;</span>
+    private DeckDropDownAdapter mDropDownAdapter;
+    private Spinner mActionBarSpinner;
+    private TextView mActionBarTitle;
+<span class="nc" id="L212">    private boolean mReloadRequired = false;</span>
+<span class="nc" id="L213">    private boolean mInMultiSelectMode = false;</span>
+<span class="nc" id="L214">    private final Set&lt;CardCache&gt; mCheckedCards = Collections.synchronizedSet(new LinkedHashSet&lt;&gt;());</span>
+    private int mLastSelectedPosition;
+    @Nullable
+    private Menu mActionBarMenu;
+
+    private static final int SNACKBAR_DURATION = 8000;
+
+
+    // Values related to persistent state data
+    private static final long ALL_DECKS_ID = 0L;
+    private static final String PERSISTENT_STATE_FILE = &quot;DeckPickerState&quot;;
+    private static final String LAST_DECK_ID_KEY = &quot;lastDeckId&quot;;
+
+    public static final int CARD_NOT_AVAILABLE = -1;
+<span class="nc" id="L228">    private long mOldCardId = 0;</span>
+<span class="nc" id="L229">    private int mOldCardTopOffset = 0;</span>
+<span class="nc" id="L230">    private boolean mShouldRestoreScroll = false;</span>
+<span class="nc" id="L231">    private boolean mPostAutoScroll = false;</span>
+
+    /**
+     * Broadcast that informs us when the sd card is about to be unmounted
+     */
+<span class="nc" id="L236">    private BroadcastReceiver mUnmountReceiver = null;</span>
+
+<span class="nc" id="L238">    private final MaterialDialog.ListCallbackSingleChoice mOrderDialogListener =</span>
+            (materialDialog, view, which, charSequence) -&gt; {
+<span class="nc" id="L240">                changeCardOrder(which);</span>
+<span class="nc" id="L241">                return true;</span>
+            };
+
+
+    protected void changeCardOrder(int which) {
+<span class="nc bnc" id="L246" title="All 2 branches missed.">        if (which != mOrder) {</span>
+<span class="nc" id="L247">            mOrder = which;</span>
+<span class="nc" id="L248">            mOrderAsc = false;</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">            if (mOrder == 0) {</span>
+                // if the sort value in the card browser was changed, then perform a new search
+<span class="nc" id="L251">                getCol().getConf().put(&quot;sortType&quot;, fSortTypes[1]);</span>
+<span class="nc" id="L252">                AnkiDroidApp.getSharedPrefs(getBaseContext()).edit()</span>
+<span class="nc" id="L253">                        .putBoolean(&quot;cardBrowserNoSorting&quot;, true)</span>
+<span class="nc" id="L254">                        .commit();</span>
+            } else {
+<span class="nc" id="L256">                getCol().getConf().put(&quot;sortType&quot;, fSortTypes[mOrder]);</span>
+<span class="nc" id="L257">                AnkiDroidApp.getSharedPrefs(getBaseContext()).edit()</span>
+<span class="nc" id="L258">                        .putBoolean(&quot;cardBrowserNoSorting&quot;, false)</span>
+<span class="nc" id="L259">                        .commit();</span>
+            }
+<span class="nc" id="L261">            getCol().getConf().put(&quot;sortBackwards&quot;, mOrderAsc);</span>
+<span class="nc" id="L262">            searchCards();</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">        } else if (which != CARD_ORDER_NONE) {</span>
+            // if the same element is selected again, reverse the order
+<span class="nc bnc" id="L265" title="All 2 branches missed.">            mOrderAsc = !mOrderAsc;</span>
+<span class="nc" id="L266">            getCol().getConf().put(&quot;sortBackwards&quot;, mOrderAsc);</span>
+<span class="nc" id="L267">            mCards.reverse();</span>
+<span class="nc" id="L268">            updateList();</span>
+        }
+<span class="nc" id="L270">    }</span>
+
+
+    private RepositionCardHandler repositionCardHandler() {
+<span class="nc" id="L274">        return new RepositionCardHandler(this);</span>
+    }
+
+    private static class RepositionCardHandler extends TaskListenerWithContext&lt;CardBrowser, Object, PairWithBoolean&lt;Card[]&gt;&gt; {
+        public RepositionCardHandler(CardBrowser browser) {
+<span class="nc" id="L279">            super(browser);</span>
+<span class="nc" id="L280">        }</span>
+
+        @Override
+        public void actualOnPreExecute(@NonNull CardBrowser browser) {
+<span class="nc" id="L284">            Timber.d(&quot;CardBrowser::RepositionCardHandler() onPreExecute&quot;);</span>
+<span class="nc" id="L285">        }</span>
+
+
+        @Override
+        public void actualOnPostExecute(@NonNull CardBrowser browser, PairWithBoolean&lt;Card[]&gt; cards) {
+<span class="nc" id="L290">            Timber.d(&quot;CardBrowser::RepositionCardHandler() onPostExecute&quot;);</span>
+<span class="nc" id="L291">            browser.mReloadRequired = true;</span>
+<span class="nc" id="L292">            int cardCount = cards.other.length;</span>
+<span class="nc" id="L293">            UIUtils.showThemedToast(browser,</span>
+<span class="nc" id="L294">                    browser.getResources().getQuantityString(R.plurals.reposition_card_dialog_acknowledge, cardCount, cardCount), true);</span>
+<span class="nc" id="L295">            browser.reloadCards(cards.other);</span>
+<span class="nc" id="L296">            browser.supportInvalidateOptionsMenu();</span>
+<span class="nc" id="L297">        }</span>
+    }
+
+    private ResetProgressCardHandler resetProgressCardHandler() {
+<span class="nc" id="L301">        return new ResetProgressCardHandler(this);</span>
+    }
+    private static class ResetProgressCardHandler extends TaskListenerWithContext&lt;CardBrowser, Object, PairWithBoolean&lt;Card[]&gt;&gt;{
+        public ResetProgressCardHandler(CardBrowser browser) {
+<span class="nc" id="L305">            super(browser);</span>
+<span class="nc" id="L306">        }</span>
+
+        @Override
+        public void actualOnPreExecute(@NonNull CardBrowser browser) {
+<span class="nc" id="L310">            Timber.d(&quot;CardBrowser::ResetProgressCardHandler() onPreExecute&quot;);</span>
+<span class="nc" id="L311">        }</span>
+
+
+        @Override
+        public void actualOnPostExecute(@NonNull CardBrowser browser, PairWithBoolean&lt;Card[]&gt; cards) {
+<span class="nc" id="L316">            Timber.d(&quot;CardBrowser::ResetProgressCardHandler() onPostExecute&quot;);</span>
+<span class="nc" id="L317">            browser.mReloadRequired = true;</span>
+<span class="nc" id="L318">            int cardCount = cards.other.length;</span>
+<span class="nc" id="L319">            UIUtils.showThemedToast(browser,</span>
+<span class="nc" id="L320">                    browser.getResources().getQuantityString(R.plurals.reset_cards_dialog_acknowledge, cardCount, cardCount), true);</span>
+<span class="nc" id="L321">            browser.reloadCards(cards.other);</span>
+<span class="nc" id="L322">            browser.supportInvalidateOptionsMenu();</span>
+<span class="nc" id="L323">        }</span>
+    }
+
+    private RescheduleCardHandler rescheduleCardHandler() {
+<span class="nc" id="L327">        return new RescheduleCardHandler(this);</span>
+    }
+    private static class RescheduleCardHandler extends TaskListenerWithContext&lt;CardBrowser, Card, PairWithBoolean&lt;Card[]&gt;&gt;{
+        public RescheduleCardHandler (CardBrowser browser) {
+<span class="nc" id="L331">            super(browser);</span>
+<span class="nc" id="L332">        }</span>
+
+        @Override
+        public void actualOnPreExecute(@NonNull CardBrowser browser) {
+<span class="nc" id="L336">            Timber.d(&quot;CardBrowser::RescheduleCardHandler() onPreExecute&quot;);</span>
+<span class="nc" id="L337">        }</span>
+
+
+        @Override
+        public void actualOnPostExecute(@NonNull CardBrowser browser, PairWithBoolean&lt;Card[]&gt; cards) {
+<span class="nc" id="L342">            Timber.d(&quot;CardBrowser::RescheduleCardHandler() onPostExecute&quot;);</span>
+<span class="nc" id="L343">            browser.mReloadRequired = true;</span>
+<span class="nc" id="L344">            int cardCount = cards.other.length;</span>
+<span class="nc" id="L345">            UIUtils.showThemedToast(browser,</span>
+<span class="nc" id="L346">                    browser.getResources().getQuantityString(R.plurals.reschedule_cards_dialog_acknowledge, cardCount, cardCount), true);</span>
+<span class="nc" id="L347">            browser.reloadCards(cards.other);</span>
+<span class="nc" id="L348">            browser.supportInvalidateOptionsMenu();</span>
+<span class="nc" id="L349">        }</span>
+    }
+
+<span class="nc" id="L352">    private final CardBrowserMySearchesDialog.MySearchesDialogListener mMySearchesDialogListener =</span>
+<span class="nc" id="L353">            new CardBrowserMySearchesDialog.MySearchesDialogListener() {</span>
+        @Override
+        public void onSelection(String searchName) {
+<span class="nc" id="L356">            Timber.d(&quot;OnSelection using search named: %s&quot;, searchName);</span>
+<span class="nc" id="L357">            JSONObject savedFiltersObj = getCol().getConf().optJSONObject(&quot;savedFilters&quot;);</span>
+<span class="nc" id="L358">            Timber.d(&quot;SavedFilters are %s&quot;, savedFiltersObj.toString());</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">            if (savedFiltersObj != null) {</span>
+<span class="nc" id="L360">                mSearchTerms = savedFiltersObj.optString(searchName);</span>
+<span class="nc" id="L361">                Timber.d(&quot;OnSelection using search terms: %s&quot;, mSearchTerms);</span>
+<span class="nc" id="L362">                mSearchView.setQuery(mSearchTerms, false);</span>
+<span class="nc" id="L363">                mSearchItem.expandActionView();</span>
+<span class="nc" id="L364">                searchCards();</span>
+            }
+<span class="nc" id="L366">        }</span>
+
+        @Override
+        public void onRemoveSearch(String searchName) {
+<span class="nc" id="L370">            Timber.d(&quot;OnRemoveSelection using search named: %s&quot;, searchName);</span>
+<span class="nc" id="L371">            JSONObject savedFiltersObj = getCol().getConf().optJSONObject(&quot;savedFilters&quot;);</span>
+<span class="nc bnc" id="L372" title="All 4 branches missed.">            if (savedFiltersObj != null &amp;&amp; savedFiltersObj.has(searchName)) {</span>
+<span class="nc" id="L373">                savedFiltersObj.remove(searchName);</span>
+<span class="nc" id="L374">                getCol().getConf().put(&quot;savedFilters&quot;, savedFiltersObj);</span>
+<span class="nc" id="L375">                getCol().flush();</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">                if (savedFiltersObj.length() == 0) {</span>
+<span class="nc" id="L377">                    mMySearchesItem.setVisible(false);</span>
+                }
+            }
+
+<span class="nc" id="L381">        }</span>
+
+        @Override
+        public void onSaveSearch(String searchName, String searchTerms) {
+<span class="nc bnc" id="L385" title="All 2 branches missed.">            if (TextUtils.isEmpty(searchName)) {</span>
+<span class="nc" id="L386">                UIUtils.showThemedToast(CardBrowser.this,</span>
+<span class="nc" id="L387">                        getString(R.string.card_browser_list_my_searches_new_search_error_empty_name), true);</span>
+<span class="nc" id="L388">                return;</span>
+            }
+<span class="nc" id="L390">            JSONObject savedFiltersObj = getCol().getConf().optJSONObject(&quot;savedFilters&quot;);</span>
+<span class="nc" id="L391">            boolean should_save = false;</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">            if (savedFiltersObj == null) {</span>
+<span class="nc" id="L393">                savedFiltersObj = new JSONObject();</span>
+<span class="nc" id="L394">                savedFiltersObj.put(searchName, searchTerms);</span>
+<span class="nc" id="L395">                should_save = true;</span>
+<span class="nc bnc" id="L396" title="All 2 branches missed.">            } else if (!savedFiltersObj.has(searchName)) {</span>
+<span class="nc" id="L397">                savedFiltersObj.put(searchName, searchTerms);</span>
+<span class="nc" id="L398">                should_save = true;</span>
+            } else {
+<span class="nc" id="L400">                UIUtils.showThemedToast(CardBrowser.this,</span>
+<span class="nc" id="L401">                                        getString(R.string.card_browser_list_my_searches_new_search_error_dup), true);</span>
+            }
+<span class="nc bnc" id="L403" title="All 2 branches missed.">            if (should_save) {</span>
+<span class="nc" id="L404">                getCol().getConf().put(&quot;savedFilters&quot;, savedFiltersObj);</span>
+<span class="nc" id="L405">                getCol().flush();</span>
+<span class="nc" id="L406">                mSearchView.setQuery(&quot;&quot;, false);</span>
+<span class="nc" id="L407">                mMySearchesItem.setVisible(true);</span>
+            }
+<span class="nc" id="L409">        }</span>
+    };
+
+
+    private void onSearch() {
+<span class="nc" id="L414">        mSearchTerms = mSearchView.getQuery().toString();</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">        if (mSearchTerms.length() == 0) {</span>
+<span class="nc" id="L416">            mSearchView.setQueryHint(getResources().getString(R.string.deck_conf_cram_search));</span>
+        }
+<span class="nc" id="L418">        searchCards();</span>
+<span class="nc" id="L419">    }</span>
+
+    private List&lt;Long&gt; getSelectedCardIds() {
+<span class="nc" id="L422">        List&lt;Long&gt; ids = new ArrayList&lt;&gt;(mCheckedCards.size());</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">        for (CardCache cardPosition : mCheckedCards) {</span>
+<span class="nc" id="L424">            ids.add(cardPosition.getId());</span>
+<span class="nc" id="L425">        }</span>
+<span class="nc" id="L426">        return ids;</span>
+    }
+
+    private boolean canPerformCardInfo() {
+<span class="nc bnc" id="L430" title="All 2 branches missed.">        return checkedCardCount() == 1;</span>
+    }
+
+    private boolean canPerformMultiSelectEditNote() {
+        //The noteId is not currently available. Only allow if a single card is selected for now.
+<span class="nc bnc" id="L435" title="All 2 branches missed.">        return checkedCardCount() == 1;</span>
+    }
+
+
+    /**
+     * Change Deck
+     * @param deckPosition NOT the did. The index in the DISPLAYED Deck list to change the decks to.
+     * grep: changeDeck
+     */
+    @VisibleForTesting
+    void moveSelectedCardsToDeck(int deckPosition) {
+<span class="nc" id="L446">        List&lt;Long&gt; ids = getSelectedCardIds();</span>
+
+<span class="nc" id="L448">        Deck selectedDeck = getValidDecksForChangeDeck().get(deckPosition);</span>
+
+        try {
+            //#5932 - can't be dynamic
+<span class="nc bnc" id="L452" title="All 2 branches missed.">            if (Decks.isDynamic(selectedDeck)) {</span>
+<span class="nc" id="L453">                Timber.w(&quot;Attempted to change cards to dynamic deck. Cancelling operation.&quot;);</span>
+<span class="nc" id="L454">                displayCouldNotChangeDeck();</span>
+<span class="nc" id="L455">                return;</span>
+            }
+<span class="nc" id="L457">        } catch (Exception e) {</span>
+<span class="nc" id="L458">            displayCouldNotChangeDeck();</span>
+<span class="nc" id="L459">            Timber.e(e);</span>
+<span class="nc" id="L460">            return;</span>
+<span class="nc" id="L461">        }</span>
+
+<span class="nc" id="L463">        mNewDid = selectedDeck.getLong(&quot;id&quot;);</span>
+
+<span class="nc" id="L465">        Timber.i(&quot;Changing selected cards to deck: %d&quot;, mNewDid);</span>
+
+<span class="nc bnc" id="L467" title="All 2 branches missed.">        if (ids.isEmpty()) {</span>
+<span class="nc" id="L468">            endMultiSelectMode();</span>
+<span class="nc" id="L469">            mCardsAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L470">            return;</span>
+        }
+
+<span class="nc bnc" id="L473" title="All 2 branches missed.">        if (ids.contains(getReviewerCardId())) {</span>
+<span class="nc" id="L474">            mReloadRequired = true;</span>
+        }
+
+<span class="nc" id="L477">        executeChangeCollectionTask(ids, mNewDid);</span>
+<span class="nc" id="L478">    }</span>
+
+
+    private void displayCouldNotChangeDeck() {
+<span class="nc" id="L482">        UIUtils.showThemedToast(this, getString(R.string.card_browser_deck_change_error), true);</span>
+<span class="nc" id="L483">    }</span>
+
+
+    @VisibleForTesting
+    Long getLastDeckId() {
+<span class="nc" id="L488">        SharedPreferences state = getSharedPreferences(PERSISTENT_STATE_FILE,0);</span>
+<span class="nc bnc" id="L489" title="All 2 branches missed.">        if (!state.contains(LAST_DECK_ID_KEY)) {</span>
+<span class="nc" id="L490">            return null;</span>
+        }
+<span class="nc" id="L492">        return state.getLong(LAST_DECK_ID_KEY, -1);</span>
+    }
+
+    public static void clearLastDeckId() {
+<span class="fc" id="L496">        Context context = AnkiDroidApp.getInstance();</span>
+<span class="fc" id="L497">        context.getSharedPreferences(PERSISTENT_STATE_FILE,0).edit().remove(LAST_DECK_ID_KEY).apply();</span>
+<span class="fc" id="L498">    }</span>
+
+    private void saveLastDeckId(Long id) {
+<span class="nc bnc" id="L501" title="All 2 branches missed.">        if (id == null) {</span>
+<span class="nc" id="L502">            clearLastDeckId();</span>
+<span class="nc" id="L503">            return;</span>
+        }
+<span class="nc" id="L505">        getSharedPreferences(PERSISTENT_STATE_FILE, 0).edit().putLong(LAST_DECK_ID_KEY, id).apply();</span>
+<span class="nc" id="L506">    }</span>
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+<span class="nc bnc" id="L510" title="All 2 branches missed.">        if (showedActivityFailedScreen(savedInstanceState)) {</span>
+<span class="nc" id="L511">            return;</span>
+        }
+<span class="nc" id="L513">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L514">        Timber.d(&quot;onCreate()&quot;);</span>
+<span class="nc bnc" id="L515" title="All 4 branches missed.">        if (wasLoadedFromExternalTextActionItem() &amp;&amp; !Permissions.hasStorageAccessPermission(this)) {</span>
+<span class="nc" id="L516">            Timber.w(&quot;'Card Browser' Action item pressed before storage permissions granted.&quot;);</span>
+<span class="nc" id="L517">            UIUtils.showThemedToast(this, getString(R.string.intent_handler_failed_no_storage_permission), false);</span>
+<span class="nc" id="L518">            displayDeckPickerForPermissionsDialog();</span>
+<span class="nc" id="L519">            return;</span>
+        }
+<span class="nc" id="L521">        setContentView(R.layout.card_browser);</span>
+<span class="nc" id="L522">        initNavigationDrawer(findViewById(android.R.id.content));</span>
+<span class="nc" id="L523">        startLoadingCollection();</span>
+<span class="nc" id="L524">    }</span>
+
+
+    // Finish initializing the activity after the collection has been correctly loaded
+    @Override
+    protected void onCollectionLoaded(Collection col) {
+<span class="nc" id="L530">        super.onCollectionLoaded(col);</span>
+<span class="nc" id="L531">        Timber.d(&quot;onCollectionLoaded()&quot;);</span>
+<span class="nc" id="L532">        registerExternalStorageListener();</span>
+
+<span class="nc" id="L534">        SharedPreferences preferences = AnkiDroidApp.getSharedPrefs(getBaseContext());</span>
+
+        // Load reference to action bar title
+<span class="nc" id="L537">        mActionBarTitle = findViewById(R.id.toolbar_title);</span>
+
+        // Add drop-down menu to select deck to action bar.
+<span class="nc" id="L540">        mDropDownDecks = getCol().getDecks().allSorted();</span>
+<span class="nc" id="L541">        mDropDownAdapter = new DeckDropDownAdapter(this, mDropDownDecks);</span>
+<span class="nc" id="L542">        ActionBar mActionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">        if (mActionBar != null) {</span>
+<span class="nc" id="L544">            mActionBar.setDisplayShowTitleEnabled(false);</span>
+        }
+<span class="nc" id="L546">        mActionBarSpinner = findViewById(R.id.toolbar_spinner);</span>
+<span class="nc" id="L547">        mActionBarSpinner.setAdapter(mDropDownAdapter);</span>
+<span class="nc" id="L548">        mActionBarSpinner.setOnItemSelectedListener(new OnItemSelectedListener() {</span>
+            @Override
+            public void onItemSelected(AdapterView&lt;?&gt; parent, View view, int position, long id) {
+<span class="nc" id="L551">                deckDropDownItemChanged(position);</span>
+<span class="nc" id="L552">            }</span>
+
+            @Override
+            public void onNothingSelected(AdapterView&lt;?&gt; parent) {
+                // do nothing
+<span class="nc" id="L557">            }</span>
+        });
+<span class="nc" id="L559">        mActionBarSpinner.setVisibility(View.VISIBLE);</span>
+
+<span class="nc" id="L561">        mOrder = CARD_ORDER_NONE;</span>
+<span class="nc" id="L562">        String colOrder = getCol().getConf().getString(&quot;sortType&quot;);</span>
+<span class="nc bnc" id="L563" title="All 2 branches missed.">        for (int c = 0; c &lt; fSortTypes.length; ++c) {</span>
+<span class="nc bnc" id="L564" title="All 2 branches missed.">            if (fSortTypes[c].equals(colOrder)) {</span>
+<span class="nc" id="L565">                mOrder = c;</span>
+<span class="nc" id="L566">                break;</span>
+            }
+        }
+<span class="nc bnc" id="L569" title="All 4 branches missed.">        if (mOrder == 1 &amp;&amp; preferences.getBoolean(&quot;cardBrowserNoSorting&quot;, false)) {</span>
+<span class="nc" id="L570">            mOrder = 0;</span>
+        }
+        //This upgrade should already have been done during
+        //setConf. However older version of AnkiDroid didn't call
+        //upgradeJSONIfNecessary during setConf, which means the
+        //conf saved may still have this bug.
+<span class="nc" id="L576">        mOrderAsc = Upgrade.upgradeJSONIfNecessary(getCol(), getCol().getConf(), &quot;sortBackwards&quot;, false);</span>
+
+<span class="nc" id="L578">        mCards.reset();</span>
+<span class="nc" id="L579">        mCardsListView = findViewById(R.id.card_browser_list);</span>
+        // Create a spinner for column1
+<span class="nc" id="L581">        Spinner cardsColumn1Spinner = findViewById(R.id.browser_column1_spinner);</span>
+<span class="nc" id="L582">        ArrayAdapter&lt;CharSequence&gt; column1Adapter = ArrayAdapter.createFromResource(this,</span>
+                R.array.browser_column1_headings, android.R.layout.simple_spinner_item);
+<span class="nc" id="L584">        column1Adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);</span>
+<span class="nc" id="L585">        cardsColumn1Spinner.setAdapter(column1Adapter);</span>
+<span class="nc" id="L586">        mColumn1Index = AnkiDroidApp.getSharedPrefs(getBaseContext()).getInt(&quot;cardBrowserColumn1&quot;, 0);</span>
+<span class="nc" id="L587">        cardsColumn1Spinner.setOnItemSelectedListener(new OnItemSelectedListener() {</span>
+            @Override
+            public void onItemSelected(AdapterView&lt;?&gt; parent, View view, int pos, long id) {
+                // If a new column was selected then change the key used to map from mCards to the column TextView
+<span class="nc bnc" id="L591" title="All 2 branches missed.">                if (pos != mColumn1Index) {</span>
+<span class="nc" id="L592">                    mColumn1Index = pos;</span>
+<span class="nc" id="L593">                    AnkiDroidApp.getSharedPrefs(AnkiDroidApp.getInstance().getBaseContext()).edit()</span>
+<span class="nc" id="L594">                            .putInt(&quot;cardBrowserColumn1&quot;, mColumn1Index).commit();</span>
+<span class="nc" id="L595">                    Column[] fromMap = mCardsAdapter.getFromMapping();</span>
+<span class="nc" id="L596">                    fromMap[0] = COLUMN1_KEYS[mColumn1Index];</span>
+<span class="nc" id="L597">                    mCardsAdapter.setFromMapping(fromMap);</span>
+                }
+<span class="nc" id="L599">            }</span>
+
+            @Override
+            public void onNothingSelected(AdapterView&lt;?&gt; parent) {
+                // Do Nothing
+<span class="nc" id="L604">            }</span>
+        });
+        // Load default value for column2 selection
+<span class="nc" id="L607">        mColumn2Index = AnkiDroidApp.getSharedPrefs(getBaseContext()).getInt(&quot;cardBrowserColumn2&quot;, 0);</span>
+        // Setup the column 2 heading as a spinner so that users can easily change the column type
+<span class="nc" id="L609">        Spinner cardsColumn2Spinner = findViewById(R.id.browser_column2_spinner);</span>
+<span class="nc" id="L610">        ArrayAdapter&lt;CharSequence&gt; column2Adapter = ArrayAdapter.createFromResource(this,</span>
+                R.array.browser_column2_headings, android.R.layout.simple_spinner_item);
+<span class="nc" id="L612">        column2Adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);</span>
+<span class="nc" id="L613">        cardsColumn2Spinner.setAdapter(column2Adapter);</span>
+        // Create a new list adapter with updated column map any time the user changes the column
+<span class="nc" id="L615">        cardsColumn2Spinner.setOnItemSelectedListener(new OnItemSelectedListener() {</span>
+            @Override
+            public void onItemSelected(AdapterView&lt;?&gt; parent, View view, int pos, long id) {
+                // If a new column was selected then change the key used to map from mCards to the column TextView
+<span class="nc bnc" id="L619" title="All 2 branches missed.">                if (pos != mColumn2Index) {</span>
+<span class="nc" id="L620">                    mColumn2Index = pos;</span>
+<span class="nc" id="L621">                    AnkiDroidApp.getSharedPrefs(AnkiDroidApp.getInstance().getBaseContext()).edit()</span>
+<span class="nc" id="L622">                            .putInt(&quot;cardBrowserColumn2&quot;, mColumn2Index).commit();</span>
+<span class="nc" id="L623">                    Column[] fromMap = mCardsAdapter.getFromMapping();</span>
+<span class="nc" id="L624">                    fromMap[1] = COLUMN2_KEYS[mColumn2Index];</span>
+<span class="nc" id="L625">                    mCardsAdapter.setFromMapping(fromMap);</span>
+                }
+<span class="nc" id="L627">            }</span>
+
+            @Override
+            public void onNothingSelected(AdapterView&lt;?&gt; parent) {
+                // Do Nothing
+<span class="nc" id="L632">            }</span>
+        });
+        // get the font and font size from the preferences
+<span class="nc" id="L635">        int sflRelativeFontSize = preferences.getInt(&quot;relativeCardBrowserFontSize&quot;, DEFAULT_FONT_SIZE_RATIO);</span>
+<span class="nc" id="L636">        String sflCustomFont = preferences.getString(&quot;browserEditorFont&quot;, &quot;&quot;);</span>
+<span class="nc" id="L637">        Column[] columnsContent = {COLUMN1_KEYS[mColumn1Index], COLUMN2_KEYS[mColumn2Index]};</span>
+        // make a new list adapter mapping the data in mCards to column1 and column2 of R.layout.card_item_browser
+<span class="nc" id="L639">        mCardsAdapter = new MultiColumnListAdapter(</span>
+                this,
+                R.layout.card_item_browser,
+                columnsContent,
+                new int[] {R.id.card_sfld, R.id.card_column2},
+                sflRelativeFontSize,
+                sflCustomFont);
+        // link the adapter to the main mCardsListView
+<span class="nc" id="L647">        mCardsListView.setAdapter(mCardsAdapter);</span>
+        // make the items (e.g. question &amp; answer) render dynamically when scrolling
+<span class="nc" id="L649">        mCardsListView.setOnScrollListener(new RenderOnScroll());</span>
+        // set the spinner index
+<span class="nc" id="L651">        cardsColumn1Spinner.setSelection(mColumn1Index);</span>
+<span class="nc" id="L652">        cardsColumn2Spinner.setSelection(mColumn2Index);</span>
+
+
+<span class="nc" id="L655">        mCardsListView.setOnItemClickListener((parent, view, position, id) -&gt; {</span>
+<span class="nc bnc" id="L656" title="All 2 branches missed.">            if (mInMultiSelectMode) {</span>
+                // click on whole cell triggers select
+<span class="nc" id="L658">                CheckBox cb = view.findViewById(R.id.card_checkbox);</span>
+<span class="nc" id="L659">                cb.toggle();</span>
+<span class="nc" id="L660">                onCheck(position, view);</span>
+<span class="nc" id="L661">            } else {</span>
+                // load up the card selected on the list
+<span class="nc" id="L663">                long clickedCardId = getCards().get(position).getId();</span>
+<span class="nc" id="L664">                saveScrollingState(position);</span>
+<span class="nc" id="L665">                openNoteEditorForCard(clickedCardId);</span>
+            }
+<span class="nc" id="L667">        });</span>
+<span class="nc" id="L668">        mCardsListView.setOnItemLongClickListener((adapterView, view, position, id) -&gt; {</span>
+<span class="nc" id="L669">            mLastSelectedPosition = position;</span>
+<span class="nc" id="L670">            saveScrollingState(position);</span>
+<span class="nc" id="L671">            loadMultiSelectMode();</span>
+
+            // click on whole cell triggers select
+<span class="nc" id="L674">            CheckBox cb = view.findViewById(R.id.card_checkbox);</span>
+<span class="nc" id="L675">            cb.toggle();</span>
+<span class="nc" id="L676">            onCheck(position, view);</span>
+<span class="nc" id="L677">            recenterListView(view);</span>
+<span class="nc" id="L678">            mCardsAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L679">            return true;</span>
+        });
+
+<span class="nc" id="L682">        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);</span>
+
+        // If a valid value for last deck exists then use it, otherwise use libanki selected deck
+<span class="nc bnc" id="L685" title="All 4 branches missed.">        if (getLastDeckId() != null &amp;&amp; getLastDeckId() == ALL_DECKS_ID) {</span>
+<span class="nc" id="L686">            selectAllDecks();</span>
+<span class="nc bnc" id="L687" title="All 4 branches missed.">        } else  if (getLastDeckId() != null &amp;&amp; getCol().getDecks().get(getLastDeckId(), false) != null) {</span>
+<span class="nc" id="L688">            selectDeckById(getLastDeckId());</span>
+        } else {
+<span class="nc" id="L690">            selectDeckById(getCol().getDecks().selected());</span>
+        }
+<span class="nc" id="L692">    }</span>
+
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // NOTE: These are all active when typing in the search - doesn't matter as all need CTRL
+
+<span class="nc bnc" id="L699" title="All 7 branches missed.">        switch (keyCode) {</span>
+            /* Ctrl+A - Select All */
+            case KeyEvent.KEYCODE_A: {
+<span class="nc bnc" id="L702" title="All 2 branches missed.">                if (event.isCtrlPressed()) {</span>
+<span class="nc" id="L703">                    Timber.i(&quot;Ctrl+A - Select All&quot;);</span>
+<span class="nc" id="L704">                    onSelectAll();</span>
+<span class="nc" id="L705">                    return true;</span>
+                }
+                break;
+            }
+            case KeyEvent.KEYCODE_E: {
+                // Ctrl+Shift+E: Export (TODO)
+<span class="nc bnc" id="L711" title="All 2 branches missed.">                if (event.isCtrlPressed()) {</span>
+<span class="nc" id="L712">                    Timber.i(&quot;Ctrl+E: Add Note&quot;);</span>
+<span class="nc" id="L713">                    addNoteFromCardBrowser();</span>
+<span class="nc" id="L714">                    return true;</span>
+                }
+                break;
+            }
+            case KeyEvent.KEYCODE_D: {
+<span class="nc bnc" id="L719" title="All 2 branches missed.">                if (event.isCtrlPressed()) {</span>
+<span class="nc" id="L720">                    Timber.i(&quot;Ctrl+D: Change Deck&quot;);</span>
+<span class="nc" id="L721">                    showChangeDeckDialog();</span>
+<span class="nc" id="L722">                    return true;</span>
+                }
+                break;
+            }
+            case KeyEvent.KEYCODE_K: {
+<span class="nc bnc" id="L727" title="All 2 branches missed.">                if (event.isCtrlPressed()) {</span>
+<span class="nc" id="L728">                    Timber.i(&quot;Ctrl+K: Toggle Mark&quot;);</span>
+<span class="nc" id="L729">                    toggleMark();</span>
+<span class="nc" id="L730">                    return true;</span>
+                }
+                break;
+            }
+            case KeyEvent.KEYCODE_R: {
+<span class="nc bnc" id="L735" title="All 4 branches missed.">                if (event.isCtrlPressed() &amp;&amp; event.isAltPressed()) {</span>
+<span class="nc" id="L736">                    Timber.i(&quot;Ctrl+Alt+R - Reschedule&quot;);</span>
+<span class="nc" id="L737">                    rescheduleSelectedCards();</span>
+<span class="nc" id="L738">                    return true;</span>
+                }
+                break;
+            }
+            case KeyEvent.KEYCODE_FORWARD_DEL: {
+<span class="nc" id="L743">                Timber.i(&quot;Delete pressed - Delete Selected Note&quot;);</span>
+<span class="nc" id="L744">                deleteSelectedNote();</span>
+<span class="nc" id="L745">                return true;</span>
+            }
+        }
+<span class="nc" id="L748">        return super.onKeyDown(keyCode, event);</span>
+    }
+
+    /** All the notes of the selected cards will be marked
+     * If one or more card is unmarked, all will be marked,
+     * otherwise, they will be unmarked */
+    private void toggleMark() {
+<span class="nc bnc" id="L755" title="All 2 branches missed.">        if (!hasSelectedCards()) {</span>
+<span class="nc" id="L756">            Timber.i(&quot;Not marking cards - nothing selected&quot;);</span>
+<span class="nc" id="L757">            return;</span>
+        }
+
+<span class="nc" id="L760">        TaskManager.launchCollectionTask(new CollectionTask.MarkNoteMulti(getSelectedCardIds()),</span>
+<span class="nc" id="L761">                markCardHandler());</span>
+<span class="nc" id="L762">    }</span>
+
+
+    @VisibleForTesting
+    void selectAllDecks() {
+<span class="nc" id="L767">        selectDropDownItem(0);</span>
+<span class="nc" id="L768">    }</span>
+
+
+    /** Opens the note editor for a card.
+     * We use the Card ID to specify the preview target */
+    public void openNoteEditorForCard(long cardId) {
+<span class="nc" id="L774">        mCurrentCardId = cardId;</span>
+<span class="nc" id="L775">        sCardBrowserCard = getCol().getCard(mCurrentCardId);</span>
+        // start note editor using the card we just loaded
+<span class="nc" id="L777">        Intent editCard = new Intent(this, NoteEditor.class);</span>
+<span class="nc" id="L778">        editCard.putExtra(NoteEditor.EXTRA_CALLER, NoteEditor.CALLER_CARDBROWSER_EDIT);</span>
+<span class="nc" id="L779">        editCard.putExtra(NoteEditor.EXTRA_CARD_ID, sCardBrowserCard.getId());</span>
+<span class="nc" id="L780">        startActivityForResultWithAnimation(editCard, EDIT_CARD, LEFT);</span>
+        //#6432 - FIXME - onCreateOptionsMenu crashes if receiving an activity result from edit card when in multiselect
+<span class="nc" id="L782">        endMultiSelectMode();</span>
+<span class="nc" id="L783">    }</span>
+
+    private void openNoteEditorForCurrentlySelectedNote() {
+        try {
+            //Just select the first one. It doesn't particularly matter if there's a multiselect occurring.
+<span class="nc" id="L788">            openNoteEditorForCard(getSelectedCardIds().get(0));</span>
+<span class="nc" id="L789">        } catch (Exception e) {</span>
+<span class="nc" id="L790">            Timber.w(e, &quot;Error Opening Note Editor&quot;);</span>
+<span class="nc" id="L791">            UIUtils.showThemedToast(this, getString(R.string.multimedia_editor_something_wrong), false);</span>
+<span class="nc" id="L792">        }</span>
+<span class="nc" id="L793">    }</span>
+
+
+    @Override
+    protected void onStop() {
+<span class="nc" id="L798">        Timber.d(&quot;onStop()&quot;);</span>
+        // cancel rendering the question and answer, which has shared access to mCards
+<span class="nc" id="L800">        super.onStop();</span>
+<span class="nc bnc" id="L801" title="All 2 branches missed.">        if (!isFinishing()) {</span>
+<span class="nc" id="L802">            WidgetStatus.update(this);</span>
+<span class="nc" id="L803">            UIUtils.saveCollectionInBackground();</span>
+        }
+<span class="nc" id="L805">    }</span>
+
+
+    @Override
+    protected void onDestroy() {
+<span class="nc" id="L810">        Timber.d(&quot;onDestroy()&quot;);</span>
+<span class="nc" id="L811">        invalidate();</span>
+<span class="nc" id="L812">        super.onDestroy();</span>
+<span class="nc bnc" id="L813" title="All 2 branches missed.">        if (mUnmountReceiver != null) {</span>
+<span class="nc" id="L814">            unregisterReceiver(mUnmountReceiver);</span>
+        }
+<span class="nc" id="L816">    }</span>
+
+
+    @Override
+    public void onBackPressed() {
+<span class="nc bnc" id="L821" title="All 2 branches missed.">        if (isDrawerOpen()) {</span>
+<span class="nc" id="L822">            super.onBackPressed();</span>
+<span class="nc bnc" id="L823" title="All 2 branches missed.">        } else if (mInMultiSelectMode) {</span>
+<span class="nc" id="L824">            endMultiSelectMode();</span>
+        } else {
+<span class="nc" id="L826">            Timber.i(&quot;Back key pressed&quot;);</span>
+<span class="nc" id="L827">            Intent data = new Intent();</span>
+<span class="nc bnc" id="L828" title="All 2 branches missed.">            if (mReloadRequired) {</span>
+                // Add reload flag to result intent so that schedule reset when returning to note editor
+<span class="nc" id="L830">                data.putExtra(&quot;reloadRequired&quot;, true);</span>
+            }
+<span class="nc" id="L832">            closeCardBrowser(RESULT_OK, data);</span>
+        }
+<span class="nc" id="L834">    }</span>
+
+    @Override
+    protected void onPause() {
+<span class="nc" id="L838">        super.onPause();</span>
+<span class="nc bnc" id="L839" title="All 2 branches missed.">        if (mPostAutoScroll) {</span>
+<span class="nc" id="L840">            mPostAutoScroll = false;</span>
+        }
+<span class="nc" id="L842">    }</span>
+
+    @Override
+    protected void onResume() {
+<span class="nc" id="L846">        Timber.d(&quot;onResume()&quot;);</span>
+<span class="nc" id="L847">        super.onResume();</span>
+<span class="nc" id="L848">        selectNavigationItem(R.id.nav_browser);</span>
+<span class="nc" id="L849">    }</span>
+
+
+    @Override
+    public boolean onCreateOptionsMenu(final Menu menu) {
+<span class="nc" id="L854">        Timber.d(&quot;onCreateOptionsMenu()&quot;);</span>
+<span class="nc" id="L855">        mActionBarMenu = menu;</span>
+<span class="nc bnc" id="L856" title="All 2 branches missed.">        if (!mInMultiSelectMode) {</span>
+            // restore drawer click listener and icon
+<span class="nc" id="L858">            restoreDrawerIcon();</span>
+<span class="nc" id="L859">            getMenuInflater().inflate(R.menu.card_browser, menu);</span>
+<span class="nc" id="L860">            mSaveSearchItem = menu.findItem(R.id.action_save_search);</span>
+<span class="nc" id="L861">            mSaveSearchItem.setVisible(false); //the searchview's query always starts empty.</span>
+<span class="nc" id="L862">            mMySearchesItem = menu.findItem(R.id.action_list_my_searches);</span>
+<span class="nc" id="L863">            JSONObject savedFiltersObj = getCol().getConf().optJSONObject(&quot;savedFilters&quot;);</span>
+<span class="nc bnc" id="L864" title="All 4 branches missed.">            mMySearchesItem.setVisible(savedFiltersObj != null &amp;&amp; savedFiltersObj.length() &gt; 0);</span>
+<span class="nc" id="L865">            mSearchItem = menu.findItem(R.id.action_search);</span>
+<span class="nc" id="L866">            mSearchItem.setOnActionExpandListener(new MenuItem.OnActionExpandListener() {</span>
+                @Override
+                public boolean onMenuItemActionExpand(MenuItem item) {
+<span class="nc" id="L869">                    return true;</span>
+                }
+
+                @Override
+                public boolean onMenuItemActionCollapse(MenuItem item) {
+                    // SearchView doesn't support empty queries so we always reset the search when collapsing
+<span class="nc" id="L875">                    mSearchTerms = &quot;&quot;;</span>
+<span class="nc" id="L876">                    mSearchView.setQuery(mSearchTerms, false);</span>
+<span class="nc" id="L877">                    searchCards();</span>
+                    // invalidate options menu so that disappeared icons would appear again
+<span class="nc" id="L879">                    supportInvalidateOptionsMenu();</span>
+<span class="nc" id="L880">                    return true;</span>
+                }
+            });
+<span class="nc" id="L883">            mSearchView = (SearchView) mSearchItem.getActionView();</span>
+<span class="nc" id="L884">            mSearchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {</span>
+                @Override
+                public boolean onQueryTextChange(String newText) {
+<span class="nc bnc" id="L887" title="All 2 branches missed.">                    mSaveSearchItem.setVisible(!TextUtils.isEmpty(newText));</span>
+<span class="nc" id="L888">                    return true;</span>
+                }
+
+                @Override
+                public boolean onQueryTextSubmit(String query) {
+<span class="nc" id="L893">                    onSearch();</span>
+<span class="nc" id="L894">                    mSearchView.clearFocus();</span>
+<span class="nc" id="L895">                    return true;</span>
+                }
+            });
+<span class="nc" id="L898">            mSearchView.setOnSearchClickListener(v -&gt; {</span>
+                // Provide SearchView with the previous search terms
+<span class="nc" id="L900">                mSearchView.setQuery(mSearchTerms, false);</span>
+<span class="nc" id="L901">            });</span>
+            // Fixes #6500 - keep the search consistent
+<span class="nc bnc" id="L903" title="All 2 branches missed.">            if (!TextUtils.isEmpty(mSearchTerms)) {</span>
+<span class="nc" id="L904">                mSearchItem.expandActionView();</span>
+<span class="nc" id="L905">                mSearchView.setQuery(mSearchTerms, false);</span>
+            }
+<span class="nc" id="L907">        } else {</span>
+            // multi-select mode
+<span class="nc" id="L909">            getMenuInflater().inflate(R.menu.card_browser_multiselect, menu);</span>
+<span class="nc" id="L910">            showBackIcon();</span>
+        }
+
+<span class="nc bnc" id="L913" title="All 4 branches missed.">        if (mActionBarMenu != null &amp;&amp; mActionBarMenu.findItem(R.id.action_undo) != null) {</span>
+<span class="nc" id="L914">            MenuItem undo =  mActionBarMenu.findItem(R.id.action_undo);</span>
+<span class="nc" id="L915">            undo.setVisible(getCol().undoAvailable());</span>
+<span class="nc" id="L916">            undo.setTitle(getResources().getString(R.string.studyoptions_congrats_undo, getCol().undoName(getResources())));</span>
+        }
+
+        // Maybe we were called from ACTION_PROCESS_TEXT.
+        // In that case we already fill in the search.
+<span class="nc" id="L921">        Intent intent = getIntent();</span>
+<span class="nc" id="L922">        Compat compat = CompatHelper.getCompat();</span>
+<span class="nc bnc" id="L923" title="All 2 branches missed.">        if (compat.ACTION_PROCESS_TEXT.equals(intent.getAction())) {</span>
+<span class="nc" id="L924">            CharSequence search = intent.getCharSequenceExtra(compat.EXTRA_PROCESS_TEXT);</span>
+<span class="nc bnc" id="L925" title="All 4 branches missed.">            if (search != null &amp;&amp; search.length() != 0) {</span>
+<span class="nc" id="L926">                Timber.i(&quot;CardBrowser :: Called with search intent: %s&quot;, search.toString());</span>
+<span class="nc" id="L927">                mSearchView.setQuery(search, true);</span>
+<span class="nc" id="L928">                intent.setAction(Intent.ACTION_DEFAULT);</span>
+            }
+        }
+
+<span class="nc" id="L932">        mPreviewItem = menu.findItem(R.id.action_preview);</span>
+<span class="nc" id="L933">        onSelectionChanged();</span>
+<span class="nc" id="L934">        updatePreviewMenuItem();</span>
+<span class="nc" id="L935">        return super.onCreateOptionsMenu(menu);</span>
+    }
+
+    @Override
+    protected void onNavigationPressed() {
+<span class="nc bnc" id="L940" title="All 2 branches missed.">        if (mInMultiSelectMode) {</span>
+<span class="nc" id="L941">            endMultiSelectMode();</span>
+        } else {
+<span class="nc" id="L943">            super.onNavigationPressed();</span>
+        }
+<span class="nc" id="L945">    }</span>
+
+
+    private void displayDeckPickerForPermissionsDialog() {
+        //TODO: Combine this with class: IntentHandler after both are well-tested
+<span class="nc" id="L950">        Intent deckPicker = new Intent(this, DeckPicker.class);</span>
+<span class="nc" id="L951">        deckPicker.setAction(Intent.ACTION_MAIN);</span>
+<span class="nc" id="L952">        deckPicker.addCategory(Intent.CATEGORY_LAUNCHER);</span>
+<span class="nc" id="L953">        deckPicker.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);</span>
+<span class="nc" id="L954">        startActivityWithAnimation(deckPicker, FADE);</span>
+<span class="nc" id="L955">        AnkiActivity.finishActivityWithFade(this);</span>
+<span class="nc" id="L956">        finishActivityWithFade(this);</span>
+<span class="nc" id="L957">        this.setResult(RESULT_CANCELED);</span>
+<span class="nc" id="L958">    }</span>
+
+
+    private boolean wasLoadedFromExternalTextActionItem() {
+<span class="nc" id="L962">        Intent intent = this.getIntent();</span>
+<span class="nc bnc" id="L963" title="All 2 branches missed.">        if (intent == null) {</span>
+<span class="nc" id="L964">            return false;</span>
+        }
+        //API 23: Replace with Intent.ACTION_PROCESS_TEXT
+<span class="nc" id="L967">        return &quot;android.intent.action.PROCESS_TEXT&quot;.equalsIgnoreCase(intent.getAction());</span>
+    }
+
+    private void updatePreviewMenuItem() {
+<span class="nc bnc" id="L971" title="All 2 branches missed.">        if (mPreviewItem == null) {</span>
+<span class="nc" id="L972">            return;</span>
+        }
+<span class="nc bnc" id="L974" title="All 2 branches missed.">        mPreviewItem.setVisible(getCardCount() &gt; 0);</span>
+<span class="nc" id="L975">    }</span>
+
+    /** Returns the number of cards that are visible on the screen */
+    public int getCardCount() {
+<span class="nc" id="L979">        return getCards().size();</span>
+    }
+
+
+    private void updateMultiselectMenu() {
+<span class="nc" id="L984">        Timber.d(&quot;updateMultiselectMenu()&quot;);</span>
+<span class="nc bnc" id="L985" title="All 4 branches missed.">        if (mActionBarMenu == null || mActionBarMenu.findItem(R.id.action_suspend_card) == null) {</span>
+<span class="nc" id="L986">            return;</span>
+        }
+
+<span class="nc bnc" id="L989" title="All 2 branches missed.">        if (!mCheckedCards.isEmpty()) {</span>
+<span class="nc" id="L990">            TaskManager.cancelAllTasks(CollectionTask.CheckCardSelection.class);</span>
+<span class="nc" id="L991">            TaskManager.launchCollectionTask(new CollectionTask.CheckCardSelection(getCards()),</span>
+                    mCheckSelectedCardsHandler);
+        }
+
+<span class="nc bnc" id="L995" title="All 2 branches missed.">        mActionBarMenu.findItem(R.id.action_select_all).setVisible(!hasSelectedAllCards());</span>
+        //Note: Theoretically should not happen, as this should kick us back to the menu
+<span class="nc" id="L997">        mActionBarMenu.findItem(R.id.action_select_none).setVisible(hasSelectedCards());</span>
+<span class="nc" id="L998">        mActionBarMenu.findItem(R.id.action_edit_note).setVisible(canPerformMultiSelectEditNote());</span>
+<span class="nc" id="L999">        mActionBarMenu.findItem(R.id.action_view_card_info).setVisible(canPerformCardInfo());</span>
+<span class="nc" id="L1000">    }</span>
+
+
+    private boolean hasSelectedCards() {
+<span class="nc bnc" id="L1004" title="All 2 branches missed.">        return !mCheckedCards.isEmpty();</span>
+    }
+
+    private boolean hasSelectedAllCards() {
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">        return checkedCardCount() &gt;= getCardCount(); //must handle 0.</span>
+    }
+
+
+    private void flagTask (int flag) {
+<span class="nc" id="L1013">        TaskManager.launchCollectionTask(</span>
+<span class="nc" id="L1014">                new CollectionTask.Flag(getSelectedCardIds(), flag),</span>
+<span class="nc" id="L1015">                flagCardHandler());</span>
+<span class="nc" id="L1016">    }</span>
+
+    /** Updates flag icon color and cards shown with given color */
+    private void selectionWithFlagTask(int flag) {
+<span class="nc" id="L1020">        mCurrentFlag = flag;</span>
+<span class="nc" id="L1021">        filterByFlag();</span>
+<span class="nc" id="L1022">    }</span>
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc bnc" id="L1026" title="All 2 branches missed.">        if (getDrawerToggle().onOptionsItemSelected(item)) {</span>
+<span class="nc" id="L1027">            return true;</span>
+        }
+
+        // dismiss undo-snackbar if shown to avoid race condition
+        // (when another operation will be performed on the model, it will undo the latest operation)
+<span class="nc bnc" id="L1032" title="All 4 branches missed.">        if (mUndoSnackbar != null &amp;&amp; mUndoSnackbar.isShown())</span>
+<span class="nc" id="L1033">            mUndoSnackbar.dismiss();</span>
+
+<span class="nc" id="L1035">        int itemId = item.getItemId();</span>
+<span class="nc bnc" id="L1036" title="All 2 branches missed.">        if (itemId == android.R.id.home) {</span>
+<span class="nc" id="L1037">            endMultiSelectMode();</span>
+<span class="nc" id="L1038">            return true;</span>
+<span class="nc bnc" id="L1039" title="All 2 branches missed.">        } else if (itemId == R.id.action_add_note_from_card_browser) {</span>
+<span class="nc" id="L1040">            addNoteFromCardBrowser();</span>
+<span class="nc" id="L1041">            return true;</span>
+<span class="nc bnc" id="L1042" title="All 2 branches missed.">        } else if (itemId == R.id.action_save_search) {</span>
+<span class="nc" id="L1043">            String searchTerms = mSearchView.getQuery().toString();</span>
+<span class="nc" id="L1044">            showDialogFragment(CardBrowserMySearchesDialog.newInstance(null, mMySearchesDialogListener,</span>
+                    searchTerms, CardBrowserMySearchesDialog.CARD_BROWSER_MY_SEARCHES_TYPE_SAVE));
+<span class="nc" id="L1046">            return true;</span>
+<span class="nc bnc" id="L1047" title="All 2 branches missed.">        } else if (itemId == R.id.action_list_my_searches) {</span>
+<span class="nc" id="L1048">            JSONObject savedFiltersObj = getCol().getConf().optJSONObject(&quot;savedFilters&quot;);</span>
+            HashMap&lt;String, String&gt; savedFilters;
+<span class="nc bnc" id="L1050" title="All 2 branches missed.">            if (savedFiltersObj != null) {</span>
+<span class="nc" id="L1051">                savedFilters = new HashMap&lt;&gt;(savedFiltersObj.length());</span>
+<span class="nc bnc" id="L1052" title="All 2 branches missed.">                for (String searchName : savedFiltersObj) {</span>
+<span class="nc" id="L1053">                    savedFilters.put(searchName, savedFiltersObj.optString(searchName));</span>
+<span class="nc" id="L1054">                }</span>
+            } else {
+<span class="nc" id="L1056">                savedFilters = new HashMap&lt;&gt;(0);</span>
+            }
+<span class="nc" id="L1058">            showDialogFragment(CardBrowserMySearchesDialog.newInstance(savedFilters, mMySearchesDialogListener,</span>
+                    &quot;&quot;, CardBrowserMySearchesDialog.CARD_BROWSER_MY_SEARCHES_TYPE_LIST));
+<span class="nc" id="L1060">            return true;</span>
+<span class="nc bnc" id="L1061" title="All 2 branches missed.">        } else if (itemId == R.id.action_sort_by_size) {</span>
+<span class="nc" id="L1062">            showDialogFragment(CardBrowserOrderDialog</span>
+<span class="nc" id="L1063">                    .newInstance(mOrder, mOrderAsc, mOrderDialogListener));</span>
+<span class="nc" id="L1064">            return true;</span>
+<span class="nc bnc" id="L1065" title="All 2 branches missed.">        } else if (itemId == R.id.action_show_marked) {</span>
+<span class="nc" id="L1066">            mSearchTerms = &quot;tag:marked&quot;;</span>
+<span class="nc" id="L1067">            mSearchView.setQuery(&quot;&quot;, false);</span>
+<span class="nc" id="L1068">            mSearchView.setQueryHint(getResources().getString(R.string.card_browser_show_marked));</span>
+<span class="nc" id="L1069">            searchCards();</span>
+<span class="nc" id="L1070">            return true;</span>
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">        } else if (itemId == R.id.action_show_suspended) {</span>
+<span class="nc" id="L1072">            mSearchTerms = &quot;is:suspended&quot;;</span>
+<span class="nc" id="L1073">            mSearchView.setQuery(&quot;&quot;, false);</span>
+<span class="nc" id="L1074">            mSearchView.setQueryHint(getResources().getString(R.string.card_browser_show_suspended));</span>
+<span class="nc" id="L1075">            searchCards();</span>
+<span class="nc" id="L1076">            return true;</span>
+<span class="nc bnc" id="L1077" title="All 2 branches missed.">        } else if (itemId == R.id.action_search_by_tag) {</span>
+<span class="nc" id="L1078">            showTagsDialog();</span>
+<span class="nc" id="L1079">            return true;</span>
+<span class="nc bnc" id="L1080" title="All 2 branches missed.">        } else if (itemId == R.id.action_flag_zero) {</span>
+<span class="nc" id="L1081">            flagTask(0);</span>
+<span class="nc" id="L1082">            return true;</span>
+<span class="nc bnc" id="L1083" title="All 2 branches missed.">        } else if (itemId == R.id.action_flag_one) {</span>
+<span class="nc" id="L1084">            flagTask(1);</span>
+<span class="nc" id="L1085">            return true;</span>
+<span class="nc bnc" id="L1086" title="All 2 branches missed.">        } else if (itemId == R.id.action_flag_two) {</span>
+<span class="nc" id="L1087">            flagTask(2);</span>
+<span class="nc" id="L1088">            return true;</span>
+<span class="nc bnc" id="L1089" title="All 2 branches missed.">        } else if (itemId == R.id.action_flag_three) {</span>
+<span class="nc" id="L1090">            flagTask(3);</span>
+<span class="nc" id="L1091">            return true;</span>
+<span class="nc bnc" id="L1092" title="All 2 branches missed.">        } else if (itemId == R.id.action_flag_four) {</span>
+<span class="nc" id="L1093">            flagTask(4);</span>
+<span class="nc" id="L1094">            return true;</span>
+<span class="nc bnc" id="L1095" title="All 2 branches missed.">        } else if (itemId == R.id.action_select_flag_zero) {</span>
+<span class="nc" id="L1096">            selectionWithFlagTask(0);</span>
+<span class="nc" id="L1097">            return true;</span>
+<span class="nc bnc" id="L1098" title="All 2 branches missed.">        } else if (itemId == R.id.action_select_flag_one) {</span>
+<span class="nc" id="L1099">            selectionWithFlagTask(1);</span>
+<span class="nc" id="L1100">            return true;</span>
+<span class="nc bnc" id="L1101" title="All 2 branches missed.">        } else if (itemId == R.id.action_select_flag_two) {</span>
+<span class="nc" id="L1102">            selectionWithFlagTask(2);</span>
+<span class="nc" id="L1103">            return true;</span>
+<span class="nc bnc" id="L1104" title="All 2 branches missed.">        } else if (itemId == R.id.action_select_flag_three) {</span>
+<span class="nc" id="L1105">            selectionWithFlagTask(3);</span>
+<span class="nc" id="L1106">            return true;</span>
+<span class="nc bnc" id="L1107" title="All 2 branches missed.">        } else if (itemId == R.id.action_select_flag_four) {</span>
+<span class="nc" id="L1108">            selectionWithFlagTask(4);</span>
+<span class="nc" id="L1109">            return true;</span>
+<span class="nc bnc" id="L1110" title="All 2 branches missed.">        } else if (itemId == R.id.action_delete_card) {</span>
+<span class="nc" id="L1111">            deleteSelectedNote();</span>
+<span class="nc" id="L1112">            return true;</span>
+<span class="nc bnc" id="L1113" title="All 2 branches missed.">        } else if (itemId == R.id.action_mark_card) {</span>
+<span class="nc" id="L1114">            toggleMark();</span>
+
+<span class="nc" id="L1116">            return true;</span>
+<span class="nc bnc" id="L1117" title="All 2 branches missed.">        } else if (itemId == R.id.action_suspend_card) {</span>
+<span class="nc" id="L1118">            TaskManager.launchCollectionTask(new CollectionTask.SuspendCardMulti(getSelectedCardIds()),</span>
+<span class="nc" id="L1119">                    suspendCardHandler());</span>
+
+<span class="nc" id="L1121">            return true;</span>
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">        } else if (itemId == R.id.action_change_deck) {</span>
+<span class="nc" id="L1123">            showChangeDeckDialog();</span>
+<span class="nc" id="L1124">            return true;</span>
+<span class="nc bnc" id="L1125" title="All 2 branches missed.">        } else if (itemId == R.id.action_undo) {</span>
+<span class="nc" id="L1126">            Timber.w(&quot;CardBrowser:: Undo pressed&quot;);</span>
+<span class="nc" id="L1127">            onUndo();</span>
+<span class="nc" id="L1128">            return true;</span>
+<span class="nc bnc" id="L1129" title="All 2 branches missed.">        } else if (itemId == R.id.action_select_none) {</span>
+<span class="nc" id="L1130">            onSelectNone();</span>
+<span class="nc" id="L1131">            return true;</span>
+<span class="nc bnc" id="L1132" title="All 2 branches missed.">        } else if (itemId == R.id.action_select_all) {</span>
+<span class="nc" id="L1133">            onSelectAll();</span>
+<span class="nc" id="L1134">            return true;</span>
+<span class="nc bnc" id="L1135" title="All 2 branches missed.">        } else if (itemId == R.id.action_preview) {</span>
+<span class="nc" id="L1136">            onPreview();</span>
+<span class="nc" id="L1137">            return true;</span>
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">        } else if (itemId == R.id.action_reset_cards_progress) {</span>
+<span class="nc" id="L1139">            Timber.i(&quot;NoteEditor:: Reset progress button pressed&quot;);</span>
+<span class="nc" id="L1140">            onResetProgress();</span>
+<span class="nc" id="L1141">            return true;</span>
+<span class="nc bnc" id="L1142" title="All 2 branches missed.">        } else if (itemId == R.id.action_reschedule_cards) {</span>
+<span class="nc" id="L1143">            Timber.i(&quot;CardBrowser:: Reschedule button pressed&quot;);</span>
+<span class="nc" id="L1144">            rescheduleSelectedCards();</span>
+<span class="nc" id="L1145">            return true;</span>
+<span class="nc bnc" id="L1146" title="All 2 branches missed.">        } else if (itemId == R.id.action_reposition_cards) {</span>
+<span class="nc" id="L1147">            Timber.i(&quot;CardBrowser:: Reposition button pressed&quot;);</span>
+
+            // Only new cards may be repositioned
+<span class="nc" id="L1150">            List&lt;Long&gt; cardIds = getSelectedCardIds();</span>
+<span class="nc bnc" id="L1151" title="All 2 branches missed.">            for (long cardId : cardIds) {</span>
+<span class="nc bnc" id="L1152" title="All 2 branches missed.">                if (getCol().getCard(cardId).getQueue() != Consts.CARD_TYPE_NEW) {</span>
+<span class="nc" id="L1153">                    SimpleMessageDialog dialog = SimpleMessageDialog.newInstance(</span>
+<span class="nc" id="L1154">                            getString(R.string.vague_error),</span>
+<span class="nc" id="L1155">                            getString(R.string.reposition_card_not_new_error),</span>
+                            false);
+<span class="nc" id="L1157">                    showDialogFragment(dialog);</span>
+<span class="nc" id="L1158">                    return false;</span>
+                }
+<span class="nc" id="L1160">            }</span>
+
+<span class="nc" id="L1162">            IntegerDialog repositionDialog = new IntegerDialog();</span>
+<span class="nc" id="L1163">            repositionDialog.setArgs(</span>
+<span class="nc" id="L1164">                    getString(R.string.reposition_card_dialog_title),</span>
+<span class="nc" id="L1165">                    getString(R.string.reposition_card_dialog_message),</span>
+                    5);
+<span class="nc" id="L1167">            repositionDialog.setCallbackRunnable(position -&gt; repositionCardsNoValidation(cardIds, position));</span>
+<span class="nc" id="L1168">            showDialogFragment(repositionDialog);</span>
+<span class="nc" id="L1169">            return true;</span>
+<span class="nc bnc" id="L1170" title="All 2 branches missed.">        } else if (itemId == R.id.action_edit_note) {</span>
+<span class="nc" id="L1171">            openNoteEditorForCurrentlySelectedNote();</span>
+
+
+<span class="nc" id="L1174">            return super.onOptionsItemSelected(item);</span>
+<span class="nc bnc" id="L1175" title="All 2 branches missed.">        } else if (itemId == R.id.action_view_card_info) {</span>
+<span class="nc" id="L1176">            List&lt;Long&gt; selectedCardIds = getSelectedCardIds();</span>
+<span class="nc bnc" id="L1177" title="All 2 branches missed.">            if (selectedCardIds.size() &gt; 0) {</span>
+<span class="nc" id="L1178">                Intent intent = new Intent(this, CardInfo.class);</span>
+<span class="nc" id="L1179">                intent.putExtra(&quot;cardId&quot;, selectedCardIds.get(0));</span>
+<span class="nc" id="L1180">                startActivityWithAnimation(intent, FADE);</span>
+            }
+<span class="nc" id="L1182">            return true;</span>
+        }
+<span class="nc" id="L1184">        return super.onOptionsItemSelected(item);</span>
+    }
+
+
+    protected void deleteSelectedNote() {
+<span class="nc bnc" id="L1189" title="All 2 branches missed.">        if (!mInMultiSelectMode) {</span>
+<span class="nc" id="L1190">            return;</span>
+        }
+<span class="nc" id="L1192">        TaskManager.launchCollectionTask(new CollectionTask.DeleteNoteMulti(getSelectedCardIds()),</span>
+                                            mDeleteNoteHandler);
+
+<span class="nc" id="L1195">        mCheckedCards.clear();</span>
+<span class="nc" id="L1196">        endMultiSelectMode();</span>
+<span class="nc" id="L1197">        mCardsAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L1198">    }</span>
+
+
+    @VisibleForTesting
+    void onUndo() {
+<span class="nc bnc" id="L1203" title="All 2 branches missed.">        if (getCol().undoAvailable()) {</span>
+<span class="nc" id="L1204">            TaskManager.launchCollectionTask(new CollectionTask.Undo(), mUndoHandler);</span>
+        }
+<span class="nc" id="L1206">    }</span>
+
+
+    protected void onResetProgress() {
+        // Show confirmation dialog before resetting card progress
+<span class="nc" id="L1211">        ConfirmationDialog dialog = new ConfirmationDialog();</span>
+<span class="nc" id="L1212">        String title = getString(R.string.reset_card_dialog_title);</span>
+<span class="nc" id="L1213">        String message = getString(R.string.reset_card_dialog_message);</span>
+<span class="nc" id="L1214">        dialog.setArgs(title, message);</span>
+<span class="nc" id="L1215">        Runnable confirm = () -&gt; {</span>
+<span class="nc" id="L1216">            Timber.i(&quot;CardBrowser:: ResetProgress button pressed&quot;);</span>
+<span class="nc" id="L1217">            resetProgressNoConfirm(getSelectedCardIds());</span>
+<span class="nc" id="L1218">        };</span>
+<span class="nc" id="L1219">        dialog.setConfirm(confirm);</span>
+<span class="nc" id="L1220">        showDialogFragment(dialog);</span>
+<span class="nc" id="L1221">    }</span>
+
+
+    @VisibleForTesting
+    void resetProgressNoConfirm(List&lt;Long&gt; cardIds) {
+<span class="nc" id="L1226">        TaskManager.launchCollectionTask(new CollectionTask.ResetCards(cardIds), resetProgressCardHandler());</span>
+<span class="nc" id="L1227">    }</span>
+
+
+    @VisibleForTesting
+    void repositionCardsNoValidation(List&lt;Long&gt; cardIds, Integer position) {
+<span class="nc" id="L1232">        TaskManager.launchCollectionTask(new CollectionTask.RepositionCards(cardIds, position),</span>
+<span class="nc" id="L1233">                                            repositionCardHandler());</span>
+<span class="nc" id="L1234">    }</span>
+
+
+    protected void onPreview() {
+<span class="nc" id="L1238">        Intent previewer = getPreviewIntent();</span>
+<span class="nc" id="L1239">        startActivityForResultWithoutAnimation(previewer, PREVIEW_CARDS);</span>
+<span class="nc" id="L1240">    }</span>
+
+
+    @NonNull
+    @VisibleForTesting
+    Intent getPreviewIntent() {
+<span class="nc bnc" id="L1246" title="All 4 branches missed.">        if (mInMultiSelectMode &amp;&amp; checkedCardCount() &gt; 1) {</span>
+            // Multiple cards have been explicitly selected, so preview only those cards
+<span class="nc" id="L1248">            int index = 0;</span>
+<span class="nc" id="L1249">            return getPreviewIntent(index, Utils.toPrimitive(getSelectedCardIds()));</span>
+        } else {
+            // Preview all cards, starting from the one that is currently selected
+<span class="nc bnc" id="L1252" title="All 2 branches missed.">            int startIndex = mCheckedCards.isEmpty() ? 0 : mCheckedCards.iterator().next().getPosition();</span>
+<span class="nc" id="L1253">            return getPreviewIntent(startIndex, getAllCardIds());</span>
+        }
+    }
+
+
+    @NonNull
+    private Intent getPreviewIntent(int index, long[] selectedCardIds) {
+<span class="nc" id="L1260">        return Previewer.getPreviewIntent(CardBrowser.this, index, selectedCardIds);</span>
+    }
+
+
+    private void rescheduleSelectedCards() {
+<span class="nc bnc" id="L1265" title="All 2 branches missed.">        if (!hasSelectedCards()) {</span>
+<span class="nc" id="L1266">            Timber.i(&quot;Attempted reschedule - no cards selected&quot;);</span>
+<span class="nc" id="L1267">            return;</span>
+        }
+
+<span class="nc" id="L1270">        List&lt;Long&gt; selectedCardIds = getSelectedCardIds();</span>
+<span class="nc" id="L1271">        FunctionalInterfaces.Consumer&lt;Integer&gt; consumer = newDays -&gt; rescheduleWithoutValidation(selectedCardIds, newDays);</span>
+        RescheduleDialog rescheduleDialog;
+<span class="nc bnc" id="L1273" title="All 2 branches missed.">        if (selectedCardIds.size() == 1) {</span>
+<span class="nc" id="L1274">            long cardId = selectedCardIds.get(0);</span>
+<span class="nc" id="L1275">            Card selected = getCol().getCard(cardId);</span>
+<span class="nc" id="L1276">            rescheduleDialog = RescheduleDialog.rescheduleSingleCard(getResources(), selected, consumer);</span>
+<span class="nc" id="L1277">        } else {</span>
+<span class="nc" id="L1278">            rescheduleDialog = RescheduleDialog.rescheduleMultipleCards(getResources(),</span>
+                    consumer,
+<span class="nc" id="L1280">                    selectedCardIds.size());</span>
+        }
+<span class="nc" id="L1282">        showDialogFragment(rescheduleDialog);</span>
+<span class="nc" id="L1283">    }</span>
+
+
+    @VisibleForTesting
+    void rescheduleWithoutValidation(List&lt;Long&gt; selectedCardIds, Integer newDays) {
+<span class="nc" id="L1288">        TaskManager.launchCollectionTask(new CollectionTask.RescheduleCards(selectedCardIds, newDays),</span>
+<span class="nc" id="L1289">            rescheduleCardHandler());</span>
+<span class="nc" id="L1290">    }</span>
+
+
+    private void showChangeDeckDialog() {
+<span class="nc bnc" id="L1294" title="All 2 branches missed.">        if (!hasSelectedCards()) {</span>
+<span class="nc" id="L1295">            Timber.i(&quot;Not showing Change Deck - No Cards&quot;);</span>
+<span class="nc" id="L1296">            return;</span>
+        }
+
+<span class="nc" id="L1299">        AlertDialog.Builder builderSingle = new AlertDialog.Builder(this);</span>
+<span class="nc" id="L1300">        builderSingle.setTitle(getString(R.string.move_all_to_deck));</span>
+
+        //WARNING: changeDeck depends on this index, so any changes should be reflected there.
+<span class="nc" id="L1303">        final ArrayAdapter&lt;String&gt; arrayAdapter = new ArrayAdapter&lt;&gt;(this, R.layout.dropdown_deck_item);</span>
+<span class="nc bnc" id="L1304" title="All 2 branches missed.">        for (Deck deck : getValidDecksForChangeDeck()) {</span>
+            try {
+<span class="nc" id="L1306">                arrayAdapter.add(deck.getString(&quot;name&quot;));</span>
+<span class="nc" id="L1307">            } catch (JSONException e) {</span>
+<span class="nc" id="L1308">                e.printStackTrace();</span>
+<span class="nc" id="L1309">            }</span>
+<span class="nc" id="L1310">        }</span>
+
+<span class="nc" id="L1312">        builderSingle.setNegativeButton(getString(R.string.dialog_cancel), (dialog, which) -&gt; dialog.dismiss());</span>
+<span class="nc" id="L1313">        builderSingle.setAdapter(arrayAdapter, (dialog, which) -&gt; moveSelectedCardsToDeck(which));</span>
+<span class="nc" id="L1314">        builderSingle.show();</span>
+<span class="nc" id="L1315">    }</span>
+
+
+    @VisibleForTesting
+    Intent getAddNoteIntent() {
+<span class="nc" id="L1320">        Intent intent = new Intent(CardBrowser.this, NoteEditor.class);</span>
+<span class="nc" id="L1321">        intent.putExtra(NoteEditor.EXTRA_CALLER, NoteEditor.CALLER_CARDBROWSER_ADD);</span>
+<span class="nc" id="L1322">        Long did = getLastDeckId();</span>
+<span class="nc bnc" id="L1323" title="All 4 branches missed.">        if (did != null &amp;&amp; did &gt; 0) {</span>
+<span class="nc" id="L1324">            intent.putExtra(NoteEditor.EXTRA_DID, (long) did);</span>
+        }
+<span class="nc" id="L1326">        return intent;</span>
+    }
+
+    private void addNoteFromCardBrowser() {
+<span class="nc" id="L1330">        startActivityForResultWithAnimation(getAddNoteIntent(), ADD_NOTE, LEFT);</span>
+<span class="nc" id="L1331">    }</span>
+
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        // FIXME:
+<span class="nc" id="L1337">        Timber.d(&quot;onActivityResult(requestCode=%d, resultCode=%d)&quot;, requestCode, resultCode);</span>
+<span class="nc" id="L1338">        super.onActivityResult(requestCode, resultCode, data);</span>
+
+<span class="nc bnc" id="L1340" title="All 2 branches missed.">        if (resultCode == DeckPicker.RESULT_DB_ERROR) {</span>
+<span class="nc" id="L1341">            closeCardBrowser(DeckPicker.RESULT_DB_ERROR);</span>
+        }
+
+<span class="nc bnc" id="L1344" title="All 4 branches missed.">        if (requestCode == EDIT_CARD &amp;&amp; resultCode != RESULT_CANCELED) {</span>
+<span class="nc" id="L1345">            Timber.i(&quot;CardBrowser:: CardBrowser: Saving card...&quot;);</span>
+<span class="nc" id="L1346">            TaskManager.launchCollectionTask(new CollectionTask.UpdateNote(sCardBrowserCard, false, false),</span>
+<span class="nc" id="L1347">                    updateCardHandler());</span>
+<span class="nc bnc" id="L1348" title="All 4 branches missed.">        } else if (requestCode == ADD_NOTE &amp;&amp; resultCode == RESULT_OK) {</span>
+<span class="nc bnc" id="L1349" title="All 2 branches missed.">            if (mSearchView != null) {</span>
+<span class="nc" id="L1350">                mSearchTerms = mSearchView.getQuery().toString();</span>
+<span class="nc" id="L1351">                searchCards();</span>
+            } else {
+<span class="nc" id="L1353">                Timber.w(&quot;Note was added from browser and on return mSearchView == null&quot;);</span>
+            }
+        }
+
+        // Previewing can now perform an &quot;edit&quot;, so it can pass on a reloadRequired
+<span class="nc bnc" id="L1358" title="All 4 branches missed.">        if (requestCode == PREVIEW_CARDS &amp;&amp; data != null</span>
+<span class="nc bnc" id="L1359" title="All 4 branches missed.">                &amp;&amp; (data.getBooleanExtra(&quot;reloadRequired&quot;, false) || data.getBooleanExtra(&quot;noteChanged&quot;, false))) {</span>
+<span class="nc" id="L1360">            searchCards();</span>
+<span class="nc bnc" id="L1361" title="All 2 branches missed.">            if (getReviewerCardId() == mCurrentCardId) {</span>
+<span class="nc" id="L1362">                mReloadRequired = true;</span>
+            }
+        }
+
+<span class="nc bnc" id="L1366" title="All 4 branches missed.">        if (requestCode == EDIT_CARD &amp;&amp;  data != null &amp;&amp;</span>
+<span class="nc bnc" id="L1367" title="All 2 branches missed.">                (data.getBooleanExtra(&quot;reloadRequired&quot;, false) ||</span>
+<span class="nc bnc" id="L1368" title="All 2 branches missed.">                        data.getBooleanExtra(&quot;noteChanged&quot;, false))) {</span>
+            // if reloadRequired or noteChanged flag was sent from note editor then reload card list
+<span class="nc" id="L1370">            searchCards();</span>
+<span class="nc" id="L1371">            mShouldRestoreScroll = true;</span>
+            // in use by reviewer?
+<span class="nc bnc" id="L1373" title="All 2 branches missed.">            if (getReviewerCardId() == mCurrentCardId) {</span>
+<span class="nc" id="L1374">                mReloadRequired = true;</span>
+            }
+        }
+
+<span class="nc" id="L1378">        invalidateOptionsMenu();    // maybe the availability of undo changed</span>
+<span class="nc" id="L1379">    }</span>
+
+
+    // We spawn CollectionTasks that may create memory pressure, this transmits it so polling isCancelled sees the pressure
+    @Override
+    public void onTrimMemory(int pressureLevel) {
+<span class="nc" id="L1385">        super.onTrimMemory(pressureLevel);</span>
+<span class="nc" id="L1386">        TaskManager.cancelCurrentlyExecutingTask();</span>
+<span class="nc" id="L1387">    }</span>
+
+    private long getReviewerCardId() {
+<span class="nc bnc" id="L1390" title="All 2 branches missed.">        if (getIntent().hasExtra(&quot;currentCard&quot;)) {</span>
+<span class="nc" id="L1391">            return getIntent().getExtras().getLong(&quot;currentCard&quot;);</span>
+        } else {
+<span class="nc" id="L1393">            return -1;</span>
+        }
+    }
+
+    private void showTagsDialog() {
+<span class="nc" id="L1398">        TagsDialog dialog = TagsDialog.newInstance(</span>
+<span class="nc" id="L1399">                TagsDialog.TYPE_FILTER_BY_TAG, new ArrayList&lt;&gt;(0), new ArrayList&lt;&gt;(getCol().getTags().all()));</span>
+<span class="nc" id="L1400">        dialog.setTagsDialogListener(this::filterByTag);</span>
+<span class="nc" id="L1401">        showDialogFragment(dialog);</span>
+<span class="nc" id="L1402">    }</span>
+
+    /** Selects the given position in the deck list */
+    public void selectDropDownItem(int position) {
+<span class="nc" id="L1406">        mActionBarSpinner.setSelection(position);</span>
+<span class="nc" id="L1407">        deckDropDownItemChanged(position);</span>
+<span class="nc" id="L1408">    }</span>
+
+    /**
+     * Performs changes relating to the Deck DropDown Item changing
+     * Exists as mActionBarSpinner.setSelection() caused a loop in roboelectirc (calling onItemSelected())
+     */
+    private void deckDropDownItemChanged(int position) {
+<span class="nc bnc" id="L1415" title="All 2 branches missed.">        if (position == 0) {</span>
+<span class="nc" id="L1416">            mRestrictOnDeck = &quot;&quot;;</span>
+<span class="nc" id="L1417">            saveLastDeckId(ALL_DECKS_ID);</span>
+        } else {
+<span class="nc" id="L1419">            Deck deck = mDropDownDecks.get(position - 1);</span>
+<span class="nc" id="L1420">            mRestrictOnDeck = &quot;deck:\&quot;&quot; + deck.getString(&quot;name&quot;) + &quot;\&quot; &quot;;</span>
+<span class="nc" id="L1421">            saveLastDeckId(deck.getLong(&quot;id&quot;));</span>
+        }
+<span class="nc" id="L1423">        searchCards();</span>
+<span class="nc" id="L1424">    }</span>
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    void selectDeckId(long targetDid) {
+<span class="nc bnc" id="L1428" title="All 2 branches missed.">        for (int i = 0; i &lt; mDropDownDecks.size(); i++) {</span>
+<span class="nc bnc" id="L1429" title="All 2 branches missed.">            if (mDropDownDecks.get(i).getLong(&quot;id&quot;) == targetDid) {</span>
+<span class="nc" id="L1430">                deckDropDownItemChanged(i + 1);</span>
+<span class="nc" id="L1431">                return;</span>
+            }
+        }
+<span class="nc" id="L1434">        throw new IllegalStateException(&quot;Could not find did &quot; + targetDid);</span>
+    }
+
+
+
+    @Override
+    public void onSaveInstanceState(Bundle savedInstanceState) {
+        // Save current search terms
+<span class="nc" id="L1442">        savedInstanceState.putString(&quot;mSearchTerms&quot;, mSearchTerms);</span>
+<span class="nc" id="L1443">        savedInstanceState.putLong(&quot;mOldCardId&quot;, mOldCardId);</span>
+<span class="nc" id="L1444">        savedInstanceState.putInt(&quot;mOldCardTopOffset&quot;, mOldCardTopOffset);</span>
+<span class="nc" id="L1445">        savedInstanceState.putBoolean(&quot;mShouldRestoreScroll&quot;, mShouldRestoreScroll);</span>
+<span class="nc" id="L1446">        savedInstanceState.putBoolean(&quot;mPostAutoScroll&quot;, mPostAutoScroll);</span>
+<span class="nc" id="L1447">        super.onSaveInstanceState(savedInstanceState);</span>
+<span class="nc" id="L1448">    }</span>
+
+    @Override
+    public void onRestoreInstanceState(Bundle savedInstanceState) {
+<span class="nc" id="L1452">        super.onRestoreInstanceState(savedInstanceState);</span>
+<span class="nc" id="L1453">        mSearchTerms = savedInstanceState.getString(&quot;mSearchTerms&quot;);</span>
+<span class="nc" id="L1454">        mOldCardId = savedInstanceState.getLong(&quot;mOldCardId&quot;);</span>
+<span class="nc" id="L1455">        mOldCardTopOffset = savedInstanceState.getInt(&quot;mOldCardTopOffset&quot;);</span>
+<span class="nc" id="L1456">        mShouldRestoreScroll = savedInstanceState.getBoolean(&quot;mShouldRestoreScroll&quot;);</span>
+<span class="nc" id="L1457">        mPostAutoScroll = savedInstanceState.getBoolean(&quot;mPostAutoScroll&quot;);</span>
+<span class="nc" id="L1458">        searchCards();</span>
+<span class="nc" id="L1459">    }</span>
+
+    private void invalidate() {
+<span class="nc" id="L1462">        TaskManager.cancelAllTasks(CollectionTask.SearchCards.class);</span>
+<span class="nc" id="L1463">        TaskManager.cancelAllTasks(CollectionTask.RenderBrowserQA.class);</span>
+<span class="nc" id="L1464">        TaskManager.cancelAllTasks(CollectionTask.CheckCardSelection.class);</span>
+<span class="nc" id="L1465">        mCards.clear();</span>
+<span class="nc" id="L1466">        mCheckedCards.clear();</span>
+<span class="nc" id="L1467">    }</span>
+
+    /** Currently unused - to be used in #7676 */
+    private void forceRefreshSearch() {
+<span class="nc" id="L1471">        searchCards();</span>
+<span class="nc" id="L1472">    }</span>
+
+
+    private void searchCards() {
+        // cancel the previous search &amp; render tasks if still running
+<span class="nc" id="L1477">        invalidate();</span>
+        String searchText;
+<span class="nc bnc" id="L1479" title="All 2 branches missed.">        if (mSearchTerms == null) {</span>
+<span class="nc" id="L1480">            mSearchTerms = &quot;&quot;;</span>
+        }
+<span class="nc bnc" id="L1482" title="All 4 branches missed.">        if (!&quot;&quot;.equals(mSearchTerms) &amp;&amp; (mSearchView != null)) {</span>
+<span class="nc" id="L1483">            mSearchView.setQuery(mSearchTerms, false);</span>
+<span class="nc" id="L1484">            mSearchItem.expandActionView();</span>
+        }
+<span class="nc bnc" id="L1486" title="All 2 branches missed.">        if (mSearchTerms.contains(&quot;deck:&quot;)) {</span>
+<span class="nc" id="L1487">            searchText = mSearchTerms;</span>
+        } else {
+<span class="nc" id="L1489">            searchText = mRestrictOnDeck + mSearchTerms;</span>
+        }
+<span class="nc bnc" id="L1491" title="All 4 branches missed.">        if (colIsOpen() &amp;&amp; mCardsAdapter!= null) {</span>
+            // clear the existing card list
+<span class="nc" id="L1493">            mCards.reset();</span>
+<span class="nc" id="L1494">            mCardsAdapter.notifyDataSetChanged();</span>
+            //  estimate maximum number of cards that could be visible (assuming worst-case minimum row height of 20dp)
+<span class="nc" id="L1496">            int numCardsToRender = (int) Math.ceil(mCardsListView.getHeight() /</span>
+<span class="nc" id="L1497">                    TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 20, getResources().getDisplayMetrics())) + 5;</span>
+            // Perform database query to get all card ids
+<span class="nc bnc" id="L1499" title="All 2 branches missed.">            TaskManager.launchCollectionTask(new CollectionTask.SearchCards(searchText,</span>
+                            (mOrder != CARD_ORDER_NONE),
+                            numCardsToRender,
+                            mColumn1Index,
+                            mColumn2Index),
+                    mSearchCardsHandler
+            );
+        }
+<span class="nc" id="L1507">    }</span>
+
+
+    private void updateList() {
+<span class="nc" id="L1511">        mCardsAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L1512">        mDropDownAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L1513">        onSelectionChanged();</span>
+<span class="nc" id="L1514">        updatePreviewMenuItem();</span>
+<span class="nc" id="L1515">    }</span>
+
+    /**
+     * @return text to be used in the subtitle of the drop-down deck selector
+     */
+    public String getSubtitleText() {
+<span class="nc" id="L1521">        int count = getCardCount();</span>
+<span class="nc" id="L1522">        return getResources().getQuantityString(R.plurals.card_browser_subtitle, count, count);</span>
+    }
+
+
+    private static Map&lt;Long, Integer&gt; getPositionMap(CardCollection&lt;CardCache&gt; list) {
+<span class="nc" id="L1527">        Map&lt;Long, Integer&gt; positions = new HashMap&lt;&gt;(list.size());</span>
+<span class="nc bnc" id="L1528" title="All 2 branches missed.">        for (int i = 0; i &lt; list.size(); i++) {</span>
+<span class="nc" id="L1529">            positions.put(list.get(i).getId(), i);</span>
+        }
+<span class="nc" id="L1531">        return positions;</span>
+    }
+
+    // Iterates the drop down decks, and selects the one matching the given id
+    private boolean selectDeckById(@NonNull Long deckId) {
+<span class="nc bnc" id="L1536" title="All 2 branches missed.">        for (int dropDownDeckIdx = 0; dropDownDeckIdx &lt; mDropDownDecks.size(); dropDownDeckIdx++) {</span>
+<span class="nc bnc" id="L1537" title="All 2 branches missed.">            if (mDropDownDecks.get(dropDownDeckIdx).getLong(&quot;id&quot;) == deckId) {</span>
+<span class="nc" id="L1538">                selectDropDownItem(dropDownDeckIdx + 1);</span>
+<span class="nc" id="L1539">                return true;</span>
+            }
+        }
+<span class="nc" id="L1542">        return false;</span>
+    }
+
+    // convenience method for updateCardsInList(...)
+    private void updateCardInList(Card card) {
+<span class="nc" id="L1547">        List&lt;Card&gt; cards = new ArrayList&lt;&gt;(1);</span>
+<span class="nc" id="L1548">        cards.add(card);</span>
+<span class="nc" id="L1549">        updateCardsInList(cards);</span>
+<span class="nc" id="L1550">    }</span>
+
+    /** Returns the decks which are valid targets for &quot;Change Deck&quot; */
+    @VisibleForTesting
+    List&lt;Deck&gt; getValidDecksForChangeDeck() {
+<span class="nc" id="L1555">        List&lt;Deck&gt; nonDynamicDecks = new ArrayList&lt;&gt;(mDropDownDecks.size());</span>
+<span class="nc bnc" id="L1556" title="All 2 branches missed.">        for (Deck d : mDropDownDecks) {</span>
+<span class="nc bnc" id="L1557" title="All 2 branches missed.">            if (Decks.isDynamic(d)) {</span>
+<span class="nc" id="L1558">                continue;</span>
+            }
+<span class="nc" id="L1560">            nonDynamicDecks.add(d);</span>
+<span class="nc" id="L1561">        }</span>
+<span class="nc" id="L1562">        return nonDynamicDecks;</span>
+    }
+
+
+    private void filterByTag(List&lt;String&gt; selectedTags, int option) {
+        //TODO: Duplication between here and CustomStudyDialog:customStudyFromTags
+<span class="nc" id="L1568">        mSearchView.setQuery(&quot;&quot;, false);</span>
+<span class="nc" id="L1569">        String tags = selectedTags.toString();</span>
+<span class="nc" id="L1570">        mSearchView.setQueryHint(getResources().getString(R.string.CardEditorTags,</span>
+<span class="nc" id="L1571">                tags.substring(1, tags.length() - 1)));</span>
+<span class="nc" id="L1572">        StringBuilder sb = new StringBuilder();</span>
+<span class="nc bnc" id="L1573" title="All 3 branches missed.">        switch (option) {</span>
+            case 1:
+<span class="nc" id="L1575">                sb.append(&quot;is:new &quot;);</span>
+<span class="nc" id="L1576">                break;</span>
+            case 2:
+<span class="nc" id="L1578">                sb.append(&quot;is:due &quot;);</span>
+<span class="nc" id="L1579">                break;</span>
+            default:
+                // Logging here might be appropriate : )
+                break;
+        }
+<span class="nc" id="L1584">        int i = 0;</span>
+<span class="nc bnc" id="L1585" title="All 2 branches missed.">        for (String tag : selectedTags) {</span>
+<span class="nc bnc" id="L1586" title="All 2 branches missed.">            if (i != 0) {</span>
+<span class="nc" id="L1587">                sb.append(&quot;or &quot;);</span>
+            } else {
+<span class="nc" id="L1589">                sb.append(&quot;(&quot;); // Only if we really have selected tags</span>
+            }
+            // 7070: quote tags so brackets are properly escaped
+<span class="nc" id="L1592">            sb.append(&quot;tag:&quot;).append(&quot;'&quot;).append(tag).append(&quot;'&quot;).append(&quot; &quot;);</span>
+<span class="nc" id="L1593">            i++;</span>
+<span class="nc" id="L1594">        }</span>
+<span class="nc bnc" id="L1595" title="All 2 branches missed.">        if (i &gt; 0) {</span>
+<span class="nc" id="L1596">            sb.append(&quot;)&quot;); // Only if we added anything to the tag list</span>
+        }
+<span class="nc" id="L1598">        mSearchTerms = sb.toString();</span>
+<span class="nc" id="L1599">        searchCards();</span>
+<span class="nc" id="L1600">    }</span>
+
+
+    /** Updates search terms to only show cards with selected flag. */
+    private void filterByFlag() {
+<span class="nc" id="L1605">        mSearchView.setQuery(&quot;&quot;, false);</span>
+<span class="nc" id="L1606">        String flagSearchTerm = &quot;flag:&quot; + mCurrentFlag;</span>
+<span class="nc bnc" id="L1607" title="All 2 branches missed.">        if (mSearchTerms.contains(&quot;flag:&quot;)) {</span>
+<span class="nc" id="L1608">            mSearchTerms = mSearchTerms.replaceFirst(&quot;flag:.&quot;, flagSearchTerm);</span>
+        }
+<span class="nc bnc" id="L1610" title="All 2 branches missed.">        else if (!mSearchTerms.isEmpty()) {</span>
+<span class="nc" id="L1611">            mSearchTerms = flagSearchTerm + &quot; &quot; + mSearchTerms;</span>
+        } else {
+<span class="nc" id="L1613">            mSearchTerms = flagSearchTerm;</span>
+        }
+<span class="nc" id="L1615">        searchCards();</span>
+<span class="nc" id="L1616">    }</span>
+
+
+    private static abstract class ListenerWithProgressBar&lt;Progress, Result&gt; extends TaskListenerWithContext&lt;CardBrowser, Progress, Result&gt;{
+        public ListenerWithProgressBar(CardBrowser browser) {
+<span class="nc" id="L1621">            super(browser);</span>
+<span class="nc" id="L1622">        }</span>
+
+        @Override
+        public void actualOnPreExecute(@NonNull CardBrowser browser) {
+<span class="nc" id="L1626">            browser.showProgressBar();</span>
+<span class="nc" id="L1627">        }</span>
+    }
+
+    /** Does not leak Card Browser. */
+    private static abstract class ListenerWithProgressBarCloseOnFalse&lt;Progress, Result extends BooleanGetter&gt; extends ListenerWithProgressBar&lt;Progress, Result&gt; {
+        private final String mTimber;
+        public ListenerWithProgressBarCloseOnFalse(String timber, CardBrowser browser) {
+<span class="nc" id="L1634">            super(browser);</span>
+<span class="nc" id="L1635">            mTimber = timber;</span>
+<span class="nc" id="L1636">        }</span>
+
+        public ListenerWithProgressBarCloseOnFalse(CardBrowser browser) {
+<span class="nc" id="L1639">            this(null, browser);</span>
+<span class="nc" id="L1640">		}</span>
+
+        public void actualOnPostExecute(@NonNull CardBrowser browser, Result result) {
+<span class="nc bnc" id="L1643" title="All 2 branches missed.">            if (mTimber != null) {</span>
+<span class="nc" id="L1644">                Timber.d(mTimber);</span>
+            }
+<span class="nc bnc" id="L1646" title="All 2 branches missed.">            if (result.getBoolean()) {</span>
+<span class="nc" id="L1647">                actualOnValidPostExecute(browser, result);</span>
+            } else {
+<span class="nc" id="L1649">                browser.closeCardBrowser(DeckPicker.RESULT_DB_ERROR);</span>
+            }
+<span class="nc" id="L1651">        }</span>
+
+        protected abstract void actualOnValidPostExecute(CardBrowser browser, Result result);
+    }
+
+    /**
+     * @param cards Cards that were changed
+     */
+    private void updateCardsInList(List&lt;Card&gt; cards) {
+<span class="nc" id="L1660">        CardCollection&lt;CardCache&gt; cardList = getCards();</span>
+<span class="nc" id="L1661">        Map&lt;Long, Integer&gt; idToPos = getPositionMap(cardList);</span>
+<span class="nc bnc" id="L1662" title="All 2 branches missed.">        for (Card c : cards) {</span>
+            // get position in the mCards search results HashMap
+<span class="nc" id="L1664">            Integer pos = idToPos.get(c.getId());</span>
+<span class="nc bnc" id="L1665" title="All 4 branches missed.">            if (pos == null || pos &gt;= getCardCount()) {</span>
+<span class="nc" id="L1666">                continue;</span>
+            }
+            // update Q &amp; A etc
+<span class="nc" id="L1669">            cardList.get(pos).load(true, mColumn1Index, mColumn2Index);</span>
+<span class="nc" id="L1670">        }</span>
+
+<span class="nc" id="L1672">        updateList();</span>
+<span class="nc" id="L1673">    }</span>
+
+    private UpdateCardHandler updateCardHandler() {
+<span class="nc" id="L1676">        return new UpdateCardHandler(this);</span>
+    }
+
+    private static class UpdateCardHandler extends ListenerWithProgressBarCloseOnFalse&lt;PairWithCard&lt;String&gt;, BooleanGetter&gt; {
+        public UpdateCardHandler(CardBrowser browser) {
+<span class="nc" id="L1681">            super(&quot;Card Browser - UpdateCardHandler.actualOnPostExecute(CardBrowser browser)&quot;, browser);</span>
+<span class="nc" id="L1682">        }</span>
+
+        @Override
+        public void actualOnProgressUpdate(@NonNull CardBrowser browser, PairWithCard&lt;String&gt; value) {
+<span class="nc" id="L1686">            browser.updateCardInList(value.getCard());</span>
+<span class="nc" id="L1687">        }</span>
+
+        @Override
+        protected void actualOnValidPostExecute(CardBrowser browser, BooleanGetter result) {
+<span class="nc" id="L1691">            browser.hideProgressBar();</span>
+<span class="nc" id="L1692">        }</span>
+    }
+
+
+    private ChangeDeckHandler changeDeckHandler() {
+<span class="nc" id="L1697">        return new ChangeDeckHandler(this);</span>
+    }
+    private static class ChangeDeckHandler extends ListenerWithProgressBarCloseOnFalse&lt;Object, PairWithBoolean&lt;Card[]&gt;&gt; {
+        public ChangeDeckHandler(CardBrowser browser) {
+<span class="nc" id="L1701">            super(&quot;Card Browser - changeDeckHandler.actualOnPostExecute(CardBrowser browser)&quot;, browser);</span>
+<span class="nc" id="L1702">        }</span>
+
+
+        @Override
+        protected void actualOnValidPostExecute(CardBrowser browser, PairWithBoolean&lt;Card[]&gt; result) {
+<span class="nc" id="L1707">            browser.hideProgressBar();</span>
+
+<span class="nc" id="L1709">            browser.searchCards();</span>
+<span class="nc" id="L1710">            browser.endMultiSelectMode();</span>
+<span class="nc" id="L1711">            browser.mCardsAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L1712">            browser.invalidateOptionsMenu();    // maybe the availability of undo changed</span>
+
+<span class="nc bnc" id="L1714" title="All 2 branches missed.">            if (!result.getBoolean()) {</span>
+<span class="nc" id="L1715">                Timber.i(&quot;changeDeckHandler failed, not offering undo&quot;);</span>
+<span class="nc" id="L1716">                browser.displayCouldNotChangeDeck();</span>
+<span class="nc" id="L1717">                return;</span>
+            }
+            // snackbar to offer undo
+<span class="nc" id="L1720">            String deckName = browser.getCol().getDecks().name(browser.mNewDid);</span>
+<span class="nc" id="L1721">            browser.mUndoSnackbar = UIUtils.showSnackbar(browser, String.format(browser.getString(R.string.changed_deck_message), deckName), SNACKBAR_DURATION,</span>
+<span class="nc" id="L1722">                                                         R.string.undo, v -&gt; TaskManager.launchCollectionTask(new CollectionTask.Undo(), browser.mUndoHandler), browser.mCardsListView, null);</span>
+<span class="nc" id="L1723">        }</span>
+    }
+
+
+    @CheckResult
+    private static String formatQA(String text, Context context) {
+<span class="nc" id="L1729">        boolean showFilenames = AnkiDroidApp.getSharedPrefs(context).getBoolean(&quot;card_browser_show_media_filenames&quot;, false);</span>
+<span class="nc" id="L1730">        return formatQAInternal(text, showFilenames);</span>
+    }
+
+
+    /**
+     * @param txt The text to strip HTML, comments, tags and media from
+     * @param showFileNames Whether [sound:foo.mp3] should be rendered as &quot; foo.mp3 &quot; or  &quot; &quot;
+     * @return The formatted string
+     */
+    @VisibleForTesting
+    @CheckResult
+    static String formatQAInternal(String txt, boolean showFileNames) {
+        /* Strips all formatting from the string txt for use in displaying question/answer in browser */
+<span class="nc" id="L1743">        String s = txt;</span>
+<span class="nc" id="L1744">        s = s.replaceAll(&quot;&lt;!--.*?--&gt;&quot;, &quot;&quot;);</span>
+<span class="nc" id="L1745">        s = s.replace(&quot;&lt;br&gt;&quot;, &quot; &quot;);</span>
+<span class="nc" id="L1746">        s = s.replace(&quot;&lt;br /&gt;&quot;, &quot; &quot;);</span>
+<span class="nc" id="L1747">        s = s.replace(&quot;&lt;div&gt;&quot;, &quot; &quot;);</span>
+<span class="nc" id="L1748">        s = s.replace(&quot;\n&quot;, &quot; &quot;);</span>
+<span class="nc bnc" id="L1749" title="All 2 branches missed.">        s = showFileNames ? Utils.stripSoundMedia(s) : Utils.stripSoundMedia(s, &quot; &quot;);</span>
+<span class="nc" id="L1750">        s = s.replaceAll(&quot;\\[\\[type:[^]]+]]&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L1751" title="All 2 branches missed.">        s = showFileNames ? Utils.stripHTMLMedia(s) : Utils.stripHTMLMedia(s, &quot; &quot;);</span>
+<span class="nc" id="L1752">        s = s.trim();</span>
+<span class="nc" id="L1753">        return s;</span>
+    }
+
+    /**
+     * Removes cards from view. Doesn't delete them in model (database).
+     */
+    private void removeNotesView(Card[] cards, boolean reorderCards) {
+<span class="nc" id="L1760">        List&lt;Long&gt; cardIds = new ArrayList&lt;&gt;(cards.length);</span>
+<span class="nc bnc" id="L1761" title="All 2 branches missed.">        for (Card c : cards) {</span>
+<span class="nc" id="L1762">            cardIds.add(c.getId());</span>
+        }
+<span class="nc" id="L1764">        removeNotesView(cardIds, reorderCards);</span>
+<span class="nc" id="L1765">    }</span>
+
+    /**
+     * Removes cards from view. Doesn't delete them in model (database).
+     * @param reorderCards Whether to rearrange the positions of checked items (DEFECT: Currently deselects all)
+     */
+    private void removeNotesView(java.util.Collection&lt;Long&gt; cardsIds, boolean reorderCards) {
+<span class="nc" id="L1772">        long reviewerCardId = getReviewerCardId();</span>
+<span class="nc" id="L1773">        CardCollection&lt;CardCache&gt; oldMCards = getCards();</span>
+<span class="nc" id="L1774">        Map&lt;Long, Integer&gt; idToPos = getPositionMap(oldMCards);</span>
+<span class="nc" id="L1775">        Set&lt;Long&gt; idToRemove = new HashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L1776" title="All 2 branches missed.">        for (Long cardId : cardsIds) {</span>
+<span class="nc bnc" id="L1777" title="All 2 branches missed.">            if (cardId == reviewerCardId) {</span>
+<span class="nc" id="L1778">                mReloadRequired = true;</span>
+            }
+<span class="nc bnc" id="L1780" title="All 2 branches missed.">            if (idToPos.containsKey(cardId)) {</span>
+<span class="nc" id="L1781">                idToRemove.add(cardId);</span>
+            }
+<span class="nc" id="L1783">        }</span>
+
+<span class="nc" id="L1785">        List&lt;CardCache&gt; newMCards = new ArrayList&lt;&gt;(oldMCards.size());</span>
+<span class="nc" id="L1786">        int pos = 0;</span>
+<span class="nc bnc" id="L1787" title="All 2 branches missed.">        for (CardCache card: oldMCards) {</span>
+<span class="nc bnc" id="L1788" title="All 2 branches missed.">            if (!idToRemove.contains(card.getId())) {</span>
+<span class="nc" id="L1789">                newMCards.add(new CardCache(card, pos++));</span>
+            }
+<span class="nc" id="L1791">        }</span>
+<span class="nc" id="L1792">        mCards.replaceWith(newMCards);</span>
+
+<span class="nc bnc" id="L1794" title="All 2 branches missed.">        if (reorderCards) {</span>
+            //Suboptimal from a UX perspective, we should reorder
+            //but this is only hit on a rare sad path and we'd need to rejig the data structures to allow an efficient
+            //search
+<span class="nc" id="L1798">            Timber.w(&quot;Removing current selection due to unexpected removal of cards&quot;);</span>
+<span class="nc" id="L1799">            onSelectNone();</span>
+        }
+
+<span class="nc" id="L1802">        updateList();</span>
+<span class="nc" id="L1803">    }</span>
+
+    private SuspendCardHandler suspendCardHandler() {
+<span class="nc" id="L1806">        return new SuspendCardHandler(this);</span>
+    }
+
+    private static class SuspendCardHandler extends ListenerWithProgressBarCloseOnFalse&lt;Void, PairWithBoolean&lt;Card[]&gt;&gt; {
+        public SuspendCardHandler(CardBrowser browser) {
+<span class="nc" id="L1811">            super(browser);</span>
+<span class="nc" id="L1812">        }</span>
+
+        @Override
+        protected void actualOnValidPostExecute(CardBrowser browser, PairWithBoolean&lt;Card[]&gt; cards) {
+<span class="nc" id="L1816">            browser.updateCardsInList(Arrays.asList(cards.other));</span>
+<span class="nc" id="L1817">            browser.hideProgressBar();</span>
+<span class="nc" id="L1818">            browser.invalidateOptionsMenu();    // maybe the availability of undo changed</span>
+<span class="nc" id="L1819">        }</span>
+    }
+
+
+    private FlagCardHandler flagCardHandler(){
+<span class="nc" id="L1824">        return new FlagCardHandler(this);</span>
+    }
+    private static class FlagCardHandler extends SuspendCardHandler {
+        public FlagCardHandler(CardBrowser browser) {
+<span class="nc" id="L1828">            super(browser);</span>
+<span class="nc" id="L1829">        }</span>
+    }
+
+
+    private MarkCardHandler markCardHandler() {
+<span class="nc" id="L1834">        return new MarkCardHandler(this);</span>
+    }
+    private static class MarkCardHandler extends ListenerWithProgressBarCloseOnFalse&lt;Void, PairWithBoolean&lt;Card[]&gt;&gt; {
+        public MarkCardHandler(CardBrowser browser) {
+<span class="nc" id="L1838">            super(browser);</span>
+<span class="nc" id="L1839">        }</span>
+
+        @Override
+        protected void actualOnValidPostExecute(CardBrowser browser, PairWithBoolean&lt;Card[]&gt; cards) {
+<span class="nc" id="L1843">            browser.updateCardsInList(CardUtils.getAllCards(CardUtils.getNotes(Arrays.asList(cards.other))));</span>
+<span class="nc" id="L1844">            browser.hideProgressBar();</span>
+<span class="nc" id="L1845">            browser.invalidateOptionsMenu();    // maybe the availability of undo changed</span>
+<span class="nc" id="L1846">        }</span>
+    }
+
+
+
+<span class="nc" id="L1851">    private final DeleteNoteHandler mDeleteNoteHandler = new DeleteNoteHandler(this);</span>
+    private static class DeleteNoteHandler extends ListenerWithProgressBarCloseOnFalse&lt;Card[], BooleanGetter&gt; {
+        public DeleteNoteHandler(CardBrowser browser) {
+<span class="nc" id="L1854">            super(browser);</span>
+<span class="nc" id="L1855">        }</span>
+
+<span class="nc" id="L1857">        private int mCardsDeleted = -1;</span>
+
+        @Override
+        public void actualOnPreExecute(@NonNull CardBrowser browser) {
+<span class="nc" id="L1861">            super.actualOnPreExecute(browser);</span>
+<span class="nc" id="L1862">            browser.invalidate();</span>
+<span class="nc" id="L1863">        }</span>
+
+        @Override
+        public void actualOnProgressUpdate(@NonNull CardBrowser browser, Card[] cards) {
+            //we don't need to reorder cards here as we've already deselected all notes,
+<span class="nc" id="L1868">            browser.removeNotesView(cards, false);</span>
+<span class="nc" id="L1869">            mCardsDeleted = cards.length;</span>
+<span class="nc" id="L1870">        }</span>
+
+
+        @Override
+        protected void actualOnValidPostExecute(CardBrowser browser, BooleanGetter result) {
+<span class="nc" id="L1875">            browser.hideProgressBar();</span>
+<span class="nc" id="L1876">            browser.mActionBarTitle.setText(Integer.toString(browser.checkedCardCount()));</span>
+<span class="nc" id="L1877">            browser.invalidateOptionsMenu();    // maybe the availability of undo changed</span>
+            // snackbar to offer undo
+<span class="nc" id="L1879">            String deletedMessage = browser.getResources().getQuantityString(R.plurals.card_browser_cards_deleted, mCardsDeleted, mCardsDeleted);</span>
+<span class="nc" id="L1880">            browser.mUndoSnackbar = UIUtils.showSnackbar(browser, deletedMessage, SNACKBAR_DURATION,</span>
+<span class="nc" id="L1881">                    R.string.undo, v -&gt; TaskManager.launchCollectionTask(new CollectionTask.Undo(), browser.mUndoHandler),</span>
+<span class="nc" id="L1882">                    browser.mCardsListView, null);</span>
+<span class="nc" id="L1883">            browser.searchCards();</span>
+<span class="nc" id="L1884">        }</span>
+    }
+
+
+
+<span class="nc" id="L1889">    private final UndoHandler mUndoHandler = new UndoHandler(this);</span>
+    private static class UndoHandler extends ListenerWithProgressBarCloseOnFalse&lt;Card, BooleanGetter&gt; {
+        public UndoHandler(CardBrowser browser) {
+<span class="nc" id="L1892">            super(browser);</span>
+<span class="nc" id="L1893">        }</span>
+
+        @Override
+        public void actualOnValidPostExecute(CardBrowser browser, BooleanGetter result) {
+<span class="nc" id="L1897">            Timber.d(&quot;Card Browser - mUndoHandler.actualOnPostExecute(CardBrowser browser)&quot;);</span>
+<span class="nc" id="L1898">            browser.hideProgressBar();</span>
+            // reload whole view
+<span class="nc" id="L1900">            browser.forceRefreshSearch();</span>
+<span class="nc" id="L1901">            browser.endMultiSelectMode();</span>
+<span class="nc" id="L1902">            browser.mCardsAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L1903">            browser.updatePreviewMenuItem();</span>
+<span class="nc" id="L1904">            browser.invalidateOptionsMenu();    // maybe the availability of undo changed</span>
+<span class="nc" id="L1905">        }</span>
+    }
+
+
+
+<span class="nc" id="L1910">    private final SearchCardsHandler mSearchCardsHandler = new SearchCardsHandler(this);</span>
+    private class SearchCardsHandler extends ListenerWithProgressBar&lt;List&lt;CardCache&gt;, List&lt;CardCache&gt;&gt; {
+<span class="nc" id="L1912">        public SearchCardsHandler(CardBrowser browser) {</span>
+<span class="nc" id="L1913">            super(browser);</span>
+<span class="nc" id="L1914">        }</span>
+
+
+        @Override
+        public void actualOnProgressUpdate(@NonNull CardBrowser browser, List&lt;CardCache&gt; cards) {
+            // Need to copy the list into a new list, because the original list is modified, and
+            // ListAdapter crash
+<span class="nc" id="L1921">            mCards.replaceWith(new ArrayList&lt;&gt;(cards));</span>
+<span class="nc" id="L1922">            updateList();</span>
+<span class="nc" id="L1923">        }</span>
+
+
+        @Override
+        public void actualOnPostExecute(@NonNull CardBrowser browser, List&lt;CardCache&gt; result) {
+<span class="nc bnc" id="L1928" title="All 2 branches missed.">            if (result != null) {</span>
+<span class="nc" id="L1929">                mCards.replaceWith(result);</span>
+<span class="nc" id="L1930">                updateList();</span>
+<span class="nc" id="L1931">                handleSearchResult();</span>
+            }
+<span class="nc bnc" id="L1933" title="All 2 branches missed.">            if (mShouldRestoreScroll) {</span>
+<span class="nc" id="L1934">                mShouldRestoreScroll = false;</span>
+<span class="nc" id="L1935">                int newPosition = getNewPositionOfSelectedCard();</span>
+<span class="nc bnc" id="L1936" title="All 2 branches missed.">                boolean isRestorePossible = (newPosition != CARD_NOT_AVAILABLE);</span>
+<span class="nc bnc" id="L1937" title="All 2 branches missed.">                if (isRestorePossible) {</span>
+<span class="nc" id="L1938">                    autoScrollTo(newPosition);</span>
+                }
+            }
+<span class="nc" id="L1941">            updatePreviewMenuItem();</span>
+<span class="nc" id="L1942">            hideProgressBar();</span>
+<span class="nc" id="L1943">        }</span>
+
+
+        private void handleSearchResult() {
+<span class="nc" id="L1947">            Timber.i(&quot;CardBrowser:: Completed doInBackgroundSearchCards Successfully&quot;);</span>
+<span class="nc" id="L1948">            updateList();</span>
+            
+<span class="nc bnc" id="L1950" title="All 4 branches missed.">            if ((mSearchView == null) || mSearchView.isIconified()) {</span>
+<span class="nc" id="L1951">                return;</span>
+            }
+
+<span class="nc bnc" id="L1954" title="All 2 branches missed.">            if (hasSelectedAllDecks()) {</span>
+<span class="nc" id="L1955">                UIUtils.showSimpleSnackbar(CardBrowser.this, getSubtitleText(), true);</span>
+<span class="nc" id="L1956">                return;</span>
+            }
+
+            //If we haven't selected all decks, allow the user the option to search all decks.
+            String displayText;
+<span class="nc bnc" id="L1961" title="All 2 branches missed.">            if (getCardCount() == 0) {</span>
+<span class="nc" id="L1962">                displayText = getString(R.string.card_browser_no_cards_in_deck, getSelectedDeckNameForUi());</span>
+            } else {
+<span class="nc" id="L1964">                displayText = getSubtitleText();</span>
+            }
+<span class="nc" id="L1966">            View root = CardBrowser.this.findViewById(R.id.root_layout);</span>
+<span class="nc" id="L1967">            UIUtils.showSnackbar(CardBrowser.this,</span>
+                    displayText,
+                    SNACKBAR_DURATION,
+                    R.string.card_browser_search_all_decks,
+<span class="nc" id="L1971">                    (v) -&gt; searchAllDecks(),</span>
+                    root,
+                    null);
+
+<span class="nc" id="L1975">        }</span>
+
+        @Override
+        public void actualOnCancelled(@NonNull CardBrowser browser) {
+<span class="nc" id="L1979">            super.actualOnCancelled(browser);</span>
+<span class="nc" id="L1980">            hideProgressBar();</span>
+<span class="nc" id="L1981">        }</span>
+    }
+
+
+    private void saveScrollingState(int position) {
+<span class="nc" id="L1986">        mOldCardId = getCards().get(position).getId();</span>
+<span class="nc" id="L1987">        mOldCardTopOffset = calculateTopOffset(position);</span>
+<span class="nc" id="L1988">    }</span>
+
+    private void autoScrollTo(int newPosition) {
+<span class="nc" id="L1991">        mCardsListView.setSelectionFromTop(newPosition, mOldCardTopOffset);</span>
+<span class="nc" id="L1992">        mPostAutoScroll = true;</span>
+<span class="nc" id="L1993">    }</span>
+
+    private int calculateTopOffset(int cardPosition) {
+<span class="nc" id="L1996">        int firstVisiblePosition = mCardsListView.getFirstVisiblePosition();</span>
+<span class="nc" id="L1997">        View v = mCardsListView.getChildAt(cardPosition - firstVisiblePosition);</span>
+<span class="nc bnc" id="L1998" title="All 2 branches missed.">        return (v == null) ? 0 : v.getTop();</span>
+    }
+
+    private int getNewPositionOfSelectedCard() {
+<span class="nc bnc" id="L2002" title="All 2 branches missed.">        if (mCards.size() == 0) {</span>
+<span class="nc" id="L2003">            return CARD_NOT_AVAILABLE;</span>
+        }
+<span class="nc bnc" id="L2005" title="All 2 branches missed.">        for (CardCache card : mCards) {</span>
+<span class="nc bnc" id="L2006" title="All 2 branches missed.">            if (card.getId() == mOldCardId) {</span>
+<span class="nc" id="L2007">                return card.mPosition;</span>
+            }
+<span class="nc" id="L2009">        }</span>
+<span class="nc" id="L2010">        return CARD_NOT_AVAILABLE;</span>
+    }
+
+    public boolean hasSelectedAllDecks() {
+<span class="nc" id="L2014">        Long lastDeckId = getLastDeckId();</span>
+<span class="nc bnc" id="L2015" title="All 4 branches missed.">        return lastDeckId != null &amp;&amp; lastDeckId == ALL_DECKS_ID;</span>
+    }
+
+
+    public void searchAllDecks() {
+        //all we need to do is select all decks
+<span class="nc" id="L2021">        selectAllDecks();</span>
+<span class="nc" id="L2022">    }</span>
+
+    /**
+     * Returns the current deck name, &quot;All Decks&quot; if all decks are selected, or &quot;Unknown&quot;
+     * Do not use this for any business logic, as this will return inconsistent data
+     * with the collection.
+     */
+    public String getSelectedDeckNameForUi() {
+        try {
+<span class="nc" id="L2031">            Long lastDeckId = getLastDeckId();</span>
+<span class="nc bnc" id="L2032" title="All 2 branches missed.">            if (lastDeckId == null) {</span>
+<span class="nc" id="L2033">                return getString(R.string.card_browser_unknown_deck_name);</span>
+            }
+<span class="nc bnc" id="L2035" title="All 2 branches missed.">            if (lastDeckId == ALL_DECKS_ID) {</span>
+<span class="nc" id="L2036">                return getString(R.string.card_browser_all_decks);</span>
+            }
+<span class="nc" id="L2038">            return getCol().getDecks().name(lastDeckId);</span>
+<span class="nc" id="L2039">        } catch (Exception e) {</span>
+<span class="nc" id="L2040">            Timber.w(e, &quot;Unable to get selected deck name&quot;);</span>
+<span class="nc" id="L2041">            return getString(R.string.card_browser_unknown_deck_name);</span>
+        }
+    }
+
+<span class="nc" id="L2045">    private final RenderQAHandler mRenderQAHandler = new RenderQAHandler(this);</span>
+    private static class RenderQAHandler extends TaskListenerWithContext&lt;CardBrowser, Integer, Pair&lt;CardCollection&lt;CardBrowser.CardCache&gt;, List&lt;Long&gt;&gt;&gt;{
+        public RenderQAHandler(CardBrowser browser) {
+<span class="nc" id="L2048">            super(browser);</span>
+<span class="nc" id="L2049">        }</span>
+
+        @Override
+        public void actualOnProgressUpdate(@NonNull CardBrowser browser, Integer value) {
+            // Note: This is called every time a card is rendered.
+            // It blocks the long-click callback while the task is running, so usage of the task should be minimized
+<span class="nc" id="L2055">            browser.mCardsAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L2056">        }</span>
+
+
+        @Override
+        public void actualOnPreExecute(@NonNull CardBrowser browser) {
+<span class="nc" id="L2061">            Timber.d(&quot;Starting Q&amp;A background rendering&quot;);</span>
+<span class="nc" id="L2062">        }</span>
+
+
+        @Override
+        public void actualOnPostExecute(@NonNull CardBrowser browser, Pair&lt;CardCollection&lt;CardBrowser.CardCache&gt;, List&lt;Long&gt;&gt; value) {
+<span class="nc" id="L2067">            List&lt;Long&gt; cardsIdsToHide = value.second;</span>
+<span class="nc bnc" id="L2068" title="All 2 branches missed.">            if (cardsIdsToHide != null) {</span>
+                    try {
+<span class="nc bnc" id="L2070" title="All 2 branches missed.">                        if (cardsIdsToHide.size() &gt; 0) {</span>
+<span class="nc" id="L2071">                            Timber.i(&quot;Removing %d invalid cards from view&quot;, cardsIdsToHide.size());</span>
+<span class="nc" id="L2072">                            browser.removeNotesView(cardsIdsToHide, true);</span>
+                        }
+<span class="nc" id="L2074">                    } catch (Exception e) {</span>
+<span class="nc" id="L2075">                        Timber.e(e, &quot;failed to hide cards&quot;);</span>
+<span class="nc" id="L2076">                    }</span>
+<span class="nc" id="L2077">                browser.hideProgressBar();</span>
+<span class="nc" id="L2078">                browser.mCardsAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L2079">                Timber.d(&quot;Completed doInBackgroundRenderBrowserQA Successfuly&quot;);</span>
+            } else {
+                // Might want to do something more proactive here like show a message box?
+<span class="nc" id="L2082">                Timber.e(&quot;doInBackgroundRenderBrowserQA was not successful... continuing anyway&quot;);</span>
+            }
+<span class="nc" id="L2084">        }</span>
+
+
+        @Override
+        public void actualOnCancelled(@NonNull CardBrowser browser) {
+<span class="nc" id="L2089">            browser.hideProgressBar();</span>
+<span class="nc" id="L2090">        }</span>
+    }
+
+
+
+<span class="nc" id="L2095">    private final CheckSelectedCardsHandler mCheckSelectedCardsHandler = new CheckSelectedCardsHandler(this);</span>
+    private static class CheckSelectedCardsHandler extends ListenerWithProgressBar&lt;Void, Pair&lt;Boolean, Boolean&gt;&gt; {
+        public CheckSelectedCardsHandler(CardBrowser browser) {
+<span class="nc" id="L2098">            super(browser);</span>
+<span class="nc" id="L2099">        }</span>
+
+        @Override
+        public void actualOnPostExecute(@NonNull CardBrowser browser, Pair&lt;Boolean, Boolean&gt; result) {
+<span class="nc bnc" id="L2103" title="All 2 branches missed.">            if (result == null) {</span>
+<span class="nc" id="L2104">                return;</span>
+            }
+<span class="nc" id="L2106">            browser.hideProgressBar();</span>
+
+<span class="nc bnc" id="L2108" title="All 2 branches missed.">            if (browser.mActionBarMenu != null) {</span>
+<span class="nc" id="L2109">                boolean hasUnsuspended = result.first;</span>
+<span class="nc" id="L2110">                boolean hasUnmarked = result.second;</span>
+
+<span class="nc" id="L2112">                setMenuIcons(browser, hasUnsuspended, hasUnmarked, browser.mActionBarMenu);</span>
+            }
+<span class="nc" id="L2114">        }</span>
+
+
+        protected void setMenuIcons(@NonNull Context browser, boolean hasUnsuspended, boolean hasUnmarked, @NonNull Menu actionBarMenu) {
+            int title;
+            int icon;
+<span class="nc bnc" id="L2120" title="All 2 branches missed.">            if (hasUnsuspended) {</span>
+<span class="nc" id="L2121">                title = R.string.card_browser_suspend_card;</span>
+<span class="nc" id="L2122">                icon = R.drawable.ic_action_suspend;</span>
+            } else {
+<span class="nc" id="L2124">                title = R.string.card_browser_unsuspend_card;</span>
+<span class="nc" id="L2125">                icon = R.drawable.ic_action_unsuspend;</span>
+            }
+<span class="nc" id="L2127">            MenuItem suspend_item = actionBarMenu.findItem(R.id.action_suspend_card);</span>
+<span class="nc" id="L2128">            suspend_item.setTitle(browser.getString(title));</span>
+<span class="nc" id="L2129">            suspend_item.setIcon(icon);</span>
+
+<span class="nc bnc" id="L2131" title="All 2 branches missed.">            if (hasUnmarked) {</span>
+<span class="nc" id="L2132">                title = R.string.card_browser_mark_card;</span>
+<span class="nc" id="L2133">                icon = R.drawable.ic_star_outline_white_24dp;</span>
+            } else {
+<span class="nc" id="L2135">                title = R.string.card_browser_unmark_card;</span>
+<span class="nc" id="L2136">                icon = R.drawable.ic_star_white_24dp;</span>
+            }
+<span class="nc" id="L2138">            MenuItem mark_item = actionBarMenu.findItem(R.id.action_mark_card);</span>
+<span class="nc" id="L2139">            mark_item.setTitle(browser.getString(title));</span>
+<span class="nc" id="L2140">            mark_item.setIcon(icon);</span>
+<span class="nc" id="L2141">        }</span>
+
+
+        @Override
+        public void actualOnCancelled(@NonNull CardBrowser browser) {
+<span class="nc" id="L2146">            super.actualOnCancelled(browser);</span>
+<span class="nc" id="L2147">            browser.hideProgressBar();</span>
+<span class="nc" id="L2148">        }</span>
+    }
+
+
+    private void closeCardBrowser(int result) {
+<span class="nc" id="L2153">        closeCardBrowser(result, null);</span>
+<span class="nc" id="L2154">    }</span>
+
+    private void closeCardBrowser(int result, Intent data) {
+        // Set result and finish
+<span class="nc" id="L2158">        setResult(result, data);</span>
+<span class="nc" id="L2159">        finishWithAnimation(RIGHT);</span>
+<span class="nc" id="L2160">    }</span>
+
+    /**
+     * Render the second column whenever the user stops scrolling
+     */
+<span class="nc" id="L2165">    private final class RenderOnScroll implements AbsListView.OnScrollListener {</span>
+        @Override
+        public void onScroll(AbsListView view, int firstVisibleItem, int visibleItemCount, int totalItemCount) {
+            // Show the progress bar if scrolling to given position requires rendering of the question / answer
+<span class="nc" id="L2169">            int lastVisibleItem = firstVisibleItem + visibleItemCount;</span>
+<span class="nc" id="L2170">            CardCollection&lt;CardCache&gt; cards = getCards();</span>
+            // List is never cleared, only reset to a new list. So it's safe here.
+<span class="nc" id="L2172">            int size = cards.size();</span>
+<span class="nc bnc" id="L2173" title="All 6 branches missed.">            if ((size &gt; 0) &amp;&amp; (firstVisibleItem &lt; size) &amp;&amp; ((lastVisibleItem - 1) &lt; size)) {</span>
+<span class="nc" id="L2174">                boolean firstLoaded = cards.get(firstVisibleItem).isLoaded();</span>
+                // Note: max value of lastVisibleItem is totalItemCount, so need to subtract 1
+<span class="nc" id="L2176">                boolean lastLoaded = cards.get(lastVisibleItem - 1).isLoaded();</span>
+<span class="nc bnc" id="L2177" title="All 4 branches missed.">                if (!firstLoaded || !lastLoaded) {</span>
+<span class="nc bnc" id="L2178" title="All 2 branches missed.">                    if (!mPostAutoScroll) {</span>
+<span class="nc" id="L2179">                        showProgressBar();</span>
+                    }
+                    // Also start rendering the items on the screen every 300ms while scrolling
+<span class="nc" id="L2182">                    long currentTime = SystemClock.elapsedRealtime ();</span>
+<span class="nc bnc" id="L2183" title="All 4 branches missed.">                    if ((currentTime - mLastRenderStart &gt; 300 || lastVisibleItem &gt;= totalItemCount)) {</span>
+<span class="nc" id="L2184">                        mLastRenderStart = currentTime;</span>
+<span class="nc" id="L2185">                        TaskManager.cancelAllTasks(CollectionTask.RenderBrowserQA.class);</span>
+<span class="nc" id="L2186">                        TaskManager.launchCollectionTask(renderBrowserQAParams(firstVisibleItem, visibleItemCount, cards), mRenderQAHandler);</span>
+                    }
+                }
+            }
+<span class="nc" id="L2190">        }</span>
+
+        @Override
+        public void onScrollStateChanged(AbsListView listView, int scrollState) {
+            // TODO: Try change to RecyclerView as currently gets stuck a lot when using scrollbar on right of ListView
+            // Start rendering the question &amp; answer every time the user stops scrolling
+<span class="nc bnc" id="L2196" title="All 2 branches missed.">            if (mPostAutoScroll) {</span>
+<span class="nc" id="L2197">                mPostAutoScroll = false;</span>
+            }
+<span class="nc bnc" id="L2199" title="All 2 branches missed.">            if (scrollState == SCROLL_STATE_IDLE) {</span>
+<span class="nc" id="L2200">                int startIdx = listView.getFirstVisiblePosition();</span>
+<span class="nc" id="L2201">                int numVisible = listView.getLastVisiblePosition() - startIdx;</span>
+<span class="nc" id="L2202">                TaskManager.launchCollectionTask(renderBrowserQAParams(startIdx - 5, 2 * numVisible + 5, getCards()), mRenderQAHandler);</span>
+            }
+<span class="nc" id="L2204">        }</span>
+    }
+
+
+    @NonNull
+    protected CollectionTask.RenderBrowserQA renderBrowserQAParams(int firstVisibleItem, int visibleItemCount, CardCollection&lt;CardCache&gt; cards) {
+<span class="nc" id="L2210">        return new CollectionTask.RenderBrowserQA(cards, firstVisibleItem, visibleItemCount, mColumn1Index, mColumn2Index);</span>
+    }
+
+
+    private final class MultiColumnListAdapter extends BaseAdapter {
+        private final int mResource;
+        private Column[] mFromKeys;
+        private final int[] mToIds;
+<span class="nc" id="L2218">        private float mOriginalTextSize = -1.0f;</span>
+        private final int mFontSizeScalePcent;
+<span class="nc" id="L2220">        private Typeface mCustomTypeface = null;</span>
+        private final LayoutInflater mInflater;
+
+        public MultiColumnListAdapter(Context context, int resource, Column[] from, int[] to,
+<span class="nc" id="L2224">                                      int fontSizeScalePcent, String customFont) {</span>
+<span class="nc" id="L2225">            mResource = resource;</span>
+<span class="nc" id="L2226">            mFromKeys = from;</span>
+<span class="nc" id="L2227">            mToIds = to;</span>
+<span class="nc" id="L2228">            mFontSizeScalePcent = fontSizeScalePcent;</span>
+<span class="nc bnc" id="L2229" title="All 2 branches missed.">            if (!&quot;&quot;.equals(customFont)) {</span>
+<span class="nc" id="L2230">                mCustomTypeface = AnkiFont.getTypeface(context, customFont);</span>
+            }
+<span class="nc" id="L2232">            mInflater = LayoutInflater.from(context);</span>
+<span class="nc" id="L2233">        }</span>
+
+
+        public View getView(int position, View convertView, ViewGroup parent) {
+            // Get the main container view if it doesn't already exist, and call bindView
+            View v;
+<span class="nc bnc" id="L2239" title="All 2 branches missed.">            if (convertView == null) {</span>
+<span class="nc" id="L2240">                v = mInflater.inflate(mResource, parent, false);</span>
+<span class="nc" id="L2241">                final int count = mToIds.length;</span>
+<span class="nc" id="L2242">                final View[] columns = new View[count];</span>
+<span class="nc bnc" id="L2243" title="All 2 branches missed.">                for (int i = 0; i &lt; count; i++) {</span>
+<span class="nc" id="L2244">                    columns[i] = v.findViewById(mToIds[i]);</span>
+                }
+<span class="nc" id="L2246">                v.setTag(columns);</span>
+<span class="nc" id="L2247">            } else {</span>
+<span class="nc" id="L2248">                v = convertView;</span>
+            }
+<span class="nc" id="L2250">            bindView(position, v);</span>
+<span class="nc" id="L2251">            return v;</span>
+        }
+
+
+        private void bindView(final int position, final View v) {
+            // Draw the content in the columns
+<span class="nc" id="L2257">            View[] columns = (View[]) v.getTag();</span>
+<span class="nc" id="L2258">            final CardCache card = getCards().get(position);</span>
+<span class="nc bnc" id="L2259" title="All 2 branches missed.">            for (int i = 0; i &lt; mToIds.length; i++) {</span>
+<span class="nc" id="L2260">                TextView col = (TextView) columns[i];</span>
+                // set font for column
+<span class="nc" id="L2262">                setFont(col);</span>
+                // set text for column
+<span class="nc" id="L2264">                col.setText(card.getColumnHeaderText(mFromKeys[i]));</span>
+            }
+            // set card's background color
+<span class="nc" id="L2267">            final int backgroundColor = Themes.getColorFromAttr(CardBrowser.this, card.getColor());</span>
+<span class="nc" id="L2268">            v.setBackgroundColor(backgroundColor);</span>
+            // setup checkbox to change color in multi-select mode
+<span class="nc" id="L2270">            final CheckBox checkBox = v.findViewById(R.id.card_checkbox);</span>
+            // if in multi-select mode, be sure to show the checkboxes
+<span class="nc bnc" id="L2272" title="All 2 branches missed.">            if(mInMultiSelectMode) {</span>
+<span class="nc" id="L2273">                checkBox.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L2274">                checkBox.setChecked(mCheckedCards.contains(card));</span>
+                // this prevents checkboxes from showing an animation from selected -&gt; unselected when
+                // checkbox was selected, then selection mode was ended and now restarted
+<span class="nc" id="L2277">                checkBox.jumpDrawablesToCurrentState();</span>
+            } else {
+<span class="nc" id="L2279">                checkBox.setChecked(false);</span>
+<span class="nc" id="L2280">                checkBox.setVisibility(View.GONE);</span>
+            }
+            // change bg color on check changed
+<span class="nc" id="L2283">            checkBox.setOnClickListener(view -&gt; onCheck(position, v));</span>
+<span class="nc" id="L2284">        }</span>
+
+        private void setFont(TextView v) {
+            // Set the font and font size for a TextView v
+<span class="nc" id="L2288">            float currentSize = v.getTextSize();</span>
+<span class="nc bnc" id="L2289" title="All 2 branches missed.">            if (mOriginalTextSize &lt; 0) {</span>
+<span class="nc" id="L2290">                mOriginalTextSize = v.getTextSize();</span>
+            }
+            // do nothing when pref is 100% and apply scaling only once
+<span class="nc bnc" id="L2293" title="All 4 branches missed.">            if (mFontSizeScalePcent != 100 &amp;&amp; Math.abs(mOriginalTextSize - currentSize) &lt; 0.1) {</span>
+                // getTextSize returns value in absolute PX so use that in the setter
+<span class="nc" id="L2295">                v.setTextSize(TypedValue.COMPLEX_UNIT_PX, mOriginalTextSize * (mFontSizeScalePcent / 100.0f));</span>
+            }
+
+<span class="nc bnc" id="L2298" title="All 2 branches missed.">            if (mCustomTypeface != null) {</span>
+<span class="nc" id="L2299">                v.setTypeface(mCustomTypeface);</span>
+            }
+<span class="nc" id="L2301">        }</span>
+
+        public void setFromMapping(Column[] from) {
+<span class="nc" id="L2304">            mFromKeys = from;</span>
+<span class="nc" id="L2305">            notifyDataSetChanged();</span>
+<span class="nc" id="L2306">        }</span>
+
+
+        public Column[] getFromMapping() {
+<span class="nc" id="L2310">            return mFromKeys;</span>
+        }
+
+
+        @Override
+        public int getCount() {
+<span class="nc" id="L2316">            return getCardCount();</span>
+        }
+
+
+        @Override
+        public Object getItem(int position) {
+<span class="nc" id="L2322">            return getCards().get(position);</span>
+        }
+
+
+        @Override
+        public long getItemId(int position) {
+<span class="nc" id="L2328">            return position;</span>
+        }
+
+    }
+
+
+    private void onCheck(int position, View cell) {
+<span class="nc" id="L2335">        CheckBox checkBox = cell.findViewById(R.id.card_checkbox);</span>
+<span class="nc" id="L2336">        CardCache card = getCards().get(position);</span>
+
+<span class="nc bnc" id="L2338" title="All 2 branches missed.">        if (checkBox.isChecked()) {</span>
+<span class="nc" id="L2339">            mCheckedCards.add(card);</span>
+        } else {
+<span class="nc" id="L2341">            mCheckedCards.remove(card);</span>
+        }
+
+<span class="nc" id="L2344">       onSelectionChanged();</span>
+<span class="nc" id="L2345">    }</span>
+
+    private void onSelectAll() {
+<span class="nc" id="L2348">        mCheckedCards.addAll(mCards.unsafeGetWrapped());</span>
+<span class="nc" id="L2349">        onSelectionChanged();</span>
+<span class="nc" id="L2350">    }</span>
+
+    private void onSelectNone() {
+<span class="nc" id="L2353">        mCheckedCards.clear();</span>
+<span class="nc" id="L2354">        onSelectionChanged();</span>
+<span class="nc" id="L2355">    }</span>
+
+    private void onSelectionChanged() {
+<span class="nc" id="L2358">        Timber.d(&quot;onSelectionChanged()&quot;);</span>
+        try {
+<span class="nc bnc" id="L2360" title="All 4 branches missed.">            if (!mInMultiSelectMode &amp;&amp; !mCheckedCards.isEmpty()) {</span>
+                //If we have selected cards, load multiselect
+<span class="nc" id="L2362">                loadMultiSelectMode();</span>
+<span class="nc bnc" id="L2363" title="All 4 branches missed.">            } else if (mInMultiSelectMode &amp;&amp; mCheckedCards.isEmpty()) {</span>
+                //If we don't have cards, unload multiselect
+<span class="nc" id="L2365">                endMultiSelectMode();</span>
+            }
+
+            //If we're not in mutliselect, we can select cards if there are cards to select
+<span class="nc bnc" id="L2369" title="All 4 branches missed.">            if (!mInMultiSelectMode &amp;&amp; this.mActionBarMenu != null) {</span>
+<span class="nc" id="L2370">                MenuItem selectAll = mActionBarMenu.findItem(R.id.action_select_all);</span>
+<span class="nc bnc" id="L2371" title="All 4 branches missed.">                selectAll.setVisible(mCards != null &amp;&amp; cardCount() != 0);</span>
+            }
+
+<span class="nc bnc" id="L2374" title="All 2 branches missed.">            if (!mInMultiSelectMode) {</span>
+<span class="nc" id="L2375">                return;</span>
+            }
+
+<span class="nc" id="L2378">            updateMultiselectMenu();</span>
+<span class="nc" id="L2379">            mActionBarTitle.setText(Integer.toString(checkedCardCount()));</span>
+        } finally {
+<span class="nc" id="L2381">            mCardsAdapter.notifyDataSetChanged();</span>
+        }
+<span class="nc" id="L2383">    }</span>
+
+
+    /**
+     * Reloads the data of the cards, taking on their current values from the database.
+     */
+    protected void reloadCards(Card[] cards) {
+<span class="nc bnc" id="L2390" title="All 4 branches missed.">        if (cards == null || cards.length == 0) {</span>
+<span class="nc" id="L2391">            return;</span>
+        }
+
+<span class="nc" id="L2394">        Set&lt;Long&gt; cardIds = new HashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L2395" title="All 2 branches missed.">        for (Card c : cards) {</span>
+<span class="nc" id="L2396">            cardIds.add(c.getId());</span>
+        }
+
+<span class="nc bnc" id="L2399" title="All 2 branches missed.">        for (CardCache props : mCards) {</span>
+<span class="nc bnc" id="L2400" title="All 2 branches missed.">            if (cardIds.contains(props.getId())) {</span>
+<span class="nc" id="L2401">                props.reload();</span>
+            }
+<span class="nc" id="L2403">        }</span>
+<span class="nc" id="L2404">        mCardsAdapter.notifyDataSetChanged();</span>
+<span class="nc" id="L2405">    }</span>
+
+    private CardCollection&lt;CardCache&gt; getCards() {
+<span class="nc" id="L2408">        mCards.ensureValidValue();</span>
+<span class="nc" id="L2409">        return mCards;</span>
+    }
+
+    private long[] getAllCardIds() {
+<span class="nc" id="L2413">        long[] l = new long[mCards.size()];</span>
+<span class="nc bnc" id="L2414" title="All 2 branches missed.">        for (int i = 0; i &lt; mCards.size(); i++) {</span>
+<span class="nc" id="L2415">            l[i] = mCards.get(i).getId();</span>
+        }
+<span class="nc" id="L2417">        return l;</span>
+    }
+
+    // This could be better: use a wrapper class PositionAware&lt;T&gt; to store the position so it's
+    // no longer a responsibility of CardCache and we can guarantee it's consistent just by using this collection
+    /** A position-aware collection to ensure consistency between the position of items and the collection */
+<span class="nc" id="L2423">    public static class CardCollection&lt;T extends PositionAware&gt; implements Iterable&lt;T&gt; {</span>
+<span class="nc" id="L2424">        private List&lt;T&gt; mWrapped = new ArrayList&lt;&gt;(0);</span>
+
+        public int size() {
+<span class="nc" id="L2427">            return mWrapped.size();</span>
+        }
+
+        public T get(int index) {
+<span class="nc" id="L2431">            return mWrapped.get(index);</span>
+        }
+
+
+        public void reset() {
+<span class="nc" id="L2436">            mWrapped = new ArrayList&lt;&gt;(0);</span>
+<span class="nc" id="L2437">        }</span>
+
+
+        public void replaceWith(List&lt;T&gt; value) {
+<span class="nc" id="L2441">            mWrapped = value;</span>
+<span class="nc" id="L2442">        }</span>
+
+        public void reverse() {
+<span class="nc" id="L2445">            Collections.reverse(mWrapped);</span>
+<span class="nc" id="L2446">            int position = 0;</span>
+<span class="nc bnc" id="L2447" title="All 2 branches missed.">            for (int i = 0; i &lt; mWrapped.size(); i++) {</span>
+<span class="nc" id="L2448">                mWrapped.get(i).setPosition(position++);</span>
+            }
+<span class="nc" id="L2450">        }</span>
+
+
+        @NonNull
+        @Override
+        public Iterator&lt;T&gt; iterator() {
+<span class="nc" id="L2456">            return mWrapped.iterator();</span>
+        }
+
+        public java.util.Collection&lt;T&gt; unsafeGetWrapped() {
+<span class="nc" id="L2460">            return mWrapped;</span>
+        }
+
+
+        public void ensureValidValue() {
+<span class="nc bnc" id="L2465" title="All 2 branches missed.">            if (mWrapped == null) {</span>
+<span class="nc" id="L2466">                reset();</span>
+            }
+<span class="nc" id="L2468">        }</span>
+
+
+        public void clear() {
+<span class="nc" id="L2472">            mWrapped.clear();</span>
+<span class="nc" id="L2473">        }</span>
+    }
+
+    @VisibleForTesting
+    interface PositionAware {
+        int getPosition();
+        void setPosition(int value);
+    }
+
+    public static class CardCache extends Card.Cache implements PositionAware {
+<span class="nc" id="L2483">        private boolean mLoaded = false;</span>
+<span class="nc" id="L2484">        private Pair&lt;String, String&gt; mQa = null;</span>
+        private int mPosition;
+
+        public CardCache(long id, Collection col, int position) {
+<span class="nc" id="L2488">            super(col, id);</span>
+<span class="nc" id="L2489">            mPosition = position;</span>
+<span class="nc" id="L2490">        }</span>
+
+        protected CardCache(CardCache cache, int position) {
+<span class="nc" id="L2493">            super(cache);</span>
+<span class="nc" id="L2494">            mLoaded = cache.mLoaded;</span>
+<span class="nc" id="L2495">            mQa = cache.mQa;</span>
+<span class="nc" id="L2496">            mPosition = position;</span>
+<span class="nc" id="L2497">        }</span>
+
+        public int getPosition() {
+<span class="nc" id="L2500">            return mPosition;</span>
+        }
+
+
+        @Override
+        public void setPosition(int value) {
+<span class="nc" id="L2506">            mPosition = value;</span>
+<span class="nc" id="L2507">        }</span>
+
+
+        /** clear all values except ID.*/
+        public void reload() {
+<span class="nc" id="L2512">            super.reload();</span>
+<span class="nc" id="L2513">            mLoaded = false;</span>
+<span class="nc" id="L2514">            mQa = null;</span>
+<span class="nc" id="L2515">        }</span>
+
+        /**
+         * Get the background color of items in the card list based on the Card
+         * @return index into TypedArray specifying the background color
+         */
+        private int getColor() {
+<span class="nc" id="L2522">            int flag = getCard().userFlag();</span>
+<span class="nc bnc" id="L2523" title="All 5 branches missed.">            switch (flag) {</span>
+                case 1:
+<span class="nc" id="L2525">                    return R.attr.flagRed;</span>
+                case 2:
+<span class="nc" id="L2527">                    return R.attr.flagOrange;</span>
+                case 3:
+<span class="nc" id="L2529">                    return R.attr.flagGreen;</span>
+                case 4:
+<span class="nc" id="L2531">                    return R.attr.flagBlue;</span>
+                default:
+<span class="nc bnc" id="L2533" title="All 2 branches missed.">                    if (getCard().note().hasTag(&quot;marked&quot;)) {</span>
+<span class="nc" id="L2534">                        return R.attr.markedColor;</span>
+                    } else {
+<span class="nc bnc" id="L2536" title="All 2 branches missed.">                        if (getCard().getQueue() == Consts.QUEUE_TYPE_SUSPENDED) {</span>
+<span class="nc" id="L2537">                            return R.attr.suspendedColor;</span>
+                        } else {
+<span class="nc" id="L2539">                            return android.R.attr.colorBackground;</span>
+                        }
+                    }
+            }
+        }
+
+        public String getColumnHeaderText(Column key) {
+<span class="nc bnc" id="L2546" title="All 19 branches missed.">            switch (key) {</span>
+            case FLAGS:
+<span class="nc" id="L2548">                return (Integer.valueOf(getCard().userFlag())).toString();</span>
+            case SUSPENDED:
+<span class="nc bnc" id="L2550" title="All 2 branches missed.">                return getCard().getQueue() == Consts.QUEUE_TYPE_SUSPENDED ? &quot;True&quot;: &quot;False&quot;;</span>
+            case MARKED:
+<span class="nc bnc" id="L2552" title="All 2 branches missed.">                return getCard().note().hasTag(&quot;marked&quot;) ? &quot;marked&quot; : null;</span>
+            case SFLD:
+<span class="nc" id="L2554">                return getCard().note().getSFld();</span>
+            case DECK:
+<span class="nc" id="L2556">                return getCol().getDecks().name(getCard().getDid());</span>
+            case TAGS:
+<span class="nc" id="L2558">                return getCard().note().stringTags();</span>
+            case CARD:
+<span class="nc" id="L2560">                return getCard().template().optString(&quot;name&quot;);</span>
+            case DUE:
+<span class="nc" id="L2562">                return getCard().getDueString();</span>
+            case EASE:
+<span class="nc bnc" id="L2564" title="All 2 branches missed.">                if (getCard().getType() == Consts.CARD_TYPE_NEW) {</span>
+<span class="nc" id="L2565">                    return AnkiDroidApp.getInstance().getString(R.string.card_browser_interval_new_card);</span>
+                } else {
+<span class="nc" id="L2567">                    return (getCard().getFactor()/10)+&quot;%&quot;;</span>
+                }
+            case CHANGED:
+<span class="nc" id="L2570">                return LanguageUtil.getShortDateFormatFromS(getCard().getMod());</span>
+            case CREATED:
+<span class="nc" id="L2572">                return LanguageUtil.getShortDateFormatFromMs(getCard().note().getId());</span>
+            case EDITED:
+<span class="nc" id="L2574">                return LanguageUtil.getShortDateFormatFromS(getCard().note().getMod());</span>
+            case INTERVAL:
+<span class="nc bnc" id="L2576" title="All 3 branches missed.">                switch (getCard().getType()) {</span>
+                case Consts.CARD_TYPE_NEW:
+<span class="nc" id="L2578">                    return AnkiDroidApp.getInstance().getString(R.string.card_browser_interval_new_card);</span>
+                case Consts.CARD_TYPE_LRN :
+<span class="nc" id="L2580">                    return AnkiDroidApp.getInstance().getString(R.string.card_browser_interval_learning_card);</span>
+                default:
+<span class="nc" id="L2582">                    return Utils.roundedTimeSpanUnformatted(AnkiDroidApp.getInstance(), getCard().getIvl()*SECONDS_PER_DAY);</span>
+                }
+            case LAPSES:
+<span class="nc" id="L2585">                return Integer.toString(getCard().getLapses());</span>
+            case NOTE_TYPE:
+<span class="nc" id="L2587">                return getCard().model().optString(&quot;name&quot;);</span>
+            case REVIEWS:
+<span class="nc" id="L2589">                return Integer.toString(getCard().getReps());</span>
+            case QUESTION:
+<span class="nc" id="L2591">                updateSearchItemQA();</span>
+<span class="nc" id="L2592">                return mQa.first;</span>
+            case ANSWER:
+<span class="nc" id="L2594">                updateSearchItemQA();</span>
+<span class="nc" id="L2595">                return mQa.second;</span>
+            default:
+<span class="nc" id="L2597">                return null;</span>
+            }
+        }
+
+        /** pre compute the note and question/answer.  It can safely
+            be called twice without doing extra work. */
+        public void load(boolean reload, int column1Index, int column2Index) {
+<span class="nc bnc" id="L2604" title="All 2 branches missed.">            if (reload) {</span>
+<span class="nc" id="L2605">                reload();</span>
+            }
+<span class="nc" id="L2607">            getCard().note();</span>
+            if (
+<span class="nc bnc" id="L2609" title="All 2 branches missed.">                COLUMN1_KEYS[column1Index] == QUESTION ||</span>
+<span class="nc bnc" id="L2610" title="All 2 branches missed.">                COLUMN2_KEYS[column2Index] == QUESTION ||</span>
+<span class="nc bnc" id="L2611" title="All 2 branches missed.">                COLUMN2_KEYS[column2Index] == ANSWER</span>
+                // First column can not be the answer. If it were to
+                // change, this code should also be changed.
+                ) {
+<span class="nc" id="L2615">                updateSearchItemQA();</span>
+            }
+<span class="nc" id="L2617">            mLoaded = true;</span>
+<span class="nc" id="L2618">        }</span>
+
+        public boolean isLoaded() {
+<span class="nc" id="L2621">            return mLoaded;</span>
+        }
+
+        /**
+           Reload question and answer. Use browser format. If it's empty
+           uses non-browser format. If answer starts by question, remove
+           question.
+        */
+        public void updateSearchItemQA() {
+<span class="nc bnc" id="L2630" title="All 2 branches missed.">            if (mQa != null) {</span>
+<span class="nc" id="L2631">                return;</span>
+            }
+            // render question and answer
+<span class="nc" id="L2634">            Map&lt;String, String&gt; qa = getCard()._getQA(true, true);</span>
+            // Render full question / answer if the bafmt (i.e. &quot;browser appearance&quot;) setting forced blank result
+<span class="nc bnc" id="L2636" title="All 4 branches missed.">            if (&quot;&quot;.equals(qa.get(&quot;q&quot;)) || &quot;&quot;.equals(qa.get(&quot;a&quot;))) {</span>
+<span class="nc" id="L2637">                HashMap&lt;String, String&gt; qaFull = getCard()._getQA(true, false);</span>
+<span class="nc bnc" id="L2638" title="All 2 branches missed.">                if (&quot;&quot;.equals(qa.get(&quot;q&quot;))) {</span>
+<span class="nc" id="L2639">                    qa.put(&quot;q&quot;, qaFull.get(&quot;q&quot;));</span>
+                }
+<span class="nc bnc" id="L2641" title="All 2 branches missed.">                if (&quot;&quot;.equals(qa.get(&quot;a&quot;))) {</span>
+<span class="nc" id="L2642">                    qa.put(&quot;a&quot;, qaFull.get(&quot;a&quot;));</span>
+                }
+            }
+            // update the original hash map to include rendered question &amp; answer
+<span class="nc" id="L2646">            String q = qa.get(&quot;q&quot;);</span>
+<span class="nc" id="L2647">            String a = qa.get(&quot;a&quot;);</span>
+            // remove the question from the start of the answer if it exists
+<span class="nc bnc" id="L2649" title="All 2 branches missed.">            if (a.startsWith(q)) {</span>
+<span class="nc" id="L2650">                a = a.replaceFirst(Pattern.quote(q), &quot;&quot;);</span>
+            }
+<span class="nc" id="L2652">            a = formatQA(a, AnkiDroidApp.getInstance());</span>
+<span class="nc" id="L2653">            q = formatQA(q, AnkiDroidApp.getInstance());</span>
+<span class="nc" id="L2654">            mQa = new Pair&lt;&gt;(q, a);</span>
+<span class="nc" id="L2655">        }</span>
+
+        @Override
+        public boolean equals(Object obj) {
+<span class="nc bnc" id="L2659" title="All 2 branches missed.">            if (this == obj) {</span>
+<span class="nc" id="L2660">                return true;</span>
+            }
+<span class="nc bnc" id="L2662" title="All 2 branches missed.">            if (obj == null) {</span>
+<span class="nc" id="L2663">                return false;</span>
+            }
+<span class="nc bnc" id="L2665" title="All 2 branches missed.">            if (getClass() != obj.getClass()) {</span>
+<span class="nc" id="L2666">                return false;</span>
+            }
+<span class="nc bnc" id="L2668" title="All 2 branches missed.">            return getId() == ((CardCache) obj).getId();</span>
+        }
+
+        @Override
+        public int hashCode() {
+<span class="nc" id="L2673">            return Long.valueOf(getId()).hashCode();</span>
+        }
+    }
+
+    /**
+     * Show/dismiss dialog when sd card is ejected/remounted (collection is saved by SdCardReceiver)
+     */
+    private void registerExternalStorageListener() {
+<span class="nc bnc" id="L2681" title="All 2 branches missed.">        if (mUnmountReceiver == null) {</span>
+<span class="nc" id="L2682">            mUnmountReceiver = new BroadcastReceiver() {</span>
+                @Override
+                public void onReceive(Context context, Intent intent) {
+<span class="nc bnc" id="L2685" title="All 2 branches missed.">                    if (intent.getAction().equals(SdCardReceiver.MEDIA_EJECT)) {</span>
+<span class="nc" id="L2686">                        finishWithoutAnimation();</span>
+                    }
+<span class="nc" id="L2688">                }</span>
+            };
+<span class="nc" id="L2690">            IntentFilter iFilter = new IntentFilter();</span>
+<span class="nc" id="L2691">            iFilter.addAction(SdCardReceiver.MEDIA_EJECT);</span>
+<span class="nc" id="L2692">            registerReceiver(mUnmountReceiver, iFilter);</span>
+        }
+<span class="nc" id="L2694">    }</span>
+
+    /**
+     * The views expand / contract when switching between multi-select mode so we manually
+     * adjust so that the vertical position of the given view is maintained
+     */
+    private void recenterListView(@NonNull View view) {
+<span class="nc" id="L2701">        final int position = mCardsListView.getPositionForView(view);</span>
+        // Get the current vertical position of the top of the selected view
+<span class="nc" id="L2703">        final int top = view.getTop();</span>
+<span class="nc" id="L2704">        final Handler handler = new Handler();</span>
+        // Post to event queue with some delay to give time for the UI to update the layout
+<span class="nc" id="L2706">        handler.postDelayed(() -&gt; {</span>
+            // Scroll to the same vertical position before the layout was changed
+<span class="nc" id="L2708">            mCardsListView.setSelectionFromTop(position, top);</span>
+<span class="nc" id="L2709">        }, 10);</span>
+<span class="nc" id="L2710">    }</span>
+
+    /**
+     * Turn on Multi-Select Mode so that the user can select multiple cards at once.
+     */
+    private void loadMultiSelectMode() {
+<span class="nc bnc" id="L2716" title="All 2 branches missed.">        if (mInMultiSelectMode) {</span>
+<span class="nc" id="L2717">            return;</span>
+        }
+<span class="nc" id="L2719">        Timber.d(&quot;loadMultiSelectMode()&quot;);</span>
+        // set in multi-select mode
+<span class="nc" id="L2721">        mInMultiSelectMode = true;</span>
+        // show title and hide spinner
+<span class="nc" id="L2723">        mActionBarTitle.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L2724">        mActionBarTitle.setText(String.valueOf(checkedCardCount()));</span>
+<span class="nc" id="L2725">        mActionBarSpinner.setVisibility(View.GONE);</span>
+        // reload the actionbar using the multi-select mode actionbar
+<span class="nc" id="L2727">        supportInvalidateOptionsMenu();</span>
+<span class="nc" id="L2728">    }</span>
+
+    /**
+     * Turn off Multi-Select Mode and return to normal state
+     */
+    private void endMultiSelectMode() {
+<span class="nc" id="L2734">        Timber.d(&quot;endMultiSelectMode()&quot;);</span>
+<span class="nc" id="L2735">        mCheckedCards.clear();</span>
+<span class="nc" id="L2736">        mInMultiSelectMode = false;</span>
+        // If view which was originally selected when entering multi-select is visible then maintain its position
+<span class="nc" id="L2738">        View view = mCardsListView.getChildAt(mLastSelectedPosition - mCardsListView.getFirstVisiblePosition());</span>
+<span class="nc bnc" id="L2739" title="All 2 branches missed.">        if (view != null) {</span>
+<span class="nc" id="L2740">            recenterListView(view);</span>
+        }
+        // update adapter to remove check boxes
+<span class="nc" id="L2743">        mCardsAdapter.notifyDataSetChanged();</span>
+        // update action bar
+<span class="nc" id="L2745">        supportInvalidateOptionsMenu();</span>
+<span class="nc" id="L2746">        mActionBarSpinner.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L2747">        mActionBarTitle.setVisibility(View.GONE);</span>
+<span class="nc" id="L2748">    }</span>
+
+    @VisibleForTesting
+    public int checkedCardCount() {
+<span class="nc" id="L2752">        return mCheckedCards.size();</span>
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    boolean isInMultiSelectMode() {
+<span class="nc" id="L2757">        return mInMultiSelectMode;</span>
+    }
+
+    @VisibleForTesting()
+    long cardCount() {
+<span class="nc" id="L2762">        return mCards.size();</span>
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+     boolean isShowingSelectAll() {
+<span class="nc bnc" id="L2767" title="All 4 branches missed.">        return mActionBarMenu != null &amp;&amp; mActionBarMenu.findItem(R.id.action_select_all).isVisible();</span>
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    boolean isShowingSelectNone() {
+<span class="nc bnc" id="L2772" title="All 2 branches missed.">        return mActionBarMenu != null &amp;&amp;</span>
+<span class="nc bnc" id="L2773" title="All 2 branches missed.">                mActionBarMenu.findItem(R.id.action_select_none) != null &amp;&amp; //</span>
+<span class="nc bnc" id="L2774" title="All 2 branches missed.">                mActionBarMenu.findItem(R.id.action_select_none).isVisible();</span>
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    void clearCardData(int position) {
+<span class="nc" id="L2779">        mCards.get(position).reload();</span>
+<span class="nc" id="L2780">    }</span>
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    void rerenderAllCards() {
+<span class="nc" id="L2784">        TaskManager.launchCollectionTask(renderBrowserQAParams(0, mCards.size()-1, getCards()), mRenderQAHandler);</span>
+<span class="nc" id="L2785">    }</span>
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    long[] getCardIds() {
+<span class="nc" id="L2789">        CardCache[] cardsCopy = mCards.unsafeGetWrapped().toArray(new CardCache[0]);</span>
+<span class="nc" id="L2790">        long[] ret = new long[cardsCopy.length];</span>
+<span class="nc bnc" id="L2791" title="All 2 branches missed.">        for (int i = 0; i &lt; cardsCopy.length; i++) {</span>
+<span class="nc" id="L2792">            ret[i] = cardsCopy[i].getId();</span>
+        }
+<span class="nc" id="L2794">        return ret;</span>
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    void checkCardsAtPositions(int... positions) {
+<span class="nc bnc" id="L2799" title="All 2 branches missed.">        for (int position : positions) {</span>
+<span class="nc bnc" id="L2800" title="All 2 branches missed.">            if (position &gt;= mCards.size()) {</span>
+<span class="nc" id="L2801">                throw new IllegalStateException(</span>
+<span class="nc" id="L2802">                        String.format(Locale.US, &quot;Attempted to check card at index %d. %d cards available&quot;,</span>
+<span class="nc" id="L2803">                                position, mCards.size()));</span>
+            }
+<span class="nc" id="L2805">            mCheckedCards.add(getCards().get(position));</span>
+        }
+<span class="nc" id="L2807">        onSelectionChanged();</span>
+<span class="nc" id="L2808">    }</span>
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    boolean hasCheckedCardAtPosition(int i) {
+<span class="nc" id="L2812">        return mCheckedCards.contains(getCards().get(i));</span>
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    public int getChangeDeckPositionFromId(long deckId) {
+<span class="nc" id="L2817">        List&lt;Deck&gt; decks = getValidDecksForChangeDeck();</span>
+<span class="nc bnc" id="L2818" title="All 2 branches missed.">        for (int i = 0; i &lt; decks.size(); i++) {</span>
+<span class="nc" id="L2819">            Deck deck = decks.get(i);</span>
+<span class="nc bnc" id="L2820" title="All 2 branches missed.">            if (deck.getLong(&quot;id&quot;) == deckId) {</span>
+<span class="nc" id="L2821">                return i;</span>
+            }
+        }
+<span class="nc" id="L2824">        throw new IllegalStateException(String.format(Locale.US, &quot;Deck %d not found&quot;, deckId));</span>
+    }
+
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    public List&lt;Long&gt; getCheckedCardIds() {
+<span class="nc" id="L2830">        List&lt;Long&gt; cardIds = new ArrayList&lt;&gt;(mCheckedCards.size());</span>
+<span class="nc bnc" id="L2831" title="All 2 branches missed.">        for (CardCache card : mCheckedCards) {</span>
+<span class="nc" id="L2832">            long id = card.getId();</span>
+<span class="nc" id="L2833">            cardIds.add(id);</span>
+<span class="nc" id="L2834">        }</span>
+<span class="nc" id="L2835">        return cardIds;</span>
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE) //should only be called from changeDeck()
+    void executeChangeCollectionTask(List&lt;Long&gt; ids, long newDid) {
+<span class="nc" id="L2840">        mNewDid = newDid; //line required for unit tests, not necessary, but a noop in regular call.</span>
+<span class="nc" id="L2841">        TaskManager.launchCollectionTask(</span>
+                new CollectionTask.ChangeDeckMulti(ids, newDid),
+                new ChangeDeckHandler(this));
+<span class="nc" id="L2844">    }</span>
+
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    public CardCache getPropertiesForCardId(long cardId) {
+<span class="nc bnc" id="L2849" title="All 2 branches missed.">        for (CardCache props : mCards) {</span>
+<span class="nc" id="L2850">            long id = props.getId();</span>
+<span class="nc bnc" id="L2851" title="All 2 branches missed.">            if (id == cardId) {</span>
+<span class="nc" id="L2852">                return props;</span>
+            }
+<span class="nc" id="L2854">        }</span>
+<span class="nc" id="L2855">        throw new IllegalStateException(String.format(Locale.US, &quot;Card '%d' not found&quot;, cardId));</span>
+    }
+
+
+    @VisibleForTesting
+    void filterByTag(String... tags) {
+<span class="nc" id="L2861">        filterByTag(Arrays.asList(tags), 0);</span>
+<span class="nc" id="L2862">    }</span>
+
+    @VisibleForTesting
+    void filterByFlag(int flag) {
+<span class="nc" id="L2866">        mCurrentFlag = flag;</span>
+<span class="nc" id="L2867">        filterByFlag();</span>
+<span class="nc" id="L2868">    }</span>
+
+    @VisibleForTesting
+    void replaceSelectionWith(int[] positions) {
+<span class="nc" id="L2872">        mCheckedCards.clear();</span>
+<span class="nc" id="L2873">        checkCardsAtPositions(positions);</span>
+<span class="nc" id="L2874">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

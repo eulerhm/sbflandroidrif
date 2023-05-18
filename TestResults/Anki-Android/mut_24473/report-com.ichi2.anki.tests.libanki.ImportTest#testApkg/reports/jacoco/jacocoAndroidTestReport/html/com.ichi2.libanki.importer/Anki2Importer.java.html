@@ -1,0 +1,1378 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Anki2Importer.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.libanki.importer</a> &gt; <span class="el_source">Anki2Importer.java</span></div><h1>Anki2Importer.java</h1><pre class="source lang-java linenums">/**
+ * ************************************************************************************
+ *  Copyright (c) 2012 Norbert Nagold &lt;norbert.nagold@gmail.com&gt;                         *
+ *  Copyright (c) 2016 Houssam Salem &lt;houssam.salem.au@gmail.com&gt;                        *
+ *                                                                                       *
+ *  This program is free software; you can redistribute it and/or modify it under        *
+ *  the terms of the GNU General Public License as published by the Free Software        *
+ *  Foundation; either version 3 of the License, or (at your option) any later           *
+ *  version.                                                                             *
+ *                                                                                       *
+ *  This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ *  WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ *  PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                       *
+ *  You should have received a copy of the GNU General Public License along with         *
+ *  this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ * **************************************************************************************
+ */
+package com.ichi2.libanki.importer;
+
+import android.database.Cursor;
+import android.text.TextUtils;
+import android.util.Pair;
+import com.ichi2.anki.R;
+import com.ichi2.anki.exception.ConfirmModSchemaException;
+import com.ichi2.anki.exception.ImportExportException;
+import com.ichi2.libanki.Collection;
+import com.ichi2.libanki.Consts;
+import com.ichi2.libanki.DB;
+import com.ichi2.libanki.Decks;
+import com.ichi2.libanki.Media;
+import com.ichi2.libanki.Model;
+import com.ichi2.libanki.Note;
+import com.ichi2.libanki.Storage;
+import com.ichi2.libanki.Utils;
+import com.ichi2.libanki.DeckConfig;
+import com.ichi2.libanki.Deck;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import androidx.annotation.NonNull;
+import timber.log.Timber;
+import static com.ichi2.libanki.Consts.CARD_TYPE_LRN;
+import static com.ichi2.libanki.Consts.CARD_TYPE_NEW;
+import static com.ichi2.libanki.Consts.CARD_TYPE_REV;
+import static com.ichi2.libanki.Consts.QUEUE_TYPE_DAY_LEARN_RELEARN;
+import static com.ichi2.libanki.Consts.QUEUE_TYPE_NEW;
+import static com.ichi2.libanki.Consts.QUEUE_TYPE_REV;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+@SuppressWarnings({ &quot;PMD.AvoidThrowingRawExceptionTypes&quot;, &quot;PMD.AvoidReassigningParameters&quot;, &quot;PMD.NPathComplexity&quot;, &quot;PMD.MethodNamingConventions&quot;, &quot;PMD.ExcessiveMethodLength&quot;, &quot;PMD.SwitchStmtsShouldHaveDefault&quot;, &quot;PMD.CollapsibleIfStatements&quot;, &quot;PMD.EmptyIfStmt&quot; })
+public class Anki2Importer extends Importer {
+
+    private static final int MEDIAPICKLIMIT = 1024;
+
+    private final String mDeckPrefix;
+
+    private final boolean mAllowUpdate;
+
+    private boolean mDupeOnSchemaChange;
+
+    private static class NoteTriple {
+
+        public final long mNid;
+
+        public final long mMid;
+
+        public final long mMod;
+
+<span class="fc" id="L83">        public NoteTriple(long nid, long mod, long mid) {</span>
+<span class="fc" id="L84">            mNid = nid;</span>
+<span class="fc" id="L85">            mMod = mod;</span>
+<span class="fc" id="L86">            mMid = mid;</span>
+<span class="fc" id="L87">        }</span>
+    }
+
+    private Map&lt;String, NoteTriple&gt; mNotes;
+
+    private Map&lt;Long, Long&gt; mDecks;
+
+    private Map&lt;Long, Long&gt; mModelMap;
+
+    private Set&lt;String&gt; mIgnoredGuids;
+
+    private int mDupes;
+
+    private int mAdded;
+
+    private int mUpdated;
+
+    /**
+     * If importing SchedV1 into SchedV2 we need to reset the learning cards
+     */
+    private boolean mMustResetLearning;
+
+    public Anki2Importer(Collection col, String file) {
+<span class="fc" id="L110">        super(col, file);</span>
+<span class="pc bpc" id="L111" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13737)) {</span>
+<span class="fc" id="L112">            mNeedMapper = false;</span>
+        }
+<span class="fc" id="L114">        mDeckPrefix = null;</span>
+<span class="fc" id="L115">        mAllowUpdate = true;</span>
+<span class="pc bpc" id="L116" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13738)) {</span>
+<span class="fc" id="L117">            mDupeOnSchemaChange = false;</span>
+        }
+<span class="fc" id="L119">    }</span>
+
+    @Override
+    public void run() throws ImportExportException {
+<span class="pc bpc" id="L123" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13739)) {</span>
+<span class="fc" id="L124">            publishProgress(0, 0, 0);</span>
+        }
+        try {
+<span class="pc bpc" id="L127" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13741)) {</span>
+<span class="fc" id="L128">                _prepareFiles();</span>
+            }
+            try {
+<span class="pc bpc" id="L131" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(13743)) {</span>
+<span class="fc" id="L132">                    _import();</span>
+                }
+            } finally {
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(13742)) {</span>
+<span class="fc" id="L136">                    mSrc.close(false);</span>
+                }
+            }
+<span class="nc" id="L139">        } catch (Exception e) {</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13740)) {</span>
+<span class="nc" id="L141">                Timber.e(e, &quot;Exception while importing&quot;);</span>
+            }
+<span class="nc" id="L143">            throw new ImportExportException(e.getMessage());</span>
+<span class="fc" id="L144">        }</span>
+<span class="fc" id="L145">    }</span>
+
+    private void _prepareFiles() {
+<span class="fc" id="L148">        boolean importingV2 = mFile.endsWith(&quot;.anki21&quot;);</span>
+<span class="pc bpc" id="L149" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13744)) {</span>
+<span class="fc" id="L150">            this.mMustResetLearning = false;</span>
+        }
+<span class="pc bpc" id="L152" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13745)) {</span>
+<span class="fc" id="L153">            mDst = mCol;</span>
+        }
+<span class="pc bpc" id="L155" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13746)) {</span>
+<span class="fc" id="L156">            mSrc = Storage.Collection(mContext, mFile);</span>
+        }
+<span class="pc bpc" id="L158" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13760)) {</span>
+<span class="pc bpc" id="L159" title="42 of 50 branches missed.">            if ((ListenerUtil.mutListener.listen(13752) ? (!importingV2 || (ListenerUtil.mutListener.listen(13751) ? (mCol.schedVer() &gt;= 1) : (ListenerUtil.mutListener.listen(13750) ? (mCol.schedVer() &lt;= 1) : (ListenerUtil.mutListener.listen(13749) ? (mCol.schedVer() &gt; 1) : (ListenerUtil.mutListener.listen(13748) ? (mCol.schedVer() &lt; 1) : (ListenerUtil.mutListener.listen(13747) ? (mCol.schedVer() == 1) : (mCol.schedVer() != 1))))))) : (!importingV2 &amp;&amp; (ListenerUtil.mutListener.listen(13751) ? (mCol.schedVer() &gt;= 1) : (ListenerUtil.mutListener.listen(13750) ? (mCol.schedVer() &lt;= 1) : (ListenerUtil.mutListener.listen(13749) ? (mCol.schedVer() &gt; 1) : (ListenerUtil.mutListener.listen(13748) ? (mCol.schedVer() &lt; 1) : (ListenerUtil.mutListener.listen(13747) ? (mCol.schedVer() == 1) : (mCol.schedVer() != 1))))))))) {</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(13759)) {</span>
+                    // any scheduling included?
+<span class="nc bnc" id="L162" title="All 22 branches missed.">                    if ((ListenerUtil.mutListener.listen(13757) ? (mSrc.getDb().queryScalar(&quot;select 1 from cards where queue != &quot; + QUEUE_TYPE_NEW + &quot; limit 1&quot;) &gt;= 0) : (ListenerUtil.mutListener.listen(13756) ? (mSrc.getDb().queryScalar(&quot;select 1 from cards where queue != &quot; + QUEUE_TYPE_NEW + &quot; limit 1&quot;) &lt;= 0) : (ListenerUtil.mutListener.listen(13755) ? (mSrc.getDb().queryScalar(&quot;select 1 from cards where queue != &quot; + QUEUE_TYPE_NEW + &quot; limit 1&quot;) &lt; 0) : (ListenerUtil.mutListener.listen(13754) ? (mSrc.getDb().queryScalar(&quot;select 1 from cards where queue != &quot; + QUEUE_TYPE_NEW + &quot; limit 1&quot;) != 0) : (ListenerUtil.mutListener.listen(13753) ? (mSrc.getDb().queryScalar(&quot;select 1 from cards where queue != &quot; + QUEUE_TYPE_NEW + &quot; limit 1&quot;) == 0) : (mSrc.getDb().queryScalar(&quot;select 1 from cards where queue != &quot; + QUEUE_TYPE_NEW + &quot; limit 1&quot;) &gt; 0))))))) {</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13758)) {</span>
+<span class="nc" id="L164">                            this.mMustResetLearning = true;</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="fc" id="L170">    }</span>
+
+    private void _import() {
+<span class="pc bpc" id="L173" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13761)) {</span>
+<span class="fc" id="L174">            mDecks = new HashMap&lt;&gt;(mSrc.getDecks().count());</span>
+        }
+        try {
+<span class="pc bpc" id="L177" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13765)) {</span>
+                // Use transactions for performance and rollbacks in case of error
+<span class="fc" id="L179">                mDst.getDb().getDatabase().beginTransaction();</span>
+            }
+<span class="pc bpc" id="L181" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13766)) {</span>
+<span class="fc" id="L182">                mDst.getMedia().getDb().getDatabase().beginTransaction();</span>
+            }
+<span class="pc bpc" id="L184" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13768)) {</span>
+<span class="pc bpc" id="L185" title="1 of 2 branches missed.">                if (!TextUtils.isEmpty(mDeckPrefix)) {</span>
+<span class="nc" id="L186">                    long id = mDst.getDecks().id(mDeckPrefix);</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13767)) {</span>
+<span class="nc" id="L188">                        mDst.getDecks().select(id);</span>
+                    }
+                }
+            }
+<span class="pc bpc" id="L192" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13769)) {</span>
+<span class="fc" id="L193">                Timber.i(&quot;Preparing Import&quot;);</span>
+            }
+<span class="pc bpc" id="L195" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13770)) {</span>
+<span class="fc" id="L196">                _prepareTS();</span>
+            }
+<span class="pc bpc" id="L198" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13771)) {</span>
+<span class="fc" id="L199">                _prepareModels();</span>
+            }
+<span class="pc bpc" id="L201" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13772)) {</span>
+<span class="fc" id="L202">                Timber.i(&quot;Importing notes&quot;);</span>
+            }
+<span class="pc bpc" id="L204" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13773)) {</span>
+<span class="fc" id="L205">                _importNotes();</span>
+            }
+<span class="pc bpc" id="L207" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13774)) {</span>
+<span class="fc" id="L208">                Timber.i(&quot;Importing Cards&quot;);</span>
+            }
+<span class="pc bpc" id="L210" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13775)) {</span>
+<span class="fc" id="L211">                _importCards();</span>
+            }
+<span class="pc bpc" id="L213" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13776)) {</span>
+<span class="fc" id="L214">                Timber.i(&quot;Importing Media&quot;);</span>
+            }
+<span class="pc bpc" id="L216" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13777)) {</span>
+<span class="fc" id="L217">                _importStaticMedia();</span>
+            }
+<span class="pc bpc" id="L219" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13778)) {</span>
+<span class="fc" id="L220">                publishProgress(100, 100, 25);</span>
+            }
+<span class="pc bpc" id="L222" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13779)) {</span>
+<span class="fc" id="L223">                Timber.i(&quot;Performing post-import&quot;);</span>
+            }
+<span class="pc bpc" id="L225" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13780)) {</span>
+<span class="fc" id="L226">                _postImport();</span>
+            }
+<span class="pc bpc" id="L228" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13781)) {</span>
+<span class="fc" id="L229">                publishProgress(100, 100, 50);</span>
+            }
+<span class="pc bpc" id="L231" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13782)) {</span>
+<span class="fc" id="L232">                mDst.getDb().getDatabase().setTransactionSuccessful();</span>
+            }
+<span class="pc bpc" id="L234" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13783)) {</span>
+<span class="fc" id="L235">                mDst.getMedia().getDb().getDatabase().setTransactionSuccessful();</span>
+            }
+<span class="nc" id="L237">        } catch (Exception err) {</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13762)) {</span>
+<span class="nc" id="L239">                Timber.e(err, &quot;_import() exception&quot;);</span>
+            }
+<span class="nc" id="L241">            throw err;</span>
+        } finally {
+<span class="pc bpc" id="L243" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13763)) {</span>
+                // endTransaction throws about invalid transaction even when you check first!
+<span class="fc" id="L245">                DB.safeEndInTransaction(mDst.getDb());</span>
+            }
+<span class="pc bpc" id="L247" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13764)) {</span>
+<span class="fc" id="L248">                DB.safeEndInTransaction(mDst.getMedia().getDb());</span>
+            }
+        }
+<span class="pc bpc" id="L251" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13784)) {</span>
+<span class="fc" id="L252">            Timber.i(&quot;Performing vacuum/analyze&quot;);</span>
+        }
+        try {
+<span class="pc bpc" id="L255" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13786)) {</span>
+<span class="fc" id="L256">                mDst.getDb().execute(&quot;vacuum&quot;);</span>
+            }
+<span class="nc" id="L258">        } catch (Exception e) {</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13785)) {</span>
+                // Allow the import to succeed but recommend the user run check database
+<span class="nc" id="L261">                mLog.add(getRes().getString(R.string.import_succeeded_but_check_database, e.getLocalizedMessage()));</span>
+            }
+<span class="fc" id="L263">        }</span>
+<span class="pc bpc" id="L264" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13787)) {</span>
+<span class="fc" id="L265">            publishProgress(100, 100, 65);</span>
+        }
+        try {
+<span class="pc bpc" id="L268" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13789)) {</span>
+<span class="fc" id="L269">                mDst.getDb().execute(&quot;analyze&quot;);</span>
+            }
+<span class="nc" id="L271">        } catch (Exception e) {</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13788)) {</span>
+                // Allow the import to succeed but recommend the user run check database
+<span class="nc" id="L274">                mLog.add(getRes().getString(R.string.import_succeeded_but_check_database, e.getLocalizedMessage()));</span>
+            }
+<span class="fc" id="L276">        }</span>
+<span class="pc bpc" id="L277" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13790)) {</span>
+<span class="fc" id="L278">            publishProgress(100, 100, 75);</span>
+        }
+<span class="fc" id="L280">    }</span>
+
+    private void _importNotes() {
+<span class="fc" id="L283">        int noteCount = mDst.noteCount();</span>
+<span class="pc bpc" id="L284" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13791)) {</span>
+            // build guid -&gt; (id,mod,mid) hash &amp; map of existing note ids
+<span class="fc" id="L286">            mNotes = new HashMap&lt;&gt;(noteCount);</span>
+        }
+<span class="fc" id="L288">        Set&lt;Long&gt; existing = new HashSet&lt;&gt;(noteCount);</span>
+<span class="fc" id="L289">        try (Cursor cur = mDst.getDb().query(&quot;select id, guid, mod, mid from notes&quot;)) {</span>
+<span class="pc bpc" id="L290" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13794)) {</span>
+                {
+<span class="fc" id="L292">                    long _loopCounter261 = 0;</span>
+<span class="pc bpc" id="L293" title="1 of 2 branches missed.">                    while (cur.moveToNext()) {</span>
+<span class="nc" id="L294">                        ListenerUtil.loopListener.listen(&quot;_loopCounter261&quot;, ++_loopCounter261);</span>
+<span class="nc" id="L295">                        long id = cur.getLong(0);</span>
+<span class="nc" id="L296">                        String guid = cur.getString(1);</span>
+<span class="nc" id="L297">                        long mod = cur.getLong(2);</span>
+<span class="nc" id="L298">                        long mid = cur.getLong(3);</span>
+<span class="nc bnc" id="L299" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13792)) {</span>
+<span class="nc" id="L300">                            mNotes.put(guid, new NoteTriple(id, mod, mid));</span>
+                        }
+<span class="nc bnc" id="L302" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13793)) {</span>
+<span class="nc" id="L303">                            existing.add(id);</span>
+                        }
+<span class="nc" id="L305">                    }</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L309" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13795)) {</span>
+            // guids, so we avoid importing invalid cards
+<span class="fc" id="L311">            mIgnoredGuids = new HashSet&lt;&gt;();</span>
+        }
+        // iterate over source collection
+<span class="fc" id="L314">        int nbNoteToImport = mSrc.noteCount();</span>
+<span class="fc" id="L315">        ArrayList&lt;Object[]&gt; add = new ArrayList&lt;&gt;(nbNoteToImport);</span>
+<span class="fc" id="L316">        int totalAddCount = 0;</span>
+<span class="fc" id="L317">        final int thresExecAdd = 1000;</span>
+<span class="fc" id="L318">        ArrayList&lt;Object[]&gt; update = new ArrayList&lt;&gt;(nbNoteToImport);</span>
+<span class="fc" id="L319">        int totalUpdateCount = 0;</span>
+<span class="fc" id="L320">        final int thresExecUpdate = 1000;</span>
+<span class="fc" id="L321">        ArrayList&lt;Long&gt; dirty = new ArrayList&lt;&gt;(nbNoteToImport);</span>
+<span class="fc" id="L322">        int totalDirtyCount = 0;</span>
+<span class="fc" id="L323">        final int thresExecDirty = 1000;</span>
+<span class="fc" id="L324">        int usn = mDst.usn();</span>
+<span class="fc" id="L325">        int dupes = 0;</span>
+<span class="fc" id="L326">        ArrayList&lt;String&gt; dupesIgnored = new ArrayList&lt;&gt;(nbNoteToImport);</span>
+<span class="pc bpc" id="L327" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13796)) {</span>
+<span class="fc" id="L328">            mDst.getDb().getDatabase().beginTransaction();</span>
+        }
+<span class="fc" id="L330">        try (Cursor cur = mSrc.getDb().getDatabase().query(&quot;select id, guid, mid, mod, tags, flds, sfld, csum, flags, data  from notes&quot;, null)) {</span>
+            // Counters for progress updates
+<span class="fc" id="L332">            int total = cur.getCount();</span>
+<span class="pc bpc" id="L333" title="16 of 22 branches missed.">            boolean largeCollection = (ListenerUtil.mutListener.listen(13802) ? (total &gt;= 200) : (ListenerUtil.mutListener.listen(13801) ? (total &lt;= 200) : (ListenerUtil.mutListener.listen(13800) ? (total &lt; 200) : (ListenerUtil.mutListener.listen(13799) ? (total != 200) : (ListenerUtil.mutListener.listen(13798) ? (total == 200) : (total &gt; 200))))));</span>
+<span class="pc bpc" id="L334" title="4 of 8 branches missed.">            int onePercent = (ListenerUtil.mutListener.listen(13806) ? (total % 100) : (ListenerUtil.mutListener.listen(13805) ? (total * 100) : (ListenerUtil.mutListener.listen(13804) ? (total - 100) : (ListenerUtil.mutListener.listen(13803) ? (total + 100) : (total / 100)))));</span>
+<span class="fc" id="L335">            int i = 0;</span>
+<span class="pc bpc" id="L336" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13894)) {</span>
+                {
+<span class="fc" id="L338">                    long _loopCounter263 = 0;</span>
+<span class="fc bfc" id="L339" title="All 2 branches covered.">                    while (cur.moveToNext()) {</span>
+<span class="fc" id="L340">                        ListenerUtil.loopListener.listen(&quot;_loopCounter263&quot;, ++_loopCounter263);</span>
+                        // turn the db result into a mutable list
+<span class="fc" id="L342">                        long nid = cur.getLong(0);</span>
+<span class="fc" id="L343">                        String guid = cur.getString(1);</span>
+<span class="fc" id="L344">                        long mid = cur.getLong(2);</span>
+<span class="fc" id="L345">                        long mod = cur.getLong(3);</span>
+<span class="fc" id="L346">                        String tags = cur.getString(4);</span>
+<span class="fc" id="L347">                        String flds = cur.getString(5);</span>
+<span class="fc" id="L348">                        String sfld = cur.getString(6);</span>
+<span class="fc" id="L349">                        long csum = cur.getLong(7);</span>
+<span class="fc" id="L350">                        int flag = cur.getInt(8);</span>
+<span class="fc" id="L351">                        String data = cur.getString(9);</span>
+<span class="fc" id="L352">                        Pair&lt;Boolean, Long&gt; shouldAddAndNewMid = _uniquifyNote(guid, mid);</span>
+<span class="fc" id="L353">                        boolean shouldAdd = shouldAddAndNewMid.first;</span>
+<span class="pc bpc" id="L354" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13807)) {</span>
+<span class="fc" id="L355">                            mid = shouldAddAndNewMid.second;</span>
+                        }
+<span class="pc bpc" id="L357" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13835)) {</span>
+<span class="pc bpc" id="L358" title="1 of 2 branches missed.">                            if (shouldAdd) {</span>
+<span class="pc bpc" id="L359" title="1 of 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13829)) {</span>
+                                    {
+<span class="fc" id="L361">                                        long _loopCounter262 = 0;</span>
+                                        // ensure nid is unique
+<span class="pc bpc" id="L363" title="1 of 2 branches missed.">                                        while (existing.contains(nid)) {</span>
+<span class="nc" id="L364">                                            ListenerUtil.loopListener.listen(&quot;_loopCounter262&quot;, ++_loopCounter262);</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(13828)) {</span>
+<span class="nc" id="L366">                                                nid += 999;</span>
+                                            }
+                                        }
+                                    }
+                                }
+<span class="pc bpc" id="L371" title="1 of 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13830)) {</span>
+<span class="fc" id="L372">                                    existing.add(nid);</span>
+                                }
+<span class="pc bpc" id="L374" title="1 of 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13831)) {</span>
+                                    // update media references in case of dupes
+<span class="fc" id="L376">                                    flds = _mungeMedia(mid, flds);</span>
+                                }
+<span class="pc bpc" id="L378" title="1 of 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13832)) {</span>
+<span class="fc" id="L379">                                    add.add(new Object[] { nid, guid, mid, mod, usn, tags, flds, sfld, csum, flag, data });</span>
+                                }
+<span class="pc bpc" id="L381" title="1 of 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13833)) {</span>
+<span class="fc" id="L382">                                    dirty.add(nid);</span>
+                                }
+<span class="pc bpc" id="L384" title="1 of 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13834)) {</span>
+                                    // note we have the added guid
+<span class="fc" id="L386">                                    mNotes.put(guid, new NoteTriple(nid, mod, mid));</span>
+                                }
+                            } else {
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13808)) {</span>
+                                    // a duplicate or changed schema - safe to update?
+<span class="nc" id="L391">                                    dupes += 1;</span>
+                                }
+<span class="nc bnc" id="L393" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13827)) {</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">                                    if (mAllowUpdate) {</span>
+<span class="nc" id="L395">                                        NoteTriple n = mNotes.get(guid);</span>
+<span class="nc" id="L396">                                        long oldNid = n.mNid;</span>
+<span class="nc" id="L397">                                        long oldMod = n.mMod;</span>
+<span class="nc" id="L398">                                        long oldMid = n.mMid;</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(13826)) {</span>
+                                            // will update if incoming note more recent
+<span class="nc bnc" id="L401" title="All 22 branches missed.">                                            if ((ListenerUtil.mutListener.listen(13813) ? (oldMod &gt;= mod) : (ListenerUtil.mutListener.listen(13812) ? (oldMod &lt;= mod) : (ListenerUtil.mutListener.listen(13811) ? (oldMod &gt; mod) : (ListenerUtil.mutListener.listen(13810) ? (oldMod != mod) : (ListenerUtil.mutListener.listen(13809) ? (oldMod == mod) : (oldMod &lt; mod))))))) {</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(13825)) {</span>
+                                                    // safe if note types identical
+<span class="nc bnc" id="L404" title="All 22 branches missed.">                                                    if ((ListenerUtil.mutListener.listen(13818) ? (oldMid &gt;= mid) : (ListenerUtil.mutListener.listen(13817) ? (oldMid &lt;= mid) : (ListenerUtil.mutListener.listen(13816) ? (oldMid &gt; mid) : (ListenerUtil.mutListener.listen(13815) ? (oldMid &lt; mid) : (ListenerUtil.mutListener.listen(13814) ? (oldMid != mid) : (oldMid == mid))))))) {</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                                                        if (!ListenerUtil.mutListener.listen(13821)) {</span>
+                                                            // incoming note should use existing id
+<span class="nc" id="L407">                                                            nid = oldNid;</span>
+                                                        }
+<span class="nc bnc" id="L409" title="All 2 branches missed.">                                                        if (!ListenerUtil.mutListener.listen(13822)) {</span>
+<span class="nc" id="L410">                                                            flds = _mungeMedia(mid, flds);</span>
+                                                        }
+<span class="nc bnc" id="L412" title="All 2 branches missed.">                                                        if (!ListenerUtil.mutListener.listen(13823)) {</span>
+<span class="nc" id="L413">                                                            update.add(new Object[] { nid, guid, mid, mod, usn, tags, flds, sfld, csum, flag, data });</span>
+                                                        }
+<span class="nc bnc" id="L415" title="All 2 branches missed.">                                                        if (!ListenerUtil.mutListener.listen(13824)) {</span>
+<span class="nc" id="L416">                                                            dirty.add(nid);</span>
+                                                        }
+                                                    } else {
+<span class="nc bnc" id="L419" title="All 2 branches missed.">                                                        if (!ListenerUtil.mutListener.listen(13819)) {</span>
+<span class="nc" id="L420">                                                            dupesIgnored.add(String.format(&quot;%s: %s&quot;, mCol.getModels().get(oldMid).getString(&quot;name&quot;), flds.replace('\u001f', ',')));</span>
+                                                        }
+<span class="nc bnc" id="L422" title="All 2 branches missed.">                                                        if (!ListenerUtil.mutListener.listen(13820)) {</span>
+<span class="nc" id="L423">                                                            mIgnoredGuids.add(guid);</span>
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L433" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13836)) {</span>
+<span class="fc" id="L434">                            i++;</span>
+                        }
+<span class="pc bpc" id="L436" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13846)) {</span>
+                            // add to col partially, so as to avoid OOM
+<span class="pc bpc" id="L438" title="16 of 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(13841) ? (add.size() &lt;= thresExecAdd) : (ListenerUtil.mutListener.listen(13840) ? (add.size() &gt; thresExecAdd) : (ListenerUtil.mutListener.listen(13839) ? (add.size() &lt; thresExecAdd) : (ListenerUtil.mutListener.listen(13838) ? (add.size() != thresExecAdd) : (ListenerUtil.mutListener.listen(13837) ? (add.size() == thresExecAdd) : (add.size() &gt;= thresExecAdd))))))) {</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13842)) {</span>
+<span class="nc" id="L440">                                    totalAddCount += add.size();</span>
+                                }
+<span class="nc bnc" id="L442" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13843)) {</span>
+<span class="nc" id="L443">                                    addNotes(add);</span>
+                                }
+<span class="nc bnc" id="L445" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13844)) {</span>
+<span class="nc" id="L446">                                    add.clear();</span>
+                                }
+<span class="nc bnc" id="L448" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13845)) {</span>
+<span class="nc" id="L449">                                    Timber.d(&quot;add notes: %d&quot;, totalAddCount);</span>
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L453" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13856)) {</span>
+                            // add to col partially, so as to avoid OOM
+<span class="pc bpc" id="L455" title="16 of 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(13851) ? (update.size() &lt;= thresExecUpdate) : (ListenerUtil.mutListener.listen(13850) ? (update.size() &gt; thresExecUpdate) : (ListenerUtil.mutListener.listen(13849) ? (update.size() &lt; thresExecUpdate) : (ListenerUtil.mutListener.listen(13848) ? (update.size() != thresExecUpdate) : (ListenerUtil.mutListener.listen(13847) ? (update.size() == thresExecUpdate) : (update.size() &gt;= thresExecUpdate))))))) {</span>
+<span class="nc bnc" id="L456" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13852)) {</span>
+<span class="nc" id="L457">                                    totalUpdateCount += update.size();</span>
+                                }
+<span class="nc bnc" id="L459" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13853)) {</span>
+<span class="nc" id="L460">                                    updateNotes(update);</span>
+                                }
+<span class="nc bnc" id="L462" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13854)) {</span>
+<span class="nc" id="L463">                                    update.clear();</span>
+                                }
+<span class="nc bnc" id="L465" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13855)) {</span>
+<span class="nc" id="L466">                                    Timber.d(&quot;update notes: %d&quot;, totalUpdateCount);</span>
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L470" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13867)) {</span>
+                            // add to col partially, so as to avoid OOM
+<span class="pc bpc" id="L472" title="16 of 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(13861) ? (dirty.size() &lt;= thresExecDirty) : (ListenerUtil.mutListener.listen(13860) ? (dirty.size() &gt; thresExecDirty) : (ListenerUtil.mutListener.listen(13859) ? (dirty.size() &lt; thresExecDirty) : (ListenerUtil.mutListener.listen(13858) ? (dirty.size() != thresExecDirty) : (ListenerUtil.mutListener.listen(13857) ? (dirty.size() == thresExecDirty) : (dirty.size() &gt;= thresExecDirty))))))) {</span>
+<span class="nc bnc" id="L473" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13862)) {</span>
+<span class="nc" id="L474">                                    totalDirtyCount += dirty.size();</span>
+                                }
+<span class="nc bnc" id="L476" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13863)) {</span>
+<span class="nc" id="L477">                                    mDst.updateFieldCache(dirty);</span>
+                                }
+<span class="nc bnc" id="L479" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13864)) {</span>
+<span class="nc" id="L480">                                    mDst.getTags().registerNotes(dirty);</span>
+                                }
+<span class="nc bnc" id="L482" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13865)) {</span>
+<span class="nc" id="L483">                                    dirty.clear();</span>
+                                }
+<span class="nc bnc" id="L485" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13866)) {</span>
+<span class="nc" id="L486">                                    Timber.d(&quot;dirty notes: %d&quot;, totalDirtyCount);</span>
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L490" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13893)) {</span>
+<span class="pc bpc" id="L491" title="329 of 338 branches missed.">                            if ((ListenerUtil.mutListener.listen(13883) ? ((ListenerUtil.mutListener.listen(13872) ? (total &gt;= 0) : (ListenerUtil.mutListener.listen(13871) ? (total &lt;= 0) : (ListenerUtil.mutListener.listen(13870) ? (total &gt; 0) : (ListenerUtil.mutListener.listen(13869) ? (total &lt; 0) : (ListenerUtil.mutListener.listen(13868) ? (total == 0) : (total != 0)))))) || ((ListenerUtil.mutListener.listen(13882) ? (!largeCollection &amp;&amp; (ListenerUtil.mutListener.listen(13881) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &gt;= 0) : (ListenerUtil.mutListener.listen(13880) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &lt;= 0) : (ListenerUtil.mutListener.listen(13879) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &gt; 0) : (ListenerUtil.mutListener.listen(13878) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &lt; 0) : (ListenerUtil.mutListener.listen(13877) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) != 0) : ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) == 0))))))) : (!largeCollection || (ListenerUtil.mutListener.listen(13881) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &gt;= 0) : (ListenerUtil.mutListener.listen(13880) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &lt;= 0) : (ListenerUtil.mutListener.listen(13879) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &gt; 0) : (ListenerUtil.mutListener.listen(13878) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &lt; 0) : (ListenerUtil.mutListener.listen(13877) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) != 0) : ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) == 0)))))))))) : ((ListenerUtil.mutListener.listen(13872) ? (total &gt;= 0) : (ListenerUtil.mutListener.listen(13871) ? (total &lt;= 0) : (ListenerUtil.mutListener.listen(13870) ? (total &gt; 0) : (ListenerUtil.mutListener.listen(13869) ? (total &lt; 0) : (ListenerUtil.mutListener.listen(13868) ? (total == 0) : (total != 0)))))) &amp;&amp; ((ListenerUtil.mutListener.listen(13882) ? (!largeCollection &amp;&amp; (ListenerUtil.mutListener.listen(13881) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &gt;= 0) : (ListenerUtil.mutListener.listen(13880) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &lt;= 0) : (ListenerUtil.mutListener.listen(13879) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &gt; 0) : (ListenerUtil.mutListener.listen(13878) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &lt; 0) : (ListenerUtil.mutListener.listen(13877) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) != 0) : ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) == 0))))))) : (!largeCollection || (ListenerUtil.mutListener.listen(13881) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &gt;= 0) : (ListenerUtil.mutListener.listen(13880) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &lt;= 0) : (ListenerUtil.mutListener.listen(13879) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &gt; 0) : (ListenerUtil.mutListener.listen(13878) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) &lt; 0) : (ListenerUtil.mutListener.listen(13877) ? ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) != 0) : ((ListenerUtil.mutListener.listen(13876) ? (i / onePercent) : (ListenerUtil.mutListener.listen(13875) ? (i * onePercent) : (ListenerUtil.mutListener.listen(13874) ? (i - onePercent) : (ListenerUtil.mutListener.listen(13873) ? (i + onePercent) : (i % onePercent))))) == 0)))))))))))) {</span>
+<span class="pc bpc" id="L492" title="1 of 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13892)) {</span>
+                                    // Calls to publishProgress are reasonably expensive due to res.getString()
+<span class="pc bpc" id="L494" title="40 of 48 branches missed.">                                    publishProgress((ListenerUtil.mutListener.listen(13891) ? ((ListenerUtil.mutListener.listen(13887) ? (i % 100) : (ListenerUtil.mutListener.listen(13886) ? (i / 100) : (ListenerUtil.mutListener.listen(13885) ? (i - 100) : (ListenerUtil.mutListener.listen(13884) ? (i + 100) : (i * 100))))) % total) : (ListenerUtil.mutListener.listen(13890) ? ((ListenerUtil.mutListener.listen(13887) ? (i % 100) : (ListenerUtil.mutListener.listen(13886) ? (i / 100) : (ListenerUtil.mutListener.listen(13885) ? (i - 100) : (ListenerUtil.mutListener.listen(13884) ? (i + 100) : (i * 100))))) * total) : (ListenerUtil.mutListener.listen(13889) ? ((ListenerUtil.mutListener.listen(13887) ? (i % 100) : (ListenerUtil.mutListener.listen(13886) ? (i / 100) : (ListenerUtil.mutListener.listen(13885) ? (i - 100) : (ListenerUtil.mutListener.listen(13884) ? (i + 100) : (i * 100))))) - total) : (ListenerUtil.mutListener.listen(13888) ? ((ListenerUtil.mutListener.listen(13887) ? (i % 100) : (ListenerUtil.mutListener.listen(13886) ? (i / 100) : (ListenerUtil.mutListener.listen(13885) ? (i - 100) : (ListenerUtil.mutListener.listen(13884) ? (i + 100) : (i * 100))))) + total) : ((ListenerUtil.mutListener.listen(13887) ? (i % 100) : (ListenerUtil.mutListener.listen(13886) ? (i / 100) : (ListenerUtil.mutListener.listen(13885) ? (i - 100) : (ListenerUtil.mutListener.listen(13884) ? (i + 100) : (i * 100))))) / total))))), 0, 0);</span>
+                                }
+                            }
+                        }
+<span class="fc" id="L498">                    }</span>
+                }
+            }
+<span class="pc bpc" id="L501" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13895)) {</span>
+<span class="fc" id="L502">                publishProgress(100, 0, 0);</span>
+            }
+<span class="pc bpc" id="L504" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13896)) {</span>
+                // summarize partial add/update/dirty results for total values
+<span class="fc" id="L506">                totalAddCount += add.size();</span>
+            }
+<span class="pc bpc" id="L508" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13897)) {</span>
+<span class="fc" id="L509">                totalUpdateCount += update.size();</span>
+            }
+<span class="pc bpc" id="L511" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13898)) {</span>
+<span class="fc" id="L512">                totalDirtyCount += dirty.size();</span>
+            }
+<span class="pc bpc" id="L514" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13912)) {</span>
+<span class="pc bpc" id="L515" title="16 of 22 branches missed.">                if ((ListenerUtil.mutListener.listen(13903) ? (dupes &gt;= 0) : (ListenerUtil.mutListener.listen(13902) ? (dupes &lt;= 0) : (ListenerUtil.mutListener.listen(13901) ? (dupes &lt; 0) : (ListenerUtil.mutListener.listen(13900) ? (dupes != 0) : (ListenerUtil.mutListener.listen(13899) ? (dupes == 0) : (dupes &gt; 0))))))) {</span>
+<span class="nc bnc" id="L516" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13904)) {</span>
+<span class="nc" id="L517">                        mLog.add(getRes().getString(R.string.import_update_details, totalUpdateCount, dupes));</span>
+                    }
+<span class="nc bnc" id="L519" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13911)) {</span>
+<span class="nc bnc" id="L520" title="All 22 branches missed.">                        if ((ListenerUtil.mutListener.listen(13909) ? (dupesIgnored.size() &gt;= 0) : (ListenerUtil.mutListener.listen(13908) ? (dupesIgnored.size() &lt;= 0) : (ListenerUtil.mutListener.listen(13907) ? (dupesIgnored.size() &lt; 0) : (ListenerUtil.mutListener.listen(13906) ? (dupesIgnored.size() != 0) : (ListenerUtil.mutListener.listen(13905) ? (dupesIgnored.size() == 0) : (dupesIgnored.size() &gt; 0))))))) {</span>
+<span class="nc bnc" id="L521" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13910)) {</span>
+<span class="nc" id="L522">                                mLog.add(getRes().getString(R.string.import_update_ignored));</span>
+                            }
+                        }
+                    }
+                }
+            }
+<span class="pc bpc" id="L528" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13913)) {</span>
+                // export info for calling code
+<span class="fc" id="L530">                mDupes = dupes;</span>
+            }
+<span class="pc bpc" id="L532" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13914)) {</span>
+<span class="fc" id="L533">                mAdded = totalAddCount;</span>
+            }
+<span class="pc bpc" id="L535" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13915)) {</span>
+<span class="fc" id="L536">                mUpdated = totalUpdateCount;</span>
+            }
+<span class="pc bpc" id="L538" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13916)) {</span>
+<span class="fc" id="L539">                Timber.d(&quot;add notes total:    %d&quot;, totalAddCount);</span>
+            }
+<span class="pc bpc" id="L541" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13917)) {</span>
+<span class="fc" id="L542">                Timber.d(&quot;update notes total: %d&quot;, totalUpdateCount);</span>
+            }
+<span class="pc bpc" id="L544" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13918)) {</span>
+<span class="fc" id="L545">                Timber.d(&quot;dirty notes total:  %d&quot;, totalDirtyCount);</span>
+            }
+<span class="pc bpc" id="L547" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13919)) {</span>
+                // add to col (for last chunk)
+<span class="fc" id="L549">                addNotes(add);</span>
+            }
+<span class="pc bpc" id="L551" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13920)) {</span>
+<span class="fc" id="L552">                add.clear();</span>
+            }
+<span class="pc bpc" id="L554" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13921)) {</span>
+<span class="fc" id="L555">                updateNotes(update);</span>
+            }
+<span class="pc bpc" id="L557" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13922)) {</span>
+<span class="fc" id="L558">                update.clear();</span>
+            }
+<span class="pc bpc" id="L560" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13923)) {</span>
+<span class="fc" id="L561">                mDst.getDb().getDatabase().setTransactionSuccessful();</span>
+            }
+        } finally {
+<span class="pc bpc" id="L564" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13797)) {</span>
+<span class="fc" id="L565">                DB.safeEndInTransaction(mDst.getDb());</span>
+            }
+        }
+<span class="pc bpc" id="L568" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13924)) {</span>
+<span class="fc" id="L569">            mDst.updateFieldCache(dirty);</span>
+        }
+<span class="pc bpc" id="L571" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13925)) {</span>
+<span class="fc" id="L572">            mDst.getTags().registerNotes(dirty);</span>
+        }
+<span class="fc" id="L574">    }</span>
+
+    private void addNotes(List&lt;Object[]&gt; add) {
+<span class="pc bpc" id="L577" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13926)) {</span>
+<span class="fc" id="L578">            mDst.getDb().executeManyNoTransaction(&quot;insert or replace into notes values (?,?,?,?,?,?,?,?,?,?,?)&quot;, add);</span>
+        }
+<span class="fc" id="L580">    }</span>
+
+    private void updateNotes(List&lt;Object[]&gt; update) {
+<span class="pc bpc" id="L583" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13927)) {</span>
+<span class="fc" id="L584">            mDst.getDb().executeManyNoTransaction(&quot;insert or replace into notes values (?,?,?,?,?,?,?,?,?,?,?)&quot;, update);</span>
+        }
+<span class="fc" id="L586">    }</span>
+
+    // returns true if note should be added and its mid
+    private Pair&lt;Boolean, Long&gt; _uniquifyNote(@NonNull String origGuid, long srcMid) {
+<span class="fc" id="L590">        long dstMid = _mid(srcMid);</span>
+<span class="pc bpc" id="L591" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13933)) {</span>
+            // duplicate Schemas?
+<span class="pc bpc" id="L593" title="16 of 22 branches missed.">            if ((ListenerUtil.mutListener.listen(13932) ? (srcMid &gt;= dstMid) : (ListenerUtil.mutListener.listen(13931) ? (srcMid &lt;= dstMid) : (ListenerUtil.mutListener.listen(13930) ? (srcMid &gt; dstMid) : (ListenerUtil.mutListener.listen(13929) ? (srcMid &lt; dstMid) : (ListenerUtil.mutListener.listen(13928) ? (srcMid != dstMid) : (srcMid == dstMid))))))) {</span>
+<span class="pc bpc" id="L594" title="1 of 2 branches missed.">                return new Pair&lt;&gt;(!mNotes.containsKey(origGuid), srcMid);</span>
+            }
+        }
+<span class="nc bnc" id="L597" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13934)) {</span>
+            // differing schemas and note doesn't exist?
+<span class="nc bnc" id="L599" title="All 2 branches missed.">            if (!mNotes.containsKey(origGuid)) {</span>
+<span class="nc" id="L600">                return new Pair&lt;&gt;(true, dstMid);</span>
+            }
+        }
+<span class="nc bnc" id="L603" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13935)) {</span>
+            // schema changed; don't import
+<span class="nc" id="L605">            mIgnoredGuids.add(origGuid);</span>
+        }
+<span class="nc" id="L607">        return new Pair&lt;&gt;(false, dstMid);</span>
+    }
+
+    /**
+     * Prepare index of schema hashes.
+     */
+    private void _prepareModels() {
+<span class="pc bpc" id="L614" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13936)) {</span>
+<span class="fc" id="L615">            mModelMap = new HashMap&lt;&gt;(mSrc.getModels().count());</span>
+        }
+<span class="fc" id="L617">    }</span>
+
+    /**
+     * Return local id for remote MID.
+     */
+    private long _mid(long srcMid) {
+<span class="pc bpc" id="L623" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13937)) {</span>
+            // already processed this mid?
+<span class="pc bpc" id="L625" title="1 of 2 branches missed.">            if (mModelMap.containsKey(srcMid)) {</span>
+<span class="nc" id="L626">                return mModelMap.get(srcMid);</span>
+            }
+        }
+<span class="fc" id="L629">        long mid = srcMid;</span>
+<span class="fc" id="L630">        Model srcModel = mSrc.getModels().get(srcMid);</span>
+<span class="fc" id="L631">        String srcScm = mSrc.getModels().scmhash(srcModel);</span>
+<span class="pc bpc" id="L632" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13949)) {</span>
+            {
+<span class="fc" id="L634">                long _loopCounter264 = 0;</span>
+                while (true) {
+<span class="fc" id="L636">                    ListenerUtil.loopListener.listen(&quot;_loopCounter264&quot;, ++_loopCounter264);</span>
+<span class="pc bpc" id="L637" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13942)) {</span>
+                        // missing from target col?
+<span class="fc bfc" id="L639" title="All 2 branches covered.">                        if (!mDst.getModels().have(mid)) {</span>
+                            // copy it over
+<span class="fc" id="L641">                            Model model = srcModel.deepClone();</span>
+<span class="pc bpc" id="L642" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13938)) {</span>
+<span class="fc" id="L643">                                model.put(&quot;id&quot;, mid);</span>
+                            }
+<span class="pc bpc" id="L645" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13939)) {</span>
+<span class="fc" id="L646">                                model.put(&quot;mod&quot;, mCol.getTime().intTime());</span>
+                            }
+<span class="pc bpc" id="L648" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13940)) {</span>
+<span class="fc" id="L649">                                model.put(&quot;usn&quot;, mCol.usn());</span>
+                            }
+<span class="pc bpc" id="L651" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13941)) {</span>
+<span class="fc" id="L652">                                mDst.getModels().update(model);</span>
+                            }
+                            break;
+                        }
+                    }
+                    // there's an existing model; do the schemas match?
+<span class="fc" id="L658">                    Model dstModel = mDst.getModels().get(mid);</span>
+<span class="fc" id="L659">                    String dstScm = mDst.getModels().scmhash(dstModel);</span>
+<span class="pc bpc" id="L660" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13947)) {</span>
+<span class="pc bpc" id="L661" title="1 of 2 branches missed.">                        if (srcScm.equals(dstScm)) {</span>
+                            // they do; we can reuse this mid
+<span class="fc" id="L663">                            Model model = srcModel.deepClone();</span>
+<span class="pc bpc" id="L664" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13943)) {</span>
+<span class="fc" id="L665">                                model.put(&quot;id&quot;, mid);</span>
+                            }
+<span class="pc bpc" id="L667" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13944)) {</span>
+<span class="fc" id="L668">                                model.put(&quot;mod&quot;, mCol.getTime().intTime());</span>
+                            }
+<span class="pc bpc" id="L670" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13945)) {</span>
+<span class="fc" id="L671">                                model.put(&quot;usn&quot;, mCol.usn());</span>
+                            }
+<span class="pc bpc" id="L673" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13946)) {</span>
+<span class="fc" id="L674">                                mDst.getModels().update(model);</span>
+                            }
+                            break;
+                        }
+                    }
+<span class="nc bnc" id="L679" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13948)) {</span>
+                        // as they don't match, try next id
+<span class="nc" id="L681">                        mid += 1;</span>
+                    }
+<span class="nc" id="L683">                }</span>
+            }
+        }
+<span class="pc bpc" id="L686" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13950)) {</span>
+            // save map and return new mid
+<span class="fc" id="L688">            mModelMap.put(srcMid, mid);</span>
+        }
+<span class="fc" id="L690">        return mid;</span>
+    }
+
+    /**
+     * Given did in src col, return local id.
+     */
+    private long _did(long did) {
+<span class="pc bpc" id="L697" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13951)) {</span>
+            // already converted?
+<span class="pc bpc" id="L699" title="1 of 2 branches missed.">            if (mDecks.containsKey(did)) {</span>
+<span class="nc" id="L700">                return mDecks.get(did);</span>
+            }
+        }
+        // get the name in src
+<span class="fc" id="L704">        Deck g = mSrc.getDecks().get(did);</span>
+<span class="fc" id="L705">        String name = g.getString(&quot;name&quot;);</span>
+<span class="pc bpc" id="L706" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13955)) {</span>
+            // if there's a prefix, replace the top level deck
+<span class="pc bpc" id="L708" title="1 of 2 branches missed.">            if (!TextUtils.isEmpty(mDeckPrefix)) {</span>
+<span class="nc" id="L709">                List&lt;String&gt; parts = Arrays.asList(Decks.path(name));</span>
+<span class="nc" id="L710">                String tmpname = TextUtils.join(&quot;::&quot;, parts.subList(1, parts.size()));</span>
+<span class="nc bnc" id="L711" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(13952)) {</span>
+<span class="nc" id="L712">                    name = mDeckPrefix;</span>
+                }
+<span class="nc bnc" id="L714" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(13954)) {</span>
+<span class="nc bnc" id="L715" title="All 2 branches missed.">                    if (!TextUtils.isEmpty(tmpname)) {</span>
+<span class="nc bnc" id="L716" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13953)) {</span>
+<span class="nc" id="L717">                            name += &quot;::&quot; + tmpname;</span>
+                        }
+                    }
+                }
+            }
+        }
+        // Manually create any parents so we can pull in descriptions
+<span class="fc" id="L724">        String head = &quot;&quot;;</span>
+<span class="fc" id="L725">        List&lt;String&gt; parents = Arrays.asList(Decks.path(name));</span>
+<span class="pc bpc" id="L726" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13964)) {</span>
+            {
+<span class="fc" id="L728">                long _loopCounter265 = 0;</span>
+<span class="pc bpc" id="L729" title="5 of 10 branches missed.">                for (String parent : parents.subList(0, (ListenerUtil.mutListener.listen(13963) ? (parents.size() % 1) : (ListenerUtil.mutListener.listen(13962) ? (parents.size() / 1) : (ListenerUtil.mutListener.listen(13961) ? (parents.size() * 1) : (ListenerUtil.mutListener.listen(13960) ? (parents.size() + 1) : (parents.size() - 1))))))) {</span>
+<span class="nc" id="L730">                    ListenerUtil.loopListener.listen(&quot;_loopCounter265&quot;, ++_loopCounter265);</span>
+<span class="nc bnc" id="L731" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13957)) {</span>
+<span class="nc bnc" id="L732" title="All 2 branches missed.">                        if (!TextUtils.isEmpty(head)) {</span>
+<span class="nc bnc" id="L733" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(13956)) {</span>
+<span class="nc" id="L734">                                head += &quot;::&quot;;</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L738" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13958)) {</span>
+<span class="nc" id="L739">                        head += parent;</span>
+                    }
+<span class="nc" id="L741">                    long idInSrc = mSrc.getDecks().id(head);</span>
+<span class="nc bnc" id="L742" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13959)) {</span>
+<span class="nc" id="L743">                        _did(idInSrc);</span>
+                    }
+<span class="nc" id="L745">                }</span>
+            }
+        }
+        // create in local
+<span class="fc" id="L749">        long newid = mDst.getDecks().id(name);</span>
+<span class="pc bpc" id="L750" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13970)) {</span>
+            // pull conf over
+<span class="pc bpc" id="L752" title="7 of 10 branches missed.">            if ((ListenerUtil.mutListener.listen(13965) ? (g.has(&quot;conf&quot;) || g.getLong(&quot;conf&quot;) != 1) : (g.has(&quot;conf&quot;) &amp;&amp; g.getLong(&quot;conf&quot;) != 1))) {</span>
+<span class="nc" id="L753">                DeckConfig conf = mSrc.getDecks().getConf(g.getLong(&quot;conf&quot;));</span>
+<span class="nc bnc" id="L754" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(13966)) {</span>
+<span class="nc" id="L755">                    mDst.getDecks().save(conf);</span>
+                }
+<span class="nc bnc" id="L757" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(13967)) {</span>
+<span class="nc" id="L758">                    mDst.getDecks().updateConf(conf);</span>
+                }
+<span class="nc" id="L760">                Deck g2 = mDst.getDecks().get(newid);</span>
+<span class="nc bnc" id="L761" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(13968)) {</span>
+<span class="nc" id="L762">                    g2.put(&quot;conf&quot;, g.getLong(&quot;conf&quot;));</span>
+                }
+<span class="nc bnc" id="L764" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(13969)) {</span>
+<span class="nc" id="L765">                    mDst.getDecks().save(g2);</span>
+                }
+            }
+        }
+        // save desc
+<span class="fc" id="L770">        Deck deck = mDst.getDecks().get(newid);</span>
+<span class="pc bpc" id="L771" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13971)) {</span>
+<span class="fc" id="L772">            deck.put(&quot;desc&quot;, g.getString(&quot;desc&quot;));</span>
+        }
+<span class="pc bpc" id="L774" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13972)) {</span>
+<span class="fc" id="L775">            mDst.getDecks().save(deck);</span>
+        }
+<span class="pc bpc" id="L777" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13973)) {</span>
+            // add to deck map and return
+<span class="fc" id="L779">            mDecks.put(did, newid);</span>
+        }
+<span class="fc" id="L781">        return newid;</span>
+    }
+
+    private void _importCards() {
+<span class="pc bpc" id="L785" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13975)) {</span>
+<span class="pc bpc" id="L786" title="1 of 2 branches missed.">            if (mMustResetLearning) {</span>
+                try {
+<span class="nc bnc" id="L788" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(13974)) {</span>
+<span class="nc" id="L789">                        mSrc.changeSchedulerVer(2);</span>
+                    }
+<span class="nc" id="L791">                } catch (ConfirmModSchemaException e) {</span>
+<span class="nc" id="L792">                    throw new RuntimeException(&quot;Changing the scheduler of an import should not cause schema modification&quot;, e);</span>
+<span class="nc" id="L793">                }</span>
+            }
+        }
+        /*
+         * Since we can't use a tuple as a key in Java, we resort to indexing twice with nested maps.
+         * Python: (guid, ord) -&gt; cid
+         * Java: guid -&gt; ord -&gt; cid
+         */
+<span class="fc" id="L801">        int nbCard = mDst.cardCount();</span>
+<span class="fc" id="L802">        Map&lt;String, Map&lt;Integer, Long&gt;&gt; mCards = new HashMap&lt;&gt;(nbCard);</span>
+<span class="fc" id="L803">        Set&lt;Long&gt; existing = new HashSet&lt;&gt;(nbCard);</span>
+<span class="fc" id="L804">        try (Cursor cur = mDst.getDb().query(&quot;select f.guid, c.ord, c.id from cards c, notes f &quot; + &quot;where c.nid = f.id&quot;)) {</span>
+<span class="pc bpc" id="L805" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13981)) {</span>
+                {
+<span class="fc" id="L807">                    long _loopCounter266 = 0;</span>
+<span class="pc bpc" id="L808" title="1 of 2 branches missed.">                    while (cur.moveToNext()) {</span>
+<span class="nc" id="L809">                        ListenerUtil.loopListener.listen(&quot;_loopCounter266&quot;, ++_loopCounter266);</span>
+<span class="nc" id="L810">                        String guid = cur.getString(0);</span>
+<span class="nc" id="L811">                        int ord = cur.getInt(1);</span>
+<span class="nc" id="L812">                        long cid = cur.getLong(2);</span>
+<span class="nc bnc" id="L813" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13976)) {</span>
+<span class="nc" id="L814">                            existing.add(cid);</span>
+                        }
+<span class="nc bnc" id="L816" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13980)) {</span>
+<span class="nc bnc" id="L817" title="All 2 branches missed.">                            if (mCards.containsKey(guid)) {</span>
+<span class="nc bnc" id="L818" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13979)) {</span>
+<span class="nc" id="L819">                                    mCards.get(guid).put(ord, cid);</span>
+                                }
+                            } else {
+                                // The size is at most the number of card type in the note type.
+<span class="nc" id="L823">                                Map&lt;Integer, Long&gt; map = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L824" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13977)) {</span>
+<span class="nc" id="L825">                                    map.put(ord, cid);</span>
+                                }
+<span class="nc bnc" id="L827" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(13978)) {</span>
+<span class="nc" id="L828">                                    mCards.put(guid, map);</span>
+                                }
+                            }
+                        }
+<span class="nc" id="L832">                    }</span>
+                }
+            }
+        }
+        // loop through src
+<span class="fc" id="L837">        int nbCardsToImport = mSrc.cardCount();</span>
+<span class="fc" id="L838">        List&lt;Object[]&gt; cards = new ArrayList&lt;&gt;(nbCardsToImport);</span>
+<span class="fc" id="L839">        int totalCardCount = 0;</span>
+<span class="fc" id="L840">        final int thresExecCards = 1000;</span>
+<span class="fc" id="L841">        List&lt;Object[]&gt; revlog = new ArrayList&lt;&gt;(mSrc.getSched().logCount());</span>
+<span class="fc" id="L842">        int totalRevlogCount = 0;</span>
+<span class="fc" id="L843">        final int thresExecRevlog = 1000;</span>
+<span class="fc" id="L844">        int usn = mDst.usn();</span>
+<span class="pc bpc" id="L845" title="4 of 8 branches missed.">        long aheadBy = (ListenerUtil.mutListener.listen(13985) ? (mSrc.getSched().getToday() % mDst.getSched().getToday()) : (ListenerUtil.mutListener.listen(13984) ? (mSrc.getSched().getToday() / mDst.getSched().getToday()) : (ListenerUtil.mutListener.listen(13983) ? (mSrc.getSched().getToday() * mDst.getSched().getToday()) : (ListenerUtil.mutListener.listen(13982) ? (mSrc.getSched().getToday() + mDst.getSched().getToday()) : (mSrc.getSched().getToday() - mDst.getSched().getToday())))));</span>
+<span class="pc bpc" id="L846" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(13986)) {</span>
+<span class="fc" id="L847">            mDst.getDb().getDatabase().beginTransaction();</span>
+        }
+<span class="fc" id="L849">        try (Cursor cur = mSrc.getDb().query(&quot;select f.guid, c.id, c.did, c.ord, c.type, c.queue, c.due, c.ivl, c.factor, c.reps, c.lapses, c.left, c.odue, c.odid, c.flags, c.data from cards c, notes f &quot; + &quot;where c.nid = f.id&quot;)) {</span>
+            // Counters for progress updates
+<span class="fc" id="L851">            int total = cur.getCount();</span>
+<span class="pc bpc" id="L852" title="16 of 22 branches missed.">            boolean largeCollection = (ListenerUtil.mutListener.listen(13992) ? (total &gt;= 200) : (ListenerUtil.mutListener.listen(13991) ? (total &lt;= 200) : (ListenerUtil.mutListener.listen(13990) ? (total &lt; 200) : (ListenerUtil.mutListener.listen(13989) ? (total != 200) : (ListenerUtil.mutListener.listen(13988) ? (total == 200) : (total &gt; 200))))));</span>
+<span class="pc bpc" id="L853" title="4 of 8 branches missed.">            int onePercent = (ListenerUtil.mutListener.listen(13996) ? (total % 100) : (ListenerUtil.mutListener.listen(13995) ? (total * 100) : (ListenerUtil.mutListener.listen(13994) ? (total - 100) : (ListenerUtil.mutListener.listen(13993) ? (total + 100) : (total / 100)))));</span>
+<span class="fc" id="L854">            int i = 0;</span>
+<span class="pc bpc" id="L855" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14107)) {</span>
+                {
+<span class="fc" id="L857">                    long _loopCounter269 = 0;</span>
+<span class="fc bfc" id="L858" title="All 2 branches covered.">                    while (cur.moveToNext()) {</span>
+<span class="fc" id="L859">                        ListenerUtil.loopListener.listen(&quot;_loopCounter269&quot;, ++_loopCounter269);</span>
+<span class="fc" id="L860">                        String guid = cur.getString(0);</span>
+<span class="fc" id="L861">                        long cid = cur.getLong(1);</span>
+                        // To keep track of card id in source
+<span class="fc" id="L863">                        long scid = cid;</span>
+<span class="fc" id="L864">                        long did = cur.getLong(2);</span>
+<span class="fc" id="L865">                        int ord = cur.getInt(3);</span>
+                        @Consts.CARD_TYPE
+<span class="fc" id="L867">                        int type = cur.getInt(4);</span>
+                        @Consts.CARD_QUEUE
+<span class="fc" id="L869">                        int queue = cur.getInt(5);</span>
+<span class="fc" id="L870">                        long due = cur.getLong(6);</span>
+<span class="fc" id="L871">                        long ivl = cur.getLong(7);</span>
+<span class="fc" id="L872">                        long factor = cur.getLong(8);</span>
+<span class="fc" id="L873">                        int reps = cur.getInt(9);</span>
+<span class="fc" id="L874">                        int lapses = cur.getInt(10);</span>
+<span class="fc" id="L875">                        int left = cur.getInt(11);</span>
+<span class="fc" id="L876">                        long odue = cur.getLong(12);</span>
+<span class="fc" id="L877">                        long odid = cur.getLong(13);</span>
+<span class="fc" id="L878">                        int flags = cur.getInt(14);</span>
+<span class="fc" id="L879">                        String data = cur.getString(15);</span>
+<span class="pc bpc" id="L880" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13997)) {</span>
+<span class="pc bpc" id="L881" title="1 of 2 branches missed.">                            if (mIgnoredGuids.contains(guid)) {</span>
+<span class="nc" id="L882">                                continue;</span>
+                            }
+                        }
+<span class="pc bpc" id="L885" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(13998)) {</span>
+                            // does the card's note exist in dst col?
+<span class="pc bpc" id="L887" title="1 of 2 branches missed.">                            if (!mNotes.containsKey(guid)) {</span>
+<span class="nc" id="L888">                                continue;</span>
+                            }
+                        }
+<span class="fc" id="L891">                        NoteTriple dnid = mNotes.get(guid);</span>
+<span class="pc bpc" id="L892" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14000)) {</span>
+                            // does the card already exist in the dst col?
+<span class="pc bpc" id="L894" title="8 of 10 branches missed.">                            if ((ListenerUtil.mutListener.listen(13999) ? (mCards.containsKey(guid) || mCards.get(guid).containsKey(ord)) : (mCards.containsKey(guid) &amp;&amp; mCards.get(guid).containsKey(ord)))) {</span>
+                                // fixme: in future, could update if newer mod time
+<span class="nc" id="L896">                                continue;</span>
+                            }
+                        }
+<span class="pc bpc" id="L899" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14002)) {</span>
+                            {
+<span class="fc" id="L901">                                long _loopCounter267 = 0;</span>
+                                // ensure the card id is unique
+<span class="pc bpc" id="L903" title="1 of 2 branches missed.">                                while (existing.contains(cid)) {</span>
+<span class="nc" id="L904">                                    ListenerUtil.loopListener.listen(&quot;_loopCounter267&quot;, ++_loopCounter267);</span>
+<span class="nc bnc" id="L905" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(14001)) {</span>
+<span class="nc" id="L906">                                        cid += 999;</span>
+                                    }
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L911" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14003)) {</span>
+<span class="fc" id="L912">                            existing.add(cid);</span>
+                        }
+                        // update cid, nid, etc
+<span class="fc" id="L915">                        long nid = mNotes.get(guid).mNid;</span>
+<span class="pc bpc" id="L916" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14004)) {</span>
+<span class="fc" id="L917">                            did = _did(did);</span>
+                        }
+<span class="fc" id="L919">                        long mod = mCol.getTime().intTime();</span>
+<span class="pc bpc" id="L920" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14023)) {</span>
+                            // review cards have a due date relative to collection
+<span class="pc bpc" id="L922" title="206 of 226 branches missed.">                            if ((ListenerUtil.mutListener.listen(14021) ? ((ListenerUtil.mutListener.listen(14015) ? ((ListenerUtil.mutListener.listen(14009) ? (queue &gt;= QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14008) ? (queue &lt;= QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14007) ? (queue &gt; QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14006) ? (queue &lt; QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14005) ? (queue != QUEUE_TYPE_REV) : (queue == QUEUE_TYPE_REV)))))) &amp;&amp; (ListenerUtil.mutListener.listen(14014) ? (queue &gt;= QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14013) ? (queue &lt;= QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14012) ? (queue &gt; QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14011) ? (queue &lt; QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14010) ? (queue != QUEUE_TYPE_DAY_LEARN_RELEARN) : (queue == QUEUE_TYPE_DAY_LEARN_RELEARN))))))) : ((ListenerUtil.mutListener.listen(14009) ? (queue &gt;= QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14008) ? (queue &lt;= QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14007) ? (queue &gt; QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14006) ? (queue &lt; QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14005) ? (queue != QUEUE_TYPE_REV) : (queue == QUEUE_TYPE_REV)))))) || (ListenerUtil.mutListener.listen(14014) ? (queue &gt;= QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14013) ? (queue &lt;= QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14012) ? (queue &gt; QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14011) ? (queue &lt; QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14010) ? (queue != QUEUE_TYPE_DAY_LEARN_RELEARN) : (queue == QUEUE_TYPE_DAY_LEARN_RELEARN)))))))) &amp;&amp; (ListenerUtil.mutListener.listen(14020) ? (type &gt;= CARD_TYPE_REV) : (ListenerUtil.mutListener.listen(14019) ? (type &lt;= CARD_TYPE_REV) : (ListenerUtil.mutListener.listen(14018) ? (type &gt; CARD_TYPE_REV) : (ListenerUtil.mutListener.listen(14017) ? (type &lt; CARD_TYPE_REV) : (ListenerUtil.mutListener.listen(14016) ? (type != CARD_TYPE_REV) : (type == CARD_TYPE_REV))))))) : ((ListenerUtil.mutListener.listen(14015) ? ((ListenerUtil.mutListener.listen(14009) ? (queue &gt;= QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14008) ? (queue &lt;= QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14007) ? (queue &gt; QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14006) ? (queue &lt; QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14005) ? (queue != QUEUE_TYPE_REV) : (queue == QUEUE_TYPE_REV)))))) &amp;&amp; (ListenerUtil.mutListener.listen(14014) ? (queue &gt;= QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14013) ? (queue &lt;= QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14012) ? (queue &gt; QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14011) ? (queue &lt; QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14010) ? (queue != QUEUE_TYPE_DAY_LEARN_RELEARN) : (queue == QUEUE_TYPE_DAY_LEARN_RELEARN))))))) : ((ListenerUtil.mutListener.listen(14009) ? (queue &gt;= QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14008) ? (queue &lt;= QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14007) ? (queue &gt; QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14006) ? (queue &lt; QUEUE_TYPE_REV) : (ListenerUtil.mutListener.listen(14005) ? (queue != QUEUE_TYPE_REV) : (queue == QUEUE_TYPE_REV)))))) || (ListenerUtil.mutListener.listen(14014) ? (queue &gt;= QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14013) ? (queue &lt;= QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14012) ? (queue &gt; QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14011) ? (queue &lt; QUEUE_TYPE_DAY_LEARN_RELEARN) : (ListenerUtil.mutListener.listen(14010) ? (queue != QUEUE_TYPE_DAY_LEARN_RELEARN) : (queue == QUEUE_TYPE_DAY_LEARN_RELEARN)))))))) || (ListenerUtil.mutListener.listen(14020) ? (type &gt;= CARD_TYPE_REV) : (ListenerUtil.mutListener.listen(14019) ? (type &lt;= CARD_TYPE_REV) : (ListenerUtil.mutListener.listen(14018) ? (type &gt; CARD_TYPE_REV) : (ListenerUtil.mutListener.listen(14017) ? (type &lt; CARD_TYPE_REV) : (ListenerUtil.mutListener.listen(14016) ? (type != CARD_TYPE_REV) : (type == CARD_TYPE_REV))))))))) {</span>
+<span class="nc bnc" id="L923" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14022)) {</span>
+<span class="nc" id="L924">                                    due -= aheadBy;</span>
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L928" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14030)) {</span>
+                            // odue needs updating too
+<span class="pc bpc" id="L930" title="16 of 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(14028) ? (odue &gt;= 0) : (ListenerUtil.mutListener.listen(14027) ? (odue &lt;= 0) : (ListenerUtil.mutListener.listen(14026) ? (odue &gt; 0) : (ListenerUtil.mutListener.listen(14025) ? (odue &lt; 0) : (ListenerUtil.mutListener.listen(14024) ? (odue == 0) : (odue != 0))))))) {</span>
+<span class="nc bnc" id="L931" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14029)) {</span>
+<span class="nc" id="L932">                                    odue -= aheadBy;</span>
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L936" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14054)) {</span>
+                            // if odid true, convert card from filtered to normal
+<span class="pc bpc" id="L938" title="16 of 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(14035) ? (odid &gt;= 0) : (ListenerUtil.mutListener.listen(14034) ? (odid &lt;= 0) : (ListenerUtil.mutListener.listen(14033) ? (odid &gt; 0) : (ListenerUtil.mutListener.listen(14032) ? (odid &lt; 0) : (ListenerUtil.mutListener.listen(14031) ? (odid == 0) : (odid != 0))))))) {</span>
+<span class="nc bnc" id="L939" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14036)) {</span>
+                                    // odid
+<span class="nc" id="L941">                                    odid = 0;</span>
+                                }
+<span class="nc bnc" id="L943" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14037)) {</span>
+                                    // odue
+<span class="nc" id="L945">                                    due = odue;</span>
+                                }
+<span class="nc bnc" id="L947" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14038)) {</span>
+<span class="nc" id="L948">                                    odue = 0;</span>
+                                }
+<span class="nc bnc" id="L950" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14046)) {</span>
+                                    // queue
+<span class="nc bnc" id="L952" title="All 22 branches missed.">                                    if ((ListenerUtil.mutListener.listen(14043) ? (type &gt;= CARD_TYPE_LRN) : (ListenerUtil.mutListener.listen(14042) ? (type &lt;= CARD_TYPE_LRN) : (ListenerUtil.mutListener.listen(14041) ? (type &gt; CARD_TYPE_LRN) : (ListenerUtil.mutListener.listen(14040) ? (type &lt; CARD_TYPE_LRN) : (ListenerUtil.mutListener.listen(14039) ? (type != CARD_TYPE_LRN) : (type == CARD_TYPE_LRN))))))) {</span>
+<span class="nc bnc" id="L953" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(14045)) {</span>
+                                            // type
+<span class="nc" id="L955">                                            queue = QUEUE_TYPE_NEW;</span>
+                                        }
+                                    } else {
+<span class="nc bnc" id="L958" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(14044)) {</span>
+<span class="nc" id="L959">                                            queue = type;</span>
+                                        }
+                                    }
+                                }
+<span class="nc bnc" id="L963" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14053)) {</span>
+                                    // type
+<span class="nc bnc" id="L965" title="All 22 branches missed.">                                    if ((ListenerUtil.mutListener.listen(14051) ? (type &gt;= CARD_TYPE_LRN) : (ListenerUtil.mutListener.listen(14050) ? (type &lt;= CARD_TYPE_LRN) : (ListenerUtil.mutListener.listen(14049) ? (type &gt; CARD_TYPE_LRN) : (ListenerUtil.mutListener.listen(14048) ? (type &lt; CARD_TYPE_LRN) : (ListenerUtil.mutListener.listen(14047) ? (type != CARD_TYPE_LRN) : (type == CARD_TYPE_LRN))))))) {</span>
+<span class="nc bnc" id="L966" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(14052)) {</span>
+<span class="nc" id="L967">                                            type = CARD_TYPE_NEW;</span>
+                                        }
+                                    }
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L973" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14055)) {</span>
+<span class="fc" id="L974">                            cards.add(new Object[] { cid, nid, did, ord, mod, usn, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags, data });</span>
+                        }
+                        // we need to import revlog, rewriting card ids and bumping usn
+<span class="fc" id="L977">                        try (Cursor cur2 = mSrc.getDb().query(&quot;select * from revlog where cid = &quot; + scid)) {</span>
+<span class="pc bpc" id="L978" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(14059)) {</span>
+                                {
+<span class="fc" id="L980">                                    long _loopCounter268 = 0;</span>
+<span class="pc bpc" id="L981" title="1 of 2 branches missed.">                                    while (cur2.moveToNext()) {</span>
+<span class="nc" id="L982">                                        ListenerUtil.loopListener.listen(&quot;_loopCounter268&quot;, ++_loopCounter268);</span>
+<span class="nc" id="L983">                                        Object[] rev = new Object[] { cur2.getLong(0), cur2.getLong(1), cur2.getInt(2), cur2.getInt(3), cur2.getLong(4), cur2.getLong(5), cur2.getLong(6), cur2.getLong(7), cur2.getInt(8) };</span>
+<span class="nc bnc" id="L984" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(14056)) {</span>
+<span class="nc" id="L985">                                            rev[1] = cid;</span>
+                                        }
+<span class="nc bnc" id="L987" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(14057)) {</span>
+<span class="nc" id="L988">                                            rev[2] = mDst.usn();</span>
+                                        }
+<span class="nc bnc" id="L990" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(14058)) {</span>
+<span class="nc" id="L991">                                            revlog.add(rev);</span>
+                                        }
+<span class="nc" id="L993">                                    }</span>
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L997" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14060)) {</span>
+<span class="fc" id="L998">                            i++;</span>
+                        }
+<span class="pc bpc" id="L1000" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14070)) {</span>
+                            // apply card changes partially
+<span class="pc bpc" id="L1002" title="16 of 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(14065) ? (cards.size() &lt;= thresExecCards) : (ListenerUtil.mutListener.listen(14064) ? (cards.size() &gt; thresExecCards) : (ListenerUtil.mutListener.listen(14063) ? (cards.size() &lt; thresExecCards) : (ListenerUtil.mutListener.listen(14062) ? (cards.size() != thresExecCards) : (ListenerUtil.mutListener.listen(14061) ? (cards.size() == thresExecCards) : (cards.size() &gt;= thresExecCards))))))) {</span>
+<span class="nc bnc" id="L1003" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14066)) {</span>
+<span class="nc" id="L1004">                                    totalCardCount += cards.size();</span>
+                                }
+<span class="nc bnc" id="L1006" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14067)) {</span>
+<span class="nc" id="L1007">                                    insertCards(cards);</span>
+                                }
+<span class="nc bnc" id="L1009" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14068)) {</span>
+<span class="nc" id="L1010">                                    cards.clear();</span>
+                                }
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14069)) {</span>
+<span class="nc" id="L1013">                                    Timber.d(&quot;add cards: %d&quot;, totalCardCount);</span>
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L1017" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14080)) {</span>
+                            // apply revlog changes partially
+<span class="pc bpc" id="L1019" title="16 of 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(14075) ? (revlog.size() &lt;= thresExecRevlog) : (ListenerUtil.mutListener.listen(14074) ? (revlog.size() &gt; thresExecRevlog) : (ListenerUtil.mutListener.listen(14073) ? (revlog.size() &lt; thresExecRevlog) : (ListenerUtil.mutListener.listen(14072) ? (revlog.size() != thresExecRevlog) : (ListenerUtil.mutListener.listen(14071) ? (revlog.size() == thresExecRevlog) : (revlog.size() &gt;= thresExecRevlog))))))) {</span>
+<span class="nc bnc" id="L1020" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14076)) {</span>
+<span class="nc" id="L1021">                                    totalRevlogCount += revlog.size();</span>
+                                }
+<span class="nc bnc" id="L1023" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14077)) {</span>
+<span class="nc" id="L1024">                                    insertRevlog(revlog);</span>
+                                }
+<span class="nc bnc" id="L1026" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14078)) {</span>
+<span class="nc" id="L1027">                                    revlog.clear();</span>
+                                }
+<span class="nc bnc" id="L1029" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14079)) {</span>
+<span class="nc" id="L1030">                                    Timber.d(&quot;add revlog: %d&quot;, totalRevlogCount);</span>
+                                }
+                            }
+                        }
+<span class="pc bpc" id="L1034" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(14106)) {</span>
+<span class="pc bpc" id="L1035" title="329 of 338 branches missed.">                            if ((ListenerUtil.mutListener.listen(14096) ? ((ListenerUtil.mutListener.listen(14085) ? (total &gt;= 0) : (ListenerUtil.mutListener.listen(14084) ? (total &lt;= 0) : (ListenerUtil.mutListener.listen(14083) ? (total &gt; 0) : (ListenerUtil.mutListener.listen(14082) ? (total &lt; 0) : (ListenerUtil.mutListener.listen(14081) ? (total == 0) : (total != 0)))))) || ((ListenerUtil.mutListener.listen(14095) ? (!largeCollection &amp;&amp; (ListenerUtil.mutListener.listen(14094) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &gt;= 0) : (ListenerUtil.mutListener.listen(14093) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &lt;= 0) : (ListenerUtil.mutListener.listen(14092) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &gt; 0) : (ListenerUtil.mutListener.listen(14091) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &lt; 0) : (ListenerUtil.mutListener.listen(14090) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) != 0) : ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) == 0))))))) : (!largeCollection || (ListenerUtil.mutListener.listen(14094) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &gt;= 0) : (ListenerUtil.mutListener.listen(14093) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &lt;= 0) : (ListenerUtil.mutListener.listen(14092) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &gt; 0) : (ListenerUtil.mutListener.listen(14091) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &lt; 0) : (ListenerUtil.mutListener.listen(14090) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) != 0) : ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) == 0)))))))))) : ((ListenerUtil.mutListener.listen(14085) ? (total &gt;= 0) : (ListenerUtil.mutListener.listen(14084) ? (total &lt;= 0) : (ListenerUtil.mutListener.listen(14083) ? (total &gt; 0) : (ListenerUtil.mutListener.listen(14082) ? (total &lt; 0) : (ListenerUtil.mutListener.listen(14081) ? (total == 0) : (total != 0)))))) &amp;&amp; ((ListenerUtil.mutListener.listen(14095) ? (!largeCollection &amp;&amp; (ListenerUtil.mutListener.listen(14094) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &gt;= 0) : (ListenerUtil.mutListener.listen(14093) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &lt;= 0) : (ListenerUtil.mutListener.listen(14092) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &gt; 0) : (ListenerUtil.mutListener.listen(14091) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &lt; 0) : (ListenerUtil.mutListener.listen(14090) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) != 0) : ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) == 0))))))) : (!largeCollection || (ListenerUtil.mutListener.listen(14094) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &gt;= 0) : (ListenerUtil.mutListener.listen(14093) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &lt;= 0) : (ListenerUtil.mutListener.listen(14092) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &gt; 0) : (ListenerUtil.mutListener.listen(14091) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) &lt; 0) : (ListenerUtil.mutListener.listen(14090) ? ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) != 0) : ((ListenerUtil.mutListener.listen(14089) ? (i / onePercent) : (ListenerUtil.mutListener.listen(14088) ? (i * onePercent) : (ListenerUtil.mutListener.listen(14087) ? (i - onePercent) : (ListenerUtil.mutListener.listen(14086) ? (i + onePercent) : (i % onePercent))))) == 0)))))))))))) {</span>
+<span class="pc bpc" id="L1036" title="1 of 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14105)) {</span>
+<span class="pc bpc" id="L1037" title="40 of 48 branches missed.">                                    publishProgress(100, (ListenerUtil.mutListener.listen(14104) ? ((ListenerUtil.mutListener.listen(14100) ? (i % 100) : (ListenerUtil.mutListener.listen(14099) ? (i / 100) : (ListenerUtil.mutListener.listen(14098) ? (i - 100) : (ListenerUtil.mutListener.listen(14097) ? (i + 100) : (i * 100))))) % total) : (ListenerUtil.mutListener.listen(14103) ? ((ListenerUtil.mutListener.listen(14100) ? (i % 100) : (ListenerUtil.mutListener.listen(14099) ? (i / 100) : (ListenerUtil.mutListener.listen(14098) ? (i - 100) : (ListenerUtil.mutListener.listen(14097) ? (i + 100) : (i * 100))))) * total) : (ListenerUtil.mutListener.listen(14102) ? ((ListenerUtil.mutListener.listen(14100) ? (i % 100) : (ListenerUtil.mutListener.listen(14099) ? (i / 100) : (ListenerUtil.mutListener.listen(14098) ? (i - 100) : (ListenerUtil.mutListener.listen(14097) ? (i + 100) : (i * 100))))) - total) : (ListenerUtil.mutListener.listen(14101) ? ((ListenerUtil.mutListener.listen(14100) ? (i % 100) : (ListenerUtil.mutListener.listen(14099) ? (i / 100) : (ListenerUtil.mutListener.listen(14098) ? (i - 100) : (ListenerUtil.mutListener.listen(14097) ? (i + 100) : (i * 100))))) + total) : ((ListenerUtil.mutListener.listen(14100) ? (i % 100) : (ListenerUtil.mutListener.listen(14099) ? (i / 100) : (ListenerUtil.mutListener.listen(14098) ? (i - 100) : (ListenerUtil.mutListener.listen(14097) ? (i + 100) : (i * 100))))) / total))))), 0);</span>
+                                }
+                            }
+                        }
+<span class="fc" id="L1041">                    }</span>
+                }
+            }
+<span class="pc bpc" id="L1044" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14108)) {</span>
+<span class="fc" id="L1045">                publishProgress(100, 100, 0);</span>
+            }
+<span class="pc bpc" id="L1047" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14109)) {</span>
+                // count total values
+<span class="fc" id="L1049">                totalCardCount += cards.size();</span>
+            }
+<span class="pc bpc" id="L1051" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14110)) {</span>
+<span class="fc" id="L1052">                totalRevlogCount += revlog.size();</span>
+            }
+<span class="pc bpc" id="L1054" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14111)) {</span>
+<span class="fc" id="L1055">                Timber.d(&quot;add cards total:  %d&quot;, totalCardCount);</span>
+            }
+<span class="pc bpc" id="L1057" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14112)) {</span>
+<span class="fc" id="L1058">                Timber.d(&quot;add revlog total: %d&quot;, totalRevlogCount);</span>
+            }
+<span class="pc bpc" id="L1060" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14113)) {</span>
+                // apply (for last chunk)
+<span class="fc" id="L1062">                insertCards(cards);</span>
+            }
+<span class="pc bpc" id="L1064" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14114)) {</span>
+<span class="fc" id="L1065">                cards.clear();</span>
+            }
+<span class="pc bpc" id="L1067" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14115)) {</span>
+<span class="fc" id="L1068">                insertRevlog(revlog);</span>
+            }
+<span class="pc bpc" id="L1070" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14116)) {</span>
+<span class="fc" id="L1071">                revlog.clear();</span>
+            }
+<span class="pc bpc" id="L1073" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14117)) {</span>
+<span class="fc" id="L1074">                mLog.add(getRes().getString(R.string.import_complete_count, totalCardCount));</span>
+            }
+<span class="pc bpc" id="L1076" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14118)) {</span>
+<span class="fc" id="L1077">                mDst.getDb().getDatabase().setTransactionSuccessful();</span>
+            }
+        } finally {
+<span class="pc bpc" id="L1080" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(13987)) {</span>
+<span class="fc" id="L1081">                DB.safeEndInTransaction(mDst.getDb());</span>
+            }
+        }
+<span class="fc" id="L1084">    }</span>
+
+    private void insertCards(List&lt;Object[]&gt; cards) {
+<span class="pc bpc" id="L1087" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14119)) {</span>
+<span class="fc" id="L1088">            mDst.getDb().executeManyNoTransaction(&quot;insert or ignore into cards values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)&quot;, cards);</span>
+        }
+<span class="fc" id="L1090">    }</span>
+
+    private void insertRevlog(List&lt;Object[]&gt; revlog) {
+<span class="pc bpc" id="L1093" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14120)) {</span>
+<span class="fc" id="L1094">            mDst.getDb().executeManyNoTransaction(&quot;insert or ignore into revlog values (?,?,?,?,?,?,?,?,?)&quot;, revlog);</span>
+        }
+<span class="fc" id="L1096">    }</span>
+
+    // apkg importer does the copying
+    private void _importStaticMedia() {
+        // they're used on notes or not
+<span class="fc" id="L1101">        String dir = mSrc.getMedia().dir();</span>
+<span class="pc bpc" id="L1102" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14121)) {</span>
+<span class="pc bpc" id="L1103" title="1 of 2 branches missed.">            if (!new File(dir).exists()) {</span>
+<span class="nc" id="L1104">                return;</span>
+            }
+        }
+<span class="pc bpc" id="L1107" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14126)) {</span>
+            {
+<span class="fc" id="L1109">                long _loopCounter270 = 0;</span>
+<span class="pc bpc" id="L1110" title="1 of 2 branches missed.">                for (File f : new File(dir).listFiles()) {</span>
+<span class="nc" id="L1111">                    ListenerUtil.loopListener.listen(&quot;_loopCounter270&quot;, ++_loopCounter270);</span>
+<span class="nc" id="L1112">                    String fname = f.getName();</span>
+<span class="nc bnc" id="L1113" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14125)) {</span>
+<span class="nc bnc" id="L1114" title="All 10 branches missed.">                        if ((ListenerUtil.mutListener.listen(14122) ? (fname.startsWith(&quot;_&quot;) || !mDst.getMedia().have(fname)) : (fname.startsWith(&quot;_&quot;) &amp;&amp; !mDst.getMedia().have(fname)))) {</span>
+<span class="nc" id="L1115">                            try (BufferedInputStream data = _srcMediaData(fname)) {</span>
+<span class="nc bnc" id="L1116" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14124)) {</span>
+<span class="nc" id="L1117">                                    _writeDstMedia(fname, data);</span>
+                                }
+<span class="nc" id="L1119">                            } catch (IOException e) {</span>
+<span class="nc bnc" id="L1120" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(14123)) {</span>
+<span class="nc" id="L1121">                                    Timber.w(e, &quot;Failed to close stream&quot;);</span>
+                                }
+<span class="nc" id="L1123">                            }</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="fc" id="L1129">    }</span>
+
+    private BufferedInputStream _mediaData(String fname, String dir) {
+<span class="pc bpc" id="L1132" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14128)) {</span>
+<span class="pc bpc" id="L1133" title="1 of 2 branches missed.">            if (dir == null) {</span>
+<span class="nc bnc" id="L1134" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(14127)) {</span>
+<span class="nc" id="L1135">                    dir = mSrc.getMedia().dir();</span>
+                }
+            }
+        }
+<span class="fc" id="L1139">        String path = new File(dir, fname).getAbsolutePath();</span>
+        try {
+<span class="pc bpc" id="L1141" title="4 of 8 branches missed.">            return new BufferedInputStream(new FileInputStream(path), (ListenerUtil.mutListener.listen(14132) ? (MEDIAPICKLIMIT % 2) : (ListenerUtil.mutListener.listen(14131) ? (MEDIAPICKLIMIT / 2) : (ListenerUtil.mutListener.listen(14130) ? (MEDIAPICKLIMIT - 2) : (ListenerUtil.mutListener.listen(14129) ? (MEDIAPICKLIMIT + 2) : (MEDIAPICKLIMIT * 2))))));</span>
+<span class="fc" id="L1142">        } catch (IOException e) {</span>
+<span class="fc" id="L1143">            return null;</span>
+        }
+    }
+
+    /**
+     * Data for FNAME in src collection.
+     */
+    protected BufferedInputStream _srcMediaData(String fname) {
+<span class="nc" id="L1151">        return _mediaData(fname, mSrc.getMedia().dir());</span>
+    }
+
+    /**
+     * Data for FNAME in dst collection.
+     */
+    private BufferedInputStream _dstMediaData(String fname) {
+<span class="fc" id="L1158">        return _mediaData(fname, mDst.getMedia().dir());</span>
+    }
+
+    private void _writeDstMedia(String fname, BufferedInputStream data) {
+        try {
+<span class="fc" id="L1163">            String path = new File(mDst.getMedia().dir(), Utils.nfcNormalized(fname)).getAbsolutePath();</span>
+<span class="pc bpc" id="L1164" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14137)) {</span>
+<span class="fc" id="L1165">                Utils.writeToFile(data, path);</span>
+            }
+<span class="pc bpc" id="L1167" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14138)) {</span>
+                // Mark file addition to media db (see note in Media.java)
+<span class="fc" id="L1169">                mDst.getMedia().markFileAdd(fname);</span>
+            }
+<span class="nc" id="L1171">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L1172" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14133)) {</span>
+                // the user likely used subdirectories
+<span class="nc" id="L1174">                Timber.e(e, &quot;Error copying file %s.&quot;, fname);</span>
+            }
+<span class="nc bnc" id="L1176" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14136)) {</span>
+                // If we are out of space, we should re-throw
+<span class="nc bnc" id="L1178" title="All 10 branches missed.">                if ((ListenerUtil.mutListener.listen(14134) ? (e.getCause() != null || e.getCause().getMessage().contains(&quot;No space left on device&quot;)) : (e.getCause() != null &amp;&amp; e.getCause().getMessage().contains(&quot;No space left on device&quot;)))) {</span>
+<span class="nc bnc" id="L1179" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14135)) {</span>
+                        // we need to let the user know why we are failing
+<span class="nc" id="L1181">                        Timber.e(&quot;We are out of space, bubbling up the file copy exception&quot;);</span>
+                    }
+<span class="nc" id="L1183">                    throw new RuntimeException(e);</span>
+                }
+            }
+<span class="fc" id="L1186">        }</span>
+<span class="fc" id="L1187">    }</span>
+
+    // running splitFields() on every note is fairly expensive and actually not necessary
+    private String _mungeMedia(long mid, String fields) {
+<span class="pc bpc" id="L1191" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14153)) {</span>
+            {
+<span class="fc" id="L1193">                long _loopCounter272 = 0;</span>
+<span class="fc bfc" id="L1194" title="All 2 branches covered.">                for (Pattern p : Media.mRegexps) {</span>
+<span class="fc" id="L1195">                    ListenerUtil.loopListener.listen(&quot;_loopCounter272&quot;, ++_loopCounter272);</span>
+<span class="fc" id="L1196">                    Matcher m = p.matcher(fields);</span>
+<span class="fc" id="L1197">                    StringBuffer sb = new StringBuffer();</span>
+<span class="fc" id="L1198">                    int fnameIdx = Media.indexOfFname(p);</span>
+<span class="pc bpc" id="L1199" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14150)) {</span>
+                        {
+<span class="fc" id="L1201">                            long _loopCounter271 = 0;</span>
+<span class="fc bfc" id="L1202" title="All 2 branches covered.">                            while (m.find()) {</span>
+<span class="fc" id="L1203">                                ListenerUtil.loopListener.listen(&quot;_loopCounter271&quot;, ++_loopCounter271);</span>
+<span class="fc" id="L1204">                                String fname = m.group(fnameIdx);</span>
+<span class="fc" id="L1205">                                try (BufferedInputStream srcData = _srcMediaData(fname);</span>
+<span class="fc" id="L1206">                                    BufferedInputStream dstData = _dstMediaData(fname)) {</span>
+<span class="pc bpc" id="L1207" title="1 of 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(14141)) {</span>
+<span class="pc bpc" id="L1208" title="1 of 2 branches missed.">                                        if (srcData == null) {</span>
+<span class="nc bnc" id="L1209" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(14140)) {</span>
+                                                // file was not in source, ignore
+<span class="nc" id="L1211">                                                m.appendReplacement(sb, Matcher.quoteReplacement(m.group(0)));</span>
+                                            }
+<span class="nc" id="L1213">                                            continue;</span>
+                                        }
+                                    }
+                                    // if model-local file exists from a previous import, use that
+<span class="fc" id="L1217">                                    String[] split = Utils.splitFilename(fname);</span>
+<span class="fc" id="L1218">                                    String name = split[0];</span>
+<span class="fc" id="L1219">                                    String ext = split[1];</span>
+<span class="fc" id="L1220">                                    String lname = String.format(Locale.US, &quot;%s_%s%s&quot;, name, mid, ext);</span>
+<span class="pc bpc" id="L1221" title="1 of 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(14147)) {</span>
+<span class="pc bpc" id="L1222" title="1 of 2 branches missed.">                                        if (mDst.getMedia().have(lname)) {</span>
+<span class="nc bnc" id="L1223" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(14146)) {</span>
+<span class="nc" id="L1224">                                                m.appendReplacement(sb, Matcher.quoteReplacement(m.group(0).replace(fname, lname)));</span>
+                                            }
+<span class="nc" id="L1226">                                            continue;</span>
+<span class="pc bpc" id="L1227" title="5 of 10 branches missed.">                                        } else if ((ListenerUtil.mutListener.listen(14142) ? (dstData == null &amp;&amp; compareMedia(srcData, dstData)) : (dstData == null || compareMedia(srcData, dstData)))) {</span>
+<span class="pc bpc" id="L1228" title="1 of 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(14144)) {</span>
+                                                // need to copy?
+<span class="fc bfc" id="L1230" title="All 2 branches covered.">                                                if (dstData == null) {</span>
+<span class="pc bpc" id="L1231" title="1 of 2 branches missed.">                                                    if (!ListenerUtil.mutListener.listen(14143)) {</span>
+<span class="fc" id="L1232">                                                        _writeDstMedia(fname, srcData);</span>
+                                                    }
+                                                }
+                                            }
+<span class="pc bpc" id="L1236" title="1 of 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(14145)) {</span>
+<span class="fc" id="L1237">                                                m.appendReplacement(sb, Matcher.quoteReplacement(m.group(0)));</span>
+                                            }
+<span class="fc" id="L1239">                                            continue;</span>
+                                        }
+                                    }
+<span class="pc bpc" id="L1242" title="1 of 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(14148)) {</span>
+                                        // exists but does not match, so we need to dedupe
+<span class="fc" id="L1244">                                        _writeDstMedia(lname, srcData);</span>
+                                    }
+<span class="pc bpc" id="L1246" title="1 of 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(14149)) {</span>
+<span class="fc" id="L1247">                                        m.appendReplacement(sb, Matcher.quoteReplacement(m.group(0).replace(fname, lname)));</span>
+                                    }
+<span class="pc bpc" id="L1249" title="9 of 12 branches missed.">                                } catch (IOException e) {</span>
+<span class="nc bnc" id="L1250" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(14139)) {</span>
+<span class="nc" id="L1251">                                        Timber.w(e, &quot;Failed to close stream&quot;);</span>
+                                    }
+<span class="fc" id="L1253">                                }</span>
+<span class="fc" id="L1254">                            }</span>
+                        }
+                    }
+<span class="pc bpc" id="L1257" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14151)) {</span>
+<span class="fc" id="L1258">                        m.appendTail(sb);</span>
+                    }
+<span class="pc bpc" id="L1260" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14152)) {</span>
+<span class="fc" id="L1261">                        fields = sb.toString();</span>
+                    }
+<span class="fc" id="L1263">                }</span>
+            }
+        }
+<span class="fc" id="L1266">        return fields;</span>
+    }
+
+    private void _postImport() {
+<span class="pc bpc" id="L1270" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14155)) {</span>
+            {
+<span class="fc" id="L1272">                long _loopCounter273 = 0;</span>
+<span class="fc bfc" id="L1273" title="All 2 branches covered.">                for (long did : mDecks.values()) {</span>
+<span class="fc" id="L1274">                    ListenerUtil.loopListener.listen(&quot;_loopCounter273&quot;, ++_loopCounter273);</span>
+<span class="pc bpc" id="L1275" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14154)) {</span>
+<span class="fc" id="L1276">                        mCol.getSched().maybeRandomizeDeck(did);</span>
+                    }
+<span class="fc" id="L1278">                }</span>
+            }
+        }
+<span class="pc bpc" id="L1281" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14156)) {</span>
+            // make sure new position is correct
+<span class="fc" id="L1283">            mDst.getConf().put(&quot;nextPos&quot;, mDst.getDb().queryLongScalar(&quot;select max(due)+1 from cards where type = &quot; + CARD_TYPE_NEW));</span>
+        }
+<span class="pc bpc" id="L1285" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14157)) {</span>
+<span class="fc" id="L1286">            mDst.save();</span>
+        }
+<span class="fc" id="L1288">    }</span>
+
+    private boolean compareMedia(BufferedInputStream lhis, BufferedInputStream rhis) {
+<span class="fc" id="L1291">        byte[] lhbytes = _mediaPick(lhis);</span>
+<span class="fc" id="L1292">        byte[] rhbytes = _mediaPick(rhis);</span>
+<span class="fc" id="L1293">        return Arrays.equals(lhbytes, rhbytes);</span>
+    }
+
+    /**
+     * Return the contents of the given input stream, limited to Anki2Importer.MEDIAPICKLIMIT bytes This is only used
+     * for comparison of media files with the limited resources of mobile devices
+     */
+    private byte[] _mediaPick(BufferedInputStream is) {
+        try {
+<span class="pc bpc" id="L1302" title="4 of 8 branches missed.">            ByteArrayOutputStream baos = new ByteArrayOutputStream((ListenerUtil.mutListener.listen(14161) ? (MEDIAPICKLIMIT % 2) : (ListenerUtil.mutListener.listen(14160) ? (MEDIAPICKLIMIT / 2) : (ListenerUtil.mutListener.listen(14159) ? (MEDIAPICKLIMIT - 2) : (ListenerUtil.mutListener.listen(14158) ? (MEDIAPICKLIMIT + 2) : (MEDIAPICKLIMIT * 2))))));</span>
+<span class="fc" id="L1303">            byte[] buf = new byte[MEDIAPICKLIMIT];</span>
+            int readLen;
+<span class="fc" id="L1305">            int readSoFar = 0;</span>
+<span class="pc bpc" id="L1306" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14166)) {</span>
+<span class="pc bpc" id="L1307" title="4 of 8 branches missed.">                is.mark((ListenerUtil.mutListener.listen(14165) ? (MEDIAPICKLIMIT % 2) : (ListenerUtil.mutListener.listen(14164) ? (MEDIAPICKLIMIT / 2) : (ListenerUtil.mutListener.listen(14163) ? (MEDIAPICKLIMIT - 2) : (ListenerUtil.mutListener.listen(14162) ? (MEDIAPICKLIMIT + 2) : (MEDIAPICKLIMIT * 2))))));</span>
+            }
+            {
+<span class="fc" id="L1310">                long _loopCounter274 = 0;</span>
+                while (true) {
+<span class="fc" id="L1312">                    ListenerUtil.loopListener.listen(&quot;_loopCounter274&quot;, ++_loopCounter274);</span>
+<span class="fc" id="L1313">                    readLen = is.read(buf);</span>
+<span class="pc bpc" id="L1314" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14167)) {</span>
+<span class="fc" id="L1315">                        baos.write(buf);</span>
+                    }
+<span class="pc bpc" id="L1317" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14173)) {</span>
+<span class="pc bpc" id="L1318" title="15 of 22 branches missed.">                        if ((ListenerUtil.mutListener.listen(14172) ? (readLen &gt;= -1) : (ListenerUtil.mutListener.listen(14171) ? (readLen &lt;= -1) : (ListenerUtil.mutListener.listen(14170) ? (readLen &gt; -1) : (ListenerUtil.mutListener.listen(14169) ? (readLen &lt; -1) : (ListenerUtil.mutListener.listen(14168) ? (readLen != -1) : (readLen == -1))))))) {</span>
+<span class="fc" id="L1319">                            break;</span>
+                        }
+                    }
+<span class="pc bpc" id="L1322" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14174)) {</span>
+<span class="fc" id="L1323">                        readSoFar += readLen;</span>
+                    }
+<span class="pc bpc" id="L1325" title="1 of 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(14180)) {</span>
+<span class="pc bpc" id="L1326" title="16 of 22 branches missed.">                        if ((ListenerUtil.mutListener.listen(14179) ? (readSoFar &gt;= MEDIAPICKLIMIT) : (ListenerUtil.mutListener.listen(14178) ? (readSoFar &lt;= MEDIAPICKLIMIT) : (ListenerUtil.mutListener.listen(14177) ? (readSoFar &lt; MEDIAPICKLIMIT) : (ListenerUtil.mutListener.listen(14176) ? (readSoFar != MEDIAPICKLIMIT) : (ListenerUtil.mutListener.listen(14175) ? (readSoFar == MEDIAPICKLIMIT) : (readSoFar &gt; MEDIAPICKLIMIT))))))) {</span>
+<span class="nc" id="L1327">                            break;</span>
+                        }
+                    }
+                }
+            }
+<span class="pc bpc" id="L1332" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14181)) {</span>
+<span class="fc" id="L1333">                is.reset();</span>
+            }
+<span class="fc" id="L1335">            byte[] result = new byte[MEDIAPICKLIMIT];</span>
+<span class="pc bpc" id="L1336" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(14182)) {</span>
+<span class="fc" id="L1337">                System.arraycopy(baos.toByteArray(), 0, result, 0, Math.min(baos.size(), MEDIAPICKLIMIT));</span>
+            }
+<span class="fc" id="L1339">            return result;</span>
+<span class="nc" id="L1340">        } catch (IOException e) {</span>
+<span class="nc" id="L1341">            return null;</span>
+        }
+    }
+
+    /**
+     * @param notesDone Percentage of notes complete.
+     * @param cardsDone Percentage of cards complete.
+     * @param postProcess Percentage of remaining tasks complete.
+     */
+    protected void publishProgress(int notesDone, int cardsDone, int postProcess) {
+<span class="pc bpc" id="L1351" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14184)) {</span>
+<span class="pc bpc" id="L1352" title="1 of 2 branches missed.">            if (mProgress != null) {</span>
+<span class="nc bnc" id="L1353" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(14183)) {</span>
+<span class="nc" id="L1354">                    mProgress.publishProgress(getRes().getString(R.string.import_progress, notesDone, cardsDone, postProcess));</span>
+                }
+            }
+        }
+<span class="fc" id="L1358">    }</span>
+
+    public void setDupeOnSchemaChange(boolean b) {
+<span class="nc bnc" id="L1361" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(14185)) {</span>
+<span class="nc" id="L1362">            mDupeOnSchemaChange = b;</span>
+        }
+<span class="nc" id="L1364">    }</span>
+
+    public int getDupes() {
+<span class="nc" id="L1367">        return mDupes;</span>
+    }
+
+    public int getAdded() {
+<span class="nc" id="L1371">        return mAdded;</span>
+    }
+
+    public int getUpdated() {
+<span class="nc" id="L1375">        return mUpdated;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>
