@@ -1,0 +1,615 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Application.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">obaGoogleDebug</a> &gt; <a href="index.source.html" class="el_package">org.onebusaway.android.app</a> &gt; <span class="el_source">Application.java</span></div><h1>Application.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (C) 2012-2017 Paul Watts (paulcwatts@gmail.com), 
+ * University of South Florida, Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.app;
+
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.PackageManager.NameNotFoundException;
+import android.hardware.GeomagneticField;
+import android.location.Location;
+import android.location.LocationManager;
+import android.os.Build;
+import android.os.PowerManager;
+import android.preference.PreferenceManager;
+import android.text.TextUtils;
+import android.util.Log;
+
+import androidx.multidex.MultiDexApplication;
+
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.tasks.Task;
+import com.google.firebase.analytics.FirebaseAnalytics;
+
+import org.onebusaway.android.BuildConfig;
+import org.onebusaway.android.R;
+import org.onebusaway.android.io.ObaAnalytics;
+import org.onebusaway.android.io.ObaApi;
+import org.onebusaway.android.io.elements.ObaRegion;
+import org.onebusaway.android.provider.ObaContract;
+import org.onebusaway.android.travelbehavior.TravelBehaviorManager;
+import org.onebusaway.android.util.BuildFlavorUtils;
+import org.onebusaway.android.util.LocationUtils;
+import org.onebusaway.android.util.PreferenceUtils;
+
+import java.security.MessageDigest;
+import java.util.Iterator;
+import java.util.List;
+import java.util.UUID;
+
+import edu.usf.cutr.open311client.Open311Manager;
+import edu.usf.cutr.open311client.models.Open311Option;
+
+import static com.google.android.gms.location.LocationServices.getFusedLocationProviderClient;
+import static org.onebusaway.android.util.UIUtils.setAppTheme;
+
+<span class="fc" id="L66">public class Application extends MultiDexApplication {</span>
+
+    public static final String APP_UID = &quot;app_uid&quot;;
+
+    // Region preference (long id)
+    private static final String TAG = &quot;Application&quot;;
+
+    public static final String CHANNEL_TRIP_PLAN_UPDATES_ID = &quot;trip_plan_updates&quot;;
+    public static final String CHANNEL_ARRIVAL_REMINDERS_ID = &quot;arrival_reminders&quot;;
+    public static final String CHANNEL_DESTINATION_ALERT_ID = &quot;destination_alerts&quot;;
+
+    private SharedPreferences mPrefs;
+
+    private static Application mApp;
+
+    /**
+     * We centralize location tracking in the Application class to allow all objects to make
+     * use of the last known location that we've seen.  This is more reliable than using the
+     * getLastKnownLocation() method of the location providers, and allows us to track both
+     * Location
+     * API v1 and fused provider.  It allows us to avoid strange behavior like animating a map view
+     * change when opening a new Activity, even when the previous Activity had a current location.
+     */
+<span class="fc" id="L89">    private static Location mLastKnownLocation = null;</span>
+
+    // Magnetic declination is based on location, so track this centrally too.
+<span class="fc" id="L92">    static GeomagneticField mGeomagneticField = null;</span>
+
+    private FirebaseAnalytics mFirebaseAnalytics;
+
+    @Override
+    public void onCreate() {
+<span class="fc" id="L98">        super.onCreate();</span>
+
+<span class="fc" id="L100">        mApp = this;</span>
+<span class="fc" id="L101">        mPrefs = PreferenceManager.getDefaultSharedPreferences(this);</span>
+
+<span class="fc" id="L103">        initOba();</span>
+<span class="fc" id="L104">        initObaRegion();</span>
+<span class="fc" id="L105">        initOpen311(getCurrentRegion());</span>
+
+<span class="fc" id="L107">        reportAnalytics();</span>
+
+<span class="fc" id="L109">        createNotificationChannels();</span>
+
+<span class="fc" id="L111">        TravelBehaviorManager.startCollectingData(getApplicationContext());</span>
+<span class="fc" id="L112">    }</span>
+
+    /**
+     * Per http://developer.android.com/reference/android/app/Application.html#onTerminate(),
+     * this code is only executed in emulated process environments - it will never be called
+     * on a production Android device.
+     */
+    @Override
+    public void onTerminate() {
+<span class="nc" id="L121">        super.onTerminate();</span>
+<span class="nc" id="L122">        mApp = null;</span>
+<span class="nc" id="L123">    }</span>
+
+    //
+    // Public helpers
+    //
+    public static Application get() {
+<span class="fc" id="L129">        return mApp;</span>
+    }
+
+    public static SharedPreferences getPrefs() {
+<span class="fc" id="L133">        return get().mPrefs;</span>
+    }
+
+    /**
+     * Returns the last known location that the application has seen, or null if we haven't seen a
+     * location yet.  When trying to get a most recent location in one shot, this method should
+     * always be called.
+     *
+     * @param cxt    The Context being used, or null if one isn't available
+     * @param client The GoogleApiClient being used to obtain fused provider updates, or null if
+     *               one
+     *               isn't available
+     * @return the last known location that the application has seen, or null if we haven't seen a
+     * location yet
+     */
+    public static synchronized Location getLastKnownLocation(Context cxt, GoogleApiClient client) {
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        if (mLastKnownLocation == null) {</span>
+            // Try to get a last known location from the location providers
+            try {
+<span class="nc" id="L152">                mLastKnownLocation = getLocation2(cxt, client);</span>
+<span class="nc" id="L153">            } catch (SecurityException e) {</span>
+<span class="nc" id="L154">                Log.e(TAG, &quot;User may have denied location permission - &quot; + e);</span>
+<span class="nc" id="L155">            }</span>
+        }
+        // Pass back last known saved location, hopefully from past location listener updates
+<span class="nc" id="L158">        return mLastKnownLocation;</span>
+    }
+
+    /**
+     * Sets the last known location observed by the application via an instance of LocationHelper
+     *
+     * @param l a location received by a LocationHelper instance
+     */
+    public static synchronized void setLastKnownLocation(Location l) {
+        // If the new location is better than the old one, save it
+<span class="nc bnc" id="L168" title="All 2 branches missed.">        if (LocationUtils.compareLocations(l, mLastKnownLocation)) {</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">            if (mLastKnownLocation == null) {</span>
+<span class="nc" id="L170">                mLastKnownLocation = new Location(&quot;Last known location&quot;);</span>
+            }
+<span class="nc" id="L172">            mLastKnownLocation.set(l);</span>
+<span class="nc" id="L173">            mGeomagneticField = new GeomagneticField(</span>
+<span class="nc" id="L174">                    (float) l.getLatitude(),</span>
+<span class="nc" id="L175">                    (float) l.getLongitude(),</span>
+<span class="nc" id="L176">                    (float) l.getAltitude(),</span>
+<span class="nc" id="L177">                    System.currentTimeMillis());</span>
+            // Log.d(TAG, &quot;Newest best location: &quot; + mLastKnownLocation.toString());
+        }
+<span class="nc" id="L180">    }</span>
+
+    /**
+     * Returns the declination of the horizontal component of the magnetic field from true north,
+     * in
+     * degrees (i.e. positive means the magnetic field is rotated east that much from true north).
+     *
+     * @return declination of the horizontal component of the magnetic field from true north, in
+     * degrees (i.e. positive means the magnetic field is rotated east that much from true north),
+     * or null if its not available
+     */
+    public static Float getMagneticDeclination() {
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        if (mGeomagneticField != null) {</span>
+<span class="nc" id="L193">            return mGeomagneticField.getDeclination();</span>
+        } else {
+<span class="nc" id="L195">            return null;</span>
+        }
+    }
+
+    /**
+     * We need to provide the API for a location used to disambiguate stop IDs in case of
+     * collision,
+     * or to provide multiple results in the case multiple agencies. But we really don't need it to
+     * be very accurate.
+     * &lt;p/&gt;
+     * Note that the GoogleApiClient must already have been initialized and connected prior to
+     * calling
+     * this method, since GoogleApiClient.connect() is asynchronous and doesn't connect before it
+     * returns,
+     * which requires additional initialization time (prior to calling this method)
+     *
+     * @param client an initialized and connected GoogleApiClient, or null if Google Play Services
+     *               isn't available
+     * @return a recent location, considering both Google Play Services (if available) and the
+     * Android Location API
+     */
+    private static Location getLocation(Context cxt, GoogleApiClient client) {
+<span class="nc" id="L217">        Location last = getLocation2(cxt, client);</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">        if (last != null) {</span>
+<span class="nc" id="L219">            return last;</span>
+        } else {
+<span class="nc" id="L221">            return LocationUtils.getDefaultSearchCenter();</span>
+        }
+    }
+
+    /**
+     * Returns a location, considering both Google Play Services (if available) and the Android
+     * Location API
+     * &lt;p/&gt;
+     * Note that the GoogleApiClient must already have been initialized and connected prior to
+     * calling
+     * this method, since GoogleApiClient.connect() is asynchronous and doesn't connect before it
+     * returns,
+     * which requires additional initialization time (prior to calling this method)
+     *
+     * @param client an initialized and connected GoogleApiClient, or null if Google Play Services
+     *               isn't available
+     * @return a recent location, considering both Google Play Services (if available) and the
+     * Android Location API
+     * @throws SecurityException if the user has remove location permissions
+     */
+    private static Location getLocation2(Context cxt, GoogleApiClient client)
+            throws SecurityException {
+<span class="nc" id="L243">        GoogleApiAvailability api = GoogleApiAvailability.getInstance();</span>
+<span class="nc" id="L244">        Location playServices = null;</span>
+<span class="nc bnc" id="L245" title="All 4 branches missed.">        if (client != null &amp;&amp;</span>
+                cxt != null &amp;&amp;
+<span class="nc bnc" id="L247" title="All 2 branches missed.">                api.isGooglePlayServicesAvailable(cxt)</span>
+                        == ConnectionResult.SUCCESS
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                &amp;&amp; client.isConnected()) {</span>
+<span class="nc" id="L250">            FusedLocationProviderClient fusedClient = getFusedLocationProviderClient(cxt);</span>
+<span class="nc" id="L251">            Task&lt;Location&gt; task = fusedClient.getLastLocation();</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">            if (task.isComplete()) {</span>
+<span class="nc" id="L253">                playServices = task.getResult();</span>
+<span class="nc" id="L254">                Log.d(TAG, &quot;Got location from Google Play Services, testing against API v1...&quot;);</span>
+            }
+        }
+<span class="nc" id="L257">        Location apiV1 = getLocationApiV1(cxt);</span>
+
+<span class="nc bnc" id="L259" title="All 2 branches missed.">        if (LocationUtils.compareLocationsByTime(playServices, apiV1)) {</span>
+<span class="nc" id="L260">            Log.d(TAG, &quot;Using location from Google Play Services&quot;);</span>
+<span class="nc" id="L261">            return playServices;</span>
+        } else {
+<span class="nc" id="L263">            Log.d(TAG, &quot;Using location from Location API v1&quot;);</span>
+<span class="nc" id="L264">            return apiV1;</span>
+        }
+    }
+
+    private static Location getLocationApiV1(Context cxt) {
+<span class="nc bnc" id="L269" title="All 2 branches missed.">        if (cxt == null) {</span>
+<span class="nc" id="L270">            return null;</span>
+        }
+<span class="nc" id="L272">        LocationManager mgr = (LocationManager) cxt.getSystemService(Context.LOCATION_SERVICE);</span>
+<span class="nc" id="L273">        List&lt;String&gt; providers = mgr.getProviders(true);</span>
+<span class="nc" id="L274">        Location last = null;</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">        for (Iterator&lt;String&gt; i = providers.iterator(); i.hasNext(); ) {</span>
+<span class="nc" id="L276">            Location loc = null;</span>
+            try {
+<span class="nc" id="L278">                loc = mgr.getLastKnownLocation(i.next());</span>
+<span class="nc" id="L279">            }  catch (SecurityException e) {</span>
+<span class="nc" id="L280">                Log.w(TAG, &quot;User may have denied location permission - &quot; + e);</span>
+<span class="nc" id="L281">            }</span>
+            // If this provider has a last location, and either:
+            // 1. We don't have a last location,
+            // 2. Our last location is older than this location.
+<span class="nc bnc" id="L285" title="All 2 branches missed.">            if (LocationUtils.compareLocationsByTime(loc, last)) {</span>
+<span class="nc" id="L286">                last = loc;</span>
+            }
+<span class="nc" id="L288">        }</span>
+<span class="nc" id="L289">        return last;</span>
+    }
+
+    //
+    // Helper to get/set the regions
+    //
+    public synchronized ObaRegion getCurrentRegion() {
+<span class="fc" id="L296">        return ObaApi.getDefaultContext().getRegion();</span>
+    }
+
+    public synchronized void setCurrentRegion(ObaRegion region) {
+<span class="fc" id="L300">        setCurrentRegion(region, true);</span>
+<span class="fc" id="L301">    }</span>
+
+    public synchronized void setCurrentRegion(ObaRegion region, boolean regionChanged) {
+<span class="fc bfc" id="L304" title="All 2 branches covered.">        if (region != null) {</span>
+            // First set it in preferences, then set it in OBA.
+<span class="fc" id="L306">            ObaApi.getDefaultContext().setRegion(region);</span>
+<span class="fc" id="L307">            PreferenceUtils</span>
+<span class="fc" id="L308">                    .saveLong(mPrefs, getString(R.string.preference_key_region), region.getId());</span>
+            //We're using a region, so clear the custom API URL preference
+<span class="fc" id="L310">            setCustomApiUrl(null);</span>
+<span class="fc bfc" id="L311" title="All 4 branches covered.">            if (regionChanged &amp;&amp; region.getOtpBaseUrl() != null) {</span>
+<span class="fc" id="L312">                setCustomOtpApiUrl(null);</span>
+<span class="fc" id="L313">                setUseOldOtpApiUrlVersion(false);</span>
+            }
+        } else {
+            //User must have just entered a custom API URL via Preferences, so clear the region info
+<span class="fc" id="L317">            ObaApi.getDefaultContext().setRegion(null);</span>
+<span class="fc" id="L318">            PreferenceUtils.saveLong(mPrefs, getString(R.string.preference_key_region), -1);</span>
+        }
+        // Init the reporting with the new endpoints
+<span class="fc" id="L321">        initOpen311(region);</span>
+<span class="fc" id="L322">    }</span>
+
+    /**
+     * Gets the date at which the region information was last updated, in the number of
+     * milliseconds
+     * since January 1, 1970, 00:00:00 GMT
+     * Default value is 0 if the region info has never been updated.
+     *
+     * @return the date at which the region information was last updated, in the number of
+     * milliseconds since January 1, 1970, 00:00:00 GMT.  Default value is 0 if the region info has
+     * never been updated.
+     */
+    public long getLastRegionUpdateDate() {
+<span class="nc" id="L335">        SharedPreferences preferences = getPrefs();</span>
+<span class="nc" id="L336">        return preferences.getLong(getString(R.string.preference_key_last_region_update), 0);</span>
+    }
+
+    /**
+     * Sets the date at which the region information was last updated
+     *
+     * @param date the date at which the region information was last updated, in the number of
+     *             milliseconds since January 1, 1970, 00:00:00 GMT
+     */
+    public void setLastRegionUpdateDate(long date) {
+<span class="nc" id="L346">        PreferenceUtils</span>
+<span class="nc" id="L347">                .saveLong(mPrefs, getString(R.string.preference_key_last_region_update), date);</span>
+<span class="nc" id="L348">    }</span>
+
+    /**
+     * Returns the custom URL if the user has set a custom API URL manually via Preferences, or
+     * null
+     * if it has not been set
+     *
+     * @return the custom URL if the user has set a custom API URL manually via Preferences, or null
+     * if it has not been set
+     */
+    public String getCustomApiUrl() {
+<span class="fc" id="L359">        SharedPreferences preferences = getPrefs();</span>
+<span class="fc" id="L360">        return preferences.getString(getString(R.string.preference_key_oba_api_url), null);</span>
+    }
+
+    /**
+     * Sets the custom URL used to reach a OBA REST API server that is not available via the
+     * Regions
+     * REST API
+     *
+     * @param url the custom URL
+     */
+    public void setCustomApiUrl(String url) {
+<span class="fc" id="L371">        PreferenceUtils.saveString(getString(R.string.preference_key_oba_api_url), url);</span>
+<span class="fc" id="L372">    }</span>
+
+    /**
+     * Returns the custom OTP URL if the user has set a custom API URL manually via Preferences, or
+     * null
+     * if it has not been set
+     *
+     * @return the custom URL if the user has set a custom API URL manually via Preferences, or null
+     * if it has not been set
+     */
+    public String getCustomOtpApiUrl() {
+<span class="fc" id="L383">        SharedPreferences preferences = getPrefs();</span>
+<span class="fc" id="L384">        return preferences.getString(getString(R.string.preference_key_otp_api_url), null);</span>
+    }
+
+    /**
+     * Sets the custom OTP URL used to reach a OBA REST API server that is not available via the
+     * Regions
+     * REST API
+     *
+     * @param url the custom URL
+     */
+    public void setCustomOtpApiUrl(String url) {
+<span class="fc" id="L395">        PreferenceUtils.saveString(getString(R.string.preference_key_otp_api_url), url);</span>
+<span class="fc" id="L396">    }</span>
+
+    /**
+     * @return true if the OTP url version is old, or false  if it has not been set
+     */
+    public boolean getUseOldOtpApiUrlVersion() {
+<span class="nc" id="L402">        SharedPreferences preferences = getPrefs();</span>
+<span class="nc" id="L403">        return preferences.getBoolean(getString(R.string.preference_key_otp_api_url_version), false);</span>
+    }
+
+    /**
+     * Sets the OTP Api url version
+     *
+     * @param useOldOtpApiUrlVersion indicates that if otp url structure belongs to older version
+     */
+    public void setUseOldOtpApiUrlVersion(boolean useOldOtpApiUrlVersion) {
+<span class="fc" id="L412">        PreferenceUtils.saveBoolean(getString(R.string.preference_key_otp_api_url_version),</span>
+                useOldOtpApiUrlVersion);
+<span class="fc" id="L414">    }</span>
+
+    private static final String HEXES = &quot;0123456789abcdef&quot;;
+
+    public static String getHex(byte[] raw) {
+<span class="nc" id="L419">        final StringBuilder hex = new StringBuilder(2 * raw.length);</span>
+<span class="nc bnc" id="L420" title="All 2 branches missed.">        for (byte b : raw) {</span>
+<span class="nc" id="L421">            hex.append(HEXES.charAt((b &amp; 0xF0) &gt;&gt; 4))</span>
+<span class="nc" id="L422">                    .append(HEXES.charAt((b &amp; 0x0F)));</span>
+        }
+<span class="nc" id="L424">        return hex.toString();</span>
+    }
+
+    private String getAppUid() {
+<span class="fc" id="L428">        return UUID.randomUUID().toString();</span>
+    }
+
+    private void initOba() {
+<span class="fc" id="L432">        String uuid = mPrefs.getString(APP_UID, null);</span>
+<span class="pc bpc" id="L433" title="1 of 2 branches missed.">        if (uuid == null) {</span>
+            // Generate one and save that.
+<span class="fc" id="L435">            uuid = getAppUid();</span>
+<span class="fc" id="L436">            PreferenceUtils.saveString(APP_UID, uuid);</span>
+        }
+
+<span class="fc" id="L439">        checkArrivalStylePreferenceDefault();</span>
+<span class="fc" id="L440">        checkDarkMode();</span>
+
+        // Get the current app version.
+<span class="fc" id="L443">        PackageManager pm = getPackageManager();</span>
+<span class="fc" id="L444">        PackageInfo appInfo = null;</span>
+        try {
+<span class="fc" id="L446">            appInfo = pm.getPackageInfo(getPackageName(), PackageManager.GET_META_DATA);</span>
+<span class="nc" id="L447">        } catch (NameNotFoundException e) {</span>
+            // Do nothing, perhaps we'll get to show it again? Or never.
+<span class="nc" id="L449">            return;</span>
+<span class="fc" id="L450">        }</span>
+<span class="fc" id="L451">        ObaApi.getDefaultContext().setAppInfo(appInfo.versionCode, uuid);</span>
+<span class="fc" id="L452">    }</span>
+
+    private void checkArrivalStylePreferenceDefault() {
+<span class="fc" id="L455">        String arrivalInfoStylePrefKey = getResources()</span>
+<span class="fc" id="L456">                .getString(R.string.preference_key_arrival_info_style);</span>
+<span class="fc" id="L457">        String arrivalInfoStylePref = mPrefs.getString(arrivalInfoStylePrefKey, null);</span>
+<span class="pc bpc" id="L458" title="1 of 2 branches missed.">        if (arrivalInfoStylePref == null) {</span>
+            // First execution of app - set the default arrival info style based on the BuildConfig value
+<span class="pc bpc" id="L460" title="2 of 3 branches missed.">            switch (BuildConfig.ARRIVAL_INFO_STYLE) {</span>
+                case BuildFlavorUtils.ARRIVAL_INFO_STYLE_A:
+                    // Use OBA classic style for default
+<span class="fc" id="L463">                    PreferenceUtils.saveString(arrivalInfoStylePrefKey, BuildFlavorUtils</span>
+<span class="fc" id="L464">                            .getPreferenceOptionForArrivalInfoBuildFlavorStyle(</span>
+                                    BuildFlavorUtils.ARRIVAL_INFO_STYLE_A));
+<span class="fc" id="L466">                    Log.d(TAG, &quot;Using arrival info style A (OBA Classic) as default preference&quot;);</span>
+<span class="fc" id="L467">                    break;</span>
+                case BuildFlavorUtils.ARRIVAL_INFO_STYLE_B:
+                    // Use a card-styled footer for default
+<span class="nc" id="L470">                    PreferenceUtils.saveString(arrivalInfoStylePrefKey, BuildFlavorUtils</span>
+<span class="nc" id="L471">                            .getPreferenceOptionForArrivalInfoBuildFlavorStyle(</span>
+                                    BuildFlavorUtils.ARRIVAL_INFO_STYLE_B));
+<span class="nc" id="L473">                    Log.d(TAG, &quot;Using arrival info style B (Cards) as default preference&quot;);</span>
+<span class="nc" id="L474">                    break;</span>
+                default:
+                    // Use a card-styled footer for default
+<span class="nc" id="L477">                    PreferenceUtils.saveString(arrivalInfoStylePrefKey, BuildFlavorUtils</span>
+<span class="nc" id="L478">                            .getPreferenceOptionForArrivalInfoBuildFlavorStyle(</span>
+                                    BuildFlavorUtils.ARRIVAL_INFO_STYLE_B));
+<span class="nc" id="L480">                    Log.d(TAG, &quot;Using arrival info style B (Cards) as default preference&quot;);</span>
+                    break;
+            }
+        }
+<span class="fc" id="L484">    }</span>
+
+    private void checkDarkMode() {
+<span class="fc" id="L487">        String appThemePrefKey = getResources()</span>
+<span class="fc" id="L488">                .getString(R.string.preference_key_app_theme);</span>
+<span class="fc" id="L489">        String appThemePref = mPrefs.getString(appThemePrefKey, null);</span>
+<span class="pc bpc" id="L490" title="1 of 2 branches missed.">        if (appThemePref != null) {</span>
+<span class="nc" id="L491">            setAppTheme(appThemePref);</span>
+        }
+<span class="fc" id="L493">    }</span>
+
+    private void initObaRegion() {
+        // Read the region preference, look it up in the DB, then set the region.
+<span class="fc" id="L497">        long id = mPrefs.getLong(getString(R.string.preference_key_region), -1);</span>
+<span class="pc bpc" id="L498" title="1 of 2 branches missed.">        if (id &lt; 0) {</span>
+<span class="fc" id="L499">            Log.d(TAG, &quot;Regions preference ID is less than 0, returning...&quot;);</span>
+<span class="fc" id="L500">            return;</span>
+        }
+
+<span class="nc" id="L503">        ObaRegion region = ObaContract.Regions.get(this, (int) id);</span>
+<span class="nc bnc" id="L504" title="All 2 branches missed.">        if (region == null) {</span>
+<span class="nc" id="L505">            Log.d(TAG, &quot;Regions preference is null, returning...&quot;);</span>
+<span class="nc" id="L506">            return;</span>
+        }
+
+
+<span class="nc" id="L510">        ObaApi.getDefaultContext().setRegion(region);</span>
+<span class="nc" id="L511">    }</span>
+
+    private void initOpen311(ObaRegion region) {
+<span class="pc bpc" id="L514" title="1 of 2 branches missed.">        if (BuildConfig.DEBUG) {</span>
+<span class="fc" id="L515">            Open311Manager.getSettings().setDebugMode(true);</span>
+<span class="fc" id="L516">            Open311Manager.getSettings().setDryRun(true);</span>
+<span class="fc" id="L517">            Log.w(TAG,</span>
+                    &quot;Open311 issue reporting is in debug/dry run mode - no issues will be submitted.&quot;);
+        }
+
+        // Clear all open311 endpoints
+<span class="fc" id="L522">        Open311Manager.clearOpen311();</span>
+
+        // Read the open311 preferences from the region and set
+<span class="pc bpc" id="L525" title="1 of 4 branches missed.">        if (region != null &amp;&amp; region.getOpen311Servers() != null) {</span>
+<span class="fc bfc" id="L526" title="All 2 branches covered.">            for (ObaRegion.Open311Server open311Server : region.getOpen311Servers()) {</span>
+<span class="fc" id="L527">                String jurisdictionId = open311Server.getJuridisctionId();</span>
+
+<span class="fc" id="L529">                Open311Option option = new Open311Option(open311Server.getBaseUrl(),</span>
+<span class="fc" id="L530">                        open311Server.getApiKey(),</span>
+<span class="pc bpc" id="L531" title="1 of 2 branches missed.">                        TextUtils.isEmpty(jurisdictionId) ? null : jurisdictionId);</span>
+<span class="fc" id="L532">                Open311Manager.initOpen311WithOption(option);</span>
+            }
+        }
+<span class="fc" id="L535">    }</span>
+
+    private void reportAnalytics() {
+<span class="fc" id="L538">        mFirebaseAnalytics = FirebaseAnalytics.getInstance(this);</span>
+<span class="pc bpc" id="L539" title="2 of 4 branches missed.">        if (getCustomApiUrl() == null &amp;&amp; getCurrentRegion() != null) {</span>
+<span class="nc" id="L540">            ObaAnalytics.setRegion(mFirebaseAnalytics, getCurrentRegion().getName());</span>
+<span class="pc bpc" id="L541" title="1 of 2 branches missed.">        } else if (Application.get().getCustomApiUrl() != null) {</span>
+<span class="nc" id="L542">            String customUrl = null;</span>
+<span class="nc" id="L543">            MessageDigest digest = null;</span>
+            try {
+<span class="nc" id="L545">                digest = MessageDigest.getInstance(&quot;SHA-1&quot;);</span>
+<span class="nc" id="L546">                digest.update(getCustomApiUrl().getBytes());</span>
+<span class="nc" id="L547">                customUrl = getString(R.string.analytics_label_custom_url) +</span>
+<span class="nc" id="L548">                        &quot;: &quot; + getHex(digest.digest());</span>
+<span class="nc" id="L549">            } catch (Exception e) {</span>
+<span class="nc" id="L550">                customUrl = Application.get().getString(R.string.analytics_label_custom_url);</span>
+<span class="nc" id="L551">            }</span>
+<span class="nc" id="L552">            ObaAnalytics.setRegion(mFirebaseAnalytics, customUrl);</span>
+        }
+<span class="fc" id="L554">        Boolean experimentalRegions = getPrefs().getBoolean(getString(R.string.preference_key_experimental_regions),</span>
+<span class="fc" id="L555">                Boolean.FALSE);</span>
+<span class="fc" id="L556">        Boolean autoRegion = getPrefs().getBoolean(getString(R.string.preference_key_auto_select_region),</span>
+                true);
+<span class="fc" id="L558">    }</span>
+
+    /**
+     * Method to check whether bikeshare layer is enabled or not.
+     *
+     * @return true if the bikeshare layer is an option that can be toggled on/off
+     */
+    public static boolean isBikeshareEnabled() {
+        // Bike layer is enabled if either the current region
+        // supports it or a custom otp url is set. The custom otp url is used to make the testing
+        // process easier
+<span class="nc bnc" id="L569" title="All 2 branches missed.">        return ((Application.get().getCurrentRegion() != null</span>
+<span class="nc bnc" id="L570" title="All 2 branches missed.">                &amp;&amp; Application.get().getCurrentRegion().getSupportsOtpBikeshare())</span>
+<span class="nc bnc" id="L571" title="All 2 branches missed.">                || !TextUtils.isEmpty(Application.get().getCustomOtpApiUrl()));</span>
+    }
+
+    private void createNotificationChannels() {
+<span class="pc bpc" id="L575" title="1 of 2 branches missed.">        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.O) {</span>
+<span class="fc" id="L576">            NotificationChannel channel1 = new NotificationChannel(</span>
+                    CHANNEL_TRIP_PLAN_UPDATES_ID,
+                    &quot;Trip plan notifications (beta)&quot;,
+                    NotificationManager.IMPORTANCE_DEFAULT);
+<span class="fc" id="L580">            channel1.setDescription(&quot;After planning a trip, send notifications if the trip is delayed or no longer recommended.&quot;);</span>
+
+<span class="fc" id="L582">            NotificationChannel channel2 = new NotificationChannel(</span>
+                    CHANNEL_ARRIVAL_REMINDERS_ID,
+                    &quot;Bus arrival notifications&quot;,
+                    NotificationManager.IMPORTANCE_DEFAULT);
+<span class="fc" id="L586">            channel2.setDescription(&quot;Notifications to remind the user of an arriving bus.&quot;);</span>
+
+<span class="fc" id="L588">            NotificationChannel channel3 = new NotificationChannel(</span>
+                    CHANNEL_DESTINATION_ALERT_ID,
+                    &quot;Destination alerts&quot;,
+                    NotificationManager.IMPORTANCE_LOW);
+<span class="fc" id="L592">            channel2.setDescription(&quot;All notifications relating to Destination alerts&quot;);</span>
+
+<span class="fc" id="L594">            NotificationManager manager = getSystemService(NotificationManager.class);</span>
+<span class="fc" id="L595">            manager.createNotificationChannel(channel1);</span>
+<span class="fc" id="L596">            manager.createNotificationChannel(channel2);</span>
+<span class="fc" id="L597">            manager.createNotificationChannel(channel3);</span>
+        }
+<span class="fc" id="L599">    }</span>
+
+    public static Boolean isIgnoringBatteryOptimizations(Context applicationContext) {
+<span class="nc" id="L602">        PowerManager pm = (PowerManager) applicationContext.getSystemService(Context.POWER_SERVICE);</span>
+<span class="nc bnc" id="L603" title="All 2 branches missed.">        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.M &amp;&amp;</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">                pm.isIgnoringBatteryOptimizations(applicationContext.getPackageName())) {</span>
+<span class="nc" id="L605">            return true;</span>
+        }
+
+<span class="nc bnc" id="L608" title="All 2 branches missed.">        if (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.M) {</span>
+<span class="nc" id="L609">            return null;</span>
+        }
+
+<span class="nc" id="L612">        return false;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.2.0</div></body></html>
