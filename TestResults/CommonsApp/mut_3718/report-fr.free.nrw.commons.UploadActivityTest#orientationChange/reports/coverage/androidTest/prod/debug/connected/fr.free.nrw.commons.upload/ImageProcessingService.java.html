@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ImageProcessingService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.upload</a> &gt; <span class="el_source">ImageProcessingService.java</span></div><h1>ImageProcessingService.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.upload;
+
+import static fr.free.nrw.commons.utils.ImageUtils.EMPTY_CAPTION;
+import static fr.free.nrw.commons.utils.ImageUtils.FILE_NAME_EXISTS;
+import static fr.free.nrw.commons.utils.ImageUtils.IMAGE_OK;
+import android.content.Context;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.media.MediaClient;
+import fr.free.nrw.commons.nearby.Place;
+import fr.free.nrw.commons.utils.ImageUtils;
+import fr.free.nrw.commons.utils.ImageUtilsWrapper;
+import io.reactivex.Single;
+import io.reactivex.schedulers.Schedulers;
+import java.util.List;
+import javax.inject.Inject;
+import javax.inject.Singleton;
+import org.apache.commons.lang3.StringUtils;
+import timber.log.Timber;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+/**
+ * Methods for pre-processing images to be uploaded
+ */
+@Singleton
+public class ImageProcessingService {
+
+    private final FileUtilsWrapper fileUtilsWrapper;
+
+    private final ImageUtilsWrapper imageUtilsWrapper;
+
+    private final ReadFBMD readFBMD;
+
+    private final EXIFReader EXIFReader;
+
+    private final MediaClient mediaClient;
+
+    @Inject
+<span class="fc" id="L38">    public ImageProcessingService(FileUtilsWrapper fileUtilsWrapper, ImageUtilsWrapper imageUtilsWrapper, ReadFBMD readFBMD, EXIFReader EXIFReader, MediaClient mediaClient, Context context) {</span>
+<span class="fc" id="L39">        this.fileUtilsWrapper = fileUtilsWrapper;</span>
+<span class="fc" id="L40">        this.imageUtilsWrapper = imageUtilsWrapper;</span>
+<span class="fc" id="L41">        this.readFBMD = readFBMD;</span>
+<span class="fc" id="L42">        this.EXIFReader = EXIFReader;</span>
+<span class="fc" id="L43">        this.mediaClient = mediaClient;</span>
+<span class="fc" id="L44">    }</span>
+
+    /**
+     * Check image quality before upload - checks duplicate image - checks dark image - checks
+     * geolocation for image - check for valid title
+     */
+    Single&lt;Integer&gt; validateImage(UploadItem uploadItem, LatLng inAppPictureLocation) {
+<span class="nc" id="L51">        int currentImageQuality = uploadItem.getImageQuality();</span>
+<span class="nc bnc" id="L52" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7793)) {</span>
+<span class="nc" id="L53">            Timber.d(&quot;Current image quality is %d&quot;, currentImageQuality);</span>
+        }
+<span class="nc bnc" id="L55" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7794)) {</span>
+<span class="nc bnc" id="L56" title="All 2 branches missed.">            if (currentImageQuality == ImageUtils.IMAGE_KEEP) {</span>
+<span class="nc" id="L57">                return Single.just(ImageUtils.IMAGE_OK);</span>
+            }
+        }
+<span class="nc bnc" id="L60" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7795)) {</span>
+<span class="nc" id="L61">            Timber.d(&quot;Checking the validity of image&quot;);</span>
+        }
+<span class="nc" id="L63">        String filePath = uploadItem.getMediaUri().getPath();</span>
+<span class="nc" id="L64">        return Single.zip(checkDuplicateImage(filePath), checkImageGeoLocation(uploadItem.getPlace(), filePath, inAppPictureLocation), checkDarkImage(filePath), validateItemTitle(uploadItem), checkFBMD(filePath), checkEXIF(filePath), (duplicateImage, wrongGeoLocation, darkImage, itemTitle, fbmd, exif) -&gt; {</span>
+<span class="nc" id="L65">            Timber.d(&quot;duplicate: %d, geo: %d, dark: %d, title: %d&quot; + &quot;fbmd:&quot; + fbmd + &quot;exif:&quot; + exif, duplicateImage, wrongGeoLocation, darkImage, itemTitle);</span>
+<span class="nc" id="L66">            return duplicateImage | wrongGeoLocation | darkImage | itemTitle | fbmd | exif;</span>
+        });
+    }
+
+    /**
+     * We want to discourage users from uploading images to Commons that were taken from Facebook.
+     * This attempts to detect whether an image was downloaded from Facebook by heuristically
+     * searching for metadata that is specific to images that come from Facebook.
+     */
+    private Single&lt;Integer&gt; checkFBMD(String filepath) {
+<span class="nc" id="L76">        return readFBMD.processMetadata(filepath);</span>
+    }
+
+    /**
+     * We try to minimize uploads from the Commons app that might be copyright violations. If an
+     * image does not have any Exif metadata, then it was likely downloaded from the internet, and
+     * is probably not an original work by the user. We detect these kinds of images by looking for
+     * the presence of some basic Exif metadata.
+     */
+    private Single&lt;Integer&gt; checkEXIF(String filepath) {
+<span class="nc" id="L86">        return EXIFReader.processMetadata(filepath);</span>
+    }
+
+    /**
+     * Checks item caption - empty caption - existing caption
+     *
+     * @param uploadItem
+     * @return
+     */
+    private Single&lt;Integer&gt; validateItemTitle(UploadItem uploadItem) {
+<span class="nc bnc" id="L96" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7796)) {</span>
+<span class="nc" id="L97">            Timber.d(&quot;Checking for image title %s&quot;, uploadItem.getUploadMediaDetails());</span>
+        }
+<span class="nc" id="L99">        List&lt;UploadMediaDetail&gt; captions = uploadItem.getUploadMediaDetails();</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7797)) {</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">            if (captions.isEmpty()) {</span>
+<span class="nc" id="L102">                return Single.just(EMPTY_CAPTION);</span>
+            }
+        }
+<span class="nc" id="L105">        return mediaClient.checkPageExistsUsingTitle(&quot;File:&quot; + uploadItem.getFileName()).map(doesFileExist -&gt; {</span>
+<span class="nc" id="L106">            Timber.d(&quot;Result for valid title is %s&quot;, doesFileExist);</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">            return doesFileExist ? FILE_NAME_EXISTS : IMAGE_OK;</span>
+<span class="nc" id="L108">        }).subscribeOn(Schedulers.io());</span>
+    }
+
+    /**
+     * Checks for duplicate image
+     *
+     * @param filePath file to be checked
+     * @return IMAGE_DUPLICATE or IMAGE_OK
+     */
+    private Single&lt;Integer&gt; checkDuplicateImage(String filePath) {
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7798)) {</span>
+<span class="nc" id="L119">            Timber.d(&quot;Checking for duplicate image %s&quot;, filePath);</span>
+        }
+<span class="nc" id="L121">        return Single.fromCallable(() -&gt; fileUtilsWrapper.getFileInputStream(filePath)).map(fileUtilsWrapper::getSHA1).flatMap(mediaClient::checkFileExistsUsingSha).map(b -&gt; {</span>
+<span class="nc" id="L122">            Timber.d(&quot;Result for duplicate image %s&quot;, b);</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">            return b ? ImageUtils.IMAGE_DUPLICATE : ImageUtils.IMAGE_OK;</span>
+<span class="nc" id="L124">        }).subscribeOn(Schedulers.io());</span>
+    }
+
+    /**
+     * Checks for dark image
+     *
+     * @param filePath file to be checked
+     * @return IMAGE_DARK or IMAGE_OK
+     */
+    private Single&lt;Integer&gt; checkDarkImage(String filePath) {
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7799)) {</span>
+<span class="nc" id="L135">            Timber.d(&quot;Checking for dark image %s&quot;, filePath);</span>
+        }
+<span class="nc" id="L137">        return imageUtilsWrapper.checkIfImageIsTooDark(filePath);</span>
+    }
+
+    /**
+     * Checks for image geolocation returns IMAGE_OK if the place is null or if the file doesn't
+     * contain a geolocation
+     *
+     * @param filePath file to be checked
+     * @return IMAGE_GEOLOCATION_DIFFERENT or IMAGE_OK
+     */
+    private Single&lt;Integer&gt; checkImageGeoLocation(Place place, String filePath, LatLng inAppPictureLocation) {
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7800)) {</span>
+<span class="nc" id="L149">            Timber.d(&quot;Checking for image geolocation %s&quot;, filePath);</span>
+        }
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7802)) {</span>
+<span class="nc bnc" id="L152" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(7801) ? (place == null &amp;&amp; StringUtils.isBlank(place.getWikiDataEntityId())) : (place == null || StringUtils.isBlank(place.getWikiDataEntityId())))) {</span>
+<span class="nc" id="L153">                return Single.just(ImageUtils.IMAGE_OK);</span>
+            }
+        }
+<span class="nc" id="L156">        return Single.fromCallable(() -&gt; filePath).flatMap(path -&gt; Single.just(fileUtilsWrapper.getGeolocationOfFile(path, inAppPictureLocation))).flatMap(geoLocation -&gt; {</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">            if (StringUtils.isBlank(geoLocation)) {</span>
+<span class="nc" id="L158">                return Single.just(ImageUtils.IMAGE_OK);</span>
+            }
+<span class="nc" id="L160">            return imageUtilsWrapper.checkImageGeolocationIsDifferent(geoLocation, place.getLocation());</span>
+<span class="nc" id="L161">        }).subscribeOn(Schedulers.io());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

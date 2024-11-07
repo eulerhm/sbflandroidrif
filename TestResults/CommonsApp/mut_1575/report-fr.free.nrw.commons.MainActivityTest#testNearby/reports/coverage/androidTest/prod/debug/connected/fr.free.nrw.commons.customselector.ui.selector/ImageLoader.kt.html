@@ -1,0 +1,364 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ImageLoader.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.customselector.ui.selector</a> &gt; <span class="el_source">ImageLoader.kt</span></div><h1>ImageLoader.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.customselector.ui.selector
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.net.Uri
+import fr.free.nrw.commons.customselector.database.NotForUploadStatusDao
+import fr.free.nrw.commons.customselector.database.UploadedStatus
+import fr.free.nrw.commons.customselector.database.UploadedStatusDao
+import fr.free.nrw.commons.customselector.helper.ImageHelper
+import fr.free.nrw.commons.customselector.model.Image
+import fr.free.nrw.commons.customselector.ui.adapter.ImageAdapter.ImageViewHolder
+import fr.free.nrw.commons.media.MediaClient
+import fr.free.nrw.commons.upload.FileProcessor
+import fr.free.nrw.commons.upload.FileUtilsWrapper
+import fr.free.nrw.commons.utils.CustomSelectorUtils
+import fr.free.nrw.commons.utils.CustomSelectorUtils.Companion.checkWhetherFileExistsOnCommonsUsingSHA1
+import kotlinx.coroutines.*
+import java.util.*
+import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+
+/**
+ * Image Loader class, loads images, depending on API results.
+ */
+<span class="nc" id="L25">class ImageLoader @Inject constructor(</span>
+
+    /**
+     * MediaClient for SHA1 query.
+     */
+<span class="nc" id="L30">    var mediaClient: MediaClient,</span>
+
+    /**
+     * FileProcessor to pre-process the file.
+     */
+<span class="nc" id="L35">    var fileProcessor: FileProcessor,</span>
+
+    /**
+     * File Utils Wrapper for SHA1
+     */
+<span class="nc" id="L40">    var fileUtilsWrapper: FileUtilsWrapper,</span>
+
+    /**
+     * UploadedStatusDao for cache query.
+     */
+<span class="nc" id="L45">    var uploadedStatusDao: UploadedStatusDao,</span>
+
+    /**
+     * NotForUploadDao for database operations
+     */
+<span class="nc" id="L50">    var notForUploadStatusDao: NotForUploadStatusDao,</span>
+
+    /**
+     * Context for coroutine.
+     */
+<span class="nc" id="L55">    val context: Context</span>
+) {
+
+    /**
+     * Maps to facilitate image query.
+     */
+<span class="nc" id="L61">    private var mapModifiedImageSHA1: HashMap&lt;Image, String&gt; = HashMap()</span>
+<span class="nc" id="L62">    private var mapHolderImage : HashMap&lt;ImageViewHolder, Image&gt; = HashMap()</span>
+<span class="nc" id="L63">    private var mapResult: HashMap&lt;String, Result&gt; = HashMap()</span>
+<span class="nc" id="L64">    private var mapImageSHA1: HashMap&lt;Uri, String&gt; = HashMap()</span>
+
+    /**
+     * Coroutine Scope.
+     */
+<span class="nc" id="L69">    private val scope : CoroutineScope = MainScope()</span>
+
+    /**
+     * Query image and setUp the view.
+     */
+    fun queryAndSetView(
+        holder: ImageViewHolder,
+        image: Image,
+        ioDispatcher: CoroutineDispatcher,
+        defaultDispatcher: CoroutineDispatcher
+    ) {
+
+        /**
+         * Recycler view uses same view holder, so we can identify the latest query image from holder.
+         */
+<span class="nc" id="L84">        mapHolderImage[holder] = image</span>
+<span class="nc" id="L85">        holder.itemNotUploaded()</span>
+<span class="nc" id="L86">        holder.itemForUpload()</span>
+
+<span class="nc" id="L88">        scope.launch {</span>
+<span class="nc" id="L89">            var result: Result = Result.NOTFOUND</span>
+
+<span class="nc bnc" id="L91" title="All 2 branches missed.">            if (mapHolderImage[holder] != image) {</span>
+<span class="nc" id="L92">                return@launch</span>
+            }
+
+<span class="nc bnc" id="L95" title="All 2 branches missed.">            val imageSHA1: String = when (mapImageSHA1[image.uri] != null) {</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">                true -&gt; mapImageSHA1[image.uri]!!</span>
+<span class="nc" id="L97">                else -&gt; CustomSelectorUtils.getImageSHA1(</span>
+<span class="nc" id="L98">                    image.uri,</span>
+<span class="nc" id="L99">                    ioDispatcher,</span>
+<span class="nc" id="L100">                    fileUtilsWrapper,</span>
+<span class="nc" id="L101">                    context.contentResolver</span>
+                )
+            }
+<span class="nc" id="L104">            mapImageSHA1[image.uri] = imageSHA1</span>
+
+<span class="nc bnc" id="L106" title="All 4 branches missed.">            if (imageSHA1.isEmpty()) {</span>
+<span class="nc" id="L107">                return@launch</span>
+            }
+<span class="nc" id="L109">            val uploadedStatus = getFromUploaded(imageSHA1)</span>
+
+<span class="nc bnc" id="L111" title="All 4 branches missed.">            val sha1 = uploadedStatus?.let {</span>
+<span class="nc" id="L112">                result = getResultFromUploadedStatus(uploadedStatus)</span>
+<span class="nc" id="L113">                uploadedStatus.modifiedImageSHA1</span>
+<span class="nc" id="L114">            } ?: run {</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">                if (mapHolderImage[holder] == image) {</span>
+<span class="nc" id="L116">                    getSHA1(image, defaultDispatcher)</span>
+                } else {
+<span class="nc" id="L118">                    &quot;&quot;</span>
+                }
+            }
+
+<span class="nc bnc" id="L122" title="All 2 branches missed.">            if (mapHolderImage[holder] != image) {</span>
+<span class="nc" id="L123">                return@launch</span>
+            }
+
+<span class="nc" id="L126">            val existsInNotForUploadTable = notForUploadStatusDao.find(imageSHA1)</span>
+
+<span class="nc bnc" id="L128" title="All 6 branches missed.">            if (result in arrayOf(Result.NOTFOUND, Result.INVALID) &amp;&amp; sha1.isNotEmpty()) {</span>
+<span class="nc" id="L129">                when {</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">                    mapResult[imageSHA1] == null -&gt; {</span>
+                        // Query original image.
+<span class="nc" id="L132">                        result = checkWhetherFileExistsOnCommonsUsingSHA1(</span>
+<span class="nc" id="L133">                            imageSHA1,</span>
+<span class="nc" id="L134">                            ioDispatcher,</span>
+<span class="nc" id="L135">                            mediaClient</span>
+                        )
+<span class="nc" id="L137">                        when (result) {</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">                            is Result.TRUE -&gt; {</span>
+<span class="nc" id="L139">                                mapResult[imageSHA1] = Result.TRUE</span>
+                            }
+<span class="nc bnc" id="L141" title="All 2 branches missed.">                            is Result.ERROR -&gt; {</span>
+<span class="nc" id="L142">                                mapResult[imageSHA1] = Result.ERROR</span>
+                            }
+<span class="nc bnc" id="L144" title="All 2 branches missed.">                            is Result.FALSE -&gt; {</span>
+<span class="nc" id="L145">                                mapResult[imageSHA1] = Result.FALSE</span>
+                            }
+<span class="nc bnc" id="L147" title="All 2 branches missed.">                            is Result.INVALID -&gt; {</span>
+<span class="nc" id="L148">                                mapResult[imageSHA1] = Result.INVALID</span>
+                            }
+<span class="nc bnc" id="L150" title="All 2 branches missed.">                            is Result.NOTFOUND -&gt; {</span>
+<span class="nc" id="L151">                                mapResult[imageSHA1] = Result.NOTFOUND</span>
+                            }
+                        }
+                    }
+                    else -&gt; {
+<span class="nc" id="L156">                        result = mapResult[imageSHA1]!!</span>
+                    }
+                }
+<span class="nc bnc" id="L159" title="All 2 branches missed.">                if (result is Result.TRUE) {</span>
+                    // Original image found.
+<span class="nc" id="L161">                    insertIntoUploaded(imageSHA1, sha1, result is Result.TRUE, false)</span>
+                } else {
+<span class="nc" id="L163">                    when {</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">                        mapResult[sha1] == null -&gt; {</span>
+                            // Original image not found, query modified image.
+<span class="nc" id="L166">                            result = checkWhetherFileExistsOnCommonsUsingSHA1(</span>
+<span class="nc" id="L167">                                sha1,</span>
+<span class="nc" id="L168">                                ioDispatcher,</span>
+<span class="nc" id="L169">                                mediaClient</span>
+                            )
+<span class="nc" id="L171">                            when (result) {</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">                                is Result.TRUE -&gt; {</span>
+<span class="nc" id="L173">                                    mapResult[sha1] = Result.TRUE</span>
+                                }
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                                is Result.ERROR -&gt; {</span>
+<span class="nc" id="L176">                                    mapResult[sha1] = Result.ERROR</span>
+                                }
+<span class="nc bnc" id="L178" title="All 2 branches missed.">                                is Result.FALSE -&gt; {</span>
+<span class="nc" id="L179">                                    mapResult[sha1] = Result.FALSE</span>
+                                }
+<span class="nc bnc" id="L181" title="All 2 branches missed.">                                is Result.INVALID -&gt; {</span>
+<span class="nc" id="L182">                                    mapResult[sha1] = Result.INVALID</span>
+                                }
+<span class="nc bnc" id="L184" title="All 2 branches missed.">                                is Result.NOTFOUND -&gt; {</span>
+<span class="nc" id="L185">                                    mapResult[sha1] = Result.NOTFOUND</span>
+                                }
+                            }
+                        }
+                        else -&gt; {
+<span class="nc" id="L190">                            result = mapResult[sha1]!!</span>
+                        }
+                    }
+<span class="nc bnc" id="L193" title="All 2 branches missed.">                    if (result != Result.ERROR) {</span>
+<span class="nc" id="L194">                        insertIntoUploaded(imageSHA1, sha1, false, result is Result.TRUE)</span>
+                    }
+                }
+            }
+
+<span class="nc" id="L199">            val sharedPreferences: SharedPreferences =</span>
+<span class="nc" id="L200">                context</span>
+<span class="nc" id="L201">                    .getSharedPreferences(ImageHelper.CUSTOM_SELECTOR_PREFERENCE_KEY, 0)</span>
+<span class="nc" id="L202">            val showAlreadyActionedImages =</span>
+<span class="nc" id="L203">                sharedPreferences.getBoolean(</span>
+<span class="nc" id="L204">                    ImageHelper.SHOW_ALREADY_ACTIONED_IMAGES_PREFERENCE_KEY,</span>
+<span class="nc" id="L205">                    true</span>
+                )
+
+<span class="nc bnc" id="L208" title="All 2 branches missed.">            if (mapHolderImage[holder] == image) {</span>
+<span class="nc bnc" id="L209" title="All 4 branches missed.">                if ((result is Result.TRUE) &amp;&amp; showAlreadyActionedImages) {</span>
+<span class="nc" id="L210">                    holder.itemUploaded()</span>
+<span class="nc" id="L211">                } else holder.itemNotUploaded()</span>
+
+<span class="nc bnc" id="L213" title="All 4 branches missed.">                if ((existsInNotForUploadTable &gt; 0) &amp;&amp; showAlreadyActionedImages) {</span>
+<span class="nc" id="L214">                    holder.itemNotForUpload()</span>
+<span class="nc" id="L215">                } else holder.itemForUpload()</span>
+            }
+<span class="nc" id="L217">        }</span>
+<span class="nc" id="L218">    }</span>
+
+    /**
+     * Finds out the next actionable image position
+     */
+<span class="nc" id="L223">    suspend fun nextActionableImage(</span>
+        allImages: List&lt;Image&gt;, ioDispatcher: CoroutineDispatcher,
+        defaultDispatcher: CoroutineDispatcher,
+        nextImagePosition: Int
+    ): Int {
+        var next: Int
+
+        // Traversing from given position to the end
+<span class="nc bnc" id="L231" title="All 2 branches missed.">        for (i in nextImagePosition until allImages.size){</span>
+<span class="nc" id="L232">            val it = allImages[i]</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">            val imageSHA1: String = when (mapImageSHA1[it.uri] != null) {</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">                true -&gt; mapImageSHA1[it.uri]!!</span>
+<span class="nc" id="L235">                else -&gt; CustomSelectorUtils.getImageSHA1(</span>
+<span class="nc" id="L236">                    it.uri,</span>
+<span class="nc" id="L237">                    ioDispatcher,</span>
+<span class="nc" id="L238">                    fileUtilsWrapper,</span>
+<span class="nc" id="L239">                    context.contentResolver</span>
+                )
+            }
+<span class="nc" id="L242">            next = notForUploadStatusDao.find(imageSHA1)</span>
+
+            // After checking the image in the not for upload table, if the image is present then
+            // skips the image and moves to next image for checking
+<span class="nc bnc" id="L246" title="All 2 branches missed.">            if(next &gt; 0){</span>
+<span class="nc" id="L247">                continue</span>
+
+            // Otherwise checks in already uploaded table
+            } else {
+<span class="nc" id="L251">                next = uploadedStatusDao.findByImageSHA1(imageSHA1, true)</span>
+
+                // If the image is not present in the already uploaded table, checks for its
+                // modified SHA1 in already uploaded table
+<span class="nc bnc" id="L255" title="All 2 branches missed.">                if (next &lt;= 0) {</span>
+<span class="nc" id="L256">                    val modifiedImageSha1 = getSHA1(it, defaultDispatcher)</span>
+<span class="nc" id="L257">                    next = uploadedStatusDao.findByModifiedImageSHA1(</span>
+<span class="nc" id="L258">                        modifiedImageSha1,</span>
+<span class="nc" id="L259">                        true</span>
+                    )
+
+                    // If the modified image SHA1 is not present in the already uploaded table,
+                    // returns the position as next actionable image position
+<span class="nc bnc" id="L264" title="All 2 branches missed.">                    if (next &lt;= 0) {</span>
+<span class="nc" id="L265">                        return i</span>
+
+                    // If present in the db then skips iteration for the image and moves to the next
+                    // for checking
+                    } else {
+<span class="nc" id="L270">                        continue</span>
+                    }
+
+                // If present in the db then skips iteration for the image and moves to the next
+                // for checking
+                } else {
+<span class="nc" id="L276">                    continue</span>
+                }
+            }
+        }
+<span class="nc" id="L280">        return -1</span>
+    }
+
+    /**
+     * Get SHA1, return SHA1 if available, otherwise generate and store the SHA1.
+     *
+     * @return sha1 of the image
+     */
+<span class="nc" id="L288">    suspend fun getSHA1(image: Image, defaultDispatcher: CoroutineDispatcher): String {</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">        mapModifiedImageSHA1[image]?.let{</span>
+<span class="nc" id="L290">            return it</span>
+        }
+<span class="nc" id="L292">        val sha1 = CustomSelectorUtils</span>
+<span class="nc" id="L293">            .generateModifiedSHA1(image,</span>
+<span class="nc" id="L294">                defaultDispatcher,</span>
+<span class="nc" id="L295">                context,</span>
+<span class="nc" id="L296">                fileProcessor,</span>
+<span class="nc" id="L297">                fileUtilsWrapper</span>
+            )
+<span class="nc" id="L299">        mapModifiedImageSHA1[image] = sha1;</span>
+<span class="nc" id="L300">        return sha1;</span>
+    }
+
+    /**
+     * Get the uploaded status entry from the database.
+     */
+    suspend fun getFromUploaded(imageSha1:String): UploadedStatus? {
+<span class="nc" id="L307">        return uploadedStatusDao.getUploadedFromImageSHA1(imageSha1)</span>
+    }
+
+    /**
+     * Insert into uploaded status table.
+     */
+    suspend fun insertIntoUploaded(imageSha1:String, modifiedImageSha1:String, imageResult:Boolean, modifiedImageResult: Boolean){
+<span class="nc" id="L314">        uploadedStatusDao.insertUploaded(</span>
+<span class="nc" id="L315">            UploadedStatus(</span>
+<span class="nc" id="L316">                imageSha1,</span>
+<span class="nc" id="L317">                modifiedImageSha1,</span>
+<span class="nc" id="L318">                imageResult,</span>
+<span class="nc" id="L319">                modifiedImageResult</span>
+            )
+        )
+<span class="nc" id="L322">    }</span>
+
+    /**
+     * Get result data from database.
+     */
+    fun getResultFromUploadedStatus(uploadedStatus: UploadedStatus): Result {
+<span class="nc bnc" id="L328" title="All 4 branches missed.">        if (uploadedStatus.imageResult || uploadedStatus.modifiedImageResult) {</span>
+<span class="nc" id="L329">            return Result.TRUE</span>
+        } else {
+<span class="nc bnc" id="L331" title="All 2 branches missed.">            uploadedStatus.lastUpdated?.let {</span>
+<span class="nc" id="L332">                val duration = Calendar.getInstance().time.time - it.time</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">                if (TimeUnit.MILLISECONDS.toDays(duration) &lt; INVALIDATE_DAY_COUNT) {</span>
+<span class="nc" id="L334">                    return Result.FALSE</span>
+                }
+<span class="nc" id="L336">            }</span>
+        }
+<span class="nc" id="L338">        return Result.INVALID</span>
+    }
+
+    /**
+     * Sealed Result class.
+     */
+    sealed class Result {
+<span class="nc" id="L345">        object TRUE : Result()</span>
+<span class="nc" id="L346">        object FALSE : Result()</span>
+<span class="nc" id="L347">        object INVALID : Result()</span>
+<span class="nc" id="L348">        object NOTFOUND : Result()</span>
+<span class="nc" id="L349">        object ERROR : Result()</span>
+    }
+
+    /**
+     * Companion Object
+     */
+    companion object {
+        /**
+         * Invalidate Day count.
+         * False Database Entries are invalid after INVALIDATE_DAY_COUNT and need to be re-queried.
+         */
+        const val INVALIDATE_DAY_COUNT: Long = 7
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

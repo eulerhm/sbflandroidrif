@@ -1,0 +1,1264 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ContributionsFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.contributions</a> &gt; <span class="el_source">ContributionsFragment.java</span></div><h1>ContributionsFragment.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.contributions;
+
+import static android.content.Context.SENSOR_SERVICE;
+import static fr.free.nrw.commons.contributions.Contribution.STATE_FAILED;
+import static fr.free.nrw.commons.contributions.Contribution.STATE_PAUSED;
+import static fr.free.nrw.commons.nearby.fragments.NearbyParentFragment.WLM_URL;
+import static fr.free.nrw.commons.profile.ProfileActivity.KEY_USERNAME;
+import static fr.free.nrw.commons.utils.LengthUtils.computeBearing;
+import static fr.free.nrw.commons.utils.LengthUtils.formatDistanceBetween;
+import android.Manifest;
+import android.Manifest.permission;
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.os.Bundle;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.MenuItem.OnMenuItemClickListener;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.CheckBox;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+import androidx.activity.result.ActivityResultCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager.OnBackStackChangedListener;
+import androidx.fragment.app.FragmentTransaction;
+import fr.free.nrw.commons.CommonsApplication;
+import fr.free.nrw.commons.Utils;
+import fr.free.nrw.commons.auth.SessionManager;
+import fr.free.nrw.commons.notification.models.Notification;
+import fr.free.nrw.commons.notification.NotificationController;
+import fr.free.nrw.commons.profile.ProfileActivity;
+import fr.free.nrw.commons.theme.BaseActivity;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import javax.inject.Inject;
+import javax.inject.Named;
+import androidx.work.WorkManager;
+import butterknife.BindView;
+import butterknife.ButterKnife;
+import fr.free.nrw.commons.Media;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.campaigns.models.Campaign;
+import fr.free.nrw.commons.campaigns.CampaignView;
+import fr.free.nrw.commons.campaigns.CampaignsPresenter;
+import fr.free.nrw.commons.campaigns.ICampaignsView;
+import fr.free.nrw.commons.contributions.ContributionsListFragment.Callback;
+import fr.free.nrw.commons.contributions.MainActivity.ActiveFragment;
+import fr.free.nrw.commons.di.CommonsDaggerSupportFragment;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.location.LocationServiceManager;
+import fr.free.nrw.commons.location.LocationUpdateListener;
+import fr.free.nrw.commons.media.MediaDetailPagerFragment;
+import fr.free.nrw.commons.media.MediaDetailPagerFragment.MediaDetailProvider;
+import fr.free.nrw.commons.mwapi.OkHttpJsonApiClient;
+import fr.free.nrw.commons.nearby.NearbyController;
+import fr.free.nrw.commons.nearby.NearbyNotificationCardView;
+import fr.free.nrw.commons.nearby.Place;
+import fr.free.nrw.commons.notification.NotificationActivity;
+import fr.free.nrw.commons.upload.worker.UploadWorker;
+import fr.free.nrw.commons.utils.ConfigUtils;
+import fr.free.nrw.commons.utils.DialogUtil;
+import fr.free.nrw.commons.utils.NetworkUtils;
+import fr.free.nrw.commons.utils.PermissionUtils;
+import fr.free.nrw.commons.utils.ViewUtil;
+import io.reactivex.Observable;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.CompositeDisposable;
+import io.reactivex.schedulers.Schedulers;
+import timber.log.Timber;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+<span class="fc" id="L86">public class ContributionsFragment extends CommonsDaggerSupportFragment implements OnBackStackChangedListener, LocationUpdateListener, MediaDetailProvider, SensorEventListener, ICampaignsView, ContributionsContract.View, Callback {</span>
+
+    @Inject
+    @Named(&quot;default_preferences&quot;)
+    JsonKvStore store;
+
+    @Inject
+    NearbyController nearbyController;
+
+    @Inject
+    OkHttpJsonApiClient okHttpJsonApiClient;
+
+    @Inject
+    CampaignsPresenter presenter;
+
+    @Inject
+    LocationServiceManager locationManager;
+
+    @Inject
+    NotificationController notificationController;
+
+<span class="fc" id="L107">    private CompositeDisposable compositeDisposable = new CompositeDisposable();</span>
+
+    private ContributionsListFragment contributionsListFragment;
+
+    private static final String CONTRIBUTION_LIST_FRAGMENT_TAG = &quot;ContributionListFragmentTag&quot;;
+
+    private MediaDetailPagerFragment mediaDetailPagerFragment;
+
+    static final String MEDIA_DETAIL_PAGER_FRAGMENT_TAG = &quot;MediaDetailFragmentTag&quot;;
+
+    private static final int MAX_RETRIES = 10;
+
+    @BindView(R.id.card_view_nearby)
+    public NearbyNotificationCardView nearbyNotificationCardView;
+
+    @BindView(R.id.campaigns_view)
+    CampaignView campaignView;
+
+    @BindView(R.id.limited_connection_enabled_layout)
+    LinearLayout limitedConnectionEnabledLayout;
+
+    @BindView(R.id.limited_connection_description_text_view)
+    TextView limitedConnectionDescriptionTextView;
+
+    @Inject
+    ContributionsPresenter contributionsPresenter;
+
+    @Inject
+    SessionManager sessionManager;
+
+    private LatLng curLatLng;
+
+<span class="fc" id="L139">    private boolean isFragmentAttachedBefore = false;</span>
+
+    private View checkBoxView;
+
+    private CheckBox checkBox;
+
+    public TextView notificationCount;
+
+    private Campaign wlmCampaign;
+
+    String userName;
+
+    private boolean isUserProfile;
+
+    private SensorManager mSensorManager;
+
+    private Sensor mLight;
+
+    private float direction;
+
+<span class="fc" id="L159">    private ActivityResultLauncher&lt;String[]&gt; nearbyLocationPermissionLauncher = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), new ActivityResultCallback&lt;Map&lt;String, Boolean&gt;&gt;() {</span>
+
+        @Override
+        public void onActivityResult(Map&lt;String, Boolean&gt; result) {
+<span class="nc" id="L163">            boolean areAllGranted = true;</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(884)) {</span>
+                {
+<span class="nc" id="L166">                    long _loopCounter16 = 0;</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">                    for (final boolean b : result.values()) {</span>
+<span class="nc" id="L168">                        ListenerUtil.loopListener.listen(&quot;_loopCounter16&quot;, ++_loopCounter16);</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(883)) {</span>
+<span class="nc bnc" id="L170" title="All 10 branches missed.">                            areAllGranted = (ListenerUtil.mutListener.listen(882) ? (areAllGranted || b) : (areAllGranted &amp;&amp; b));</span>
+                        }
+<span class="nc" id="L172">                    }</span>
+                }
+            }
+<span class="nc bnc" id="L175" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(893)) {</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">                if (areAllGranted) {</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(892)) {</span>
+<span class="nc" id="L178">                        onLocationPermissionGranted();</span>
+                    }
+                } else {
+<span class="nc bnc" id="L181" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(891)) {</span>
+<span class="nc bnc" id="L182" title="All 58 branches missed.">                        if ((ListenerUtil.mutListener.listen(887) ? ((ListenerUtil.mutListener.listen(886) ? ((ListenerUtil.mutListener.listen(885) ? (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) || store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)) : (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true))) || !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false)) : ((ListenerUtil.mutListener.listen(885) ? (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) || store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)) : (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true))) &amp;&amp; !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false))) || (((MainActivity) getActivity()).activeFragment == ActiveFragment.CONTRIBUTIONS)) : ((ListenerUtil.mutListener.listen(886) ? ((ListenerUtil.mutListener.listen(885) ? (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) || store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)) : (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true))) || !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false)) : ((ListenerUtil.mutListener.listen(885) ? (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) || store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)) : (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true))) &amp;&amp; !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false))) &amp;&amp; (((MainActivity) getActivity()).activeFragment == ActiveFragment.CONTRIBUTIONS)))) {</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(889)) {</span>
+<span class="nc" id="L184">                                nearbyNotificationCardView.permissionType = NearbyNotificationCardView.PermissionType.ENABLE_LOCATION_PERMISSION;</span>
+                            }
+<span class="nc bnc" id="L186" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(890)) {</span>
+<span class="nc" id="L187">                                showNearbyCardPermissionRationale();</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L190" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(888)) {</span>
+<span class="nc" id="L191">                                displayYouWontSeeNearbyMessage();</span>
+                            }
+                        }
+                    }
+                }
+            }
+<span class="nc" id="L197">        }</span>
+    });
+
+    @NonNull
+    public static ContributionsFragment newInstance() {
+<span class="fc" id="L202">        ContributionsFragment fragment = new ContributionsFragment();</span>
+<span class="pc bpc" id="L203" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(894)) {</span>
+<span class="fc" id="L204">            fragment.setRetainInstance(true);</span>
+        }
+<span class="fc" id="L206">        return fragment;</span>
+    }
+
+    private boolean shouldShowMediaDetailsFragment;
+
+    @Override
+    public void onCreate(@Nullable Bundle savedInstanceState) {
+<span class="pc bpc" id="L213" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(895)) {</span>
+<span class="fc" id="L214">            super.onCreate(savedInstanceState);</span>
+        }
+<span class="pc bpc" id="L216" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(899)) {</span>
+<span class="pc bpc" id="L217" title="8 of 10 branches missed.">            if ((ListenerUtil.mutListener.listen(896) ? (getArguments() != null || getArguments().getString(KEY_USERNAME) != null) : (getArguments() != null &amp;&amp; getArguments().getString(KEY_USERNAME) != null))) {</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(897)) {</span>
+<span class="nc" id="L219">                    userName = getArguments().getString(KEY_USERNAME);</span>
+                }
+<span class="nc bnc" id="L221" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(898)) {</span>
+<span class="nc" id="L222">                    isUserProfile = true;</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L226" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(900)) {</span>
+<span class="fc" id="L227">            mSensorManager = (SensorManager) getActivity().getSystemService(SENSOR_SERVICE);</span>
+        }
+<span class="pc bpc" id="L229" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(901)) {</span>
+<span class="fc" id="L230">            mLight = mSensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION);</span>
+        }
+<span class="fc" id="L232">    }</span>
+
+    @Nullable
+    @Override
+    public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+<span class="fc" id="L237">        View view = inflater.inflate(R.layout.fragment_contributions, container, false);</span>
+<span class="pc bpc" id="L238" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(902)) {</span>
+<span class="fc" id="L239">            ButterKnife.bind(this, view);</span>
+        }
+<span class="pc bpc" id="L241" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(903)) {</span>
+<span class="fc" id="L242">            initWLMCampaign();</span>
+        }
+<span class="pc bpc" id="L244" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(904)) {</span>
+<span class="fc" id="L245">            presenter.onAttachView(this);</span>
+        }
+<span class="pc bpc" id="L247" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(905)) {</span>
+<span class="fc" id="L248">            contributionsPresenter.onAttachView(this);</span>
+        }
+<span class="pc bpc" id="L250" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(906)) {</span>
+<span class="fc" id="L251">            campaignView.setVisibility(View.GONE);</span>
+        }
+<span class="pc bpc" id="L253" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(907)) {</span>
+<span class="fc" id="L254">            checkBoxView = View.inflate(getActivity(), R.layout.nearby_permission_dialog, null);</span>
+        }
+<span class="pc bpc" id="L256" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(908)) {</span>
+<span class="fc" id="L257">            checkBox = (CheckBox) checkBoxView.findViewById(R.id.never_ask_again);</span>
+        }
+<span class="pc bpc" id="L259" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(909)) {</span>
+<span class="fc" id="L260">            checkBox.setOnCheckedChangeListener((buttonView, isChecked) -&gt; {</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">                if (isChecked) {</span>
+                    // Do not ask for permission on activity start again
+<span class="nc" id="L263">                    store.putBoolean(&quot;displayLocationPermissionForCardView&quot;, false);</span>
+                }
+<span class="nc" id="L265">            });</span>
+        }
+<span class="pc bpc" id="L267" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(913)) {</span>
+<span class="pc bpc" id="L268" title="1 of 2 branches missed.">            if (savedInstanceState != null) {</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(910)) {</span>
+<span class="nc" id="L270">                    mediaDetailPagerFragment = (MediaDetailPagerFragment) getChildFragmentManager().findFragmentByTag(MEDIA_DETAIL_PAGER_FRAGMENT_TAG);</span>
+                }
+<span class="nc bnc" id="L272" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(911)) {</span>
+<span class="nc" id="L273">                    contributionsListFragment = (ContributionsListFragment) getChildFragmentManager().findFragmentByTag(CONTRIBUTION_LIST_FRAGMENT_TAG);</span>
+                }
+<span class="nc bnc" id="L275" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(912)) {</span>
+<span class="nc" id="L276">                    shouldShowMediaDetailsFragment = savedInstanceState.getBoolean(&quot;mediaDetailsVisible&quot;);</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L280" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(914)) {</span>
+<span class="fc" id="L281">            initFragments();</span>
+        }
+<span class="pc bpc" id="L283" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(917)) {</span>
+<span class="pc bpc" id="L284" title="1 of 2 branches missed.">            if (isUserProfile) {</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(916)) {</span>
+<span class="nc" id="L286">                    limitedConnectionEnabledLayout.setVisibility(View.GONE);</span>
+                }
+            } else {
+<span class="pc bpc" id="L289" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(915)) {</span>
+<span class="fc" id="L290">                    upDateUploadCount();</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L294" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(922)) {</span>
+<span class="pc bpc" id="L295" title="1 of 2 branches missed.">            if (shouldShowMediaDetailsFragment) {</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(921)) {</span>
+<span class="nc" id="L297">                    showMediaDetailPagerFragment();</span>
+                }
+            } else {
+<span class="pc bpc" id="L300" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(919)) {</span>
+<span class="pc bpc" id="L301" title="1 of 2 branches missed.">                    if (mediaDetailPagerFragment != null) {</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(918)) {</span>
+<span class="nc" id="L303">                            removeFragment(mediaDetailPagerFragment);</span>
+                        }
+                    }
+                }
+<span class="pc bpc" id="L307" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(920)) {</span>
+<span class="fc" id="L308">                    showContributionsListFragment();</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L312" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(927)) {</span>
+<span class="pc bpc" id="L313" title="51 of 58 branches missed.">            if ((ListenerUtil.mutListener.listen(925) ? ((ListenerUtil.mutListener.listen(924) ? ((ListenerUtil.mutListener.listen(923) ? (!ConfigUtils.isBetaFlavour() || sessionManager.isUserLoggedIn()) : (!ConfigUtils.isBetaFlavour() &amp;&amp; sessionManager.isUserLoggedIn())) || sessionManager.getCurrentAccount() != null) : ((ListenerUtil.mutListener.listen(923) ? (!ConfigUtils.isBetaFlavour() || sessionManager.isUserLoggedIn()) : (!ConfigUtils.isBetaFlavour() &amp;&amp; sessionManager.isUserLoggedIn())) &amp;&amp; sessionManager.getCurrentAccount() != null)) || !isUserProfile) : ((ListenerUtil.mutListener.listen(924) ? ((ListenerUtil.mutListener.listen(923) ? (!ConfigUtils.isBetaFlavour() || sessionManager.isUserLoggedIn()) : (!ConfigUtils.isBetaFlavour() &amp;&amp; sessionManager.isUserLoggedIn())) || sessionManager.getCurrentAccount() != null) : ((ListenerUtil.mutListener.listen(923) ? (!ConfigUtils.isBetaFlavour() || sessionManager.isUserLoggedIn()) : (!ConfigUtils.isBetaFlavour() &amp;&amp; sessionManager.isUserLoggedIn())) &amp;&amp; sessionManager.getCurrentAccount() != null)) &amp;&amp; !isUserProfile))) {</span>
+<span class="pc bpc" id="L314" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(926)) {</span>
+<span class="fc" id="L315">                    setUploadCount();</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L319" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(928)) {</span>
+<span class="fc" id="L320">            limitedConnectionEnabledLayout.setOnClickListener(toggleDescriptionListener);</span>
+        }
+<span class="pc bpc" id="L322" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(929)) {</span>
+<span class="fc" id="L323">            setHasOptionsMenu(true);</span>
+        }
+<span class="fc" id="L325">        return view;</span>
+    }
+
+    /**
+     * Initialise the campaign object for WML
+     */
+    private void initWLMCampaign() {
+<span class="pc bpc" id="L332" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(930)) {</span>
+<span class="fc" id="L333">            wlmCampaign = new Campaign(getString(R.string.wlm_campaign_title), getString(R.string.wlm_campaign_description), Utils.getWLMStartDate().toString(), Utils.getWLMEndDate().toString(), WLM_URL, true);</span>
+        }
+<span class="fc" id="L335">    }</span>
+
+    @Override
+    public void onCreateOptionsMenu(@NonNull final Menu menu, @NonNull final MenuInflater inflater) {
+<span class="pc bpc" id="L339" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(931)) {</span>
+            // Removing contributions menu items for ProfileActivity
+<span class="pc bpc" id="L341" title="1 of 2 branches missed.">            if (getActivity() instanceof ProfileActivity) {</span>
+<span class="nc" id="L342">                return;</span>
+            }
+        }
+<span class="pc bpc" id="L345" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(932)) {</span>
+<span class="fc" id="L346">            inflater.inflate(R.menu.contribution_activity_notification_menu, menu);</span>
+        }
+<span class="fc" id="L348">        MenuItem notificationsMenuItem = menu.findItem(R.id.notifications);</span>
+<span class="fc" id="L349">        final View notification = notificationsMenuItem.getActionView();</span>
+<span class="pc bpc" id="L350" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(933)) {</span>
+<span class="fc" id="L351">            notificationCount = notification.findViewById(R.id.notification_count_badge);</span>
+        }
+<span class="pc bpc" id="L353" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(934)) {</span>
+<span class="fc" id="L354">            notification.setOnClickListener(view -&gt; {</span>
+<span class="nc" id="L355">                NotificationActivity.startYourself(getContext(), &quot;unread&quot;);</span>
+<span class="nc" id="L356">            });</span>
+        }
+<span class="pc bpc" id="L358" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(935)) {</span>
+<span class="fc" id="L359">            updateLimitedConnectionToggle(menu);</span>
+        }
+<span class="fc" id="L361">    }</span>
+
+    @SuppressLint(&quot;CheckResult&quot;)
+    public void setNotificationCount() {
+<span class="pc bpc" id="L365" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(936)) {</span>
+<span class="pc" id="L366">            compositeDisposable.add(notificationController.getNotifications(false).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe(this::initNotificationViews, throwable -&gt; Timber.e(throwable, &quot;Error occurred while loading notifications&quot;)));</span>
+        }
+<span class="fc" id="L368">    }</span>
+
+    public void scrollToTop() {
+<span class="nc bnc" id="L371" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(938)) {</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">            if (contributionsListFragment != null) {</span>
+<span class="nc bnc" id="L373" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(937)) {</span>
+<span class="nc" id="L374">                    contributionsListFragment.scrollToTop();</span>
+                }
+            }
+        }
+<span class="nc" id="L378">    }</span>
+
+    private void initNotificationViews(List&lt;Notification&gt; notificationList) {
+<span class="pc bpc" id="L381" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(939)) {</span>
+<span class="fc" id="L382">            Timber.d(&quot;Number of notifications is %d&quot;, notificationList.size());</span>
+        }
+<span class="pc bpc" id="L384" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(943)) {</span>
+<span class="pc bpc" id="L385" title="1 of 2 branches missed.">            if (notificationList.isEmpty()) {</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(942)) {</span>
+<span class="nc" id="L387">                    notificationCount.setVisibility(View.GONE);</span>
+                }
+            } else {
+<span class="pc bpc" id="L390" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(940)) {</span>
+<span class="fc" id="L391">                    notificationCount.setVisibility(View.VISIBLE);</span>
+                }
+<span class="pc bpc" id="L393" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(941)) {</span>
+<span class="fc" id="L394">                    notificationCount.setText(String.valueOf(notificationList.size()));</span>
+                }
+            }
+        }
+<span class="fc" id="L398">    }</span>
+
+    public void updateLimitedConnectionToggle(Menu menu) {
+<span class="fc" id="L401">        MenuItem checkable = menu.findItem(R.id.toggle_limited_connection_mode);</span>
+<span class="fc" id="L402">        boolean isEnabled = store.getBoolean(CommonsApplication.IS_LIMITED_CONNECTION_MODE_ENABLED, false);</span>
+<span class="pc bpc" id="L403" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(944)) {</span>
+<span class="fc" id="L404">            checkable.setChecked(isEnabled);</span>
+        }
+<span class="pc bpc" id="L406" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(947)) {</span>
+<span class="pc bpc" id="L407" title="1 of 2 branches missed.">            if (isEnabled) {</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(946)) {</span>
+<span class="nc" id="L409">                    limitedConnectionEnabledLayout.setVisibility(View.VISIBLE);</span>
+                }
+            } else {
+<span class="pc bpc" id="L412" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(945)) {</span>
+<span class="fc" id="L413">                    limitedConnectionEnabledLayout.setVisibility(View.GONE);</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L417" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(948)) {</span>
+<span class="pc bpc" id="L418" title="1 of 2 branches missed.">            checkable.setIcon((isEnabled) ? R.drawable.ic_baseline_cloud_off_24 : R.drawable.ic_baseline_cloud_queue_24);</span>
+        }
+<span class="pc bpc" id="L420" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(954)) {</span>
+<span class="fc" id="L421">            checkable.setOnMenuItemClickListener(new OnMenuItemClickListener() {</span>
+
+                @Override
+                public boolean onMenuItemClick(MenuItem item) {
+<span class="nc bnc" id="L425" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(949)) {</span>
+<span class="nc" id="L426">                        ((MainActivity) getActivity()).toggleLimitedConnectionMode();</span>
+                    }
+<span class="nc" id="L428">                    boolean isEnabled = store.getBoolean(CommonsApplication.IS_LIMITED_CONNECTION_MODE_ENABLED, false);</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(952)) {</span>
+<span class="nc bnc" id="L430" title="All 2 branches missed.">                        if (isEnabled) {</span>
+<span class="nc bnc" id="L431" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(951)) {</span>
+<span class="nc" id="L432">                                limitedConnectionEnabledLayout.setVisibility(View.VISIBLE);</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L435" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(950)) {</span>
+<span class="nc" id="L436">                                limitedConnectionEnabledLayout.setVisibility(View.GONE);</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L440" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(953)) {</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">                        checkable.setIcon((isEnabled) ? R.drawable.ic_baseline_cloud_off_24 : R.drawable.ic_baseline_cloud_queue_24);</span>
+                    }
+<span class="nc" id="L443">                    return false;</span>
+                }
+            });
+        }
+<span class="fc" id="L447">    }</span>
+
+    @Override
+    public void onAttach(Context context) {
+<span class="pc bpc" id="L451" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(955)) {</span>
+<span class="fc" id="L452">            super.onAttach(context);</span>
+        }
+<span class="pc bpc" id="L454" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(958)) {</span>
+            /*
+        - There are some operations we need auth, so we need to make sure isAuthCookieAcquired.
+        - And since we use same retained fragment doesn't want to make all network operations
+        all over again on same fragment attached to recreated activity, we do this network
+        operations on first time fragment attached to an activity. Then they will be retained
+        until fragment life time ends.
+         */
+<span class="pc bpc" id="L462" title="7 of 10 branches missed.">            if ((ListenerUtil.mutListener.listen(956) ? (!isFragmentAttachedBefore || getActivity() != null) : (!isFragmentAttachedBefore &amp;&amp; getActivity() != null))) {</span>
+<span class="pc bpc" id="L463" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(957)) {</span>
+<span class="fc" id="L464">                    isFragmentAttachedBefore = true;</span>
+                }
+            }
+        }
+<span class="fc" id="L468">    }</span>
+
+    /**
+     * Replace FrameLayout with ContributionsListFragment, user will see contributions list. Creates
+     * new one if null.
+     */
+    private void showContributionsListFragment() {
+<span class="pc bpc" id="L475" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(964)) {</span>
+            // show nearby card view on contributions list is visible
+<span class="pc bpc" id="L477" title="7 of 10 branches missed.">            if ((ListenerUtil.mutListener.listen(959) ? (nearbyNotificationCardView != null || !isUserProfile) : (nearbyNotificationCardView != null &amp;&amp; !isUserProfile))) {</span>
+<span class="pc bpc" id="L478" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(963)) {</span>
+<span class="pc bpc" id="L479" title="1 of 2 branches missed.">                    if (store.getBoolean(&quot;displayNearbyCardView&quot;, true)) {</span>
+<span class="pc bpc" id="L480" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(962)) {</span>
+<span class="pc bpc" id="L481" title="1 of 2 branches missed.">                            if (nearbyNotificationCardView.cardViewVisibilityState == NearbyNotificationCardView.CardViewVisibilityState.READY) {</span>
+<span class="nc bnc" id="L482" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(961)) {</span>
+<span class="nc" id="L483">                                    nearbyNotificationCardView.setVisibility(View.VISIBLE);</span>
+                                }
+                            }
+                        }
+                    } else {
+<span class="nc bnc" id="L488" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(960)) {</span>
+<span class="nc" id="L489">                            nearbyNotificationCardView.setVisibility(View.GONE);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="pc bpc" id="L495" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(965)) {</span>
+<span class="fc" id="L496">            showFragment(contributionsListFragment, CONTRIBUTION_LIST_FRAGMENT_TAG, mediaDetailPagerFragment);</span>
+        }
+<span class="fc" id="L498">    }</span>
+
+    private void showMediaDetailPagerFragment() {
+<span class="nc bnc" id="L501" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(966)) {</span>
+            // hide nearby card view on media detail is visible
+<span class="nc" id="L503">            setupViewForMediaDetails();</span>
+        }
+<span class="nc bnc" id="L505" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(967)) {</span>
+<span class="nc" id="L506">            showFragment(mediaDetailPagerFragment, MEDIA_DETAIL_PAGER_FRAGMENT_TAG, contributionsListFragment);</span>
+        }
+<span class="nc" id="L508">    }</span>
+
+    private void setupViewForMediaDetails() {
+<span class="nc bnc" id="L511" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(968)) {</span>
+<span class="nc" id="L512">            campaignView.setVisibility(View.GONE);</span>
+        }
+<span class="nc bnc" id="L514" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(969)) {</span>
+<span class="nc" id="L515">            nearbyNotificationCardView.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L517">    }</span>
+
+    @Override
+    public void onBackStackChanged() {
+<span class="nc bnc" id="L521" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(970)) {</span>
+<span class="nc" id="L522">            fetchCampaigns();</span>
+        }
+<span class="nc" id="L524">    }</span>
+
+    private void initFragments() {
+<span class="pc bpc" id="L527" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(974)) {</span>
+<span class="pc bpc" id="L528" title="1 of 2 branches missed.">            if (null == contributionsListFragment) {</span>
+<span class="pc bpc" id="L529" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(971)) {</span>
+<span class="fc" id="L530">                    contributionsListFragment = new ContributionsListFragment();</span>
+                }
+<span class="fc" id="L532">                Bundle contributionsListBundle = new Bundle();</span>
+<span class="pc bpc" id="L533" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(972)) {</span>
+<span class="fc" id="L534">                    contributionsListBundle.putString(KEY_USERNAME, userName);</span>
+                }
+<span class="pc bpc" id="L536" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(973)) {</span>
+<span class="fc" id="L537">                    contributionsListFragment.setArguments(contributionsListBundle);</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L541" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(977)) {</span>
+<span class="pc bpc" id="L542" title="1 of 2 branches missed.">            if (shouldShowMediaDetailsFragment) {</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(976)) {</span>
+<span class="nc" id="L544">                    showMediaDetailPagerFragment();</span>
+                }
+            } else {
+<span class="pc bpc" id="L547" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(975)) {</span>
+<span class="fc" id="L548">                    showContributionsListFragment();</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L552" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(978)) {</span>
+<span class="fc" id="L553">            showFragment(contributionsListFragment, CONTRIBUTION_LIST_FRAGMENT_TAG, mediaDetailPagerFragment);</span>
+        }
+<span class="fc" id="L555">    }</span>
+
+    /**
+     * Replaces the root frame layout with the given fragment
+     *
+     * @param fragment
+     * @param tag
+     * @param otherFragment
+     */
+    private void showFragment(Fragment fragment, String tag, Fragment otherFragment) {
+<span class="fc" id="L565">        FragmentTransaction transaction = getChildFragmentManager().beginTransaction();</span>
+<span class="pc bpc" id="L566" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1000)) {</span>
+<span class="pc bpc" id="L567" title="6 of 10 branches missed.">            if ((ListenerUtil.mutListener.listen(979) ? (fragment.isAdded() || otherFragment != null) : (fragment.isAdded() &amp;&amp; otherFragment != null))) {</span>
+<span class="nc bnc" id="L568" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(995)) {</span>
+<span class="nc" id="L569">                    transaction.hide(otherFragment);</span>
+                }
+<span class="nc bnc" id="L571" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(996)) {</span>
+<span class="nc" id="L572">                    transaction.show(fragment);</span>
+                }
+<span class="nc bnc" id="L574" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(997)) {</span>
+<span class="nc" id="L575">                    transaction.addToBackStack(tag);</span>
+                }
+<span class="nc bnc" id="L577" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(998)) {</span>
+<span class="nc" id="L578">                    transaction.commit();</span>
+                }
+<span class="nc bnc" id="L580" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(999)) {</span>
+<span class="nc" id="L581">                    getChildFragmentManager().executePendingTransactions();</span>
+                }
+<span class="pc bpc" id="L583" title="6 of 10 branches missed.">            } else if ((ListenerUtil.mutListener.listen(980) ? (fragment.isAdded() || otherFragment == null) : (fragment.isAdded() &amp;&amp; otherFragment == null))) {</span>
+<span class="pc bpc" id="L584" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(991)) {</span>
+<span class="fc" id="L585">                    transaction.show(fragment);</span>
+                }
+<span class="pc bpc" id="L587" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(992)) {</span>
+<span class="fc" id="L588">                    transaction.addToBackStack(tag);</span>
+                }
+<span class="pc bpc" id="L590" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(993)) {</span>
+<span class="fc" id="L591">                    transaction.commit();</span>
+                }
+<span class="pc bpc" id="L593" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(994)) {</span>
+<span class="fc" id="L594">                    getChildFragmentManager().executePendingTransactions();</span>
+                }
+<span class="pc bpc" id="L596" title="7 of 10 branches missed.">            } else if ((ListenerUtil.mutListener.listen(981) ? (!fragment.isAdded() || otherFragment != null) : (!fragment.isAdded() &amp;&amp; otherFragment != null))) {</span>
+<span class="nc bnc" id="L597" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(986)) {</span>
+<span class="nc" id="L598">                    transaction.hide(otherFragment);</span>
+                }
+<span class="nc bnc" id="L600" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(987)) {</span>
+<span class="nc" id="L601">                    transaction.add(R.id.root_frame, fragment, tag);</span>
+                }
+<span class="nc bnc" id="L603" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(988)) {</span>
+<span class="nc" id="L604">                    transaction.addToBackStack(tag);</span>
+                }
+<span class="nc bnc" id="L606" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(989)) {</span>
+<span class="nc" id="L607">                    transaction.commit();</span>
+                }
+<span class="nc bnc" id="L609" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(990)) {</span>
+<span class="nc" id="L610">                    getChildFragmentManager().executePendingTransactions();</span>
+                }
+<span class="pc bpc" id="L612" title="1 of 2 branches missed.">            } else if (!fragment.isAdded()) {</span>
+<span class="pc bpc" id="L613" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(982)) {</span>
+<span class="fc" id="L614">                    transaction.replace(R.id.root_frame, fragment, tag);</span>
+                }
+<span class="pc bpc" id="L616" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(983)) {</span>
+<span class="fc" id="L617">                    transaction.addToBackStack(tag);</span>
+                }
+<span class="pc bpc" id="L619" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(984)) {</span>
+<span class="fc" id="L620">                    transaction.commit();</span>
+                }
+<span class="pc bpc" id="L622" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(985)) {</span>
+<span class="fc" id="L623">                    getChildFragmentManager().executePendingTransactions();</span>
+                }
+            }
+        }
+<span class="fc" id="L627">    }</span>
+
+    public void removeFragment(Fragment fragment) {
+<span class="nc bnc" id="L630" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1001)) {</span>
+<span class="nc" id="L631">            getChildFragmentManager().beginTransaction().remove(fragment).commit();</span>
+        }
+<span class="nc bnc" id="L633" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1002)) {</span>
+<span class="nc" id="L634">            getChildFragmentManager().executePendingTransactions();</span>
+        }
+<span class="nc" id="L636">    }</span>
+
+    @SuppressWarnings(&quot;ConstantConditions&quot;)
+    private void setUploadCount() {
+<span class="pc bpc" id="L640" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1003)) {</span>
+<span class="pc" id="L641">            compositeDisposable.add(okHttpJsonApiClient.getUploadCount(((MainActivity) getActivity()).sessionManager.getCurrentAccount().name).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe(this::displayUploadCount, t -&gt; Timber.e(t, &quot;Fetching upload count failed&quot;)));</span>
+        }
+<span class="fc" id="L643">    }</span>
+
+    private void displayUploadCount(Integer uploadCount) {
+<span class="pc bpc" id="L646" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1005)) {</span>
+<span class="pc bpc" id="L647" title="7 of 10 branches missed.">            if ((ListenerUtil.mutListener.listen(1004) ? (getActivity().isFinishing() &amp;&amp; getResources() == null) : (getActivity().isFinishing() || getResources() == null))) {</span>
+<span class="nc" id="L648">                return;</span>
+            }
+        }
+<span class="pc bpc" id="L651" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1006)) {</span>
+<span class="fc" id="L652">            ((MainActivity) getActivity()).setNumOfUploads(uploadCount);</span>
+        }
+<span class="fc" id="L654">    }</span>
+
+    @Override
+    public void onPause() {
+<span class="pc bpc" id="L658" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1007)) {</span>
+<span class="fc" id="L659">            super.onPause();</span>
+        }
+<span class="pc bpc" id="L661" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1008)) {</span>
+<span class="fc" id="L662">            locationManager.removeLocationListener(this);</span>
+        }
+<span class="pc bpc" id="L664" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1009)) {</span>
+<span class="fc" id="L665">            locationManager.unregisterLocationManager();</span>
+        }
+<span class="pc bpc" id="L667" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1010)) {</span>
+<span class="fc" id="L668">            mSensorManager.unregisterListener(this);</span>
+        }
+<span class="fc" id="L670">    }</span>
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+<span class="nc bnc" id="L674" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1011)) {</span>
+<span class="nc" id="L675">            super.onSaveInstanceState(outState);</span>
+        }
+<span class="nc" id="L677">    }</span>
+
+    @Override
+    public void onResume() {
+<span class="pc bpc" id="L681" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1012)) {</span>
+<span class="fc" id="L682">            super.onResume();</span>
+        }
+<span class="pc bpc" id="L684" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1013)) {</span>
+<span class="fc" id="L685">            contributionsPresenter.onAttachView(this);</span>
+        }
+<span class="pc bpc" id="L687" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1014)) {</span>
+<span class="fc" id="L688">            locationManager.addLocationListener(this);</span>
+        }
+<span class="pc bpc" id="L690" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1015)) {</span>
+<span class="fc" id="L691">            nearbyNotificationCardView.permissionRequestButton.setOnClickListener(v -&gt; {</span>
+<span class="nc" id="L692">                showNearbyCardPermissionRationale();</span>
+<span class="nc" id="L693">            });</span>
+        }
+<span class="pc bpc" id="L695" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1027)) {</span>
+            // Notification cards should only be seen on contributions list, not in media details
+<span class="pc bpc" id="L697" title="7 of 10 branches missed.">            if ((ListenerUtil.mutListener.listen(1016) ? (mediaDetailPagerFragment == null || !isUserProfile) : (mediaDetailPagerFragment == null &amp;&amp; !isUserProfile))) {</span>
+<span class="pc bpc" id="L698" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1023)) {</span>
+<span class="pc bpc" id="L699" title="1 of 2 branches missed.">                    if (store.getBoolean(&quot;displayNearbyCardView&quot;, true)) {</span>
+<span class="pc bpc" id="L700" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1018)) {</span>
+<span class="fc" id="L701">                            checkPermissionsAndShowNearbyCardView();</span>
+                        }
+                        // Calling nearby card to keep showing it even when user clicks on it and comes back
+                        try {
+<span class="pc bpc" id="L705" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(1020)) {</span>
+<span class="fc" id="L706">                                updateClosestNearbyCardViewInfo();</span>
+                            }
+<span class="nc" id="L708">                        } catch (Exception e) {</span>
+<span class="nc bnc" id="L709" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(1019)) {</span>
+<span class="nc" id="L710">                                Timber.e(e);</span>
+                            }
+<span class="fc" id="L712">                        }</span>
+<span class="pc bpc" id="L713" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1022)) {</span>
+<span class="pc bpc" id="L714" title="1 of 2 branches missed.">                            if (nearbyNotificationCardView.cardViewVisibilityState == NearbyNotificationCardView.CardViewVisibilityState.READY) {</span>
+<span class="nc bnc" id="L715" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(1021)) {</span>
+<span class="nc" id="L716">                                    nearbyNotificationCardView.setVisibility(View.VISIBLE);</span>
+                                }
+                            }
+                        }
+                    } else {
+<span class="nc bnc" id="L721" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1017)) {</span>
+                            // Hide nearby notification card view if related shared preferences is false
+<span class="nc" id="L723">                            nearbyNotificationCardView.setVisibility(View.GONE);</span>
+                        }
+                    }
+                }
+<span class="pc bpc" id="L727" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1026)) {</span>
+                    // Notification Count and Campaigns should not be set, if it is used in User Profile
+<span class="pc bpc" id="L729" title="1 of 2 branches missed.">                    if (!isUserProfile) {</span>
+<span class="pc bpc" id="L730" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1024)) {</span>
+<span class="fc" id="L731">                            setNotificationCount();</span>
+                        }
+<span class="pc bpc" id="L733" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1025)) {</span>
+<span class="fc" id="L734">                            fetchCampaigns();</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="pc bpc" id="L740" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1028)) {</span>
+<span class="fc" id="L741">            mSensorManager.registerListener(this, mLight, SensorManager.SENSOR_DELAY_UI);</span>
+        }
+<span class="fc" id="L743">    }</span>
+
+    private void checkPermissionsAndShowNearbyCardView() {
+<span class="pc bpc" id="L746" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1035)) {</span>
+<span class="pc bpc" id="L747" title="1 of 2 branches missed.">            if (PermissionUtils.hasPermission(getActivity(), new String[] { Manifest.permission.ACCESS_FINE_LOCATION })) {</span>
+<span class="pc bpc" id="L748" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1034)) {</span>
+<span class="fc" id="L749">                    onLocationPermissionGranted();</span>
+                }
+<span class="nc bnc" id="L751" title="All 58 branches missed.">            } else if ((ListenerUtil.mutListener.listen(1031) ? ((ListenerUtil.mutListener.listen(1030) ? ((ListenerUtil.mutListener.listen(1029) ? (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) || store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)) : (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true))) || !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false)) : ((ListenerUtil.mutListener.listen(1029) ? (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) || store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)) : (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true))) &amp;&amp; !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false))) || (((MainActivity) getActivity()).activeFragment == ActiveFragment.CONTRIBUTIONS)) : ((ListenerUtil.mutListener.listen(1030) ? ((ListenerUtil.mutListener.listen(1029) ? (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) || store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)) : (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true))) || !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false)) : ((ListenerUtil.mutListener.listen(1029) ? (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) || store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)) : (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION) &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true))) &amp;&amp; !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false))) &amp;&amp; (((MainActivity) getActivity()).activeFragment == ActiveFragment.CONTRIBUTIONS)))) {</span>
+<span class="nc bnc" id="L752" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1032)) {</span>
+<span class="nc" id="L753">                    nearbyNotificationCardView.permissionType = NearbyNotificationCardView.PermissionType.ENABLE_LOCATION_PERMISSION;</span>
+                }
+<span class="nc bnc" id="L755" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1033)) {</span>
+<span class="nc" id="L756">                    showNearbyCardPermissionRationale();</span>
+                }
+            }
+        }
+<span class="fc" id="L760">    }</span>
+
+    private void requestLocationPermission() {
+<span class="nc bnc" id="L763" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1036)) {</span>
+<span class="nc" id="L764">            nearbyLocationPermissionLauncher.launch(new String[] { permission.ACCESS_FINE_LOCATION });</span>
+        }
+<span class="nc" id="L766">    }</span>
+
+    private void onLocationPermissionGranted() {
+<span class="pc bpc" id="L769" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1037)) {</span>
+<span class="fc" id="L770">            nearbyNotificationCardView.permissionType = NearbyNotificationCardView.PermissionType.NO_PERMISSION_NEEDED;</span>
+        }
+<span class="pc bpc" id="L772" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1038)) {</span>
+<span class="fc" id="L773">            locationManager.registerLocationManager();</span>
+        }
+<span class="fc" id="L775">    }</span>
+
+    private void showNearbyCardPermissionRationale() {
+<span class="nc bnc" id="L778" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1039)) {</span>
+<span class="nc" id="L779">            DialogUtil.showAlertDialog(getActivity(), getString(R.string.nearby_card_permission_title), getString(R.string.nearby_card_permission_explanation), this::requestLocationPermission, this::displayYouWontSeeNearbyMessage, checkBoxView, false);</span>
+        }
+<span class="nc" id="L781">    }</span>
+
+    private void displayYouWontSeeNearbyMessage() {
+<span class="nc bnc" id="L784" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1040)) {</span>
+<span class="nc" id="L785">            ViewUtil.showLongToast(getActivity(), getResources().getString(R.string.unable_to_display_nearest_place));</span>
+        }
+<span class="nc bnc" id="L787" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1041)) {</span>
+<span class="nc" id="L788">            store.putBoolean(&quot;doNotAskForLocationPermission&quot;, true);</span>
+        }
+<span class="nc" id="L790">    }</span>
+
+    private void updateClosestNearbyCardViewInfo() {
+<span class="pc bpc" id="L793" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1042)) {</span>
+<span class="fc" id="L794">            curLatLng = locationManager.getLastLocation();</span>
+        }
+<span class="pc bpc" id="L796" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1043)) {</span>
+<span class="fc" id="L797">            compositeDisposable.add(Observable.fromCallable(() -&gt; nearbyController.loadAttractionsFromLocation(curLatLng, curLatLng, true, false, // thanks to boolean, it will only return closest result</span>
+<span class="fc" id="L798">            false)).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe(this::updateNearbyNotification, throwable -&gt; {</span>
+<span class="fc" id="L799">                Timber.d(throwable);</span>
+<span class="fc" id="L800">                updateNearbyNotification(null);</span>
+<span class="fc" id="L801">            }));</span>
+        }
+<span class="fc" id="L803">    }</span>
+
+    private void updateNearbyNotification(@Nullable NearbyController.NearbyPlacesInfo nearbyPlacesInfo) {
+<span class="pc bpc" id="L806" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1061)) {</span>
+<span class="pc bpc" id="L807" title="55 of 66 branches missed.">            if ((ListenerUtil.mutListener.listen(1050) ? ((ListenerUtil.mutListener.listen(1044) ? (nearbyPlacesInfo != null || nearbyPlacesInfo.placeList != null) : (nearbyPlacesInfo != null &amp;&amp; nearbyPlacesInfo.placeList != null)) || (ListenerUtil.mutListener.listen(1049) ? (nearbyPlacesInfo.placeList.size() &gt;= 0) : (ListenerUtil.mutListener.listen(1048) ? (nearbyPlacesInfo.placeList.size() &lt;= 0) : (ListenerUtil.mutListener.listen(1047) ? (nearbyPlacesInfo.placeList.size() &lt; 0) : (ListenerUtil.mutListener.listen(1046) ? (nearbyPlacesInfo.placeList.size() != 0) : (ListenerUtil.mutListener.listen(1045) ? (nearbyPlacesInfo.placeList.size() == 0) : (nearbyPlacesInfo.placeList.size() &gt; 0))))))) : ((ListenerUtil.mutListener.listen(1044) ? (nearbyPlacesInfo != null || nearbyPlacesInfo.placeList != null) : (nearbyPlacesInfo != null &amp;&amp; nearbyPlacesInfo.placeList != null)) &amp;&amp; (ListenerUtil.mutListener.listen(1049) ? (nearbyPlacesInfo.placeList.size() &gt;= 0) : (ListenerUtil.mutListener.listen(1048) ? (nearbyPlacesInfo.placeList.size() &lt;= 0) : (ListenerUtil.mutListener.listen(1047) ? (nearbyPlacesInfo.placeList.size() &lt; 0) : (ListenerUtil.mutListener.listen(1046) ? (nearbyPlacesInfo.placeList.size() != 0) : (ListenerUtil.mutListener.listen(1045) ? (nearbyPlacesInfo.placeList.size() == 0) : (nearbyPlacesInfo.placeList.size() &gt; 0))))))))) {</span>
+<span class="fc" id="L808">                Place closestNearbyPlace = null;</span>
+<span class="pc bpc" id="L809" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1055)) {</span>
+                    {
+<span class="fc" id="L811">                        long _loopCounter17 = 0;</span>
+                        // Find the first nearby place that has no image and exists
+<span class="pc bpc" id="L813" title="1 of 2 branches missed.">                        for (Place place : nearbyPlacesInfo.placeList) {</span>
+<span class="fc" id="L814">                            ListenerUtil.loopListener.listen(&quot;_loopCounter17&quot;, ++_loopCounter17);</span>
+<span class="pc bpc" id="L815" title="1 of 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(1054)) {</span>
+<span class="pc bpc" id="L816" title="6 of 10 branches missed.">                                if ((ListenerUtil.mutListener.listen(1052) ? (place.pic.equals(&quot;&quot;) || place.exists) : (place.pic.equals(&quot;&quot;) &amp;&amp; place.exists))) {</span>
+<span class="pc bpc" id="L817" title="1 of 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(1053)) {</span>
+<span class="fc" id="L818">                                        closestNearbyPlace = place;</span>
+                                    }
+                                    break;
+                                }
+                            }
+<span class="fc" id="L823">                        }</span>
+                    }
+                }
+<span class="pc bpc" id="L826" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1060)) {</span>
+<span class="pc bpc" id="L827" title="1 of 2 branches missed.">                    if (closestNearbyPlace == null) {</span>
+<span class="nc bnc" id="L828" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1059)) {</span>
+<span class="nc" id="L829">                            nearbyNotificationCardView.setVisibility(View.GONE);</span>
+                        }
+                    } else {
+<span class="fc" id="L832">                        String distance = formatDistanceBetween(curLatLng, closestNearbyPlace.location);</span>
+<span class="pc bpc" id="L833" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1056)) {</span>
+<span class="fc" id="L834">                            closestNearbyPlace.setDistance(distance);</span>
+                        }
+<span class="pc bpc" id="L836" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1057)) {</span>
+<span class="fc" id="L837">                            direction = (float) computeBearing(curLatLng, closestNearbyPlace.location);</span>
+                        }
+<span class="pc bpc" id="L839" title="1 of 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1058)) {</span>
+<span class="fc" id="L840">                            nearbyNotificationCardView.updateContent(closestNearbyPlace);</span>
+                        }
+                    }
+                }
+<span class="fc" id="L844">            } else {</span>
+<span class="pc bpc" id="L845" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1051)) {</span>
+                    // Means that no close nearby place is found
+<span class="fc" id="L847">                    nearbyNotificationCardView.setVisibility(View.GONE);</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L851" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1064)) {</span>
+            // Prevent Nearby banner from appearing in Media Details, fixing bug https://github.com/commons-app/apps-android-commons/issues/4731
+<span class="pc bpc" id="L853" title="8 of 10 branches missed.">            if ((ListenerUtil.mutListener.listen(1062) ? (mediaDetailPagerFragment != null || !contributionsListFragment.isVisible()) : (mediaDetailPagerFragment != null &amp;&amp; !contributionsListFragment.isVisible()))) {</span>
+<span class="nc bnc" id="L854" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1063)) {</span>
+<span class="nc" id="L855">                    nearbyNotificationCardView.setVisibility(View.GONE);</span>
+                }
+            }
+        }
+<span class="fc" id="L859">    }</span>
+
+    @Override
+    public void onDestroy() {
+        try {
+<span class="pc bpc" id="L864" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(1066)) {</span>
+<span class="fc" id="L865">                compositeDisposable.clear();</span>
+            }
+<span class="pc bpc" id="L867" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(1067)) {</span>
+<span class="fc" id="L868">                getChildFragmentManager().removeOnBackStackChangedListener(this);</span>
+            }
+<span class="pc bpc" id="L870" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(1068)) {</span>
+<span class="fc" id="L871">                locationManager.unregisterLocationManager();</span>
+            }
+<span class="pc bpc" id="L873" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(1069)) {</span>
+<span class="fc" id="L874">                locationManager.removeLocationListener(this);</span>
+            }
+<span class="pc bpc" id="L876" title="1 of 2 branches missed.">            if (!ListenerUtil.mutListener.listen(1070)) {</span>
+<span class="fc" id="L877">                super.onDestroy();</span>
+            }
+<span class="nc" id="L879">        } catch (IllegalArgumentException | IllegalStateException exception) {</span>
+<span class="nc bnc" id="L880" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(1065)) {</span>
+<span class="nc" id="L881">                Timber.e(exception);</span>
+            }
+<span class="fc" id="L883">        }</span>
+<span class="fc" id="L884">    }</span>
+
+    @Override
+    public void onLocationChangedSignificantly(LatLng latLng) {
+<span class="pc bpc" id="L888" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1071)) {</span>
+            // Will be called if location changed more than 1000 meter
+<span class="fc" id="L890">            updateClosestNearbyCardViewInfo();</span>
+        }
+<span class="fc" id="L892">    }</span>
+
+    @Override
+    public void onLocationChangedSlightly(LatLng latLng) {
+        /* Update closest nearby notification card onLocationChangedSlightly
+        */
+        try {
+<span class="nc bnc" id="L899" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(1073)) {</span>
+<span class="nc" id="L900">                updateClosestNearbyCardViewInfo();</span>
+            }
+<span class="nc" id="L902">        } catch (Exception e) {</span>
+<span class="nc bnc" id="L903" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(1072)) {</span>
+<span class="nc" id="L904">                Timber.e(e);</span>
+            }
+<span class="nc" id="L906">        }</span>
+<span class="nc" id="L907">    }</span>
+
+    @Override
+    public void onLocationChangedMedium(LatLng latLng) {
+<span class="nc bnc" id="L911" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1074)) {</span>
+            // Update closest nearby card view if location changed more than 500 meters
+<span class="nc" id="L913">            updateClosestNearbyCardViewInfo();</span>
+        }
+<span class="nc" id="L915">    }</span>
+
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+<span class="pc bpc" id="L919" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1075)) {</span>
+<span class="fc" id="L920">            super.onViewCreated(view, savedInstanceState);</span>
+        }
+<span class="fc" id="L922">    }</span>
+
+    /**
+     * As the home screen has limited space, we have choosen to show either campaigns or WLM card.
+     * The WLM Card gets the priority over monuments, so if the WLM is going on we show that instead
+     * of campaigns on the campaigns card
+     */
+    private void fetchCampaigns() {
+<span class="pc bpc" id="L930" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1080)) {</span>
+<span class="pc bpc" id="L931" title="1 of 2 branches missed.">            if (Utils.isMonumentsEnabled(new Date())) {</span>
+<span class="nc bnc" id="L932" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1078)) {</span>
+<span class="nc" id="L933">                    campaignView.setCampaign(wlmCampaign);</span>
+                }
+<span class="nc bnc" id="L935" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1079)) {</span>
+<span class="nc" id="L936">                    campaignView.setVisibility(View.VISIBLE);</span>
+                }
+<span class="pc bpc" id="L938" title="1 of 2 branches missed.">            } else if (store.getBoolean(CampaignView.CAMPAIGNS_DEFAULT_PREFERENCE, true)) {</span>
+<span class="pc bpc" id="L939" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1077)) {</span>
+<span class="fc" id="L940">                    presenter.getCampaigns();</span>
+                }
+            } else {
+<span class="nc bnc" id="L943" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1076)) {</span>
+<span class="nc" id="L944">                    campaignView.setVisibility(View.GONE);</span>
+                }
+            }
+        }
+<span class="fc" id="L948">    }</span>
+
+    @Override
+    public void showMessage(String message) {
+<span class="nc bnc" id="L952" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1081)) {</span>
+<span class="nc" id="L953">            Toast.makeText(getContext(), message, Toast.LENGTH_SHORT).show();</span>
+        }
+<span class="nc" id="L955">    }</span>
+
+    @Override
+    public void showCampaigns(Campaign campaign) {
+<span class="pc bpc" id="L959" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1084)) {</span>
+<span class="pc bpc" id="L960" title="7 of 10 branches missed.">            if ((ListenerUtil.mutListener.listen(1082) ? (campaign != null || !isUserProfile) : (campaign != null &amp;&amp; !isUserProfile))) {</span>
+<span class="pc bpc" id="L961" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1083)) {</span>
+<span class="fc" id="L962">                    campaignView.setCampaign(campaign);</span>
+                }
+            }
+        }
+<span class="fc" id="L966">    }</span>
+
+    @Override
+    public void onDestroyView() {
+<span class="pc bpc" id="L970" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1085)) {</span>
+<span class="fc" id="L971">            super.onDestroyView();</span>
+        }
+<span class="pc bpc" id="L973" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1086)) {</span>
+<span class="fc" id="L974">            presenter.onDetachView();</span>
+        }
+<span class="fc" id="L976">    }</span>
+
+    @Override
+    public void notifyDataSetChanged() {
+<span class="pc bpc" id="L980" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1088)) {</span>
+<span class="pc bpc" id="L981" title="1 of 2 branches missed.">            if (mediaDetailPagerFragment != null) {</span>
+<span class="nc bnc" id="L982" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1087)) {</span>
+<span class="nc" id="L983">                    mediaDetailPagerFragment.notifyDataSetChanged();</span>
+                }
+            }
+        }
+<span class="fc" id="L987">    }</span>
+
+    /**
+     * Restarts the upload process for a contribution
+     * @param contribution
+     */
+    public void restartUpload(Contribution contribution) {
+<span class="nc bnc" id="L994" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1089)) {</span>
+<span class="nc" id="L995">            contribution.setState(Contribution.STATE_QUEUED);</span>
+        }
+<span class="nc bnc" id="L997" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1090)) {</span>
+<span class="nc" id="L998">            contributionsPresenter.saveContribution(contribution);</span>
+        }
+<span class="nc bnc" id="L1000" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1091)) {</span>
+<span class="nc" id="L1001">            Timber.d(&quot;Restarting for %s&quot;, contribution.toString());</span>
+        }
+<span class="nc" id="L1003">    }</span>
+
+    /**
+     * Retry upload when it is failed
+     *
+     * @param contribution contribution to be retried
+     */
+    @Override
+    public void retryUpload(Contribution contribution) {
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1115)) {</span>
+<span class="nc bnc" id="L1013" title="All 2 branches missed.">            if (NetworkUtils.isInternetConnectionEstablished(getContext())) {</span>
+<span class="nc bnc" id="L1014" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1114)) {</span>
+<span class="nc bnc" id="L1015" title="All 10 branches missed.">                    if ((ListenerUtil.mutListener.listen(1093) ? (contribution.getState() == STATE_PAUSED &amp;&amp; contribution.getState() == Contribution.STATE_QUEUED_LIMITED_CONNECTION_MODE) : (contribution.getState() == STATE_PAUSED || contribution.getState() == Contribution.STATE_QUEUED_LIMITED_CONNECTION_MODE))) {</span>
+<span class="nc bnc" id="L1016" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1113)) {</span>
+<span class="nc" id="L1017">                            restartUpload(contribution);</span>
+                        }
+<span class="nc bnc" id="L1019" title="All 2 branches missed.">                    } else if (contribution.getState() == STATE_FAILED) {</span>
+<span class="nc" id="L1020">                        int retries = contribution.getRetries();</span>
+<span class="nc bnc" id="L1021" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1112)) {</span>
+                            /* Limit the number of retries for a failed upload
+                   to handle cases like invalid filename as such uploads
+                   will never be successful */
+<span class="nc bnc" id="L1025" title="All 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(1099) ? (retries &gt;= MAX_RETRIES) : (ListenerUtil.mutListener.listen(1098) ? (retries &lt;= MAX_RETRIES) : (ListenerUtil.mutListener.listen(1097) ? (retries &gt; MAX_RETRIES) : (ListenerUtil.mutListener.listen(1096) ? (retries != MAX_RETRIES) : (ListenerUtil.mutListener.listen(1095) ? (retries == MAX_RETRIES) : (retries &lt; MAX_RETRIES))))))) {</span>
+<span class="nc bnc" id="L1026" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(1105)) {</span>
+<span class="nc bnc" id="L1027" title="All 8 branches missed.">                                    contribution.setRetries((ListenerUtil.mutListener.listen(1104) ? (retries % 1) : (ListenerUtil.mutListener.listen(1103) ? (retries / 1) : (ListenerUtil.mutListener.listen(1102) ? (retries * 1) : (ListenerUtil.mutListener.listen(1101) ? (retries - 1) : (retries + 1))))));</span>
+                                }
+<span class="nc bnc" id="L1029" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(1110)) {</span>
+<span class="nc bnc" id="L1030" title="All 8 branches missed.">                                    Timber.d(&quot;Retried uploading %s %d times&quot;, contribution.getMedia().getFilename(), (ListenerUtil.mutListener.listen(1109) ? (retries % 1) : (ListenerUtil.mutListener.listen(1108) ? (retries / 1) : (ListenerUtil.mutListener.listen(1107) ? (retries * 1) : (ListenerUtil.mutListener.listen(1106) ? (retries - 1) : (retries + 1))))));</span>
+                                }
+<span class="nc bnc" id="L1032" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(1111)) {</span>
+<span class="nc" id="L1033">                                    restartUpload(contribution);</span>
+                                }
+                            } else {
+<span class="nc bnc" id="L1036" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(1100)) {</span>
+                                    // TODO: Show the exact reason for failure
+<span class="nc" id="L1038">                                    Toast.makeText(getContext(), R.string.retry_limit_reached, Toast.LENGTH_SHORT).show();</span>
+                                }
+                            }
+                        }
+<span class="nc" id="L1042">                    } else {</span>
+<span class="nc bnc" id="L1043" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1094)) {</span>
+<span class="nc" id="L1044">                            Timber.d(&quot;Skipping re-upload for non-failed %s&quot;, contribution.toString());</span>
+                        }
+                    }
+                }
+            } else {
+<span class="nc bnc" id="L1049" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1092)) {</span>
+<span class="nc" id="L1050">                    ViewUtil.showLongToast(getContext(), R.string.this_function_needs_network_connection);</span>
+                }
+            }
+        }
+<span class="nc" id="L1054">    }</span>
+
+    /**
+     * Pauses the upload
+     * @param contribution
+     */
+    @Override
+    public void pauseUpload(Contribution contribution) {
+<span class="nc bnc" id="L1062" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1116)) {</span>
+            // Pause the upload in the global singleton
+<span class="nc" id="L1064">            CommonsApplication.pauseUploads.put(contribution.getPageId(), true);</span>
+        }
+<span class="nc bnc" id="L1066" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1117)) {</span>
+            // Retain the paused state in DB
+<span class="nc" id="L1068">            contribution.setState(STATE_PAUSED);</span>
+        }
+<span class="nc bnc" id="L1070" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1118)) {</span>
+<span class="nc" id="L1071">            contributionsPresenter.saveContribution(contribution);</span>
+        }
+<span class="nc" id="L1073">    }</span>
+
+    /**
+     * Notify the viewpager that number of items have changed.
+     */
+    @Override
+    public void viewPagerNotifyDataSetChanged() {
+<span class="nc bnc" id="L1080" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1120)) {</span>
+<span class="nc bnc" id="L1081" title="All 2 branches missed.">            if (mediaDetailPagerFragment != null) {</span>
+<span class="nc bnc" id="L1082" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1119)) {</span>
+<span class="nc" id="L1083">                    mediaDetailPagerFragment.notifyDataSetChanged();</span>
+                }
+            }
+        }
+<span class="nc" id="L1087">    }</span>
+
+    /**
+     * Replace whatever is in the current contributionsFragmentContainer view with
+     * mediaDetailPagerFragment, and preserve previous state in back stack. Called when user selects a
+     * contribution.
+     */
+    @Override
+    public void showDetail(int position, boolean isWikipediaButtonDisplayed) {
+<span class="nc bnc" id="L1096" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1126)) {</span>
+<span class="nc bnc" id="L1097" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(1121) ? (mediaDetailPagerFragment == null &amp;&amp; !mediaDetailPagerFragment.isVisible()) : (mediaDetailPagerFragment == null || !mediaDetailPagerFragment.isVisible()))) {</span>
+<span class="nc bnc" id="L1098" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1122)) {</span>
+<span class="nc" id="L1099">                    mediaDetailPagerFragment = MediaDetailPagerFragment.newInstance(false, true);</span>
+                }
+<span class="nc bnc" id="L1101" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1124)) {</span>
+<span class="nc bnc" id="L1102" title="All 2 branches missed.">                    if (isUserProfile) {</span>
+<span class="nc bnc" id="L1103" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1123)) {</span>
+<span class="nc" id="L1104">                            ((ProfileActivity) getActivity()).setScroll(false);</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L1108" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1125)) {</span>
+<span class="nc" id="L1109">                    showMediaDetailPagerFragment();</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L1113" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1127)) {</span>
+<span class="nc" id="L1114">            mediaDetailPagerFragment.showImage(position, isWikipediaButtonDisplayed);</span>
+        }
+<span class="nc" id="L1116">    }</span>
+
+    @Override
+    public Media getMediaAtPosition(int i) {
+<span class="nc" id="L1120">        return contributionsListFragment.getMediaAtPosition(i);</span>
+    }
+
+    @Override
+    public int getTotalMediaCount() {
+<span class="nc" id="L1125">        return contributionsListFragment.getTotalMediaCount();</span>
+    }
+
+    @Override
+    public Integer getContributionStateAt(int position) {
+<span class="nc" id="L1130">        return contributionsListFragment.getContributionStateAt(position);</span>
+    }
+
+    public boolean backButtonClicked() {
+<span class="nc bnc" id="L1134" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1142)) {</span>
+<span class="nc bnc" id="L1135" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(1128) ? (mediaDetailPagerFragment != null || mediaDetailPagerFragment.isVisible()) : (mediaDetailPagerFragment != null &amp;&amp; mediaDetailPagerFragment.isVisible()))) {</span>
+<span class="nc bnc" id="L1136" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1133)) {</span>
+<span class="nc bnc" id="L1137" title="All 10 branches missed.">                    if ((ListenerUtil.mutListener.listen(1129) ? (store.getBoolean(&quot;displayNearbyCardView&quot;, true) || !isUserProfile) : (store.getBoolean(&quot;displayNearbyCardView&quot;, true) &amp;&amp; !isUserProfile))) {</span>
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1132)) {</span>
+<span class="nc bnc" id="L1139" title="All 2 branches missed.">                            if (nearbyNotificationCardView.cardViewVisibilityState == NearbyNotificationCardView.CardViewVisibilityState.READY) {</span>
+<span class="nc bnc" id="L1140" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(1131)) {</span>
+<span class="nc" id="L1141">                                    nearbyNotificationCardView.setVisibility(View.VISIBLE);</span>
+                                }
+                            }
+                        }
+                    } else {
+<span class="nc bnc" id="L1146" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1130)) {</span>
+<span class="nc" id="L1147">                            nearbyNotificationCardView.setVisibility(View.GONE);</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L1151" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1134)) {</span>
+<span class="nc" id="L1152">                    removeFragment(mediaDetailPagerFragment);</span>
+                }
+<span class="nc bnc" id="L1154" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1135)) {</span>
+<span class="nc" id="L1155">                    showFragment(contributionsListFragment, CONTRIBUTION_LIST_FRAGMENT_TAG, mediaDetailPagerFragment);</span>
+                }
+<span class="nc bnc" id="L1157" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1138)) {</span>
+<span class="nc bnc" id="L1158" title="All 2 branches missed.">                    if (isUserProfile) {</span>
+<span class="nc bnc" id="L1159" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1137)) {</span>
+                            // Enable ParentViewPager Scroll
+<span class="nc" id="L1161">                            ((ProfileActivity) getActivity()).setScroll(true);</span>
+                        }
+                    } else {
+<span class="nc bnc" id="L1164" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1136)) {</span>
+<span class="nc" id="L1165">                            fetchCampaigns();</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L1169" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1141)) {</span>
+<span class="nc bnc" id="L1170" title="All 2 branches missed.">                    if (getActivity() instanceof MainActivity) {</span>
+<span class="nc bnc" id="L1171" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1139)) {</span>
+                            // Fragment is associated with MainActivity
+<span class="nc" id="L1173">                            ((BaseActivity) getActivity()).getSupportActionBar().setDisplayHomeAsUpEnabled(false);</span>
+                        }
+<span class="nc bnc" id="L1175" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(1140)) {</span>
+<span class="nc" id="L1176">                            ((MainActivity) getActivity()).showTabs();</span>
+                        }
+                    }
+                }
+<span class="nc" id="L1180">                return true;</span>
+            }
+        }
+<span class="nc" id="L1183">        return false;</span>
+    }
+
+    // Getter for mediaDetailPagerFragment
+    public MediaDetailPagerFragment getMediaDetailPagerFragment() {
+<span class="nc" id="L1188">        return mediaDetailPagerFragment;</span>
+    }
+
+    /**
+     * this function updates the number of contributions
+     */
+    void upDateUploadCount() {
+<span class="pc bpc" id="L1195" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1143)) {</span>
+<span class="fc" id="L1196">            WorkManager.getInstance(getContext()).getWorkInfosForUniqueWorkLiveData(UploadWorker.class.getSimpleName()).observe(getViewLifecycleOwner(), workInfos -&gt; {</span>
+<span class="pc bpc" id="L1197" title="1 of 2 branches missed.">                if (workInfos.size() &gt; 0) {</span>
+<span class="nc" id="L1198">                    setUploadCount();</span>
+                }
+<span class="fc" id="L1200">            });</span>
+        }
+<span class="fc" id="L1202">    }</span>
+
+    /**
+     * Reload media detail fragment once media is nominated
+     *
+     * @param index item position that has been nominated
+     */
+    @Override
+    public void refreshNominatedMedia(int index) {
+<span class="nc bnc" id="L1211" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1149)) {</span>
+<span class="nc bnc" id="L1212" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(1144) ? (mediaDetailPagerFragment != null || !contributionsListFragment.isVisible()) : (mediaDetailPagerFragment != null &amp;&amp; !contributionsListFragment.isVisible()))) {</span>
+<span class="nc bnc" id="L1213" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1145)) {</span>
+<span class="nc" id="L1214">                    removeFragment(mediaDetailPagerFragment);</span>
+                }
+<span class="nc bnc" id="L1216" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1146)) {</span>
+<span class="nc" id="L1217">                    mediaDetailPagerFragment = MediaDetailPagerFragment.newInstance(false, true);</span>
+                }
+<span class="nc bnc" id="L1219" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1147)) {</span>
+<span class="nc" id="L1220">                    mediaDetailPagerFragment.showImage(index);</span>
+                }
+<span class="nc bnc" id="L1222" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(1148)) {</span>
+<span class="nc" id="L1223">                    showMediaDetailPagerFragment();</span>
+                }
+            }
+        }
+<span class="nc" id="L1227">    }</span>
+
+    // banner and description will hide. Tap again to show description.
+<span class="fc" id="L1230">    private View.OnClickListener toggleDescriptionListener = new View.OnClickListener() {</span>
+
+        @Override
+        public void onClick(View view) {
+<span class="nc" id="L1234">            View view2 = limitedConnectionDescriptionTextView;</span>
+<span class="nc bnc" id="L1235" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(1152)) {</span>
+<span class="nc bnc" id="L1236" title="All 2 branches missed.">                if (view2.getVisibility() == View.GONE) {</span>
+<span class="nc bnc" id="L1237" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(1151)) {</span>
+<span class="nc" id="L1238">                        view2.setVisibility(View.VISIBLE);</span>
+                    }
+                } else {
+<span class="nc bnc" id="L1241" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(1150)) {</span>
+<span class="nc" id="L1242">                        view2.setVisibility(View.GONE);</span>
+                    }
+                }
+            }
+<span class="nc" id="L1246">        }</span>
+    };
+
+    /**
+     * When the device rotates, rotate the Nearby banner's compass arrow in tandem.
+     */
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+<span class="fc" id="L1254">        float rotateDegree = Math.round(event.values[0]);</span>
+<span class="pc bpc" id="L1255" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(1153)) {</span>
+<span class="fc" id="L1256">            nearbyNotificationCardView.rotateCompass(rotateDegree, direction);</span>
+        }
+<span class="fc" id="L1258">    }</span>
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+<span class="fc" id="L1262">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

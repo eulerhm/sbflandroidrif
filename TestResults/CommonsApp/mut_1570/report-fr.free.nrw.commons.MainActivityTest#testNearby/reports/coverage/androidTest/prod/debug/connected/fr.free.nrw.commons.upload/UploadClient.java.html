@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UploadClient.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.upload</a> &gt; <span class="el_source">UploadClient.java</span></div><h1>UploadClient.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.upload;
+
+import static fr.free.nrw.commons.di.NetworkingModule.NAMED_COMMONS_CSRF;
+import android.content.Context;
+import android.net.Uri;
+import androidx.annotation.Nullable;
+import com.google.gson.Gson;
+import fr.free.nrw.commons.CommonsApplication;
+import fr.free.nrw.commons.contributions.ChunkInfo;
+import fr.free.nrw.commons.contributions.Contribution;
+import fr.free.nrw.commons.upload.worker.UploadWorker.NotificationUpdateProgressListener;
+import io.reactivex.Observable;
+import io.reactivex.disposables.CompositeDisposable;
+import java.io.File;
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.util.Date;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Singleton;
+import okhttp3.MediaType;
+import okhttp3.MultipartBody;
+import okhttp3.RequestBody;
+import fr.free.nrw.commons.auth.csrf.CsrfTokenClient;
+import org.wikipedia.dataclient.mwapi.MwException;
+import timber.log.Timber;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+@Singleton
+public class UploadClient {
+
+    // 512 KB
+<span class="nc" id="L37">    private final int CHUNK_SIZE = 512 * 1024;</span>
+
+    // 6 hours
+<span class="nc" id="L40">    private final int MAX_CHUNK_AGE = 6 * 3600 * 1000;</span>
+
+    private final UploadInterface uploadInterface;
+
+    private final CsrfTokenClient csrfTokenClient;
+
+    private final PageContentsCreator pageContentsCreator;
+
+    private final FileUtilsWrapper fileUtilsWrapper;
+
+    private final Gson gson;
+
+<span class="nc" id="L52">    private final CompositeDisposable compositeDisposable = new CompositeDisposable();</span>
+
+    @Inject
+<span class="nc" id="L55">    public UploadClient(final UploadInterface uploadInterface, @Named(NAMED_COMMONS_CSRF) final CsrfTokenClient csrfTokenClient, final PageContentsCreator pageContentsCreator, final FileUtilsWrapper fileUtilsWrapper, final Gson gson) {</span>
+<span class="nc" id="L56">        this.uploadInterface = uploadInterface;</span>
+<span class="nc" id="L57">        this.csrfTokenClient = csrfTokenClient;</span>
+<span class="nc" id="L58">        this.pageContentsCreator = pageContentsCreator;</span>
+<span class="nc" id="L59">        this.fileUtilsWrapper = fileUtilsWrapper;</span>
+<span class="nc" id="L60">        this.gson = gson;</span>
+<span class="nc" id="L61">    }</span>
+
+    /**
+     * Upload file to stash in chunks of specified size. Uploading files in chunks will make
+     * handling of large files easier. Also, it will be useful in supporting pause/resume of
+     * uploads
+     */
+    public Observable&lt;StashUploadResult&gt; uploadFileToStash(final Context context, final String filename, final Contribution contribution, final NotificationUpdateProgressListener notificationUpdater) throws IOException {
+<span class="nc bnc" id="L69" title="All 10 branches missed.">        if ((ListenerUtil.mutListener.listen(7820) ? (contribution.getChunkInfo() != null || contribution.getChunkInfo().getTotalChunks() == contribution.getChunkInfo().getIndexOfNextChunkToUpload()) : (contribution.getChunkInfo() != null &amp;&amp; contribution.getChunkInfo().getTotalChunks() == contribution.getChunkInfo().getIndexOfNextChunkToUpload()))) {</span>
+<span class="nc" id="L70">            return Observable.just(new StashUploadResult(StashUploadState.SUCCESS, contribution.getChunkInfo().getUploadResult().getFilekey()));</span>
+        }
+<span class="nc bnc" id="L72" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7821)) {</span>
+<span class="nc" id="L73">            CommonsApplication.pauseUploads.put(contribution.getPageId(), false);</span>
+        }
+<span class="nc" id="L75">        final File file = new File(contribution.getLocalUri().getPath());</span>
+<span class="nc" id="L76">        final List&lt;File&gt; fileChunks = fileUtilsWrapper.getFileChunks(context, file, CHUNK_SIZE);</span>
+<span class="nc" id="L77">        final int totalChunks = fileChunks.size();</span>
+<span class="nc" id="L78">        final MediaType mediaType = MediaType.parse(FileUtils.getMimeType(context, Uri.parse(file.getPath())));</span>
+<span class="nc" id="L79">        final AtomicReference&lt;ChunkInfo&gt; chunkInfo = new AtomicReference&lt;&gt;();</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7824)) {</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">            if (isStashValid(contribution)) {</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(7822)) {</span>
+<span class="nc" id="L83">                    chunkInfo.set(contribution.getChunkInfo());</span>
+                }
+<span class="nc bnc" id="L85" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(7823)) {</span>
+<span class="nc" id="L86">                    Timber.d(&quot;Chunk: Next Chunk: %s, Total Chunks: %s&quot;, contribution.getChunkInfo().getIndexOfNextChunkToUpload(), contribution.getChunkInfo().getTotalChunks());</span>
+                }
+            }
+        }
+<span class="nc" id="L90">        final AtomicInteger index = new AtomicInteger();</span>
+<span class="nc" id="L91">        final AtomicBoolean failures = new AtomicBoolean();</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(7825)) {</span>
+<span class="nc" id="L93">            compositeDisposable.add(Observable.fromIterable(fileChunks).forEach(chunkFile -&gt; {</span>
+<span class="nc bnc" id="L94" title="All 4 branches missed.">                if (CommonsApplication.pauseUploads.get(contribution.getPageId()) || failures.get()) {</span>
+<span class="nc" id="L95">                    return;</span>
+                }
+<span class="nc bnc" id="L97" title="All 4 branches missed.">                if (chunkInfo.get() != null &amp;&amp; index.get() &lt; chunkInfo.get().getIndexOfNextChunkToUpload()) {</span>
+<span class="nc" id="L98">                    index.incrementAndGet();</span>
+<span class="nc" id="L99">                    Timber.d(&quot;Chunk: Increment and return: %s&quot;, index.get());</span>
+<span class="nc" id="L100">                    return;</span>
+                }
+<span class="nc" id="L102">                index.getAndIncrement();</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">                final int offset = chunkInfo.get() != null ? chunkInfo.get().getUploadResult().getOffset() : 0;</span>
+<span class="nc" id="L104">                Timber.d(&quot;Chunk: Sending Chunk number: %s, offset: %s&quot;, index.get(), offset);</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                final String filekey = chunkInfo.get() != null ? chunkInfo.get().getUploadResult().getFilekey() : null;</span>
+<span class="nc" id="L106">                final RequestBody requestBody = RequestBody.create(mediaType, chunkFile);</span>
+<span class="nc" id="L107">                final CountingRequestBody countingRequestBody = new CountingRequestBody(requestBody, notificationUpdater::onProgress, offset, file.length());</span>
+<span class="nc" id="L108">                compositeDisposable.add(uploadChunkToStash(filename, file.length(), offset, filekey, countingRequestBody).subscribe(uploadResult -&gt; {</span>
+<span class="nc" id="L109">                    Timber.d(&quot;Chunk: Received Chunk number: %s, offset: %s&quot;, index.get(), uploadResult.getOffset());</span>
+<span class="nc" id="L110">                    chunkInfo.set(new ChunkInfo(uploadResult, index.get(), totalChunks));</span>
+<span class="nc" id="L111">                    notificationUpdater.onChunkUploaded(contribution, chunkInfo.get());</span>
+<span class="nc" id="L112">                }, throwable -&gt; {</span>
+<span class="nc" id="L113">                    Timber.e(throwable, &quot;Received error in chunk upload&quot;);</span>
+<span class="nc" id="L114">                    failures.set(true);</span>
+<span class="nc" id="L115">                }));</span>
+<span class="nc" id="L116">            }));</span>
+        }
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        if (CommonsApplication.pauseUploads.get(contribution.getPageId())) {</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(7829)) {</span>
+<span class="nc" id="L120">                Timber.d(&quot;Upload stash paused %s&quot;, contribution.getPageId());</span>
+            }
+<span class="nc" id="L122">            return Observable.just(new StashUploadResult(StashUploadState.PAUSED, null));</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        } else if (failures.get()) {</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(7828)) {</span>
+<span class="nc" id="L125">                Timber.d(&quot;Upload stash contains failures %s&quot;, contribution.getPageId());</span>
+            }
+<span class="nc" id="L127">            return Observable.just(new StashUploadResult(StashUploadState.FAILED, null));</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">        } else if (chunkInfo.get() != null) {</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(7827)) {</span>
+<span class="nc" id="L130">                Timber.d(&quot;Upload stash success %s&quot;, contribution.getPageId());</span>
+            }
+<span class="nc" id="L132">            return Observable.just(new StashUploadResult(StashUploadState.SUCCESS, chunkInfo.get().getUploadResult().getFilekey()));</span>
+        } else {
+<span class="nc bnc" id="L134" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(7826)) {</span>
+<span class="nc" id="L135">                Timber.d(&quot;Upload stash failed %s&quot;, contribution.getPageId());</span>
+            }
+<span class="nc" id="L137">            return Observable.just(new StashUploadResult(StashUploadState.FAILED, null));</span>
+        }
+    }
+
+    /**
+     * Stash is valid for 6 hours. This function checks the validity of stash
+     *
+     * @param contribution
+     * @return
+     */
+    private boolean isStashValid(Contribution contribution) {
+<span class="nc bnc" id="L148" title="All 26 branches missed.">        return (ListenerUtil.mutListener.listen(7834) ? (contribution.getChunkInfo() != null || contribution.getDateModified().after(new Date((ListenerUtil.mutListener.listen(7833) ? (System.currentTimeMillis() % MAX_CHUNK_AGE) : (ListenerUtil.mutListener.listen(7832) ? (System.currentTimeMillis() / MAX_CHUNK_AGE) : (ListenerUtil.mutListener.listen(7831) ? (System.currentTimeMillis() * MAX_CHUNK_AGE) : (ListenerUtil.mutListener.listen(7830) ? (System.currentTimeMillis() + MAX_CHUNK_AGE) : (System.currentTimeMillis() - MAX_CHUNK_AGE)))))))) : (contribution.getChunkInfo() != null &amp;&amp; contribution.getDateModified().after(new Date((ListenerUtil.mutListener.listen(7833) ? (System.currentTimeMillis() % MAX_CHUNK_AGE) : (ListenerUtil.mutListener.listen(7832) ? (System.currentTimeMillis() / MAX_CHUNK_AGE) : (ListenerUtil.mutListener.listen(7831) ? (System.currentTimeMillis() * MAX_CHUNK_AGE) : (ListenerUtil.mutListener.listen(7830) ? (System.currentTimeMillis() + MAX_CHUNK_AGE) : (System.currentTimeMillis() - MAX_CHUNK_AGE)))))))));</span>
+    }
+
+    /**
+     * Uploads a file chunk to stash
+     *
+     * @param filename            The name of the file being uploaded
+     * @param fileSize            The total size of the file
+     * @param offset              The offset returned by the previous chunk upload
+     * @param fileKey             The filekey returned by the previous chunk upload
+     * @param countingRequestBody Request body with chunk file
+     * @return
+     */
+    Observable&lt;UploadResult&gt; uploadChunkToStash(final String filename, final long fileSize, final long offset, final String fileKey, final CountingRequestBody countingRequestBody) {
+        final MultipartBody.Part filePart;
+        try {
+<span class="nc" id="L164">            filePart = MultipartBody.Part.createFormData(&quot;chunk&quot;, URLEncoder.encode(filename, &quot;utf-8&quot;), countingRequestBody);</span>
+<span class="nc" id="L165">            return uploadInterface.uploadFileToStash(toRequestBody(filename), toRequestBody(String.valueOf(fileSize)), toRequestBody(String.valueOf(offset)), toRequestBody(fileKey), toRequestBody(csrfTokenClient.getTokenBlocking()), filePart).map(UploadResponse::getUpload);</span>
+<span class="nc" id="L166">        } catch (final Throwable throwable) {</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(7835)) {</span>
+<span class="nc" id="L168">                Timber.e(throwable, &quot;Failed to upload chunk to stash&quot;);</span>
+            }
+<span class="nc" id="L170">            return Observable.error(throwable);</span>
+        }
+    }
+
+    /**
+     * Converts string value to request body
+     */
+    @Nullable
+    private RequestBody toRequestBody(@Nullable final String value) {
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        return value == null ? null : RequestBody.create(okhttp3.MultipartBody.FORM, value);</span>
+    }
+
+    public Observable&lt;UploadResult&gt; uploadFileFromStash(final Contribution contribution, final String uniqueFileName, final String fileKey) {
+        try {
+<span class="nc" id="L184">            return uploadInterface.uploadFileFromStash(csrfTokenClient.getTokenBlocking(), pageContentsCreator.createFrom(contribution), CommonsApplication.DEFAULT_EDIT_SUMMARY, uniqueFileName, fileKey).map(uploadResponse -&gt; {</span>
+<span class="nc" id="L185">                final UploadResponse uploadResult = gson.fromJson(uploadResponse, UploadResponse.class);</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">                if (uploadResult.getUpload() == null) {</span>
+<span class="nc" id="L187">                    final MwException exception = gson.fromJson(uploadResponse, MwException.class);</span>
+<span class="nc" id="L188">                    Timber.e(exception, &quot;Error in uploading file from stash&quot;);</span>
+<span class="nc" id="L189">                    throw new Exception(exception.getErrorCode());</span>
+                }
+<span class="nc" id="L191">                return uploadResult.getUpload();</span>
+            });
+<span class="nc" id="L193">        } catch (final Throwable throwable) {</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(7836)) {</span>
+<span class="nc" id="L195">                Timber.e(throwable, &quot;Exception occurred in uploading file from stash&quot;);</span>
+            }
+<span class="nc" id="L197">            return Observable.error(throwable);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

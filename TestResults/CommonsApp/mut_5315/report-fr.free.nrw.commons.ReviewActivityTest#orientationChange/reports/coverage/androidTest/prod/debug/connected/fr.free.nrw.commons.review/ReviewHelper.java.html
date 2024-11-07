@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReviewHelper.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.review</a> &gt; <span class="el_source">ReviewHelper.java</span></div><h1>ReviewHelper.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.review;
+
+import androidx.annotation.VisibleForTesting;
+import fr.free.nrw.commons.Media;
+import fr.free.nrw.commons.media.MediaClient;
+import io.reactivex.Completable;
+import io.reactivex.Observable;
+import io.reactivex.Single;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.schedulers.Schedulers;
+import java.util.Collections;
+import javax.inject.Inject;
+import javax.inject.Singleton;
+import org.apache.commons.lang3.StringUtils;
+import org.wikipedia.dataclient.mwapi.MwQueryPage;
+import timber.log.Timber;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+@Singleton
+public class ReviewHelper {
+
+<span class="fc" id="L22">    private static final String[] imageExtensions = new String[] { &quot;.jpg&quot;, &quot;.jpeg&quot;, &quot;.png&quot; };</span>
+
+    private final MediaClient mediaClient;
+
+    private final ReviewInterface reviewInterface;
+
+    @Inject
+    ReviewDao dao;
+
+    @Inject
+<span class="fc" id="L32">    public ReviewHelper(MediaClient mediaClient, ReviewInterface reviewInterface) {</span>
+<span class="fc" id="L33">        this.mediaClient = mediaClient;</span>
+<span class="fc" id="L34">        this.reviewInterface = reviewInterface;</span>
+<span class="fc" id="L35">    }</span>
+
+    /**
+     * Fetches recent changes from MediaWiki API
+     * Calls the API to get the latest 50 changes
+     * When more results are available, the query gets continued beyond this range
+     *
+     * @return
+     */
+    private Observable&lt;MwQueryPage&gt; getRecentChanges() {
+<span class="pc" id="L45">        return reviewInterface.getRecentChanges().map(mwQueryResponse -&gt; mwQueryResponse.query().pages()).map(recentChanges -&gt; {</span>
+<span class="nc" id="L46">            Collections.shuffle(recentChanges);</span>
+<span class="nc" id="L47">            return recentChanges;</span>
+<span class="pc" id="L48">        }).flatMapIterable(changes -&gt; changes).filter(recentChange -&gt; isChangeReviewable(recentChange));</span>
+    }
+
+    /**
+     * Gets a random file change for review.
+     * - Picks a random file from those changes
+     * - Checks if the file is nominated for deletion
+     * - Retries upto 5 times for getting a file which is not nominated for deletion
+     *
+     * @return Random file change
+     */
+    public Single&lt;Media&gt; getRandomMedia() {
+<span class="pc bnc" id="L60" title="All 2 branches missed.">        return getRecentChanges().flatMapSingle(change -&gt; getRandomMediaFromRecentChange(change)).filter(media -&gt; !StringUtils.isBlank(media.getFilename()) &amp;&amp; // Check if the image has already been shown to the user</span>
+<span class="pc bnc" id="L61" title="All 2 branches missed.">        !getReviewStatus(media.getPageId())).firstOrError();</span>
+    }
+
+    /**
+     * Returns a proper Media object if the file is not already nominated for deletion
+     * Else it returns an empty Media object
+     *
+     * @param recentChange
+     * @return
+     */
+    private Single&lt;Media&gt; getRandomMediaFromRecentChange(MwQueryPage recentChange) {
+<span class="nc" id="L72">        return Single.just(recentChange).flatMap(change -&gt; mediaClient.checkPageExistsUsingTitle(&quot;Commons:Deletion_requests/&quot; + change.title())).flatMap(isDeleted -&gt; {</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">            if (isDeleted) {</span>
+<span class="nc" id="L74">                return Single.error(new Exception(recentChange.title() + &quot; is deleted&quot;));</span>
+            }
+<span class="nc" id="L76">            return mediaClient.getMedia(recentChange.title());</span>
+        });
+    }
+
+    /**
+     * Checks if the image exists in the reviewed images entity
+     *
+     * @param image
+     * @return
+     */
+    @VisibleForTesting
+    Boolean getReviewStatus(String image) {
+<span class="nc bnc" id="L88" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5712)) {</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">            if (dao == null) {</span>
+<span class="nc" id="L90">                return false;</span>
+            }
+        }
+<span class="nc" id="L93">        return Observable.fromCallable(() -&gt; dao.isReviewedAlready(image)).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).blockingSingle();</span>
+    }
+
+    /**
+     * Gets the first revision of the file from filename
+     *
+     * @param filename
+     * @return
+     */
+    public Observable&lt;MwQueryPage.Revision&gt; getFirstRevisionOfFile(String filename) {
+<span class="nc" id="L103">        return reviewInterface.getFirstRevisionOfFile(filename).map(response -&gt; response.query().firstPage().revisions().get(0));</span>
+    }
+
+    /**
+     * Checks Whether Given File is used in any Wiki page or not
+     * by calling api for given file
+     *
+     * @param filename
+     * @return
+     */
+    Observable&lt;Boolean&gt; checkFileUsage(final String filename) {
+<span class="nc" id="L114">        return reviewInterface.getGlobalUsageInfo(filename).map(mwQueryResponse -&gt; mwQueryResponse.query().firstPage().checkWhetherFileIsUsedInWikis());</span>
+    }
+
+    /**
+     * Checks if the change is reviewable or not.
+     * - checks the type and revisionId of the change
+     * - checks supported image extensions
+     *
+     * @param recentChange
+     * @return
+     */
+    private boolean isChangeReviewable(MwQueryPage recentChange) {
+<span class="nc bnc" id="L126" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5714)) {</span>
+            {
+<span class="nc" id="L128">                long _loopCounter80 = 0;</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">                for (String extension : imageExtensions) {</span>
+<span class="nc" id="L130">                    ListenerUtil.loopListener.listen(&quot;_loopCounter80&quot;, ++_loopCounter80);</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(5713)) {</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">                        if (recentChange.title().endsWith(extension)) {</span>
+<span class="nc" id="L133">                            return true;</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L139">        return false;</span>
+    }
+
+    /**
+     * Adds reviewed/skipped images to the database
+     *
+     * @param imageId
+     */
+    public void addViewedImagesToDB(String imageId) {
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5715)) {</span>
+<span class="nc" id="L149">            Completable.fromAction(() -&gt; dao.insert(new ReviewEntity(imageId))).subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe(() -&gt; {</span>
+                // Inserted successfully
+<span class="nc" id="L151">                Timber.i(&quot;Image inserted successfully.&quot;);</span>
+<span class="nc" id="L152">            }, throwable -&gt; {</span>
+<span class="nc" id="L153">                Timber.e(&quot;Image not inserted into the reviewed images database&quot;);</span>
+<span class="nc" id="L154">            });</span>
+        }
+<span class="nc" id="L156">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

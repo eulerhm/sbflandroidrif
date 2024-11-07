@@ -1,0 +1,515 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ImageAdapter.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.customselector.ui.adapter</a> &gt; <span class="el_source">ImageAdapter.kt</span></div><h1>ImageAdapter.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.customselector.ui.adapter
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
+import android.widget.TextView
+import android.widget.Toast
+import androidx.constraintlayout.widget.Group
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.RecyclerView
+import com.bumptech.glide.Glide
+import com.simplecityapps.recyclerview_fastscroll.views.FastScrollRecyclerView
+import fr.free.nrw.commons.R
+import fr.free.nrw.commons.customselector.helper.ImageHelper
+import fr.free.nrw.commons.customselector.helper.ImageHelper.CUSTOM_SELECTOR_PREFERENCE_KEY
+import fr.free.nrw.commons.customselector.helper.ImageHelper.SHOW_ALREADY_ACTIONED_IMAGES_PREFERENCE_KEY
+import fr.free.nrw.commons.customselector.listeners.ImageSelectListener
+import fr.free.nrw.commons.customselector.model.Image
+import fr.free.nrw.commons.customselector.ui.selector.ImageLoader
+import kotlinx.coroutines.*
+import java.util.*
+import kotlin.collections.ArrayList
+
+/**
+ * Custom selector ImageAdapter.
+ */
+<span class="nc" id="L29">class ImageAdapter(</span>
+    /**
+     * Application Context.
+     */
+    context: Context,
+
+    /**
+     * Image select listener for click events on image.
+     */
+<span class="nc" id="L38">    private var imageSelectListener: ImageSelectListener,</span>
+
+    /**
+     * ImageLoader queries images.
+     */
+<span class="nc" id="L43">    private var imageLoader: ImageLoader</span>
+):
+
+<span class="nc" id="L46">    RecyclerViewAdapter&lt;ImageAdapter.ImageViewHolder&gt;(context), FastScrollRecyclerView.SectionedAdapter {</span>
+
+    /**
+     * ImageSelectedOrUpdated payload class.
+     */
+<span class="nc" id="L51">    class ImageSelectedOrUpdated</span>
+
+    /**
+     * ImageUnselected payload class.
+     */
+<span class="nc" id="L56">    class ImageUnselected</span>
+
+    /**
+     * Determines whether addition of all actionable images is done or not
+     */
+    private var reachedEndOfFolder: Boolean = false
+
+    /**
+     * Currently selected images.
+     */
+<span class="nc" id="L66">    private var selectedImages = arrayListOf&lt;Image&gt;()</span>
+
+    /**
+     * Number of selected images that are marked as not for upload
+     */
+    private var numberOfSelectedImagesMarkedAsNotForUpload = 0
+
+    /**
+     * List of all images in adapter.
+     */
+<span class="nc" id="L76">    private var images: ArrayList&lt;Image&gt; = ArrayList()</span>
+
+    /**
+     * Stores all images
+     */
+<span class="nc" id="L81">    private var allImages: List&lt;Image&gt; = ArrayList()</span>
+
+    /**
+     * Map to store actionable images
+     */
+<span class="nc" id="L86">    private var actionableImagesMap: TreeMap&lt;Int, Image&gt; = TreeMap()</span>
+
+    /**
+     * Stores already added positions of actionable images
+     */
+<span class="nc" id="L91">    private var alreadyAddedPositions: ArrayList&lt;Int&gt; = ArrayList()</span>
+
+    /**
+     * Next starting index to initiate query to find next actionable image
+     */
+    private var nextImagePosition = 0
+
+    /**
+     * Helps to maintain the increasing sequence of the position. eg- 0, 1, 2, 3
+     */
+    private var imagePositionAsPerIncreasingOrder = 0
+
+    /**
+     * Coroutine Dispatchers and Scope.
+     */
+<span class="nc" id="L106">    private var defaultDispatcher : CoroutineDispatcher = Dispatchers.Default</span>
+<span class="nc" id="L107">    private var ioDispatcher : CoroutineDispatcher = Dispatchers.IO</span>
+<span class="nc" id="L108">    private val scope : CoroutineScope = MainScope()</span>
+
+    /**
+     * Create View holder.
+     */
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ImageViewHolder {
+<span class="nc" id="L114">        val itemView = inflater.inflate(R.layout.item_custom_selector_image, parent, false)</span>
+<span class="nc" id="L115">        return ImageViewHolder(itemView)</span>
+    }
+
+    /**
+     * Bind View holder, load image, selected view, click listeners.
+     */
+    override fun onBindViewHolder(holder: ImageViewHolder, position: Int) {
+<span class="nc" id="L122">        var image=images[position]</span>
+<span class="nc" id="L123">        holder.image.setImageDrawable (null)</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">        if (context.contentResolver.getType(image.uri) == null) {</span>
+            // Image does not exist anymore, update adapter.
+<span class="nc" id="L126">            holder.itemView.post {</span>
+<span class="nc" id="L127">                val updatedPosition = images.indexOf(image)</span>
+<span class="nc" id="L128">                images.remove(image)</span>
+<span class="nc" id="L129">                notifyItemRemoved(updatedPosition)</span>
+<span class="nc" id="L130">                notifyItemRangeChanged(updatedPosition, images.size)</span>
+<span class="nc" id="L131">            }</span>
+        } else {
+<span class="nc" id="L133">            val sharedPreferences: SharedPreferences =</span>
+<span class="nc" id="L134">                context.getSharedPreferences(CUSTOM_SELECTOR_PREFERENCE_KEY, 0)</span>
+<span class="nc" id="L135">            val showAlreadyActionedImages =</span>
+<span class="nc" id="L136">                sharedPreferences.getBoolean(SHOW_ALREADY_ACTIONED_IMAGES_PREFERENCE_KEY, true)</span>
+
+            // Getting selected index when switch is on
+<span class="nc bnc" id="L139" title="All 2 branches missed.">            val selectedIndex: Int = if (showAlreadyActionedImages) {</span>
+<span class="nc" id="L140">                ImageHelper.getIndex(selectedImages, image)</span>
+
+                // Getting selected index when switch is off
+<span class="nc bnc" id="L143" title="All 2 branches missed.">            } else if (actionableImagesMap.size &gt; position) {</span>
+<span class="nc" id="L144">                ImageHelper</span>
+<span class="nc" id="L145">                    .getIndex(selectedImages, ArrayList(actionableImagesMap.values)[position])</span>
+
+                // For any other case return -1
+            } else {
+<span class="nc" id="L149">                -1</span>
+            }
+
+<span class="nc bnc" id="L152" title="All 2 branches missed.">            val isSelected = selectedIndex != -1</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">            if (isSelected) {</span>
+<span class="nc" id="L154">                holder.itemSelected()</span>
+            } else {
+<span class="nc" id="L156">                holder.itemUnselected()</span>
+            }
+
+<span class="nc" id="L159">            imageLoader.queryAndSetView(</span>
+<span class="nc" id="L160">                holder, image, ioDispatcher, defaultDispatcher</span>
+            )
+<span class="nc" id="L162">            scope.launch {</span>
+<span class="nc" id="L163">                val sharedPreferences: SharedPreferences =</span>
+<span class="nc" id="L164">                    context.getSharedPreferences(CUSTOM_SELECTOR_PREFERENCE_KEY, 0)</span>
+<span class="nc" id="L165">                val showAlreadyActionedImages =</span>
+<span class="nc" id="L166">                    sharedPreferences.getBoolean(SHOW_ALREADY_ACTIONED_IMAGES_PREFERENCE_KEY, true)</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">                if (!showAlreadyActionedImages) {</span>
+                    // If the position is not already visited, that means the position is new then
+                    // finds the next actionable image position from all images
+<span class="nc bnc" id="L170" title="All 2 branches missed.">                    if (!alreadyAddedPositions.contains(position)) {</span>
+<span class="nc" id="L171">                        processThumbnailForActionedImage(holder, position)</span>
+
+                    // If the position is already visited, that means the image is already present
+                    // inside map, so it will fetch the image from the map and load in the holder
+                    } else {
+<span class="nc" id="L176">                        val actionableImages: List&lt;Image&gt; = ArrayList(actionableImagesMap.values)</span>
+<span class="nc" id="L177">                        image = actionableImages[position]</span>
+<span class="nc" id="L178">                        Glide.with(holder.image).load(image.uri)</span>
+<span class="nc" id="L179">                            .thumbnail(0.3f).into(holder.image)</span>
+                    }
+
+                // If switch is turned off, it just fetches the image from all images without any
+                // further operations
+                } else {
+<span class="nc" id="L185">                    Glide.with(holder.image).load(image.uri)</span>
+<span class="nc" id="L186">                        .thumbnail(0.3f).into(holder.image)</span>
+                }
+<span class="nc" id="L188">            }</span>
+
+<span class="nc" id="L190">            holder.itemView.setOnClickListener {</span>
+<span class="nc" id="L191">                onThumbnailClicked(position, holder)</span>
+<span class="nc" id="L192">            }</span>
+
+            // launch media preview on long click.
+<span class="nc" id="L195">            holder.itemView.setOnLongClickListener {</span>
+<span class="nc" id="L196">                imageSelectListener.onLongPress(images.indexOf(image), images, selectedImages)</span>
+<span class="nc" id="L197">                true</span>
+            }
+        }
+<span class="nc" id="L200">    }</span>
+
+    /**
+     * Process thumbnail for actioned image
+     */
+    suspend fun processThumbnailForActionedImage(
+        holder: ImageViewHolder,
+        position: Int
+    ) {
+<span class="nc" id="L209">        val next = imageLoader.nextActionableImage(</span>
+<span class="nc" id="L210">            allImages, ioDispatcher, defaultDispatcher,</span>
+<span class="nc" id="L211">            nextImagePosition</span>
+        )
+
+        // If next actionable image is found, saves it, as the the search for
+        // finding next actionable image will start from this position
+<span class="nc bnc" id="L216" title="All 2 branches missed.">        if (next &gt; -1) {</span>
+<span class="nc" id="L217">            nextImagePosition = next + 1</span>
+
+            // If map doesn't contains the next actionable image, that means it's a
+            // new actionable image, it will put it to the map as actionable images
+            // and it will load the new image in the view holder
+<span class="nc bnc" id="L222" title="All 2 branches missed.">            if (!actionableImagesMap.containsKey(next)) {</span>
+<span class="nc" id="L223">                actionableImagesMap[next] = allImages[next]</span>
+<span class="nc" id="L224">                alreadyAddedPositions.add(imagePositionAsPerIncreasingOrder)</span>
+<span class="nc" id="L225">                imagePositionAsPerIncreasingOrder++</span>
+<span class="nc" id="L226">                Glide.with(holder.image).load(allImages[next].uri)</span>
+<span class="nc" id="L227">                    .thumbnail(0.3f).into(holder.image)</span>
+<span class="nc" id="L228">                notifyItemInserted(position)</span>
+<span class="nc" id="L229">                notifyItemRangeChanged(position, itemCount + 1)</span>
+            }
+
+            // If next actionable image is not found, that means searching is
+            // complete till end, and it will stop searching.
+        } else {
+<span class="nc" id="L235">            reachedEndOfFolder = true</span>
+<span class="nc" id="L236">            notifyItemRemoved(position)</span>
+        }
+<span class="nc" id="L238">    }</span>
+
+    /**
+     * Handles click on thumbnail
+     */
+    private fun onThumbnailClicked(
+        position: Int,
+        holder: ImageViewHolder
+    ) {
+<span class="nc" id="L247">        val sharedPreferences: SharedPreferences =</span>
+<span class="nc" id="L248">            context.getSharedPreferences(CUSTOM_SELECTOR_PREFERENCE_KEY, 0)</span>
+<span class="nc" id="L249">        val switchState =</span>
+<span class="nc" id="L250">            sharedPreferences.getBoolean(SHOW_ALREADY_ACTIONED_IMAGES_PREFERENCE_KEY, true)</span>
+
+        // While switch is turned off, lets user click on image only if the position is
+        // added inside map
+<span class="nc bnc" id="L254" title="All 2 branches missed.">        if (!switchState) {</span>
+<span class="nc bnc" id="L255" title="All 2 branches missed.">            if (actionableImagesMap.size &gt; position) {</span>
+<span class="nc" id="L256">                selectOrRemoveImage(holder, position)</span>
+            }
+        } else {
+<span class="nc" id="L259">            selectOrRemoveImage(holder, position)</span>
+        }
+<span class="nc" id="L261">    }</span>
+
+    /**
+     * Handle click event on an image, update counter on images.
+     */
+    private fun selectOrRemoveImage(holder: ImageViewHolder, position: Int){
+<span class="nc" id="L267">        val sharedPreferences: SharedPreferences =</span>
+<span class="nc" id="L268">            context.getSharedPreferences(CUSTOM_SELECTOR_PREFERENCE_KEY, 0)</span>
+<span class="nc" id="L269">        val showAlreadyActionedImages =</span>
+<span class="nc" id="L270">            sharedPreferences.getBoolean(SHOW_ALREADY_ACTIONED_IMAGES_PREFERENCE_KEY, true)</span>
+
+        // Getting clicked index from all images index when show_already_actioned_images
+        // switch is on
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        val clickedIndex: Int = if(showAlreadyActionedImages) {</span>
+<span class="nc" id="L275">            ImageHelper.getIndex(selectedImages, images[position])</span>
+
+        // Getting clicked index from actionable images when show_already_actioned_images
+        // switch is off
+        } else {
+<span class="nc" id="L280">            ImageHelper.getIndex(selectedImages, ArrayList(actionableImagesMap.values)[position])</span>
+        }
+
+<span class="nc bnc" id="L283" title="All 2 branches missed.">        if (clickedIndex != -1) {</span>
+<span class="nc" id="L284">            selectedImages.removeAt(clickedIndex)</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">            if (holder.isItemNotForUpload()) {</span>
+<span class="nc" id="L286">                numberOfSelectedImagesMarkedAsNotForUpload--</span>
+            }
+<span class="nc" id="L288">            notifyItemChanged(position, ImageUnselected())</span>
+
+            // Getting index from all images index when switch is on
+<span class="nc bnc" id="L291" title="All 2 branches missed.">            val indexes = if (showAlreadyActionedImages) {</span>
+<span class="nc" id="L292">                ImageHelper.getIndexList(selectedImages, images)</span>
+
+            // Getting index from actionable images when switch is off
+            } else {
+<span class="nc" id="L296">                ImageHelper.getIndexList(selectedImages, ArrayList(actionableImagesMap.values))</span>
+            }
+<span class="nc bnc" id="L298" title="All 2 branches missed.">            for (index in indexes) {</span>
+<span class="nc" id="L299">                notifyItemChanged(index, ImageSelectedOrUpdated())</span>
+            }
+        } else {
+<span class="nc bnc" id="L302" title="All 2 branches missed.">            if (holder.isItemUploaded()) {</span>
+<span class="nc" id="L303">                Toast.makeText(context, R.string.custom_selector_already_uploaded_image_text, Toast.LENGTH_SHORT).show()</span>
+            } else {
+<span class="nc bnc" id="L305" title="All 2 branches missed.">                if (holder.isItemNotForUpload()) {</span>
+<span class="nc" id="L306">                    numberOfSelectedImagesMarkedAsNotForUpload++</span>
+                }
+
+                // Getting index from all images index when switch is on
+<span class="nc bnc" id="L310" title="All 2 branches missed.">                val indexes: ArrayList&lt;Int&gt; = if (showAlreadyActionedImages) {</span>
+<span class="nc" id="L311">                    selectedImages.add(images[position])</span>
+<span class="nc" id="L312">                    ImageHelper.getIndexList(selectedImages, images)</span>
+
+                // Getting index from actionable images when switch is off
+                } else {
+<span class="nc" id="L316">                    selectedImages.add(ArrayList(actionableImagesMap.values)[position])</span>
+<span class="nc" id="L317">                    ImageHelper.getIndexList(selectedImages, ArrayList(actionableImagesMap.values))</span>
+                }
+
+<span class="nc bnc" id="L320" title="All 2 branches missed.">                for (index in indexes) {</span>
+<span class="nc" id="L321">                    notifyItemChanged(index, ImageSelectedOrUpdated())</span>
+                }
+            }
+        }
+<span class="nc" id="L325">        imageSelectListener.onSelectedImagesChanged(selectedImages, numberOfSelectedImagesMarkedAsNotForUpload)</span>
+<span class="nc" id="L326">    }</span>
+
+    /**
+     * Initialize the data set.
+     */
+    fun init(newImages: List&lt;Image&gt;, fixedImages: List&lt;Image&gt;, emptyMap: TreeMap&lt;Int, Image&gt;) {
+<span class="nc" id="L332">        allImages = fixedImages</span>
+<span class="nc" id="L333">        val oldImageList:ArrayList&lt;Image&gt; = images</span>
+<span class="nc" id="L334">        val newImageList:ArrayList&lt;Image&gt; = ArrayList(newImages)</span>
+<span class="nc" id="L335">        actionableImagesMap = emptyMap</span>
+<span class="nc" id="L336">        alreadyAddedPositions = ArrayList()</span>
+<span class="nc" id="L337">        nextImagePosition = 0</span>
+<span class="nc" id="L338">        reachedEndOfFolder = false</span>
+<span class="nc" id="L339">        selectedImages = ArrayList()</span>
+<span class="nc" id="L340">        imagePositionAsPerIncreasingOrder = 0</span>
+<span class="nc" id="L341">        val diffResult = DiffUtil.calculateDiff(</span>
+<span class="nc" id="L342">            ImagesDiffCallback(oldImageList, newImageList)</span>
+        )
+<span class="nc" id="L344">        images = newImageList</span>
+<span class="nc" id="L345">        diffResult.dispatchUpdatesTo(this)</span>
+<span class="nc" id="L346">    }</span>
+
+    /**
+     * Set new selected images
+     */
+    fun setSelectedImages(newSelectedImages: ArrayList&lt;Image&gt;){
+<span class="nc" id="L352">        selectedImages = ArrayList(newSelectedImages)</span>
+<span class="nc" id="L353">        imageSelectListener.onSelectedImagesChanged(selectedImages, 0)</span>
+<span class="nc" id="L354">    }</span>
+    /**
+     * Refresh the data in the adapter
+     */
+    fun refresh(newImages: List&lt;Image&gt;, fixedImages: List&lt;Image&gt;) {
+<span class="nc" id="L359">        numberOfSelectedImagesMarkedAsNotForUpload = 0</span>
+<span class="nc" id="L360">        selectedImages.clear()</span>
+<span class="nc" id="L361">        images.clear()</span>
+<span class="nc" id="L362">        selectedImages = arrayListOf()</span>
+<span class="nc" id="L363">        init(newImages, fixedImages, TreeMap())</span>
+<span class="nc" id="L364">        notifyDataSetChanged()</span>
+<span class="nc" id="L365">    }</span>
+
+    /**
+     * Returns the total number of items in the data set held by the adapter.
+     *
+     * @return The total number of items in this adapter.
+     */
+    override fun getItemCount(): Int {
+<span class="nc" id="L373">        val sharedPreferences: SharedPreferences =</span>
+<span class="nc" id="L374">            context.getSharedPreferences(CUSTOM_SELECTOR_PREFERENCE_KEY, 0)</span>
+<span class="nc" id="L375">        val showAlreadyActionedImages =</span>
+<span class="nc" id="L376">            sharedPreferences.getBoolean(SHOW_ALREADY_ACTIONED_IMAGES_PREFERENCE_KEY, true)</span>
+
+        // While switch is on initializes the holder with all images size
+<span class="nc bnc" id="L379" title="All 2 branches missed.">        return if(showAlreadyActionedImages) {</span>
+<span class="nc" id="L380">            allImages.size</span>
+
+        // While switch is off and searching for next actionable has ended, initializes the holder
+        // with size of all actionable images
+<span class="nc bnc" id="L384" title="All 4 branches missed.">        } else if (actionableImagesMap.size == allImages.size || reachedEndOfFolder) {</span>
+<span class="nc" id="L385">            actionableImagesMap.size</span>
+
+        // While switch is off, initializes the holder with and extra view holder so that finding
+        // and addition of the next actionable image in the adapter can be continued
+        } else {
+<span class="nc" id="L390">            actionableImagesMap.size + 1</span>
+        }
+    }
+
+    fun getImageIdAt(position: Int): Long {
+<span class="nc" id="L395">        return images.get(position).id</span>
+    }
+
+    /**
+     * CleanUp function.
+     */
+    fun cleanUp() {
+<span class="nc" id="L402">        scope.cancel()</span>
+<span class="nc" id="L403">    }</span>
+
+    /**
+     * Image view holder.
+     */
+<span class="nc" id="L408">    class ImageViewHolder(itemView: View): RecyclerView.ViewHolder(itemView) {</span>
+<span class="nc" id="L409">        val image: ImageView = itemView.findViewById(R.id.image_thumbnail)</span>
+<span class="nc" id="L410">        private val uploadedGroup: Group = itemView.findViewById(R.id.uploaded_group)</span>
+<span class="nc" id="L411">        private val notForUploadGroup: Group = itemView.findViewById(R.id.not_for_upload_group)</span>
+<span class="nc" id="L412">        private val selectedGroup: Group = itemView.findViewById(R.id.selected_group)</span>
+
+        /**
+         * Item selected view.
+         */
+        fun itemSelected() {
+<span class="nc" id="L418">            selectedGroup.visibility = View.VISIBLE</span>
+<span class="nc" id="L419">        }</span>
+
+        /**
+         * Item Unselected view.
+         */
+        fun itemUnselected() {
+<span class="nc" id="L425">            selectedGroup.visibility = View.GONE</span>
+<span class="nc" id="L426">        }</span>
+
+        /**
+         * Item Uploaded view.
+         */
+        fun itemUploaded() {
+<span class="nc" id="L432">            uploadedGroup.visibility = View.VISIBLE</span>
+<span class="nc" id="L433">        }</span>
+
+        /**
+         * Item is not for upload view
+         */
+        fun itemNotForUpload() {
+<span class="nc" id="L439">            notForUploadGroup.visibility = View.VISIBLE</span>
+<span class="nc" id="L440">        }</span>
+
+        fun isItemUploaded():Boolean {
+<span class="nc bnc" id="L443" title="All 2 branches missed.">            return uploadedGroup.visibility == View.VISIBLE</span>
+        }
+
+        /**
+         * Item is not for upload
+         */
+        fun isItemNotForUpload():Boolean {
+<span class="nc bnc" id="L450" title="All 2 branches missed.">            return notForUploadGroup.visibility == View.VISIBLE</span>
+        }
+
+        /**
+         * Item Not Uploaded view.
+         */
+        fun itemNotUploaded() {
+<span class="nc" id="L457">            uploadedGroup.visibility = View.GONE</span>
+<span class="nc" id="L458">        }</span>
+
+        /**
+         * Item can be uploaded view
+         */
+        fun itemForUpload() {
+<span class="nc" id="L464">            notForUploadGroup.visibility = View.GONE</span>
+<span class="nc" id="L465">        }</span>
+    }
+
+    /**
+     * DiffUtilCallback.
+     */
+<span class="nc" id="L471">    class ImagesDiffCallback(</span>
+<span class="nc" id="L472">        var oldImageList: ArrayList&lt;Image&gt;,</span>
+<span class="nc" id="L473">        var newImageList: ArrayList&lt;Image&gt;</span>
+<span class="nc" id="L474">    ) : DiffUtil.Callback(){</span>
+
+        /**
+         * Returns the size of the old list.
+         */
+        override fun getOldListSize(): Int {
+<span class="nc" id="L480">            return oldImageList.size</span>
+        }
+
+        /**
+         * Returns the size of the new list.
+         */
+        override fun getNewListSize(): Int {
+<span class="nc" id="L487">            return newImageList.size</span>
+        }
+
+        /**
+         * Called by the DiffUtil to decide whether two object represent the same Item.
+         */
+        override fun areItemsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {
+<span class="nc bnc" id="L494" title="All 2 branches missed.">            return newImageList[newItemPosition].id == oldImageList[oldItemPosition].id</span>
+        }
+
+        /**
+         * Called by the DiffUtil when it wants to check whether two items have the same data.
+         * DiffUtil uses this information to detect if the contents of an item has changed.
+         */
+        override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {
+<span class="nc" id="L502">            return oldImageList[oldItemPosition].equals(newImageList[newItemPosition])</span>
+        }
+
+    }
+
+    /**
+     * Returns the text for showing inside the bubble during bubble scroll.
+     */
+    override fun getSectionName(position: Int): String {
+<span class="nc" id="L511">        return images[position].date</span>
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>
