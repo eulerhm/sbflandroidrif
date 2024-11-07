@@ -1,0 +1,52 @@
+/*
+* Copyright (C) 2015 University of South Florida (sjbarbeau@gmail.com)
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*      http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*/
+package org.onebusaway.android.report.ui.dialog;
+
+import android.content.DialogInterface;
+import androidx.fragment.app.DialogFragment;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+public class BaseReportDialogFragment extends DialogFragment {
+
+    @Override
+    public void onResume() {
+        if (!ListenerUtil.mutListener.listen(10924)) {
+            super.onResume();
+        }
+        if (!ListenerUtil.mutListener.listen(10927)) {
+            getDialog().setOnKeyListener(new DialogInterface.OnKeyListener() {
+
+                @Override
+                public boolean onKey(android.content.DialogInterface dialog, int keyCode, android.view.KeyEvent event) {
+                    if (!ListenerUtil.mutListener.listen(10926)) {
+                        if ((keyCode == android.view.KeyEvent.KEYCODE_BACK)) {
+                            if (!ListenerUtil.mutListener.listen(10925)) {
+                                closeSuperActivity();
+                            }
+                        }
+                    }
+                    return false;
+                }
+            });
+        }
+    }
+
+    public void closeSuperActivity() {
+        if (!ListenerUtil.mutListener.listen(10928)) {
+            getActivity().finish();
+        }
+    }
+}

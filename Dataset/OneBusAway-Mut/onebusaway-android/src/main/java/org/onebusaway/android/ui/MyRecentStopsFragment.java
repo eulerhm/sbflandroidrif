@@ -1,0 +1,111 @@
+/*
+ * Copyright (C) 2011 Paul Watts (paulcwatts@gmail.com)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.ui;
+
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Bundle;
+import android.view.ContextMenu;
+import android.view.ContextMenu.ContextMenuInfo;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.AdapterView.AdapterContextMenuInfo;
+import org.onebusaway.android.R;
+import org.onebusaway.android.provider.ObaContract;
+import androidx.loader.content.Loader;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+public class MyRecentStopsFragment extends MyStopListFragmentBase {
+
+    public static final String TAB_NAME = "recent";
+
+    @Override
+    public Loader<Cursor> onCreateLoader(int id, Bundle args) {
+        return QueryUtils.newRecentQuery(getActivity(), ObaContract.Stops.CONTENT_URI, PROJECTION, ObaContract.Stops.ACCESS_TIME, ObaContract.Stops.USE_COUNT);
+    }
+
+    // 
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState) {
+        if (!ListenerUtil.mutListener.listen(1175)) {
+            super.onActivityCreated(savedInstanceState);
+        }
+        if (!ListenerUtil.mutListener.listen(1176)) {
+            setHasOptionsMenu(true);
+        }
+    }
+
+    @Override
+    public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
+        if (!ListenerUtil.mutListener.listen(1177)) {
+            super.onCreateContextMenu(menu, v, menuInfo);
+        }
+        if (!ListenerUtil.mutListener.listen(1178)) {
+            menu.add(0, CONTEXT_MENU_DELETE, 0, R.string.my_context_remove_recent);
+        }
+    }
+
+    @Override
+    public boolean onContextItemSelected(android.view.MenuItem item) {
+        AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
+        switch(item.getItemId()) {
+            case CONTEXT_MENU_DELETE:
+                if (!ListenerUtil.mutListener.listen(1179)) {
+                    ObaContract.Stops.markAsUnused(getActivity(), Uri.withAppendedPath(ObaContract.Stops.CONTENT_URI, QueryUtils.StopList.getId(getListView(), info.position)));
+                }
+                return true;
+            default:
+                return super.onContextItemSelected(item);
+        }
+    }
+
+    @Override
+    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
+        if (!ListenerUtil.mutListener.listen(1180)) {
+            inflater.inflate(R.menu.my_recent_stop_options, menu);
+        }
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        if (!ListenerUtil.mutListener.listen(1182)) {
+            if (item.getItemId() == R.id.clear_recent) {
+                if (!ListenerUtil.mutListener.listen(1181)) {
+                    new ClearDialog().show(getActivity().getSupportFragmentManager(), "confirm_clear_recent_stops");
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    protected int getEmptyText() {
+        return R.string.my_no_recent_stops;
+    }
+
+    public static class ClearDialog extends ClearConfirmDialog {
+
+        @Override
+        protected void doClear() {
+            if (!ListenerUtil.mutListener.listen(1183)) {
+                ObaContract.Stops.markAsUnused(getActivity(), ObaContract.Stops.CONTENT_URI);
+            }
+        }
+    }
+}
