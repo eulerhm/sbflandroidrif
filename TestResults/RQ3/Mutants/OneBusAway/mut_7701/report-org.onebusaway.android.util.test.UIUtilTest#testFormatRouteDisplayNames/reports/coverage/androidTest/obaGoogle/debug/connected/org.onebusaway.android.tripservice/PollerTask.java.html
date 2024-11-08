@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PollerTask.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">obaGoogleDebug</a> &gt; <a href="index.source.html" class="el_package">org.onebusaway.android.tripservice</a> &gt; <span class="el_source">PollerTask.java</span></div><h1>PollerTask.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (C) 2016 Paul Watts (paulcwatts@gmail.com),
+ * University of South Florida (sjbarbeau@gmail.com)
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.tripservice;
+
+import org.onebusaway.android.io.ObaApi;
+import org.onebusaway.android.io.elements.ObaArrivalInfo;
+import org.onebusaway.android.io.request.ObaArrivalInfoRequest;
+import org.onebusaway.android.io.request.ObaArrivalInfoResponse;
+import org.onebusaway.android.provider.ObaContract;
+import org.onebusaway.android.ui.ArrivalInfo;
+import org.onebusaway.android.util.UIUtils;
+
+import android.content.ContentResolver;
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.net.Uri;
+
+/**
+ * A task (thread) that is responsible for polling the server to determine if a Notification to
+ * remind the user of an arriving bus should be triggered.
+ */
+public final class PollerTask implements Runnable {
+    //private static final String TAG = &quot;PollerTask&quot;;
+
+    private static final long ONE_MINUTE = 60 * 1000;
+
+<span class="nc" id="L42">    private static final String[] ALERT_PROJECTION = {</span>
+            ObaContract.TripAlerts._ID,
+            ObaContract.TripAlerts.TRIP_ID,
+            ObaContract.TripAlerts.STOP_ID,
+            ObaContract.TripAlerts.START_TIME,
+            ObaContract.TripAlerts.STATE,
+    };
+
+    private static final int COL_ID = 0;
+
+    private static final int COL_TRIP_ID = 1;
+
+    private static final int COL_STOP_ID = 2;
+
+    private static final int COL_START_TIME = 3;
+
+    private static final int COL_STATE = 4;
+
+    private final Context mContext;
+
+    private final ContentResolver mCR;
+
+    private final TaskContext mTaskContext;
+
+    private final Uri mUri;
+
+<span class="nc" id="L68">    public PollerTask(Context context, TaskContext taskContext, Uri uri) {</span>
+<span class="nc" id="L69">        mContext = context;</span>
+<span class="nc" id="L70">        mCR = mContext.getContentResolver();</span>
+<span class="nc" id="L71">        mTaskContext = taskContext;</span>
+<span class="nc" id="L72">        mUri = uri;</span>
+<span class="nc" id="L73">    }</span>
+
+    @Override
+    public void run() {
+<span class="nc" id="L77">        Cursor c = mCR.query(mUri, ALERT_PROJECTION, null, null, null);</span>
+
+        try {
+<span class="nc bnc" id="L80" title="All 2 branches missed.">            if (c != null) {</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">                while (c.moveToNext()) {</span>
+<span class="nc" id="L82">                    poll1(c);</span>
+                }
+            }
+        } finally {
+<span class="nc bnc" id="L86" title="All 2 branches missed.">            if (c != null) {</span>
+<span class="nc" id="L87">                c.close();</span>
+            }
+<span class="nc" id="L89">            mTaskContext.taskComplete();</span>
+        }
+<span class="nc" id="L91">    }</span>
+
+    private void poll1(Cursor c) {
+<span class="nc" id="L94">        final Uri alertUri = ObaContract.TripAlerts.buildUri(c.getInt(COL_ID));</span>
+<span class="nc" id="L95">        final int state = c.getInt(COL_STATE);</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">        if (state == ObaContract.TripAlerts.STATE_CANCELLED) {</span>
+<span class="nc" id="L97">            return;</span>
+        }
+<span class="nc" id="L99">        long now = System.currentTimeMillis();</span>
+
+<span class="nc" id="L101">        final long startTime = c.getLong(COL_START_TIME);</span>
+        // After a half-hour we can completely give up.
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        if (startTime &lt; (now - ONE_MINUTE * 30)) {</span>
+<span class="nc" id="L104">            ContentValues values = new ContentValues();</span>
+<span class="nc" id="L105">            values.put(ObaContract.TripAlerts.STATE, ObaContract.TripAlerts.STATE_CANCELLED);</span>
+<span class="nc" id="L106">            mCR.update(alertUri, values, null, null);</span>
+
+<span class="nc" id="L108">            TripService.scheduleAll(mContext, true);</span>
+<span class="nc" id="L109">            return;</span>
+        }
+
+        // Before we do anything else, schedule another poll in a minute.
+        // That way we know the polling will continue even if we're killed.
+<span class="nc" id="L114">        TripService.pollTrip(mContext, alertUri, now + ONE_MINUTE);</span>
+
+        // If this is just scheduled, mark it as polling.
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        if (state == ObaContract.TripAlerts.STATE_SCHEDULED) {</span>
+<span class="nc" id="L118">            ObaContract.TripAlerts</span>
+<span class="nc" id="L119">                    .setState(mContext, alertUri, ObaContract.TripAlerts.STATE_POLLING);</span>
+        }
+
+<span class="nc" id="L122">        final String tripId = c.getString(COL_TRIP_ID);</span>
+<span class="nc" id="L123">        final String stopId = c.getString(COL_STOP_ID);</span>
+<span class="nc" id="L124">        final long reminderMin = getReminderMin(tripId, stopId);</span>
+
+<span class="nc" id="L126">        ObaArrivalInfoResponse response = ObaArrivalInfoRequest</span>
+<span class="nc" id="L127">                .newRequest(mContext, stopId).call();</span>
+
+        // Arrival information
+<span class="nc" id="L130">        ArrivalInfo arrivalInfo = null;</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">        if (response.getCode() == ObaApi.OBA_OK) {</span>
+<span class="nc" id="L132">            arrivalInfo = checkArrivals(response, c.getString(COL_TRIP_ID));</span>
+        }
+
+<span class="nc bnc" id="L135" title="All 2 branches missed.">        if (arrivalInfo != null) {</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">            if (arrivalInfo.getEta() &lt;= reminderMin) {</span>
+                // Bus is within the reminder interval (or it possibly has left!)
+                // Send off a notification.
+                //Log.d(TAG, &quot;Notify for trip: &quot; + alertUri);
+<span class="nc" id="L140">                TripService.notifyTrip(mContext, mUri, getReminderName(tripId, stopId), arrivalInfo.getNotifyText());</span>
+            }
+        }
+<span class="nc" id="L143">    }</span>
+
+    private String getReminderName(String tripId, String stopId) {
+<span class="nc" id="L146">        final Uri uri = ObaContract.Trips.buildUri(tripId, stopId);</span>
+<span class="nc" id="L147">        return UIUtils.stringForQuery(mContext, uri, ObaContract.Trips.NAME);</span>
+    }
+
+    private long getReminderMin(String tripId, String stopId) {
+<span class="nc" id="L151">        final Uri uri = ObaContract.Trips.buildUri(tripId, stopId);</span>
+<span class="nc" id="L152">        return (long) UIUtils.intForQuery(mContext, uri, ObaContract.Trips.REMINDER);</span>
+    }
+
+    /**
+     * Checks arrivals from given ObaArrivalInfoResponse
+     *
+     * @param response arrival information
+     * @param tripId trip id 
+     * @return ArrivalInfo, or return null if the arrival can't be found.
+     */
+    private ArrivalInfo checkArrivals(ObaArrivalInfoResponse response, String tripId) {
+<span class="nc" id="L163">        final ObaArrivalInfo[] arrivals = response.getArrivalInfo();</span>
+<span class="nc" id="L164">        final int length = arrivals.length;</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        for (int i = 0; i &lt; length; ++i) {</span>
+<span class="nc" id="L166">            ObaArrivalInfo info = arrivals[i];</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">            if (tripId.equals(info.getTripId())) {</span>
+                // We found the trip. We notify when the reminder time
+<span class="nc" id="L169">                return new ArrivalInfo(mContext, info, response.getCurrentTime(), false);</span>
+            }
+        }
+        // Didn't find it.
+<span class="nc" id="L173">        return null;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.2.0</div></body></html>

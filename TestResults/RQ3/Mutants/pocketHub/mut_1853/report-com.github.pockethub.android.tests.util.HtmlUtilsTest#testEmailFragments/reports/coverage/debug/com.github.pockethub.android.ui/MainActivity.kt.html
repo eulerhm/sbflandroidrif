@@ -1,0 +1,385 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MainActivity.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">debugAndroidTest</a> &gt; <a href="index.source.html" class="el_package">com.github.pockethub.android.ui</a> &gt; <span class="el_source">MainActivity.kt</span></div><h1>MainActivity.kt</h1><pre class="source lang-java linenums">/*
+ * Copyright (c) 2015 PocketHub
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.github.pockethub.android.ui
+
+import android.accounts.AccountManager
+import android.app.SearchManager
+import android.content.Context
+import android.content.Intent
+import android.content.res.Configuration
+import android.os.Build
+import android.os.Bundle
+import android.preference.PreferenceManager
+import android.util.Log
+import android.view.Menu
+import android.view.MenuItem
+import android.view.View
+import android.webkit.CookieManager
+import android.widget.ImageView
+import android.widget.TextView
+import androidx.annotation.NonNull
+import androidx.annotation.VisibleForTesting
+import androidx.appcompat.app.ActionBarDrawerToggle
+import androidx.appcompat.widget.SearchView
+import androidx.core.content.edit
+import androidx.core.view.GravityCompat
+import androidx.fragment.app.Fragment
+import com.github.pockethub.android.Database
+import com.github.pockethub.android.R
+import com.github.pockethub.android.accounts.AccountUtils
+import com.github.pockethub.android.accounts.AccountsHelper
+import com.github.pockethub.android.accounts.LoginActivity
+import com.github.pockethub.android.core.user.UserComparator
+import com.github.pockethub.android.persistence.AccountDataManager
+import com.github.pockethub.android.rx.AutoDisposeUtils
+import com.github.pockethub.android.ui.base.BaseActivity
+import com.github.pockethub.android.ui.gist.GistsPagerFragment
+import com.github.pockethub.android.ui.issue.FilterListFragment
+import com.github.pockethub.android.ui.issue.IssueDashboardPagerFragment
+import com.github.pockethub.android.ui.notification.NotificationActivity
+import com.github.pockethub.android.ui.user.HomePagerFragment
+import com.github.pockethub.android.util.AvatarLoader
+import com.github.pockethub.android.util.ToastUtils
+import com.google.android.material.navigation.NavigationView
+import com.meisolsson.githubsdk.core.TokenStore
+import com.meisolsson.githubsdk.model.User
+import io.reactivex.Single
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.schedulers.Schedulers
+import kotlinx.android.synthetic.main.activity_main.*
+import java.util.Collections
+import javax.inject.Inject
+import javax.inject.Provider
+import javax.inject.Singleton
+
+// TODO: Have another think about MVI
+// TODO: Figure out good way to inject github-sdk services dynamically with Dagger. If possible
+<span class="nc" id="L71">class MainActivity : BaseActivity(), NavigationView.OnNavigationItemSelectedListener {</span>
+
+    @Inject
+<span class="nc bnc" id="L74" title="All 2 branches missed.">    lateinit var accountDataManager: AccountDataManager</span>
+
+    @Inject
+<span class="nc bnc" id="L77" title="All 2 branches missed.">    lateinit var database: Database</span>
+
+    @Inject
+<span class="nc bnc" id="L80" title="All 2 branches missed.">    lateinit var userComparatorProvider: Provider&lt;UserComparator&gt;</span>
+
+    @Inject
+    @Singleton
+<span class="nc bnc" id="L84" title="All 2 branches missed.">    lateinit var avatars: AvatarLoader</span>
+
+<span class="nc" id="L86">    private var orgs: List&lt;User&gt; = emptyList()</span>
+
+    private var org: User? = null
+
+    private var userLearnedDrawer: Boolean = false
+    private lateinit var actionBarDrawerToggle: ActionBarDrawerToggle
+
+    @VisibleForTesting
+<span class="nc" id="L94">    var currentFragment: Fragment? = null</span>
+
+<span class="nc" id="L96">    private var menuItemOrganizationMap: MutableMap&lt;MenuItem, User&gt; = HashMap()</span>
+
+    private val accountManager: AccountManager
+<span class="nc" id="L99">        get() = AccountManager.get(this)</span>
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+<span class="nc" id="L102">        super.onCreate(savedInstanceState)</span>
+<span class="nc" id="L103">        setContentView(R.layout.activity_main)</span>
+
+<span class="nc" id="L105">        val sp = PreferenceManager.getDefaultSharedPreferences(this)</span>
+<span class="nc" id="L106">        userLearnedDrawer = sp.getBoolean(PREF_USER_LEARNED_DRAWER, false)</span>
+
+<span class="nc bnc" id="L108" title="All 2 branches missed.">        supportActionBar?.setDisplayHomeAsUpEnabled(true)</span>
+
+<span class="nc" id="L110">        actionBarDrawerToggle = object : ActionBarDrawerToggle(</span>
+<span class="nc" id="L111">            this,</span>
+<span class="nc" id="L112">            drawer_layout,</span>
+<span class="nc" id="L113">            toolbar,</span>
+<span class="nc" id="L114">            R.string.navigation_drawer_open,</span>
+<span class="nc" id="L115">            R.string.navigation_drawer_close</span>
+        ) {
+            override fun onDrawerOpened(drawerView: View) {
+<span class="nc" id="L118">                super.onDrawerOpened(drawerView)</span>
+
+<span class="nc bnc" id="L120" title="All 2 branches missed.">                if (!userLearnedDrawer) {</span>
+<span class="nc" id="L121">                    sp.edit {</span>
+<span class="nc" id="L122">                        putBoolean(PREF_USER_LEARNED_DRAWER, true)</span>
+<span class="nc" id="L123">                    }</span>
+<span class="nc" id="L124">                    userLearnedDrawer = true</span>
+<span class="nc" id="L125">                    Log.d(TAG, &quot;User learned drawer&quot;)</span>
+                }
+<span class="nc" id="L127">            }</span>
+        }
+
+<span class="nc bnc" id="L130" title="All 2 branches missed.">        drawer_layout.addDrawerListener(actionBarDrawerToggle)</span>
+<span class="nc" id="L131">        navigation_view.setNavigationItemSelectedListener(this)</span>
+
+<span class="nc" id="L133">        reloadOrgs()</span>
+
+<span class="nc" id="L135">        val tokenStore = TokenStore.getInstance(this)</span>
+
+<span class="nc bnc" id="L137" title="All 2 branches missed.">        if (tokenStore.token == null) {</span>
+<span class="nc" id="L138">            val accounts = accountManager.getAccountsByType(getString(R.string.account_type))</span>
+<span class="nc bnc" id="L139" title="All 6 branches missed.">            if (accounts.isNotEmpty()) {</span>
+<span class="nc" id="L140">                val account = accounts[0]</span>
+<span class="nc" id="L141">                AccountsHelper.getUserToken(this, account)</span>
+<span class="nc" id="L142">                tokenStore.saveToken(AccountsHelper.getUserToken(this, account))</span>
+            }
+        }
+<span class="nc" id="L145">    }</span>
+
+    override fun onDestroy() {
+<span class="nc" id="L148">        super.onDestroy()</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        drawer_layout.removeDrawerListener(actionBarDrawerToggle)</span>
+<span class="nc" id="L150">    }</span>
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+<span class="nc" id="L153">        super.onConfigurationChanged(newConfig)</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        actionBarDrawerToggle.onConfigurationChanged(newConfig)</span>
+<span class="nc" id="L155">    }</span>
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+<span class="nc bnc" id="L158" title="All 4 branches missed.">        return if (actionBarDrawerToggle.onOptionsItemSelected(item)) {</span>
+<span class="nc" id="L159">            true</span>
+<span class="nc" id="L160">        } else super.onOptionsItemSelected(item)</span>
+    }
+
+    override fun onPostCreate(savedInstanceState: Bundle?) {
+<span class="nc" id="L164">        super.onPostCreate(savedInstanceState)</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        actionBarDrawerToggle.syncState()</span>
+<span class="nc" id="L166">    }</span>
+
+    private fun reloadOrgs() {
+<span class="nc" id="L169">        Single.fromCallable { AccountUtils.getAccount(accountManager, this) }</span>
+<span class="nc" id="L170">            .map { account -&gt; accountDataManager.getOrgs(true) }</span>
+<span class="nc" id="L171">            .map { orgs -&gt;</span>
+<span class="nc" id="L172">                Collections.sort(orgs, userComparatorProvider.get())</span>
+<span class="nc" id="L173">                orgs</span>
+            }
+<span class="nc" id="L175">            .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L176">            .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L177">            .`as`(AutoDisposeUtils.bindToLifecycle(this))</span>
+<span class="nc" id="L178">            .subscribe({ this.onOrgsLoaded(it) },</span>
+<span class="nc" id="L179">                { e -&gt;</span>
+<span class="nc" id="L180">                    Log.e(TAG, &quot;Exception loading organizations&quot;, e)</span>
+<span class="nc" id="L181">                    ToastUtils.show(this, R.string.error_orgs_load)</span>
+<span class="nc" id="L182">                })</span>
+<span class="nc" id="L183">    }</span>
+
+    @VisibleForTesting
+    fun onOrgsLoaded(orgs: List&lt;User&gt;) {
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        if (orgs.isEmpty()) {</span>
+<span class="nc" id="L188">            return</span>
+        }
+
+<span class="nc" id="L191">        org = orgs[0]</span>
+<span class="nc" id="L192">        this.orgs = orgs</span>
+
+<span class="nc" id="L194">        val accounts = accountManager.getAccountsByType(getString(R.string.account_type))</span>
+<span class="nc" id="L195">        val account = accounts[0]</span>
+<span class="nc" id="L196">        LoginActivity.configureSyncFor(account)</span>
+<span class="nc bnc" id="L197" title="All 4 branches missed.">        if (org!!.login() != AccountUtils.getLogin(this)) {</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">            AccountUtils.renameAccount(org!!.login(), account, accountManager, this)</span>
+        }
+
+<span class="nc" id="L201">        setUpNavigationView()</span>
+
+<span class="nc bnc" id="L203" title="All 2 branches missed.">        val window = window ?: return</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">        val view = window.decorView ?: return</span>
+
+<span class="nc" id="L206">        view.post {</span>
+<span class="nc" id="L207">            switchFragment(HomePagerFragment(), org)</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">            if (!userLearnedDrawer) {</span>
+<span class="nc" id="L209">                drawer_layout.openDrawer(GravityCompat.START)</span>
+            }
+<span class="nc" id="L211">        }</span>
+<span class="nc" id="L212">    }</span>
+
+    override fun onCreateOptionsMenu(optionMenu: Menu): Boolean {
+<span class="nc" id="L215">        menuInflater.inflate(R.menu.activity_main, optionMenu)</span>
+
+<span class="nc bnc" id="L217" title="All 2 branches missed.">        val searchManager = getSystemService(Context.SEARCH_SERVICE) as SearchManager</span>
+<span class="nc" id="L218">        val searchItem = optionMenu.findItem(R.id.m_search)</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">        val searchView = searchItem.actionView as SearchView</span>
+<span class="nc" id="L220">        searchView.setSearchableInfo(searchManager.getSearchableInfo(componentName))</span>
+
+<span class="nc" id="L222">        return super.onCreateOptionsMenu(optionMenu)</span>
+    }
+
+    override fun onResume() {
+<span class="nc" id="L226">        super.onResume()</span>
+
+        // Restart loader if default account doesn't match currently loaded
+        // account
+<span class="nc" id="L230">        val currentOrgs = orgs</span>
+<span class="nc bnc" id="L231" title="All 4 branches missed.">        if (currentOrgs.isNotEmpty()</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">            &amp;&amp; !AccountUtils.isUser(this, currentOrgs[0])) {</span>
+<span class="nc" id="L233">            reloadOrgs()</span>
+        }
+<span class="nc" id="L235">    }</span>
+
+    private fun setUpHeaderView() {
+<span class="nc" id="L238">        val userImage: ImageView</span>
+<span class="nc" id="L239">        val userRealName: TextView</span>
+<span class="nc" id="L240">        val userName: TextView</span>
+
+<span class="nc" id="L242">        val headerView = navigation_view.getHeaderView(0)</span>
+<span class="nc" id="L243">        userImage = headerView.findViewById(R.id.user_picture)</span>
+<span class="nc" id="L244">        val notificationIcon = headerView.findViewById&lt;ImageView&gt;(R.id.iv_notification)</span>
+<span class="nc" id="L245">        userRealName = headerView.findViewById(R.id.user_real_name)</span>
+<span class="nc" id="L246">        userName = headerView.findViewById(R.id.user_name)</span>
+
+<span class="nc" id="L248">        notificationIcon.setOnClickListener { v -&gt;</span>
+<span class="nc" id="L249">            startActivity(Intent(this@MainActivity, NotificationActivity::class.java))</span>
+<span class="nc" id="L250">        }</span>
+
+<span class="nc bnc" id="L252" title="All 2 branches missed.">        avatars.bind(userImage, org)</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">        userName.text = org!!.login()</span>
+
+<span class="nc bnc" id="L255" title="All 2 branches missed.">        val name = org!!.name()</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">        if (name != null) {</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">            userRealName.text = org!!.name()</span>
+        } else {
+<span class="nc" id="L259">            userRealName.visibility = View.GONE</span>
+        }
+<span class="nc" id="L261">    }</span>
+
+    private fun setUpNavigationView() {
+<span class="nc" id="L264">        setUpHeaderView()</span>
+<span class="nc" id="L265">        setUpNavigationMenu()</span>
+<span class="nc" id="L266">    }</span>
+
+    private fun setUpNavigationMenu() {
+<span class="nc" id="L269">        val organizationContainer = navigation_view.menu.findItem(R.id.navigation_organizations)</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        if (organizationContainer.hasSubMenu()) {</span>
+<span class="nc" id="L271">            val organizationsMenu = organizationContainer.subMenu</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">            for (i in 1 until orgs.size) {</span>
+<span class="nc" id="L273">                val organization = orgs[i]</span>
+<span class="nc bnc" id="L274" title="All 4 branches missed.">                if (organizationsMenu.findItem(organization.id()!!.toInt()) == null) {</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">                    val title = organization.name() ?: organization.login()</span>
+<span class="nc" id="L276">                    val organizationMenuItem = organizationsMenu.add(</span>
+<span class="nc" id="L277">                        Menu.NONE,</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">                        organization.id()!!.toInt(),</span>
+<span class="nc" id="L279">                        Menu.NONE,</span>
+<span class="nc" id="L280">                        title</span>
+                    )
+
+<span class="nc" id="L283">                    organizationMenuItem.setIcon(R.drawable.ic_github_organization_black_24dp)</span>
+                    //Because of tinting the real image would became a grey block
+                    //avatars.bind(organizationMenuItem, organization);
+<span class="nc" id="L286">                    menuItemOrganizationMap[organizationMenuItem] = organization</span>
+                }
+            }
+        } else {
+<span class="nc" id="L290">            throw IllegalStateException(&quot;Menu item $organizationContainer should have a submenu&quot;)</span>
+        }
+<span class="nc" id="L292">    }</span>
+
+    override fun onNavigationItemSelected(@NonNull menuItem: MenuItem): Boolean {
+<span class="nc" id="L295">        val itemId = menuItem.itemId</span>
+
+<span class="nc" id="L297">        when {</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">            itemId == R.id.navigation_home -&gt; {</span>
+<span class="nc" id="L299">                switchFragment(HomePagerFragment(), org)</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">                supportActionBar!!.setTitle(R.string.app_name)</span>
+<span class="nc" id="L301">                return true</span>
+            }
+<span class="nc bnc" id="L303" title="All 2 branches missed.">            itemId == R.id.navigation_gists -&gt; {</span>
+<span class="nc" id="L304">                switchFragment(GistsPagerFragment(), null)</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">                supportActionBar!!.title = menuItem.title</span>
+<span class="nc" id="L306">                return true</span>
+            }
+<span class="nc bnc" id="L308" title="All 2 branches missed.">            itemId == R.id.navigation_issue_dashboard -&gt; {</span>
+<span class="nc" id="L309">                switchFragment(IssueDashboardPagerFragment(), null)</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">                supportActionBar!!.title = menuItem.title</span>
+<span class="nc" id="L311">                return true</span>
+            }
+<span class="nc bnc" id="L313" title="All 2 branches missed.">            itemId == R.id.navigation_bookmarks -&gt; {</span>
+<span class="nc" id="L314">                switchFragment(FilterListFragment(), null)</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">                supportActionBar!!.title = menuItem.title</span>
+<span class="nc" id="L316">                return true</span>
+            }
+<span class="nc bnc" id="L318" title="All 2 branches missed.">            itemId == R.id.navigation_log_out -&gt; {</span>
+<span class="nc" id="L319">                logout()</span>
+<span class="nc" id="L320">                return false</span>
+            }
+<span class="nc bnc" id="L322" title="All 2 branches missed.">            menuItemOrganizationMap.containsKey(menuItem) -&gt; {</span>
+<span class="nc" id="L323">                switchFragment(HomePagerFragment(), menuItemOrganizationMap[menuItem])</span>
+<span class="nc" id="L324">                navigation_view.menu.findItem(R.id.navigation_home).isChecked = true</span>
+<span class="nc" id="L325">                return false</span>
+            }
+<span class="nc" id="L327">            else -&gt; throw IllegalStateException(&quot;MenuItem $menuItem not known&quot;)</span>
+        }
+    }
+
+    private fun logout() {
+        // Remove cookies so that the login is clean
+<span class="nc bnc" id="L333" title="All 2 branches missed.">        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.LOLLIPOP) {</span>
+<span class="nc" id="L334">            CookieManager.getInstance().removeAllCookies(null)</span>
+        } else {
+<span class="nc" id="L336">            CookieManager.getInstance().removeAllCookie()</span>
+        }
+
+        // Clear all of the cached data
+<span class="nc bnc" id="L340" title="All 2 branches missed.">        database.repositoriesQueries.clearRepositories()</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">        database.organizationsQueries.clearOrgs()</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">        database.organizationsQueries.clearUsers()</span>
+
+        // Remove the account
+<span class="nc" id="L345">        val accountManager = accountManager</span>
+<span class="nc" id="L346">        val accountType = getString(R.string.account_type)</span>
+<span class="nc" id="L347">        val allGitHubAccounts = accountManager.getAccountsByType(accountType)</span>
+
+<span class="nc bnc" id="L349" title="All 2 branches missed.">        for (account in allGitHubAccounts) {</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">            if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.LOLLIPOP_MR1) {</span>
+<span class="nc" id="L351">                accountManager.removeAccountExplicitly(account)</span>
+<span class="nc" id="L352">                startLoginActivity()</span>
+            } else {
+<span class="nc" id="L354">                accountManager.removeAccount(account, { bundle -&gt; startLoginActivity() }, null)</span>
+            }
+        }
+<span class="nc" id="L357">    }</span>
+
+    private fun startLoginActivity() {
+<span class="nc" id="L360">        val `in` = Intent(this, LoginActivity::class.java)</span>
+<span class="nc" id="L361">        `in`.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)</span>
+<span class="nc" id="L362">        startActivity(`in`)</span>
+<span class="nc" id="L363">        finish()</span>
+<span class="nc" id="L364">    }</span>
+
+    private fun switchFragment(fragment: Fragment, organization: User?) {
+<span class="nc bnc" id="L367" title="All 2 branches missed.">        if (organization != null) {</span>
+<span class="nc" id="L368">            val args = Bundle()</span>
+<span class="nc" id="L369">            args.putParcelable(&quot;org&quot;, organization)</span>
+<span class="nc" id="L370">            fragment.arguments = args</span>
+        }
+<span class="nc" id="L372">        val manager = supportFragmentManager</span>
+<span class="nc" id="L373">        manager.beginTransaction().replace(R.id.container, fragment).commit()</span>
+<span class="nc" id="L374">        drawer_layout.closeDrawer(GravityCompat.START)</span>
+
+<span class="nc" id="L376">        currentFragment = fragment</span>
+<span class="nc" id="L377">    }</span>
+
+<span class="nc" id="L379">    companion object {</span>
+
+<span class="nc" id="L381">        private val TAG = &quot;MainActivity&quot;</span>
+<span class="nc" id="L382">        private val PREF_USER_LEARNED_DRAWER = &quot;navigation_drawer_learned&quot;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.7.9.201702052155</span>Generated by the Android Gradle plugin 3.6.1</div></body></html>

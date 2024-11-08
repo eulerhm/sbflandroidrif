@@ -1,0 +1,559 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>NavigationService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">agencyXGoogleDebug</a> &gt; <a href="index.source.html" class="el_package">org.onebusaway.android.nav</a> &gt; <span class="el_source">NavigationService.java</span></div><h1>NavigationService.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (C) 2005-2019 University of South Florida
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.nav;
+
+import static android.app.PendingIntent.*;
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
+import android.location.Location;
+import android.os.Build;
+import android.os.IBinder;
+import android.util.Log;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.RemoteInput;
+import androidx.work.PeriodicWorkRequest;
+import androidx.work.WorkManager;
+import com.google.firebase.analytics.FirebaseAnalytics;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
+import org.apache.commons.io.FileUtils;
+import org.onebusaway.android.R;
+import org.onebusaway.android.app.Application;
+import org.onebusaway.android.io.ObaAnalytics;
+import org.onebusaway.android.nav.model.Path;
+import org.onebusaway.android.nav.model.PathLink;
+import org.onebusaway.android.provider.ObaContract;
+import org.onebusaway.android.ui.FeedbackActivity;
+import org.onebusaway.android.ui.TripDetailsListFragment;
+import org.onebusaway.android.util.LocationHelper;
+import org.onebusaway.android.util.LocationUtils;
+import org.onebusaway.android.util.PreferenceUtils;
+import java.io.File;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Locale;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+/**
+ * Implements the &quot;destination reminders&quot; feature in the app that notifies the user as they
+ * are approaching their destination stop on-board the transit vehicle.
+ * &lt;p&gt;
+ * The NavigationService is started when the user begins a trip, this service listens for location
+ * updates and passes the locations to its instance of NavigationServiceProvider each time.
+ * NavigationServiceProvider is responsible for computing the statuses of the trips and issuing
+ * notifications/TTS messages. Once the NavigationServiceProvider is completed, the
+ * NavigationService will stop itself.
+ */
+<span class="nc" id="L69">public class NavigationService extends Service implements LocationHelper.Listener {</span>
+
+    public static final String TAG = &quot;NavigationService&quot;;
+
+    public static final String DESTINATION_ID = &quot;.DestinationId&quot;;
+
+    public static final String BEFORE_STOP_ID = &quot;.BeforeId&quot;;
+
+    public static final String TRIP_ID = &quot;.TripId&quot;;
+
+    public static final String FIRST_FEEDBACK = &quot;firstFeedback&quot;;
+
+    public static final String KEY_TEXT_REPLY = &quot;trip_feedback&quot;;
+
+    public static final String LOG_DIRECTORY = &quot;ObaNavLog&quot;;
+
+<span class="nc" id="L85">    public static boolean mFirstFeedback = true;</span>
+
+    private static final int RECORDING_THRESHOLD = NavigationServiceProvider.DISTANCE_THRESHOLD + 100;
+
+<span class="nc" id="L89">    private LocationHelper mLocationHelper = null;</span>
+
+<span class="nc" id="L91">    private Location mLastLocation = null;</span>
+
+    // Destination Stop ID
+    private String mDestinationStopId;
+
+    // Before Destination Stop ID
+    private String mBeforeStopId;
+
+    // Trip ID
+    private String mTripId;
+
+<span class="nc" id="L102">    private int mCoordId = 0;</span>
+
+    private NavigationServiceProvider mNavProvider;
+
+<span class="nc" id="L106">    private File mLogFile = null;</span>
+
+    private long mFinishedTime;
+
+    private FirebaseAuth mAuth;
+
+    private FirebaseAnalytics mFirebaseAnalytics;
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+<span class="nc bnc" id="L116" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12105)) {</span>
+<span class="nc" id="L117">            Log.d(TAG, &quot;Starting Service&quot;);</span>
+        }
+<span class="nc bnc" id="L119" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12106)) {</span>
+<span class="nc" id="L120">            mFirebaseAnalytics = FirebaseAnalytics.getInstance(this);</span>
+        }
+<span class="nc" id="L122">        long currentTime = System.currentTimeMillis();</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12123)) {</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">            if (intent != null) {</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12118)) {</span>
+<span class="nc" id="L126">                    mDestinationStopId = intent.getStringExtra(DESTINATION_ID);</span>
+                }
+<span class="nc bnc" id="L128" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12119)) {</span>
+<span class="nc" id="L129">                    mBeforeStopId = intent.getStringExtra(BEFORE_STOP_ID);</span>
+                }
+<span class="nc bnc" id="L131" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12120)) {</span>
+<span class="nc" id="L132">                    mTripId = intent.getStringExtra(TRIP_ID);</span>
+                }
+<span class="nc bnc" id="L134" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12121)) {</span>
+<span class="nc" id="L135">                    ObaContract.NavStops.insert(Application.get().getApplicationContext(), currentTime, 1, 1, mTripId, mDestinationStopId, mBeforeStopId);</span>
+                }
+<span class="nc bnc" id="L137" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12122)) {</span>
+<span class="nc" id="L138">                    mNavProvider = new NavigationServiceProvider(mTripId, mDestinationStopId);</span>
+                }
+            } else {
+<span class="nc" id="L141">                String[] args = ObaContract.NavStops.getDetails(Application.get().getApplicationContext(), &quot;1&quot;);</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12117)) {</span>
+<span class="nc bnc" id="L143" title="All 50 branches missed.">                    if ((ListenerUtil.mutListener.listen(12112) ? (args != null || (ListenerUtil.mutListener.listen(12111) ? (args.length &gt;= 3) : (ListenerUtil.mutListener.listen(12110) ? (args.length &lt;= 3) : (ListenerUtil.mutListener.listen(12109) ? (args.length &gt; 3) : (ListenerUtil.mutListener.listen(12108) ? (args.length &lt; 3) : (ListenerUtil.mutListener.listen(12107) ? (args.length != 3) : (args.length == 3))))))) : (args != null &amp;&amp; (ListenerUtil.mutListener.listen(12111) ? (args.length &gt;= 3) : (ListenerUtil.mutListener.listen(12110) ? (args.length &lt;= 3) : (ListenerUtil.mutListener.listen(12109) ? (args.length &gt; 3) : (ListenerUtil.mutListener.listen(12108) ? (args.length &lt; 3) : (ListenerUtil.mutListener.listen(12107) ? (args.length != 3) : (args.length == 3))))))))) {</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12113)) {</span>
+<span class="nc" id="L145">                            mTripId = args[0];</span>
+                        }
+<span class="nc bnc" id="L147" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12114)) {</span>
+<span class="nc" id="L148">                            mDestinationStopId = args[1];</span>
+                        }
+<span class="nc bnc" id="L150" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12115)) {</span>
+<span class="nc" id="L151">                            mBeforeStopId = args[2];</span>
+                        }
+<span class="nc bnc" id="L153" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12116)) {</span>
+<span class="nc" id="L154">                            mNavProvider = new NavigationServiceProvider(mTripId, mDestinationStopId, 1);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L160" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12124)) {</span>
+            // Log in anonymously via Firebase
+<span class="nc" id="L162">            initAnonFirebaseLogin();</span>
+        }
+<span class="nc bnc" id="L164" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12126)) {</span>
+            // Setup file for logging.
+<span class="nc bnc" id="L166" title="All 2 branches missed.">            if (mLogFile == null) {</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12125)) {</span>
+<span class="nc" id="L168">                    setupLog();</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L172" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12128)) {</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">            if (mLocationHelper == null) {</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12127)) {</span>
+<span class="nc" id="L175">                    mLocationHelper = new LocationHelper(this, 1);</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12129)) {</span>
+<span class="nc" id="L180">            Log.d(TAG, &quot;Requesting Location Updates&quot;);</span>
+        }
+<span class="nc bnc" id="L182" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12130)) {</span>
+<span class="nc" id="L183">            mLocationHelper.registerListener(this);</span>
+        }
+<span class="nc" id="L185">        Location dest = ObaContract.Stops.getLocation(Application.get().getApplicationContext(), mDestinationStopId);</span>
+<span class="nc" id="L186">        Location last = ObaContract.Stops.getLocation(Application.get().getApplicationContext(), mBeforeStopId);</span>
+<span class="nc" id="L187">        PathLink pathLink = new PathLink(currentTime, null, last, dest, mTripId);</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12133)) {</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">            if (mNavProvider != null) {</span>
+                // TODO Support more than one path link
+<span class="nc" id="L191">                ArrayList&lt;PathLink&gt; links = new ArrayList&lt;&gt;(1);</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12131)) {</span>
+<span class="nc" id="L193">                    links.add(pathLink);</span>
+                }
+<span class="nc" id="L195">                Path path = new Path(links);</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12132)) {</span>
+<span class="nc" id="L197">                    mNavProvider.navigate(path);</span>
+                }
+            }
+        }
+<span class="nc" id="L201">        Notification notification = mNavProvider.getForegroundStartingNotification();</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12134)) {</span>
+<span class="nc" id="L203">            startForeground(NavigationServiceProvider.NOTIFICATION_ID, notification);</span>
+        }
+<span class="nc" id="L205">        return START_STICKY;</span>
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+<span class="nc" id="L210">        return null;</span>
+    }
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+<span class="nc" id="L215">        return false;</span>
+    }
+
+    @Override
+    public void onRebind(Intent intent) {
+<span class="nc" id="L220">    }</span>
+
+    @Override
+    public void onDestroy() {
+<span class="nc bnc" id="L224" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12135)) {</span>
+<span class="nc" id="L225">            Log.d(TAG, &quot;Destroying Service.&quot;);</span>
+        }
+<span class="nc bnc" id="L227" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12136)) {</span>
+<span class="nc" id="L228">            mLocationHelper.unregisterListener(this);</span>
+        }
+<span class="nc bnc" id="L230" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12137)) {</span>
+<span class="nc" id="L231">            super.onDestroy();</span>
+        }
+<span class="nc bnc" id="L233" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12138)) {</span>
+            // Send Broadcast
+<span class="nc" id="L235">            sendBroadcast();</span>
+        }
+<span class="nc" id="L237">    }</span>
+
+    /**
+     * Sends broadcast so that flag of destination alert is removed from trip detail screen
+     */
+    private void sendBroadcast() {
+<span class="nc" id="L243">        Intent intent = new Intent(TripDetailsListFragment.ACTION_SERVICE_DESTROYED);</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12139)) {</span>
+<span class="nc" id="L245">            sendBroadcast(intent);</span>
+        }
+<span class="nc" id="L247">    }</span>
+
+    @Override
+    public synchronized void onLocationChanged(Location location) {
+<span class="nc bnc" id="L251" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12140)) {</span>
+<span class="nc" id="L252">            Log.d(TAG, &quot;Location Updated&quot;);</span>
+        }
+<span class="nc bnc" id="L254" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12143)) {</span>
+<span class="nc bnc" id="L255" title="All 2 branches missed.">            if (mLastLocation == null) {</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12142)) {</span>
+<span class="nc" id="L257">                    mNavProvider.locationUpdated(location);</span>
+                }
+<span class="nc bnc" id="L259" title="All 2 branches missed.">            } else if (!LocationUtils.isDuplicate(mLastLocation, location)) {</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12141)) {</span>
+<span class="nc" id="L261">                    mNavProvider.locationUpdated(location);</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12150)) {</span>
+<span class="nc bnc" id="L266" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(12148) ? (mNavProvider.mSectoCurDistance &gt;= RECORDING_THRESHOLD) : (ListenerUtil.mutListener.listen(12147) ? (mNavProvider.mSectoCurDistance &gt; RECORDING_THRESHOLD) : (ListenerUtil.mutListener.listen(12146) ? (mNavProvider.mSectoCurDistance &lt; RECORDING_THRESHOLD) : (ListenerUtil.mutListener.listen(12145) ? (mNavProvider.mSectoCurDistance != RECORDING_THRESHOLD) : (ListenerUtil.mutListener.listen(12144) ? (mNavProvider.mSectoCurDistance == RECORDING_THRESHOLD) : (mNavProvider.mSectoCurDistance &lt;= RECORDING_THRESHOLD))))))) {</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12149)) {</span>
+<span class="nc" id="L268">                    writeToLog(location);</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L272" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12151)) {</span>
+<span class="nc" id="L273">            mLastLocation = location;</span>
+        }
+<span class="nc bnc" id="L275" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12172)) {</span>
+            // Is trip is finished? If so end service.
+<span class="nc bnc" id="L277" title="All 2 branches missed.">            if (mNavProvider.getFinished()) {</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12171)) {</span>
+<span class="nc bnc" id="L279" title="All 22 branches missed.">                    if ((ListenerUtil.mutListener.listen(12156) ? (mFinishedTime &gt;= 0) : (ListenerUtil.mutListener.listen(12155) ? (mFinishedTime &lt;= 0) : (ListenerUtil.mutListener.listen(12154) ? (mFinishedTime &gt; 0) : (ListenerUtil.mutListener.listen(12153) ? (mFinishedTime &lt; 0) : (ListenerUtil.mutListener.listen(12152) ? (mFinishedTime != 0) : (mFinishedTime == 0))))))) {</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12170)) {</span>
+<span class="nc" id="L281">                            mFinishedTime = System.currentTimeMillis();</span>
+                        }
+<span class="nc bnc" id="L283" title="All 70 branches missed.">                    } else if ((ListenerUtil.mutListener.listen(12165) ? ((ListenerUtil.mutListener.listen(12160) ? (System.currentTimeMillis() % mFinishedTime) : (ListenerUtil.mutListener.listen(12159) ? (System.currentTimeMillis() / mFinishedTime) : (ListenerUtil.mutListener.listen(12158) ? (System.currentTimeMillis() * mFinishedTime) : (ListenerUtil.mutListener.listen(12157) ? (System.currentTimeMillis() + mFinishedTime) : (System.currentTimeMillis() - mFinishedTime))))) &lt;= 30000) : (ListenerUtil.mutListener.listen(12164) ? ((ListenerUtil.mutListener.listen(12160) ? (System.currentTimeMillis() % mFinishedTime) : (ListenerUtil.mutListener.listen(12159) ? (System.currentTimeMillis() / mFinishedTime) : (ListenerUtil.mutListener.listen(12158) ? (System.currentTimeMillis() * mFinishedTime) : (ListenerUtil.mutListener.listen(12157) ? (System.currentTimeMillis() + mFinishedTime) : (System.currentTimeMillis() - mFinishedTime))))) &gt; 30000) : (ListenerUtil.mutListener.listen(12163) ? ((ListenerUtil.mutListener.listen(12160) ? (System.currentTimeMillis() % mFinishedTime) : (ListenerUtil.mutListener.listen(12159) ? (System.currentTimeMillis() / mFinishedTime) : (ListenerUtil.mutListener.listen(12158) ? (System.currentTimeMillis() * mFinishedTime) : (ListenerUtil.mutListener.listen(12157) ? (System.currentTimeMillis() + mFinishedTime) : (System.currentTimeMillis() - mFinishedTime))))) &lt; 30000) : (ListenerUtil.mutListener.listen(12162) ? ((ListenerUtil.mutListener.listen(12160) ? (System.currentTimeMillis() % mFinishedTime) : (ListenerUtil.mutListener.listen(12159) ? (System.currentTimeMillis() / mFinishedTime) : (ListenerUtil.mutListener.listen(12158) ? (System.currentTimeMillis() * mFinishedTime) : (ListenerUtil.mutListener.listen(12157) ? (System.currentTimeMillis() + mFinishedTime) : (System.currentTimeMillis() - mFinishedTime))))) != 30000) : (ListenerUtil.mutListener.listen(12161) ? ((ListenerUtil.mutListener.listen(12160) ? (System.currentTimeMillis() % mFinishedTime) : (ListenerUtil.mutListener.listen(12159) ? (System.currentTimeMillis() / mFinishedTime) : (ListenerUtil.mutListener.listen(12158) ? (System.currentTimeMillis() * mFinishedTime) : (ListenerUtil.mutListener.listen(12157) ? (System.currentTimeMillis() + mFinishedTime) : (System.currentTimeMillis() - mFinishedTime))))) == 30000) : ((ListenerUtil.mutListener.listen(12160) ? (System.currentTimeMillis() % mFinishedTime) : (ListenerUtil.mutListener.listen(12159) ? (System.currentTimeMillis() / mFinishedTime) : (ListenerUtil.mutListener.listen(12158) ? (System.currentTimeMillis() * mFinishedTime) : (ListenerUtil.mutListener.listen(12157) ? (System.currentTimeMillis() + mFinishedTime) : (System.currentTimeMillis() - mFinishedTime))))) &gt;= 30000))))))) {</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12166)) {</span>
+<span class="nc" id="L285">                            ObaAnalytics.reportUiEvent(mFirebaseAnalytics, getString(R.string.analytics_label_destination_reminder), getString(R.string.analytics_label_destination_reminder_variant_ended));</span>
+                        }
+<span class="nc bnc" id="L287" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12167)) {</span>
+<span class="nc" id="L288">                            getUserFeedback();</span>
+                        }
+<span class="nc bnc" id="L290" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12168)) {</span>
+<span class="nc" id="L291">                            stopSelf();</span>
+                        }
+<span class="nc bnc" id="L293" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12169)) {</span>
+<span class="nc" id="L294">                            setupLogCleanupTask();</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L300">    }</span>
+
+    private void initAnonFirebaseLogin() {
+<span class="nc bnc" id="L303" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12173)) {</span>
+<span class="nc" id="L304">            mAuth = FirebaseAuth.getInstance();</span>
+        }
+<span class="nc" id="L306">        int numCores = Runtime.getRuntime().availableProcessors();</span>
+<span class="nc bnc" id="L307" title="All 16 branches missed.">        ThreadPoolExecutor executor = new ThreadPoolExecutor((ListenerUtil.mutListener.listen(12177) ? (numCores % 2) : (ListenerUtil.mutListener.listen(12176) ? (numCores / 2) : (ListenerUtil.mutListener.listen(12175) ? (numCores - 2) : (ListenerUtil.mutListener.listen(12174) ? (numCores + 2) : (numCores * 2))))), (ListenerUtil.mutListener.listen(12181) ? (numCores % 2) : (ListenerUtil.mutListener.listen(12180) ? (numCores / 2) : (ListenerUtil.mutListener.listen(12179) ? (numCores - 2) : (ListenerUtil.mutListener.listen(12178) ? (numCores + 2) : (numCores * 2))))), 60L, TimeUnit.SECONDS, new LinkedBlockingQueue&lt;Runnable&gt;());</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12182)) {</span>
+<span class="nc" id="L309">            mAuth.signInAnonymously().addOnCompleteListener(executor, task -&gt; {</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">                if (task.isSuccessful()) {</span>
+                    // Sign in success
+<span class="nc" id="L312">                    FirebaseUser user = mAuth.getCurrentUser();</span>
+<span class="nc" id="L313">                    Log.d(TAG, &quot;signInAnonymously:success&quot;);</span>
+<span class="nc" id="L314">                } else {</span>
+                    // Sign in failed
+<span class="nc" id="L316">                    Log.w(TAG, &quot;signInAnonymously:failure&quot;, task.getException());</span>
+                }
+<span class="nc" id="L318">            });</span>
+        }
+<span class="nc" id="L320">    }</span>
+
+    /**
+     * Creates the log file that GPS data and navigation performance is written to - see DESTINATION_ALERTS.md
+     */
+    private void setupLog() {
+        try {
+            // Get the counter that's incremented for each test
+<span class="nc" id="L328">            final String NAV_TEST_ID = getString(R.string.preference_key_nav_test_id);</span>
+<span class="nc" id="L329">            int counter = Application.getPrefs().getInt(NAV_TEST_ID, 0);</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12184)) {</span>
+<span class="nc" id="L331">                counter++;</span>
+            }
+<span class="nc bnc" id="L333" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12185)) {</span>
+<span class="nc" id="L334">                PreferenceUtils.saveInt(NAV_TEST_ID, counter);</span>
+            }
+<span class="nc" id="L336">            SimpleDateFormat sdf = new SimpleDateFormat(&quot;EEE, MMM d yyyy, hh:mm aaa&quot;);</span>
+<span class="nc" id="L337">            String readableDate = sdf.format(Calendar.getInstance().getTime());</span>
+<span class="nc" id="L338">            File subFolder = new File(Application.get().getApplicationContext().getFilesDir().getAbsolutePath() + File.separator + LOG_DIRECTORY);</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12187)) {</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">                if (!subFolder.exists()) {</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12186)) {</span>
+<span class="nc" id="L342">                        subFolder.mkdirs();</span>
+                    }
+                }
+            }
+<span class="nc bnc" id="L346" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12188)) {</span>
+<span class="nc" id="L347">                mLogFile = new File(subFolder, counter + &quot;-&quot; + readableDate + &quot;.csv&quot;);</span>
+            }
+<span class="nc bnc" id="L349" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12189)) {</span>
+<span class="nc" id="L350">                Log.d(TAG, &quot;:&quot; + mLogFile.getAbsolutePath());</span>
+            }
+<span class="nc" id="L352">            Location dest = ObaContract.Stops.getLocation(Application.get().getApplicationContext(), mDestinationStopId);</span>
+<span class="nc" id="L353">            Location last = ObaContract.Stops.getLocation(Application.get().getApplicationContext(), mBeforeStopId);</span>
+<span class="nc" id="L354">            String header = String.format(Locale.US, &quot;%s,%s,%f,%f,%s,%f,%f\n&quot;, mTripId, mDestinationStopId, dest.getLatitude(), dest.getLongitude(), mBeforeStopId, last.getLatitude(), last.getLongitude());</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12192)) {</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">                if (mLogFile != null) {</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12191)) {</span>
+<span class="nc" id="L358">                        FileUtils.write(mLogFile, header, false);</span>
+                    }
+                } else {
+<span class="nc bnc" id="L361" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12190)) {</span>
+<span class="nc" id="L362">                        Log.e(TAG, &quot;Failed to write to file - null file&quot;);</span>
+                    }
+                }
+            }
+<span class="nc" id="L366">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12183)) {</span>
+<span class="nc" id="L368">                Log.e(TAG, &quot;File write failed: &quot; + e.toString());</span>
+            }
+<span class="nc" id="L370">        }</span>
+<span class="nc" id="L371">    }</span>
+
+    private void writeToLog(Location l) {
+        try {
+<span class="nc" id="L375">            String nanoTime = &quot;&quot;;</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12200)) {</span>
+<span class="nc bnc" id="L377" title="All 22 branches missed.">                if ((ListenerUtil.mutListener.listen(12198) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.JELLY_BEAN_MR1) : (ListenerUtil.mutListener.listen(12197) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.JELLY_BEAN_MR1) : (ListenerUtil.mutListener.listen(12196) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.JELLY_BEAN_MR1) : (ListenerUtil.mutListener.listen(12195) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.JELLY_BEAN_MR1) : (ListenerUtil.mutListener.listen(12194) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.JELLY_BEAN_MR1) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.JELLY_BEAN_MR1))))))) {</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12199)) {</span>
+<span class="nc" id="L379">                        nanoTime = Long.toString(l.getElapsedRealtimeNanos());</span>
+                    }
+                }
+            }
+<span class="nc" id="L383">            int satellites = 0;</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12202)) {</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">                if (l.getExtras() != null) {</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12201)) {</span>
+<span class="nc" id="L387">                        satellites = l.getExtras().getInt(&quot;satellites&quot;, 0);</span>
+                    }
+                }
+            }
+            // TODO: Add isMockProvider
+<span class="nc" id="L392">            String log = String.format(Locale.US, &quot;%d,%s,%s,%s,%d,%f,%f,%f,%f,%f,%f,%d,%s\n&quot;, mCoordId, mNavProvider.getGetReady(), mNavProvider.getFinished(), nanoTime, l.getTime(), l.getLatitude(), l.getLongitude(), l.getAltitude(), l.getSpeed(), l.getBearing(), l.getAccuracy(), satellites, l.getProvider());</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12203)) {</span>
+                // Increments the id for each coordinate
+<span class="nc" id="L395">                mCoordId++;</span>
+            }
+<span class="nc bnc" id="L397" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12207)) {</span>
+<span class="nc bnc" id="L398" title="All 10 branches missed.">                if ((ListenerUtil.mutListener.listen(12204) ? (mLogFile != null || mLogFile.canWrite()) : (mLogFile != null &amp;&amp; mLogFile.canWrite()))) {</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12206)) {</span>
+<span class="nc" id="L400">                        FileUtils.write(mLogFile, log, true);</span>
+                    }
+                } else {
+<span class="nc bnc" id="L403" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12205)) {</span>
+<span class="nc" id="L404">                        Log.e(TAG, &quot;Failed to write to file&quot;);</span>
+                    }
+                }
+            }
+<span class="nc" id="L408">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12193)) {</span>
+<span class="nc" id="L410">                Log.e(TAG, &quot;File write failed: &quot; + e.toString());</span>
+            }
+<span class="nc" id="L412">        }</span>
+<span class="nc" id="L413">    }</span>
+
+    public void getUserFeedback() {
+<span class="nc" id="L416">        Application app = Application.get();</span>
+        NotificationCompat.Builder mBuilder;
+<span class="nc" id="L418">        String message = Application.get().getString(R.string.feedback_notify_dialog_msg);</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12208)) {</span>
+<span class="nc" id="L420">            mFirstFeedback = Application.getPrefs().getBoolean(FIRST_FEEDBACK, true);</span>
+        }
+        // Create delete intent to set flag for snackbar creation next time the app is opened.
+<span class="nc" id="L423">        Intent delIntent = new Intent(app.getApplicationContext(), FeedbackReceiver.class);</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12209)) {</span>
+<span class="nc" id="L425">            delIntent.putExtra(FeedbackReceiver.NOTIFICATION_ID, mNavProvider.NOTIFICATION_ID + 1);</span>
+        }
+<span class="nc bnc" id="L427" title="All 146 branches missed.">        if ((ListenerUtil.mutListener.listen(12221) ? ((ListenerUtil.mutListener.listen(12215) ? ((mFirstFeedback) &amp;&amp; ((ListenerUtil.mutListener.listen(12214) ? (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12213) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12212) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12211) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12210) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.N) : (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.N)))))))) : ((mFirstFeedback) || ((ListenerUtil.mutListener.listen(12214) ? (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12213) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12212) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12211) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12210) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.N) : (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.N))))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12220) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.P) : (ListenerUtil.mutListener.listen(12219) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.P) : (ListenerUtil.mutListener.listen(12218) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.P) : (ListenerUtil.mutListener.listen(12217) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.P) : (ListenerUtil.mutListener.listen(12216) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.P) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.P)))))))) : ((ListenerUtil.mutListener.listen(12215) ? ((mFirstFeedback) &amp;&amp; ((ListenerUtil.mutListener.listen(12214) ? (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12213) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12212) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12211) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12210) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.N) : (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.N)))))))) : ((mFirstFeedback) || ((ListenerUtil.mutListener.listen(12214) ? (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12213) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12212) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12211) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.N) : (ListenerUtil.mutListener.listen(12210) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.N) : (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.N))))))))) || ((ListenerUtil.mutListener.listen(12220) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.P) : (ListenerUtil.mutListener.listen(12219) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.P) : (ListenerUtil.mutListener.listen(12218) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.P) : (ListenerUtil.mutListener.listen(12217) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.P) : (ListenerUtil.mutListener.listen(12216) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.P) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.P)))))))))) {</span>
+<span class="nc" id="L428">            Intent fdIntent = new Intent(app.getApplicationContext(), FeedbackActivity.class);</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12238)) {</span>
+<span class="nc" id="L430">                fdIntent.setAction(FeedbackReceiver.ACTION_REPLY);</span>
+            }
+<span class="nc bnc" id="L432" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12239)) {</span>
+<span class="nc" id="L433">                fdIntent.putExtra(FeedbackActivity.RESPONSE, FeedbackActivity.FEEDBACK_NO);</span>
+            }
+<span class="nc bnc" id="L435" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12240)) {</span>
+<span class="nc" id="L436">                fdIntent.putExtra(FeedbackActivity.NOTIFICATION_ID, mNavProvider.NOTIFICATION_ID + 1);</span>
+            }
+<span class="nc bnc" id="L438" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12241)) {</span>
+<span class="nc" id="L439">                fdIntent.putExtra(FeedbackActivity.TRIP_ID, mTripId);</span>
+            }
+<span class="nc bnc" id="L441" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12242)) {</span>
+<span class="nc" id="L442">                fdIntent.putExtra(FeedbackActivity.LOG_FILE, mLogFile.getAbsolutePath());</span>
+            }
+            int flags;
+<span class="nc bnc" id="L445" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(12247) ? (android.os.Build.VERSION.SDK_INT &lt;= android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12246) ? (android.os.Build.VERSION.SDK_INT &gt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12245) ? (android.os.Build.VERSION.SDK_INT &lt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12244) ? (android.os.Build.VERSION.SDK_INT != android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12243) ? (android.os.Build.VERSION.SDK_INT == android.os.Build.VERSION_CODES.S) : (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.S))))))) {</span>
+<span class="nc" id="L446">                flags = FLAG_UPDATE_CURRENT | FLAG_MUTABLE;</span>
+            } else {
+<span class="nc" id="L448">                flags = FLAG_UPDATE_CURRENT;</span>
+            }
+            // Pending intent used to handle feedback when user taps on 'No'
+<span class="nc" id="L451">            PendingIntent fdPendingIntentNo = getActivity(app.getApplicationContext(), 1, fdIntent, flags);</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12248)) {</span>
+<span class="nc" id="L453">                fdIntent = new Intent(app.getApplicationContext(), FeedbackActivity.class);</span>
+            }
+<span class="nc bnc" id="L455" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12249)) {</span>
+<span class="nc" id="L456">                fdIntent.setAction(FeedbackReceiver.ACTION_REPLY);</span>
+            }
+<span class="nc bnc" id="L458" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12250)) {</span>
+<span class="nc" id="L459">                fdIntent.putExtra(FeedbackActivity.RESPONSE, FeedbackActivity.FEEDBACK_YES);</span>
+            }
+<span class="nc bnc" id="L461" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12251)) {</span>
+<span class="nc" id="L462">                fdIntent.putExtra(FeedbackActivity.NOTIFICATION_ID, mNavProvider.NOTIFICATION_ID + 1);</span>
+            }
+<span class="nc bnc" id="L464" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12252)) {</span>
+<span class="nc" id="L465">                fdIntent.putExtra(FeedbackActivity.TRIP_ID, mTripId);</span>
+            }
+<span class="nc bnc" id="L467" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12253)) {</span>
+<span class="nc" id="L468">                fdIntent.putExtra(FeedbackActivity.LOG_FILE, mLogFile.getAbsolutePath());</span>
+            }
+            // Pending intent used to handle feedback when user taps on 'Yes'
+<span class="nc" id="L471">            PendingIntent fdPendingIntentYes = getActivity(app.getApplicationContext(), 2, fdIntent, flags);</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12254)) {</span>
+<span class="nc" id="L473">                delIntent.setAction(FeedbackReceiver.ACTION_DISMISS_FEEDBACK);</span>
+            }
+            int delFlags;
+<span class="nc bnc" id="L476" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(12259) ? (android.os.Build.VERSION.SDK_INT &lt;= android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12258) ? (android.os.Build.VERSION.SDK_INT &gt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12257) ? (android.os.Build.VERSION.SDK_INT &lt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12256) ? (android.os.Build.VERSION.SDK_INT != android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12255) ? (android.os.Build.VERSION.SDK_INT == android.os.Build.VERSION_CODES.S) : (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.S))))))) {</span>
+<span class="nc" id="L477">                delFlags = FLAG_MUTABLE;</span>
+            } else {
+<span class="nc" id="L479">                delFlags = 0;</span>
+            }
+<span class="nc" id="L481">            PendingIntent pDelIntent = getBroadcast(app.getApplicationContext(), 0, delIntent, delFlags);</span>
+<span class="nc" id="L482">            mBuilder = new NotificationCompat.Builder(Application.get().getApplicationContext(), Application.CHANNEL_DESTINATION_ALERT_ID).setSmallIcon(R.drawable.ic_stat_notification).setContentTitle(Application.get().getResources().getString(R.string.feedback_notify_title)).setContentText(message).addAction(0, Application.get().getResources().getString(R.string.feedback_action_reply_no), fdPendingIntentNo).addAction(0, Application.get().getResources().getString(R.string.feedback_action_reply_yes), fdPendingIntentYes).setDeleteIntent(pDelIntent).setAutoCancel(true);</span>
+<span class="nc" id="L483">        } else {</span>
+            // Intent to handle user feedback when a user taps on 'No'
+<span class="nc" id="L485">            Intent intentNo = new Intent(Application.get().getApplicationContext(), FeedbackReceiver.class);</span>
+<span class="nc bnc" id="L486" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12222)) {</span>
+<span class="nc" id="L487">                intentNo.setAction(FeedbackReceiver.ACTION_REPLY);</span>
+            }
+<span class="nc bnc" id="L489" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12223)) {</span>
+<span class="nc" id="L490">                intentNo.putExtra(FeedbackReceiver.NOTIFICATION_ID, mNavProvider.NOTIFICATION_ID + 1);</span>
+            }
+<span class="nc bnc" id="L492" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12224)) {</span>
+<span class="nc" id="L493">                intentNo.putExtra(FeedbackReceiver.TRIP_ID, mTripId);</span>
+            }
+<span class="nc bnc" id="L495" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12225)) {</span>
+<span class="nc" id="L496">                intentNo.putExtra(FeedbackReceiver.RESPONSE, FeedbackReceiver.FEEDBACK_NO);</span>
+            }
+<span class="nc bnc" id="L498" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12226)) {</span>
+<span class="nc" id="L499">                intentNo.putExtra(FeedbackReceiver.LOG_FILE, mLogFile.getAbsolutePath());</span>
+            }
+            int flags;
+<span class="nc bnc" id="L502" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(12231) ? (android.os.Build.VERSION.SDK_INT &lt;= android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12230) ? (android.os.Build.VERSION.SDK_INT &gt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12229) ? (android.os.Build.VERSION.SDK_INT &lt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12228) ? (android.os.Build.VERSION.SDK_INT != android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12227) ? (android.os.Build.VERSION.SDK_INT == android.os.Build.VERSION_CODES.S) : (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.S))))))) {</span>
+<span class="nc" id="L503">                flags = FLAG_MUTABLE;</span>
+            } else {
+<span class="nc" id="L505">                flags = 0;</span>
+            }
+            // PendingIntent to handle user feedback when a user taps on 'No'
+<span class="nc" id="L508">            PendingIntent fdPendingIntentNo = getBroadcast(Application.get().getApplicationContext(), 100, intentNo, flags);</span>
+<span class="nc" id="L509">            String replyLabelNo = Application.get().getResources().getString(R.string.feedback_action_reply_no);</span>
+<span class="nc" id="L510">            RemoteInput remoteInput = new RemoteInput.Builder(KEY_TEXT_REPLY).setLabel(replyLabelNo).build();</span>
+<span class="nc" id="L511">            NotificationCompat.Action replyActionNo = new NotificationCompat.Action.Builder(0, replyLabelNo, fdPendingIntentNo).addRemoteInput(remoteInput).build();</span>
+            // Intent to handle user feedback when a user taps on 'Yes'
+<span class="nc" id="L513">            Intent intentYes = new Intent(Application.get().getApplicationContext(), FeedbackReceiver.class);</span>
+<span class="nc bnc" id="L514" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12232)) {</span>
+<span class="nc" id="L515">                intentYes.setAction(FeedbackReceiver.ACTION_REPLY);</span>
+            }
+<span class="nc bnc" id="L517" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12233)) {</span>
+<span class="nc" id="L518">                intentYes.putExtra(FeedbackReceiver.NOTIFICATION_ID, mNavProvider.NOTIFICATION_ID + 1);</span>
+            }
+<span class="nc bnc" id="L520" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12234)) {</span>
+<span class="nc" id="L521">                intentYes.putExtra(FeedbackReceiver.TRIP_ID, mTripId);</span>
+            }
+<span class="nc bnc" id="L523" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12235)) {</span>
+<span class="nc" id="L524">                intentYes.putExtra(FeedbackReceiver.RESPONSE, FeedbackReceiver.FEEDBACK_YES);</span>
+            }
+<span class="nc bnc" id="L526" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12236)) {</span>
+<span class="nc" id="L527">                intentYes.putExtra(FeedbackReceiver.LOG_FILE, mLogFile.getAbsolutePath());</span>
+            }
+            // PendingIntent to handle user feedback when a user taps on 'No'
+<span class="nc" id="L530">            PendingIntent fdPendingIntentYes = getBroadcast(Application.get().getApplicationContext(), 101, intentYes, flags);</span>
+<span class="nc" id="L531">            String replyLabelYes = Application.get().getResources().getString(R.string.feedback_action_reply_yes);</span>
+<span class="nc" id="L532">            RemoteInput remoteInput1 = new RemoteInput.Builder(KEY_TEXT_REPLY).setLabel(replyLabelYes).build();</span>
+<span class="nc" id="L533">            NotificationCompat.Action replyActionYes = new NotificationCompat.Action.Builder(0, replyLabelYes, fdPendingIntentYes).addRemoteInput(remoteInput1).build();</span>
+<span class="nc bnc" id="L534" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12237)) {</span>
+<span class="nc" id="L535">                delIntent.setAction(FeedbackReceiver.ACTION_DISMISS_FEEDBACK);</span>
+            }
+<span class="nc" id="L537">            PendingIntent pDelIntent = getBroadcast(app.getApplicationContext(), 0, delIntent, flags);</span>
+<span class="nc" id="L538">            mBuilder = new NotificationCompat.Builder(Application.get().getApplicationContext(), Application.CHANNEL_DESTINATION_ALERT_ID).setSmallIcon(R.drawable.ic_stat_notification).setContentTitle(Application.get().getResources().getString(R.string.feedback_notify_title)).setContentText(message).addAction(replyActionNo).addAction(replyActionYes).setDeleteIntent(pDelIntent).setAutoCancel(true);</span>
+        }
+<span class="nc bnc" id="L540" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12260)) {</span>
+<span class="nc" id="L541">            mBuilder.setOngoing(false);</span>
+        }
+<span class="nc" id="L543">        NotificationManager mNotificationManager = (NotificationManager) Application.get().getSystemService(Context.NOTIFICATION_SERVICE);</span>
+<span class="nc bnc" id="L544" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12261)) {</span>
+<span class="nc" id="L545">            mNotificationManager.notify(mNavProvider.NOTIFICATION_ID + 1, mBuilder.build());</span>
+        }
+<span class="nc" id="L547">    }</span>
+
+    private void setupLogCleanupTask() {
+<span class="nc" id="L550">        PeriodicWorkRequest.Builder cleanupLogsBuilder = new PeriodicWorkRequest.Builder(NavigationCleanupWorker.class, 24, TimeUnit.HOURS);</span>
+        // Create the actual work object:
+<span class="nc" id="L552">        PeriodicWorkRequest cleanUpCheckWork = cleanupLogsBuilder.build();</span>
+<span class="nc bnc" id="L553" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12262)) {</span>
+            // Then enqueue the recurring task:
+<span class="nc" id="L555">            WorkManager.getInstance().enqueue(cleanUpCheckWork);</span>
+        }
+<span class="nc" id="L557">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.2.0</div></body></html>

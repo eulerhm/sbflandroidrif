@@ -1,0 +1,764 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>NavigationServiceProvider.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">obaGoogleDebug</a> &gt; <a href="index.source.html" class="el_package">org.onebusaway.android.nav</a> &gt; <span class="el_source">NavigationServiceProvider.java</span></div><h1>NavigationServiceProvider.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (C) 2005-2019 University of South Florida
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.nav;
+
+import static android.app.PendingIntent.*;
+
+import com.google.firebase.analytics.FirebaseAnalytics;
+
+import org.onebusaway.android.R;
+import org.onebusaway.android.app.Application;
+import org.onebusaway.android.io.ObaAnalytics;
+import org.onebusaway.android.nav.model.Path;
+import org.onebusaway.android.nav.model.PathLink;
+import org.onebusaway.android.ui.TripDetailsActivity;
+import org.onebusaway.android.util.RegionUtils;
+
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.location.Location;
+import android.os.Build;
+import android.speech.tts.TextToSpeech;
+import android.util.Log;
+
+import java.text.DecimalFormat;
+import java.util.Locale;
+
+import androidx.core.app.NotificationCompat;
+
+/**
+ * This class provides the navigation functionality for the destination reminders
+ */
+public class NavigationServiceProvider implements TextToSpeech.OnInitListener {
+
+    public static final String TAG = &quot;NavServiceProvider&quot;;
+
+    private static final int EVENT_TYPE_NO_EVENT = 0;
+    private static final int EVENT_TYPE_UPDATE_DISTANCE = 1;
+    private static final int EVENT_TYPE_GET_READY = 2;
+    private static final int EVENT_TYPE_PULL_CORD = 3;
+    private static final int EVENT_TYPE_INITIAL_STARTUP = 4;
+
+    private static final int ALERT_STATE_NONE = -1;
+    private static final int ALERT_STATE_SHOWN_TO_RIDER = 0;
+    private static final int ALERT_STATE_ENDING_PATH_LINK = 1;
+
+    public static final int NOTIFICATION_ID = 33620;
+<span class="fc" id="L64">    private static final long[] VIBRATION_PATTERN = new long[]{</span>
+            2000, 1000, 2000, 1000, 2000, 1000, 2000, 1000, 2000, 1000
+    };
+    public static final int DISTANCE_THRESHOLD = 200;
+
+    // Number of times to repeat voice commands
+    private static final int NUM_PULL_CORD_REPEAT = 10;
+    private static final int NUM_GET_READY_REPEAT = 2;
+
+    private ProximityCalculator mProxCalculator;
+
+<span class="pc" id="L75">    private int mTimeout = 60;  //Timeout value for service provider action (default = 60 seconds);</span>
+
+    // Index that defines the current path link within the path (i.e. First link in a path will have index = 0, second link index = 1, etc.)
+<span class="pc" id="L78">    private int mPathLinkIndex = 0;</span>
+
+    // Path links being navigated
+    private Path mPath;
+
+<span class="pc" id="L83">    private float mAlertDistance = -1;</span>
+
+<span class="pc" id="L85">    private boolean mWaitingForConfirm = false;</span>
+
+<span class="pc" id="L87">    private Location mCurrentLocation = null;</span>
+
+<span class="pc" id="L89">    private boolean mResuming = false;   // Is Trip being resumed?</span>
+<span class="pc" id="L90">    public boolean mFinished = false;   // Trip has finished.  //Change to public</span>
+<span class="pc" id="L91">    public boolean mGetReady = false;   // Get Ready triggered. //Change to public</span>
+
+<span class="pc" id="L93">    public float mSectoCurDistance = -1;</span>
+
+    public static TextToSpeech mTTS;          // TextToSpeech for speaking commands.
+
+<span class="pc" id="L97">    SharedPreferences mSettings = Application.getPrefs();  // Shared Prefs</span>
+
+    private String mTripId;             // Trip ID
+    private String mStopId;             // Stop ID
+
+    private FirebaseAnalytics mFirebaseAnalytics;
+
+<span class="fc" id="L104">    public NavigationServiceProvider(String tripId, String stopId) {</span>
+<span class="fc" id="L105">        Log.d(TAG, &quot;Creating NavigationServiceProvider...&quot;);</span>
+<span class="fc" id="L106">        mFirebaseAnalytics = FirebaseAnalytics.getInstance(Application.get().getApplicationContext());</span>
+<span class="fc bfc" id="L107" title="All 2 branches covered.">        if (mTTS == null) {</span>
+<span class="fc" id="L108">            mTTS = new TextToSpeech(Application.get().getApplicationContext(), this);</span>
+        }
+<span class="fc" id="L110">        mTripId = tripId;</span>
+<span class="fc" id="L111">        mStopId = stopId;</span>
+
+<span class="fc" id="L113">    }</span>
+
+<span class="nc" id="L115">    public NavigationServiceProvider(String tripId, String stopId, int flag) {</span>
+<span class="nc" id="L116">        Log.d(TAG, &quot;Creating NavigationServiceProvider...&quot;);</span>
+<span class="nc" id="L117">        mFirebaseAnalytics = FirebaseAnalytics.getInstance(Application.get().getApplicationContext());</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        mResuming = flag == 1;</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">        if (mTTS == null) {</span>
+<span class="nc" id="L120">            mTTS = new TextToSpeech(Application.get().getApplicationContext(), this);</span>
+        }
+<span class="nc" id="L122">        mTripId = tripId;</span>
+<span class="nc" id="L123">        mStopId = stopId;</span>
+<span class="nc" id="L124">    }</span>
+
+    /**
+     * Initialize ProximityCalculator
+     * Proximity listener will be created only upon selection of service to navigate
+     */
+    private void lazyProxInitialization() {
+<span class="fc" id="L131">        Log.d(TAG, &quot;ProximityCalculator initializing...&quot;);</span>
+<span class="fc" id="L132">        mProxCalculator = null;</span>
+<span class="fc" id="L133">        mProxCalculator = new ProximityCalculator(this);</span>
+<span class="fc" id="L134">    }</span>
+
+    /**
+     * Returns true if user has been notified to get ready.
+     */
+    public boolean getGetReady() {
+<span class="fc" id="L140">        return mGetReady;</span>
+    }
+
+    /**
+     * Returns true if trip is done.
+     */
+    public boolean getFinished() {
+<span class="fc" id="L147">        return mFinished;</span>
+    }
+
+    /**
+     * Returns the index of the current path link
+     */
+    public int getPathLinkIndex() {
+<span class="nc" id="L154">        return mPathLinkIndex;</span>
+    }
+
+    /**
+     * Navigates a navigation path which is composed of path links
+     */
+    public void navigate(Path path) {
+<span class="fc" id="L161">        Log.d(TAG, &quot;Starting navigation for service&quot;);</span>
+
+        // Create a new instance and rewrite the old one with a blank slate of ProximityListener
+<span class="fc" id="L164">        lazyProxInitialization();</span>
+<span class="fc" id="L165">        mPath = path;</span>
+<span class="fc" id="L166">        mPathLinkIndex = 0;</span>
+<span class="fc" id="L167">        Log.d(TAG, &quot;Number of path links: &quot; + mPath.getPathLinks().size());</span>
+
+        // Create new coordinate object using the &quot;Ring&quot; coordinates
+<span class="fc" id="L170">        Location firstLocation = mPath.getPathLinks().get(mPathLinkIndex).getOriginLocation();</span>
+<span class="fc" id="L171">        Location secondToLastLocation = mPath.getPathLinks().get(mPathLinkIndex).getSecondToLastLocation();</span>
+<span class="fc" id="L172">        Location lastLocation = mPath.getPathLinks().get(mPathLinkIndex).getDestinationLocation();</span>
+
+<span class="fc" id="L174">        mAlertDistance = mPath.getPathLinks().get(mPathLinkIndex).getAlertDistance();</span>
+
+        // Have proximity listener listen for the &quot;Ring&quot; location
+<span class="fc" id="L177">        mProxCalculator.listenForDistance(mAlertDistance);</span>
+<span class="fc" id="L178">        mProxCalculator.listenForLocation(firstLocation, secondToLastLocation, lastLocation);</span>
+<span class="fc" id="L179">        mProxCalculator.mReady = false;</span>
+<span class="fc" id="L180">        mProxCalculator.mTrigger = false;</span>
+<span class="fc" id="L181">    }</span>
+
+    /**
+     * Resets any current routes which might be currently navigated
+     */
+    public void reset() {
+<span class="nc" id="L187">        mProxCalculator.listenForLocation(null, null, null);</span>
+<span class="nc" id="L188">    }</span>
+
+    public void setTimeout(int timeout) {
+<span class="nc" id="L191">        mTimeout = timeout;</span>
+<span class="nc" id="L192">    }</span>
+
+    public int getTimeout() {
+<span class="nc" id="L195">        return mTimeout;</span>
+    }
+
+    /**
+     * Sets the radius of detection for the ProximityListener
+     */
+    public void setRadius(float radius) {
+<span class="nc" id="L202">        mProxCalculator.setRadius(radius);</span>
+<span class="nc" id="L203">    }</span>
+
+    /**
+     * Returns true if there is another path link to be navigated as part of the current path that is being navigated, false if there is not another link
+     *
+     * @return true if there is another path link to be navigated as part of the current path that is being navigated, false if there is not another link
+     */
+    public boolean hasMorePathLinks() {
+<span class="fc" id="L211">        Log.d(TAG, &quot;Checking if path has more path links left to be navigated&quot;);</span>
+<span class="pc bpc" id="L212" title="2 of 4 branches missed.">        if (mPath == null || (mPathLinkIndex &gt;= (mPath.getPathLinks().size() - 1))) {</span>
+            // No more path links exist
+<span class="fc" id="L214">            Log.d(TAG, &quot;PathLink index: &quot; + mPathLinkIndex + &quot; Number of PathLinks: &quot; + (mPath.getPathLinks().size()));</span>
+<span class="fc" id="L215">            Log.d(TAG, &quot;%%%%%%N%%%%%%%%% No more PathLinks left in Path %%%%%%%%%%%%%%%%%%%%%&quot;);</span>
+<span class="fc" id="L216">            return false;</span>
+        }
+        // Additional path links still need to be navigated as part of this service
+<span class="nc" id="L219">        Log.d(TAG, &quot;More path links left&quot;);</span>
+<span class="nc" id="L220">        return true;</span>
+
+    }
+
+    /**
+     * Tells the NavigationProvider to navigate the next PathLink in the Path
+     */
+    private void navigateNextPathLink() {
+<span class="nc" id="L228">        Log.d(TAG, &quot;Attempting to navigate next path link&quot;);</span>
+<span class="nc bnc" id="L229" title="All 4 branches missed.">        if (mPath != null &amp;&amp; mPathLinkIndex &lt; mPath.getPathLinks().size()) {</span>
+<span class="nc" id="L230">            mPathLinkIndex++;</span>
+
+            // Create new location using the &quot;Ring&quot; coordinates
+<span class="nc" id="L233">            PathLink link = mPath.getPathLinks().get(mPathLinkIndex);</span>
+<span class="nc" id="L234">            mAlertDistance = link.getAlertDistance();</span>
+
+            // Have proximity listener listen for the &quot;Ring&quot; location
+<span class="nc" id="L237">            mProxCalculator.listenForDistance(mAlertDistance);</span>
+<span class="nc" id="L238">            mProxCalculator.listenForLocation(</span>
+<span class="nc" id="L239">                    link.getOriginLocation(),</span>
+<span class="nc" id="L240">                    link.getSecondToLastLocation(),</span>
+<span class="nc" id="L241">                    link.getDestinationLocation());</span>
+<span class="nc" id="L242">            Log.d(TAG, &quot;ProxCalculator parameters were set!&quot;);</span>
+        }
+<span class="nc" id="L244">    }</span>
+
+    /**
+     * Called from LocationListener.locationUpdated() in order to supply the Navigation Provider with the most recent location
+     */
+    public void locationUpdated(Location l) {
+<span class="fc" id="L250">        mCurrentLocation = l;</span>
+<span class="fc" id="L251">        mProxCalculator.checkProximityAll(mCurrentLocation);</span>
+<span class="fc" id="L252">    }</span>
+
+<span class="pc" id="L254">    private int sendCounter = 0;</span>
+
+    public void skipPathLink() {
+<span class="nc bnc" id="L257" title="All 2 branches missed.">        if (hasMorePathLinks()) {</span>
+<span class="nc" id="L258">            Log.d(TAG, &quot;About to switch link - from skipPathLink&quot;);</span>
+<span class="nc" id="L259">            navigateNextPathLink();</span>
+            // Reset the &quot;get ready&quot; notification alert
+<span class="nc" id="L261">            mProxCalculator.setReady(false);</span>
+        } else {
+<span class="nc" id="L263">            Log.d(TAG, &quot;No more path links!&quot;);</span>
+        }
+        // Reset the proximity notification alert
+<span class="nc" id="L266">        mProxCalculator.setTrigger(false);</span>
+<span class="nc" id="L267">    }</span>
+
+    /**
+     * Detects proximity to a latitude and longitude to help navigate a path link
+     */
+    public class ProximityCalculator {
+
+        NavigationServiceProvider mNavProvider;
+
+<span class="fc" id="L276">        private float mRadius = 100;</span>
+        //Defines radius (in meters) for which the Proximity listener should be triggered (Default = 50)
+
+<span class="fc" id="L279">        private float readyRadius = 300;</span>
+        //Defines radius(in meters) for which the Proximity listener should trigger &quot;Get Ready Alert&quot;
+
+<span class="fc" id="L282">        private boolean mTrigger = false;</span>
+        //Defines whether the Proximity Listener has been triggered (true) or not (false)
+
+<span class="fc" id="L285">        private Location secondToLastCoords = null;</span>
+        //Tests distance from registered location w/ ProximityListener manually
+
+<span class="fc" id="L288">        private Location lastCoords = null; //Coordinates of the final bus stop of the link</span>
+
+<span class="fc" id="L290">        private Location firstCoords = null; //Coordinates of the first bus stop of the link</span>
+
+<span class="fc" id="L292">        private float mDistance = -1;  //Actual known traveled distance loaded from link object</span>
+
+<span class="fc" id="L294">        private float directDistance = -1;</span>
+        //Direct distance to second to last stop coords, used for radius detection
+
+<span class="fc" id="L297">        private float endDistance = -1;</span>
+        //Direct distance to last bus stop coords, used for link navigation
+
+<span class="fc" id="L300">        private boolean mReady = false; //Has get ready alert been played?</span>
+
+<span class="fc" id="L302">        private boolean m100_a, m50_a, m20_a, m20_d, m50_d, m100_d = false;</span>
+        // Variables for handling arrival/departure from 2nd to last stop
+
+<span class="fc" id="L305">        ProximityCalculator(NavigationServiceProvider navProvider) {</span>
+<span class="fc" id="L306">            mNavProvider = navProvider;</span>
+<span class="fc" id="L307">            Log.d(TAG, &quot;Initializing ProximityCalculator&quot;);</span>
+<span class="fc" id="L308">        }</span>
+
+        /**
+         * Getter method for radius value of ProximityListener
+         **/
+        public float getRadius() {
+<span class="nc" id="L314">            return mRadius;</span>
+        }
+
+        /**
+         * Setter method for radius value of ProximityListener
+         **/
+        public void setRadius(float radius) {
+<span class="nc" id="L321">            mRadius = radius;</span>
+<span class="nc" id="L322">        }</span>
+
+        /**
+         * ProximityListener Functions
+         **/
+        public void monitoringStateChanged(boolean value) {
+            //Fired when the monitoring of the ProximityListener state changes (is or is NOT active)
+<span class="nc" id="L329">            Log.d(TAG, &quot;Fired ProximityListener.monitoringStateChanged()...&quot;);</span>
+<span class="nc" id="L330">        }</span>
+
+        /**
+         * Resets triggers for proximityEvent
+         */
+        public void setTrigger(boolean t) {
+<span class="nc" id="L336">            mTrigger = mReady = t;</span>
+<span class="nc" id="L337">        }</span>
+
+        /**
+         * Updates the state of the navigation provider based on the provided eventType
+         *
+         * @param eventType  EVENT_TYPE_PULL_CORD for &quot;Pull the cord now&quot; event, or EVENT_TYPE_GET_READY for getting ready to exit the vehicle
+         * @param alertState ALERT_STATE_* variable is responsible for differentiating the switch of path link and alert being played.
+         */
+        boolean proximityEvent(int eventType, int alertState) {
+            //*******************************************************************************************************************
+            //* This function is fired by the ProximityListener when it detects that it is near a set of registered coordinates *
+            //*******************************************************************************************************************
+            // Log.d(TAG,&quot;Fired proximityEvent() from ProximityListener object.&quot;);
+
+<span class="fc bfc" id="L351" title="All 2 branches covered.">            if (eventType == EVENT_TYPE_PULL_CORD) {</span>
+<span class="pc bpc" id="L352" title="1 of 2 branches missed.">                if (!mTrigger) {</span>
+<span class="fc" id="L353">                    mTrigger = true;</span>
+<span class="fc" id="L354">                    Log.d(TAG, &quot;Proximity Event fired&quot;);</span>
+<span class="pc bpc" id="L355" title="1 of 2 branches missed.">                    if (mNavProvider.hasMorePathLinks()) {</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">                        if (alertState == ALERT_STATE_SHOWN_TO_RIDER) {</span>
+<span class="nc" id="L357">                            Log.d(TAG, &quot;Alert 1 Screen showed to rider&quot;);</span>
+<span class="nc" id="L358">                            mWaitingForConfirm = true;</span>
+                            // GET READY.
+                            // Log.d(TAG, &quot;Calling way point reached!&quot;);
+                            //this.mNavProvider.navlistener.waypointReached(this.lastCoords);
+<span class="nc" id="L362">                            return true;</span>
+                        }
+<span class="nc bnc" id="L364" title="All 2 branches missed.">                        if (alertState == ALERT_STATE_ENDING_PATH_LINK) {</span>
+<span class="nc" id="L365">                            Log.d(TAG, &quot;About to switch path links - from Proximity Event&quot;);</span>
+<span class="nc" id="L366">                            mNavProvider.navigateNextPathLink();</span>
+
+                            // Reset notification alerts
+<span class="nc" id="L369">                            mReady = false;</span>
+<span class="nc" id="L370">                            mTrigger = false;</span>
+                        }
+                    } else {
+<span class="fc" id="L373">                        Log.d(TAG, &quot;Got to last stop&quot;);</span>
+<span class="pc bpc" id="L374" title="1 of 2 branches missed.">                        if (alertState == ALERT_STATE_SHOWN_TO_RIDER) {</span>
+<span class="fc" id="L375">                            Log.d(TAG, &quot;Alert 1 screen before last stop&quot;);</span>
+<span class="fc" id="L376">                            mWaitingForConfirm = true;</span>
+<span class="fc" id="L377">                            Log.d(TAG, &quot;Calling destination reached...&quot;);</span>
+<span class="fc" id="L378">                            return true;</span>
+                        }
+<span class="nc bnc" id="L380" title="All 2 branches missed.">                        if (alertState == ALERT_STATE_ENDING_PATH_LINK) {</span>
+<span class="nc" id="L381">                            Log.d(TAG, &quot;Ending navigation&quot;);</span>
+<span class="nc" id="L382">                            mNavProvider.mPath = null;</span>
+<span class="nc" id="L383">                            mNavProvider.mPathLinkIndex = 0;</span>
+                        }
+                    }
+                }
+<span class="pc bpc" id="L387" title="1 of 2 branches missed.">            } else if (eventType == EVENT_TYPE_GET_READY) {</span>
+<span class="fc bfc" id="L388" title="All 2 branches covered.">                if (!mReady) {</span>
+<span class="fc" id="L389">                    mReady = true;</span>
+<span class="fc" id="L390">                    return true;</span>
+                }
+            }
+
+<span class="fc" id="L394">            return false;</span>
+        }
+
+        /**
+         * Test function used to register a location to detect proximity to
+         */
+        void listenForLocation(Location first, Location secondToLast, Location last) {
+<span class="fc" id="L401">            firstCoords = first;</span>
+<span class="fc" id="L402">            secondToLastCoords = secondToLast;</span>
+<span class="fc" id="L403">            lastCoords = last;</span>
+
+            // Reset distance if the manual listener is reset
+<span class="pc bpc" id="L406" title="1 of 2 branches missed.">            if (secondToLast == null) {</span>
+<span class="nc" id="L407">                directDistance = -1;</span>
+            }
+<span class="pc bpc" id="L409" title="1 of 2 branches missed.">            if (last == null) {</span>
+<span class="nc" id="L410">                endDistance = -1;</span>
+            }
+<span class="fc" id="L412">        }</span>
+
+        /**
+         * Sets the &quot;known&quot; distance for the path link
+         */
+        void listenForDistance(float d) {
+<span class="fc" id="L418">            mDistance = d;</span>
+<span class="fc" id="L419">        }</span>
+
+        /**
+         * Fire proximity event to switch path link or go back to service menu
+         * when the final stop of the path link or path is reached
+         * stop_type = 0; -&gt; final stop detection
+         * stop_type = 1; -&gt; second to last stop detection
+         * speed = current speed of the bus;
+         */
+        boolean StopDetector(float distance_d, int stop_type, float speed) {
+            
+            /* TODO: This comment was comented to avoid path link switching when the rider is 20 meters away from the bus stop
+            if ((distance_d &lt; 20) &amp;&amp; (distance_d != -1) &amp;&amp; stop_type == 0) {
+                Log.d(TAG,&quot;About to fire Proximity Event from Last Stop Detected&quot;);
+                this.trigger = false;
+                this.proximityEvent(0, 1);
+                return true;
+
+            } else */
+<span class="fc" id="L438">            float lastToSecDistance = lastCoords.distanceTo(secondToLastCoords);</span>
+<span class="fc" id="L439">            Log.d(TAG, &quot;Detecting stop. distance_d=&quot; +</span>
+                    distance_d + &quot;. stop_type=&quot; + stop_type + &quot; speed=&quot; + speed);
+<span class="pc bpc" id="L441" title="1 of 2 branches missed.">            if (stop_type == 1) {</span>
+                /* Check if the bus is on the second to last stop */
+<span class="pc bpc" id="L443" title="1 of 8 branches missed.">                if ((distance_d &gt; 50) &amp;&amp; (distance_d &lt; 100) &amp;&amp; (distance_d != -1) &amp;&amp; !m100_a) {</span>
+<span class="fc" id="L444">                    m100_a = true;</span>
+<span class="fc" id="L445">                    Log.d(TAG, &quot;Case 1: false&quot;);</span>
+<span class="fc" id="L446">                    return false;</span>
+                }
+<span class="pc bpc" id="L448" title="1 of 8 branches missed.">                if ((distance_d &gt; 20) &amp;&amp; (distance_d &lt; 50) &amp;&amp; (distance_d != -1) &amp;&amp; !m50_a) {</span>
+<span class="fc" id="L449">                    m50_a = true;</span>
+<span class="fc" id="L450">                    Log.d(TAG, &quot;Case 2: false&quot;);</span>
+<span class="fc" id="L451">                    return false;</span>
+                }
+<span class="pc bpc" id="L453" title="1 of 6 branches missed.">                if ((distance_d &lt; 20) &amp;&amp; (distance_d != -1) &amp;&amp; !m20_a) {</span>
+<span class="fc" id="L454">                    m20_a = true;</span>
+<span class="pc bpc" id="L455" title="1 of 4 branches missed.">                    if (speed &gt; 15 &amp;&amp; lastToSecDistance &lt; 100) {</span>
+<span class="nc" id="L456">                        Log.d(TAG, &quot;Case 3: true&quot;);</span>
+<span class="nc" id="L457">                        return true;</span>
+                    }
+<span class="fc" id="L459">                    Log.d(TAG, &quot;Case 3: false&quot;);</span>
+<span class="fc" id="L460">                    return false;</span>
+                }
+<span class="pc bpc" id="L462" title="2 of 8 branches missed.">                if ((distance_d &lt; 20) &amp;&amp; (distance_d != -1) &amp;&amp; m20_a &amp;&amp; !m20_d) {</span>
+<span class="fc" id="L463">                    m20_d = true;</span>
+<span class="fc bfc" id="L464" title="All 2 branches covered.">                    if (speed &lt; 10) {</span>
+<span class="fc" id="L465">                        Log.d(TAG, &quot;Case 4: false&quot;);</span>
+<span class="fc" id="L466">                        return false;</span>
+<span class="fc bfc" id="L467" title="All 2 branches covered.">                    } else if (speed &gt; 15) {</span>
+<span class="fc" id="L468">                        Log.d(TAG, &quot;Case 4: true&quot;);</span>
+<span class="fc" id="L469">                        return true;</span>
+                    }
+                }
+<span class="pc bpc" id="L472" title="2 of 12 branches missed.">                if ((distance_d &gt; 20) &amp;&amp; (distance_d &lt; 50) &amp;&amp; (distance_d != -1) &amp;&amp; !m50_d &amp;&amp; (m20_d</span>
+                        || m20_a)) {
+<span class="fc" id="L474">                    m50_d = true;</span>
+<span class="fc" id="L475">                    Log.d(TAG, &quot;Case 5: true&quot;);</span>
+<span class="fc" id="L476">                    return true;</span>
+                }
+            }
+<span class="fc" id="L479">            return false;</span>
+        }
+
+        /**
+         * Checks the proximity to the provided location and returns the event type (EVENT_TYPE_*) that was triggered by the proximity to this location.
+         *
+         * @return the status update (EVENT_TYPE_*) that was triggered by the proximity to this location (if any).
+         */
+        private int checkProximityAll(Location currentLocation) {
+<span class="pc bpc" id="L488" title="1 of 2 branches missed.">            if (!mWaitingForConfirm) {</span>
+                //re-calculate the distance to the final bus stop from the current location
+<span class="fc" id="L490">                endDistance = lastCoords.distanceTo(currentLocation);</span>
+                //re-calculate the distance to second to last bus stop from the current location
+<span class="fc" id="L492">                directDistance = secondToLastCoords.distanceTo(currentLocation);</span>
+
+<span class="fc" id="L494">                mSectoCurDistance = directDistance;</span>
+
+<span class="fc" id="L496">                Log.d(TAG, &quot;Second to last stop coordinates: &quot; + secondToLastCoords.getLatitude()</span>
+                        + &quot;, &quot; + secondToLastCoords
+<span class="fc" id="L498">                        .getLongitude());</span>
+
+<span class="fc" id="L500">                mNavProvider.updateUi(EVENT_TYPE_UPDATE_DISTANCE);                 // Update distance notification</span>
+
+                // Check if distance from 2nd-to-last stop is less than threshold.
+<span class="fc bfc" id="L503" title="All 2 branches covered.">                if (directDistance &lt; DISTANCE_THRESHOLD) {</span>
+<span class="fc bfc" id="L504" title="All 2 branches covered.">                    if (proximityEvent(EVENT_TYPE_GET_READY, ALERT_STATE_NONE)) {</span>
+<span class="fc" id="L505">                        mNavProvider.updateUi(EVENT_TYPE_GET_READY);</span>
+<span class="fc" id="L506">                        Log.d(TAG, &quot;-----Get ready!&quot;);</span>
+<span class="fc" id="L507">                        ObaAnalytics.reportUiEvent(mFirebaseAnalytics, Application.get().getString(R.string.analytics_label_destination_reminder), Application.get().getString(R.string.analytics_label_destination_reminder_variant_get_ready));</span>
+<span class="fc" id="L508">                        return EVENT_TYPE_GET_READY; //Get ready alert played</span>
+                    }
+                }
+
+                // Check if pull the cord notification should be fired.
+<span class="fc bfc" id="L513" title="All 2 branches covered.">                if (StopDetector(directDistance, 1, currentLocation.getSpeed())) {</span>
+<span class="pc bpc" id="L514" title="1 of 2 branches missed.">                    if (proximityEvent(EVENT_TYPE_PULL_CORD, ALERT_STATE_SHOWN_TO_RIDER)) {</span>
+<span class="fc" id="L515">                        mNavProvider.updateUi(EVENT_TYPE_PULL_CORD);</span>
+<span class="fc" id="L516">                        Log.d(TAG, &quot;-----Get off the bus!&quot;);</span>
+<span class="fc" id="L517">                        ObaAnalytics.reportUiEvent(mFirebaseAnalytics, Application.get().getString(R.string.analytics_label_destination_reminder), Application.get().getString(R.string.analytics_label_destination_reminder_variant_exit_at_next_stop));</span>
+<span class="fc" id="L518">                        return EVENT_TYPE_PULL_CORD; // Get off bus alert played</span>
+                    }
+                }
+            }
+<span class="fc" id="L522">            return EVENT_TYPE_NO_EVENT; //No alerts played.</span>
+        }
+
+
+        public void resetVariablesAfterPathLinkSwitching() {
+<span class="nc" id="L527">            Log.d(TAG, &quot;Reseting variables after path link switching!&quot;);</span>
+<span class="nc" id="L528">            m100_a = false;</span>
+<span class="nc" id="L529">            m50_a = false;</span>
+<span class="nc" id="L530">            m20_a = false;</span>
+<span class="nc" id="L531">            m20_d = false;</span>
+<span class="nc" id="L532">            m50_d = false;</span>
+<span class="nc" id="L533">            m100_d = false;</span>
+<span class="nc" id="L534">        }</span>
+
+        public void setOnlyTrigger(boolean value) {
+<span class="nc" id="L537">            mTrigger = value;</span>
+<span class="nc" id="L538">        }</span>
+
+        public void setReady(boolean ready) {
+<span class="nc" id="L541">            mReady = ready;</span>
+<span class="nc" id="L542">        }</span>
+    }
+
+    public void setWaitingForConfirm(boolean waitingForConfirm) {
+<span class="nc" id="L546">        mWaitingForConfirm = waitingForConfirm;</span>
+<span class="nc" id="L547">    }</span>
+
+    @Override
+    public void onInit(int status) {
+<span class="pc bpc" id="L551" title="1 of 2 branches missed.">        if (status == TextToSpeech.SUCCESS) {</span>
+<span class="fc" id="L552">            mTTS.setLanguage(Locale.getDefault());</span>
+<span class="fc" id="L553">            mTTS.setSpeechRate(0.75f);</span>
+        }
+<span class="fc" id="L555">    }</span>
+
+    /**
+     * Gets the notification to be used for starting a hosting service for the NavigationServiceProvider in the foreground
+     *
+     * @return the notification to be used for starting a hosting service for the NavigationServiceProvider in the foreground
+     */
+    public Notification getForegroundStartingNotification() {
+<span class="nc" id="L563">        return updateUi(EVENT_TYPE_INITIAL_STARTUP);</span>
+    }
+
+    /**
+     * Updates the user interface (e.g., distance display, speech) based on navigation events
+     * TODO - This method should be moved to a NavigationServiceListener class based on a listener interface
+     *
+     * @param eventType EVENT_TYPE_* variable defining the eventType update to act upon
+     * @return the notification to use for the foreground service if eventType == EVENT_TYPE_INITIAL_STARTUP, otherwise returns null
+     */
+    private Notification updateUi(int eventType) {
+<span class="fc" id="L574">        Application app = Application.get();</span>
+<span class="fc" id="L575">        TripDetailsActivity.Builder bldr = new TripDetailsActivity.Builder(</span>
+<span class="fc" id="L576">                app.getApplicationContext(), mTripId);</span>
+
+<span class="fc" id="L578">        bldr = bldr.setDestinationId(mStopId);</span>
+<span class="fc" id="L579">        Intent intent = bldr.getIntent();</span>
+<span class="fc" id="L580">        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);</span>
+
+        int flags;
+<span class="pc bpc" id="L583" title="1 of 2 branches missed.">        if (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.S) {</span>
+<span class="nc" id="L584">            flags = FLAG_UPDATE_CURRENT | FLAG_MUTABLE;</span>
+        } else {
+<span class="fc" id="L586">            flags = FLAG_UPDATE_CURRENT;</span>
+        }
+
+<span class="fc" id="L589">        PendingIntent pIntent = getActivity(app.getApplicationContext(), 1, intent,</span>
+                flags);
+
+        // Create deletion intent to stop repeated voice comands.
+<span class="fc" id="L593">        Intent receiverIntent = new Intent(app.getApplicationContext(), NavigationReceiver.class);</span>
+        int cancelFlags;
+<span class="pc bpc" id="L595" title="1 of 2 branches missed.">        if (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.S) {</span>
+<span class="nc" id="L596">            cancelFlags = FLAG_MUTABLE;</span>
+        } else {
+<span class="fc" id="L598">            cancelFlags = 0;</span>
+        }
+
+<span class="fc" id="L601">        NotificationCompat.Builder mBuilder =</span>
+<span class="fc" id="L602">                new NotificationCompat.Builder(Application.get().getApplicationContext()</span>
+                        , Application.CHANNEL_DESTINATION_ALERT_ID)
+<span class="fc" id="L604">                        .setSmallIcon(R.drawable.ic_content_flag)</span>
+<span class="fc" id="L605">                        .setContentTitle(Application.get().getResources()</span>
+<span class="fc" id="L606">                                .getString(R.string.destination_reminder_title))</span>
+<span class="fc" id="L607">                        .setContentIntent(pIntent);</span>
+<span class="pc bpc" id="L608" title="1 of 2 branches missed.">        if (eventType == EVENT_TYPE_INITIAL_STARTUP) {</span>
+            // Build initial notification used to start the service in the foreground
+<span class="nc" id="L610">            receiverIntent.putExtra(NavigationReceiver.ACTION_NUM, NavigationReceiver.CANCEL_TRIP);</span>
+<span class="nc" id="L611">            receiverIntent.putExtra(NavigationReceiver.NOTIFICATION_ID, NOTIFICATION_ID);</span>
+<span class="nc" id="L612">            PendingIntent pCancelIntent = getBroadcast(app.getApplicationContext(),</span>
+                    0, receiverIntent, cancelFlags);
+<span class="nc" id="L614">            mBuilder.addAction(R.drawable.ic_navigation_close,</span>
+<span class="nc" id="L615">                    app.getString(R.string.destination_reminder_cancel_trip), pCancelIntent);</span>
+<span class="nc" id="L616">            mBuilder.setOngoing(true);</span>
+<span class="nc" id="L617">            return mBuilder.build();</span>
+<span class="fc bfc" id="L618" title="All 2 branches covered.">        } else if (eventType == EVENT_TYPE_UPDATE_DISTANCE) {</span>
+            // Retrieve preferred unit and calculate distance.
+<span class="fc" id="L620">            String IMPERIAL = app.getString(R.string.preferences_preferred_units_option_imperial);</span>
+<span class="fc" id="L621">            String METRIC = app.getString(R.string.preferences_preferred_units_option_metric);</span>
+<span class="fc" id="L622">            String AUTOMATIC = app.getString(R.string.preferences_preferred_units_option_automatic);</span>
+<span class="fc" id="L623">            String preferredUnits = mSettings</span>
+<span class="fc" id="L624">                    .getString(app.getString(R.string.preference_key_preferred_units), AUTOMATIC);</span>
+<span class="fc" id="L625">            double distance = mProxCalculator.endDistance;</span>
+<span class="fc" id="L626">            double miles = distance * RegionUtils.METERS_TO_MILES;  // Get miles.</span>
+<span class="fc" id="L627">            distance /= 1000;                                       // Get kilometers.</span>
+<span class="fc" id="L628">            DecimalFormat fmt = new DecimalFormat(&quot;0.0&quot;);</span>
+
+<span class="fc" id="L630">            Locale mLocale = Locale.getDefault();</span>
+
+<span class="pc bpc" id="L632" title="1 of 2 branches missed.">            if (preferredUnits.equalsIgnoreCase(AUTOMATIC)) {</span>
+<span class="fc" id="L633">                Log.d(TAG, &quot;Setting units automatically&quot;);</span>
+                // If the country is set to USA, assume imperial, otherwise metric
+                // TODO - Method of guessing metric/imperial can definitely be improved
+<span class="pc bpc" id="L636" title="1 of 2 branches missed.">                if (mLocale.getISO3Country().equalsIgnoreCase(Locale.US.getISO3Country())) {</span>
+<span class="fc" id="L637">                    mBuilder.setContentText(Application.get().getResources().getQuantityString(R.plurals.distance_miles,</span>
+                            (int) miles,
+<span class="fc" id="L639">                            fmt.format(miles)));</span>
+                } else {
+<span class="nc" id="L641">                    mBuilder.setContentText(Application.get().getResources().getQuantityString(R.plurals.distance_kilometers,</span>
+                            (int) distance,
+<span class="nc" id="L643">                            fmt.format(distance)));</span>
+                }
+<span class="nc bnc" id="L645" title="All 2 branches missed.">            } else if (preferredUnits.equalsIgnoreCase(IMPERIAL)) {</span>
+<span class="nc" id="L646">                mBuilder.setContentText(Application.get().getResources().getQuantityString(R.plurals.distance_miles,</span>
+                        (int) miles,
+<span class="nc" id="L648">                        fmt.format(miles)));</span>
+            } else {
+<span class="nc" id="L650">                mBuilder.setContentText(Application.get().getResources().getQuantityString(R.plurals.distance_kilometers,</span>
+                        (int) distance,
+<span class="nc" id="L652">                        fmt.format(distance)));</span>
+            }
+
+<span class="fc" id="L655">            receiverIntent.putExtra(NavigationReceiver.ACTION_NUM, NavigationReceiver.CANCEL_TRIP);</span>
+<span class="fc" id="L656">            receiverIntent.putExtra(NavigationReceiver.NOTIFICATION_ID, NOTIFICATION_ID);</span>
+<span class="fc" id="L657">            PendingIntent pCancelIntent = getBroadcast(app.getApplicationContext(),</span>
+                    0, receiverIntent, cancelFlags);
+
+<span class="fc" id="L660">            mBuilder.addAction(R.drawable.ic_navigation_close,</span>
+<span class="fc" id="L661">                    app.getString(R.string.destination_reminder_cancel_trip), pCancelIntent);</span>
+
+<span class="fc" id="L663">            mBuilder.setOngoing(true);</span>
+            NotificationManager mNotificationManager = (NotificationManager)
+<span class="fc" id="L665">                    Application.get().getSystemService(Context.NOTIFICATION_SERVICE);</span>
+<span class="fc" id="L666">            mNotificationManager.notify(NOTIFICATION_ID, mBuilder.build());</span>
+<span class="fc bfc" id="L667" title="All 2 branches covered.">        } else if (eventType == EVENT_TYPE_GET_READY) {   // Get ready to pack</span>
+<span class="fc" id="L668">            mGetReady = true;</span>
+<span class="fc" id="L669">            receiverIntent.putExtra(NavigationReceiver.NOTIFICATION_ID, NOTIFICATION_ID + 1);</span>
+<span class="fc" id="L670">            receiverIntent.putExtra(NavigationReceiver.ACTION_NUM,</span>
+                    NavigationReceiver.DISMISS_NOTIFICATION);
+<span class="fc" id="L672">            PendingIntent pDelIntent = getBroadcast(app.getApplicationContext(),</span>
+                    0, receiverIntent, cancelFlags);
+
+<span class="fc" id="L675">            String message = Application.get().getString(R.string.destination_voice_get_ready);</span>
+<span class="fc bfc" id="L676" title="All 2 branches covered.">            for (int i = 0; i &lt; NUM_GET_READY_REPEAT; i++) {</span>
+<span class="fc bfc" id="L677" title="All 2 branches covered.">                speak(message, i == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD);</span>
+<span class="fc bfc" id="L678" title="All 2 branches covered.">                if (i &lt; NUM_GET_READY_REPEAT - 1) {</span>
+<span class="fc" id="L679">                    silence(500, TextToSpeech.QUEUE_ADD);</span>
+                }
+            }
+
+<span class="fc" id="L683">            mBuilder.setContentText(message);</span>
+<span class="fc" id="L684">            mBuilder.setVibrate(VIBRATION_PATTERN);</span>
+<span class="fc" id="L685">            mBuilder.setDeleteIntent(pDelIntent);</span>
+
+            NotificationManager mNotificationManager =
+<span class="fc" id="L688">                    (NotificationManager) Application.get()</span>
+<span class="fc" id="L689">                            .getSystemService(Context.NOTIFICATION_SERVICE);</span>
+
+<span class="fc" id="L691">            mNotificationManager.notify(NOTIFICATION_ID + 1, mBuilder.build());</span>
+
+<span class="pc bpc" id="L693" title="1 of 2 branches missed.">        } else if (eventType == EVENT_TYPE_PULL_CORD) {   // Pull the cord</span>
+<span class="fc" id="L694">            mFinished = true;</span>
+<span class="fc" id="L695">            receiverIntent.putExtra(NavigationReceiver.ACTION_NUM,</span>
+                    NavigationReceiver.DISMISS_NOTIFICATION);
+<span class="fc" id="L697">            receiverIntent.putExtra(NavigationReceiver.NOTIFICATION_ID, NOTIFICATION_ID + 2);</span>
+<span class="fc" id="L698">            PendingIntent pDelIntent = getBroadcast(app.getApplicationContext(),</span>
+                    0, receiverIntent, cancelFlags);
+
+<span class="fc" id="L701">            String message = Application.get().getString(R.string.destination_voice_request_stop);</span>
+            // TODO: Slow down voice commands, add count as property.
+<span class="fc bfc" id="L703" title="All 2 branches covered.">            for (int i = 0; i &lt; NUM_PULL_CORD_REPEAT; i++) {</span>
+<span class="fc bfc" id="L704" title="All 2 branches covered.">                speak(message, i == 0 ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD);</span>
+<span class="fc bfc" id="L705" title="All 2 branches covered.">                if (i &lt; NUM_PULL_CORD_REPEAT - 1) {</span>
+<span class="fc" id="L706">                    silence(500, TextToSpeech.QUEUE_ADD);</span>
+                }
+            }
+<span class="fc" id="L709">            mBuilder.setContentText(message);</span>
+<span class="fc" id="L710">            mBuilder.setVibrate(VIBRATION_PATTERN);</span>
+<span class="fc" id="L711">            mBuilder.setDeleteIntent(pDelIntent);</span>
+
+            NotificationManager mNotificationManager =
+<span class="fc" id="L714">                    (NotificationManager) Application.get()</span>
+<span class="fc" id="L715">                            .getSystemService(Context.NOTIFICATION_SERVICE);</span>
+
+<span class="fc" id="L717">            mNotificationManager.cancel(NOTIFICATION_ID + 1);</span>
+<span class="fc" id="L718">            mNotificationManager.notify(NOTIFICATION_ID + 2, mBuilder.build());</span>
+
+<span class="fc" id="L720">            mBuilder = new NotificationCompat.Builder(Application.get().getApplicationContext()</span>
+                    , Application.CHANNEL_DESTINATION_ALERT_ID)
+<span class="fc" id="L722">                    .setSmallIcon(R.drawable.ic_content_flag)</span>
+<span class="fc" id="L723">                    .setContentTitle(</span>
+<span class="fc" id="L724">                            Application.get().getResources().getString(R.string.destination_reminder_title))</span>
+<span class="fc" id="L725">                    .setContentIntent(pIntent)</span>
+<span class="fc" id="L726">                    .setAutoCancel(true);</span>
+<span class="fc" id="L727">            message = Application.get().getString(R.string.destination_voice_arriving_destination);</span>
+<span class="fc" id="L728">            mBuilder.setContentText(message);</span>
+<span class="fc" id="L729">            mBuilder.setOngoing(false);</span>
+<span class="fc" id="L730">            mNotificationManager.notify(NOTIFICATION_ID, mBuilder.build());</span>
+        }
+        // If we reach this point then the event_type isn't initial startup
+<span class="fc" id="L733">        return null;</span>
+    }
+
+    /**
+     * Speak specified message out loud using TTS
+     *
+     * @param message   Message to be spoken.
+     * @param queueFlag Flag to use when adding message to queue.
+     */
+    private void speak(String message, int queueFlag) {
+<span class="pc bpc" id="L743" title="1 of 2 branches missed.">        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.LOLLIPOP) {</span>
+<span class="fc" id="L744">            mTTS.speak(message, queueFlag, null, &quot;TRIPMESSAGE&quot;);</span>
+        } else {
+<span class="nc" id="L746">            mTTS.speak(message, queueFlag, null);</span>
+        }
+<span class="fc" id="L748">    }</span>
+
+    /**
+     * Play silence for specified duration.
+     *
+     * @param duration  Time in ms to play silence.
+     * @param queueFlag Flag to use when adding to the queue.
+     */
+    private void silence(long duration, int queueFlag) {
+<span class="pc bpc" id="L757" title="1 of 2 branches missed.">        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.LOLLIPOP) {</span>
+<span class="fc" id="L758">            mTTS.playSilentUtterance(duration, queueFlag, &quot;TRIPSILENCE&quot;);</span>
+        } else {
+<span class="nc" id="L760">            mTTS.playSilence(duration, queueFlag, null);</span>
+        }
+<span class="fc" id="L762">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.2.0</div></body></html>

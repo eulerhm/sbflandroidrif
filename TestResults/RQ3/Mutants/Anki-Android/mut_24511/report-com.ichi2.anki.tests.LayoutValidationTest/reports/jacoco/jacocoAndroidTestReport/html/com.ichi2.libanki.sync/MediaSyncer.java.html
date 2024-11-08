@@ -1,0 +1,368 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MediaSyncer.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.libanki.sync</a> &gt; <span class="el_source">MediaSyncer.java</span></div><h1>MediaSyncer.java</h1><pre class="source lang-java linenums">/**
+ * *************************************************************************************
+ *  Copyright (c) 2012 Kostas Spyropoulos &lt;inigo.aldana@gmail.com&gt;                       *
+ *  Copyright (c) 2014 Houssam Salem &lt;houssam.salem.au@gmail.com&gt;                        *
+ *                                                                                       *
+ *  This program is free software; you can redistribute it and/or modify it under        *
+ *  the terms of the GNU General Public License as published by the Free Software        *
+ *  Foundation; either version 3 of the License, or (at your option) any later           *
+ *  version.                                                                             *
+ *                                                                                       *
+ *  This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ *  WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ *  PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                       *
+ *  You should have received a copy of the GNU General Public License along with         *
+ *  this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ * **************************************************************************************
+ */
+package com.ichi2.libanki.sync;
+
+import android.database.SQLException;
+import android.text.TextUtils;
+import android.util.Pair;
+import com.ichi2.anki.AnkiDroidApp;
+import com.ichi2.anki.R;
+import com.ichi2.anki.exception.MediaSyncException;
+import com.ichi2.anki.exception.UnknownHttpResponseException;
+import com.ichi2.async.Connection;
+import com.ichi2.libanki.Collection;
+import com.ichi2.libanki.Consts;
+import com.ichi2.utils.JSONArray;
+import com.ichi2.utils.JSONObject;
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.zip.ZipFile;
+import timber.log.Timber;
+import static com.ichi2.libanki.sync.Syncer.ConnectionResultType;
+import static com.ichi2.libanki.sync.Syncer.ConnectionResultType.*;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+/**
+ * About conflicts:
+ * - to minimize data loss, if both sides are marked for sending and one
+ *   side has been deleted, favour the add
+ * - if added/changed on both sides, favour the server version on the
+ *   assumption other syncers are in sync with the server
+ *
+ * A note about differences to the original python version of this class. We found that:
+ *  1 - There is no reliable way to detect changes to the media directory on Android due to the
+ *      file systems used (mainly FAT32 for sdcards) and the utilities available to probe them.
+ *  2 - Scanning for media changes can take a very long time with thousands of files.
+ *
+ * Given these two points, we have decided to avoid the call to findChanges() on every sync and
+ * only do it on the first sync to build the initial database. Changes to the media collection
+ * made through AnkiDroid (e.g., multimedia note editor, media check) are recorded directly in
+ * the media database as they are made. This allows us to skip finding media changes entirely
+ * as the database already contains the changes.
+ *
+ * The downside to this approach is that changes made to the media directory externally (e.g.,
+ * through a file manager) will not be recorded and will not be synced. In this case, the user
+ * must issue a media check command through the UI to bring the database up-to-date.
+ */
+@SuppressWarnings({ &quot;PMD.AvoidThrowingRawExceptionTypes&quot;, &quot;PMD.AvoidReassigningParameters&quot;, &quot;PMD.NPathComplexity&quot;, &quot;PMD.MethodNamingConventions&quot;, &quot;PMD.ExcessiveMethodLength&quot;, &quot;PMD.OneDeclarationPerLine&quot;, &quot;PMD.SwitchStmtsShouldHaveDefault&quot;, &quot;PMD.EmptyIfStmt&quot;, &quot;PMD.SimplifyBooleanReturns&quot;, &quot;PMD.CollapsibleIfStatements&quot; })
+public class MediaSyncer {
+
+    private final Collection mCol;
+
+    private final RemoteMediaServer mServer;
+
+    private int mDownloadCount;
+
+    // Needed to update progress to UI
+    private final Connection mCon;
+
+<span class="nc" id="L79">    public MediaSyncer(Collection col, RemoteMediaServer server, Connection con) {</span>
+<span class="nc" id="L80">        mCol = col;</span>
+<span class="nc" id="L81">        mServer = server;</span>
+<span class="nc" id="L82">        mCon = con;</span>
+<span class="nc" id="L83">    }</span>
+
+    // Returned string may be null. ConnectionResultType and Pair are not null
+    public Pair&lt;ConnectionResultType, String&gt; sync() throws UnknownHttpResponseException, MediaSyncException {
+        // of this class about this difference to the original.
+<span class="nc bnc" id="L88" title="All 2 branches missed.">        if (mCol.getMedia().needScan()) {</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(19950)) {</span>
+<span class="nc" id="L90">                mCon.publishProgress(R.string.sync_media_find);</span>
+            }
+<span class="nc bnc" id="L92" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(19951)) {</span>
+<span class="nc" id="L93">                mCol.log(&quot;findChanges&quot;);</span>
+            }
+            try {
+<span class="nc bnc" id="L96" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(19952)) {</span>
+<span class="nc" id="L97">                    mCol.getMedia().findChanges();</span>
+                }
+<span class="nc" id="L99">            } catch (SQLException ignored) {</span>
+<span class="nc" id="L100">                return new Pair&lt;&gt;(CORRUPT, null);</span>
+<span class="nc" id="L101">            }</span>
+        }
+        // begin session and check if in sync
+<span class="nc" id="L104">        int lastUsn = mCol.getMedia().lastUsn();</span>
+<span class="nc" id="L105">        JSONObject ret = mServer.begin();</span>
+<span class="nc" id="L106">        int srvUsn = ret.getInt(&quot;usn&quot;);</span>
+<span class="nc bnc" id="L107" title="All 50 branches missed.">        if ((ListenerUtil.mutListener.listen(19958) ? (((ListenerUtil.mutListener.listen(19957) ? (lastUsn &gt;= srvUsn) : (ListenerUtil.mutListener.listen(19956) ? (lastUsn &lt;= srvUsn) : (ListenerUtil.mutListener.listen(19955) ? (lastUsn &gt; srvUsn) : (ListenerUtil.mutListener.listen(19954) ? (lastUsn &lt; srvUsn) : (ListenerUtil.mutListener.listen(19953) ? (lastUsn != srvUsn) : (lastUsn == srvUsn))))))) || !(mCol.getMedia().haveDirty())) : (((ListenerUtil.mutListener.listen(19957) ? (lastUsn &gt;= srvUsn) : (ListenerUtil.mutListener.listen(19956) ? (lastUsn &lt;= srvUsn) : (ListenerUtil.mutListener.listen(19955) ? (lastUsn &gt; srvUsn) : (ListenerUtil.mutListener.listen(19954) ? (lastUsn &lt; srvUsn) : (ListenerUtil.mutListener.listen(19953) ? (lastUsn != srvUsn) : (lastUsn == srvUsn))))))) &amp;&amp; !(mCol.getMedia().haveDirty())))) {</span>
+<span class="nc" id="L108">            return new Pair&lt;&gt;(NO_CHANGES, null);</span>
+        }
+<span class="nc bnc" id="L110" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(19959)) {</span>
+            // loop through and process changes from server
+<span class="nc" id="L112">            mCol.log(&quot;last local usn is &quot; + lastUsn);</span>
+        }
+<span class="nc bnc" id="L114" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(19960)) {</span>
+<span class="nc" id="L115">            mDownloadCount = 0;</span>
+        }
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20002)) {</span>
+            {
+<span class="nc" id="L119">                long _loopCounter397 = 0;</span>
+                while (true) {
+<span class="nc" id="L121">                    ListenerUtil.loopListener.listen(&quot;_loopCounter397&quot;, ++_loopCounter397);</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(19962)) {</span>
+                        // Allow cancellation (note: media sync has no finish command, so just throw)
+<span class="nc bnc" id="L124" title="All 2 branches missed.">                        if (Connection.getIsCancelled()) {</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(19961)) {</span>
+<span class="nc" id="L126">                                Timber.i(&quot;Sync was cancelled&quot;);</span>
+                            }
+<span class="nc" id="L128">                            throw new RuntimeException(USER_ABORTED_SYNC.toString());</span>
+                        }
+                    }
+<span class="nc" id="L131">                    JSONArray data = mServer.mediaChanges(lastUsn);</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(19963)) {</span>
+<span class="nc" id="L133">                        mCol.log(&quot;mediaChanges resp count: &quot;, data.length());</span>
+                    }
+<span class="nc bnc" id="L135" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(19964)) {</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">                        if (data.length() == 0) {</span>
+<span class="nc" id="L137">                            break;</span>
+                        }
+                    }
+<span class="nc" id="L140">                    List&lt;String&gt; need = new ArrayList&lt;&gt;(data.length());</span>
+<span class="nc bnc" id="L141" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(19969)) {</span>
+<span class="nc bnc" id="L142" title="All 8 branches missed.">                        lastUsn = data.getJSONArray((ListenerUtil.mutListener.listen(19968) ? (data.length() % 1) : (ListenerUtil.mutListener.listen(19967) ? (data.length() / 1) : (ListenerUtil.mutListener.listen(19966) ? (data.length() * 1) : (ListenerUtil.mutListener.listen(19965) ? (data.length() + 1) : (data.length() - 1)))))).getInt(1);</span>
+                    }
+<span class="nc bnc" id="L144" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(19998)) {</span>
+                        {
+<span class="nc" id="L146">                            long _loopCounter396 = 0;</span>
+<span class="nc bnc" id="L147" title="All 22 branches missed.">                            for (int i = 0; (ListenerUtil.mutListener.listen(19997) ? (i &gt;= data.length()) : (ListenerUtil.mutListener.listen(19996) ? (i &lt;= data.length()) : (ListenerUtil.mutListener.listen(19995) ? (i &gt; data.length()) : (ListenerUtil.mutListener.listen(19994) ? (i != data.length()) : (ListenerUtil.mutListener.listen(19993) ? (i == data.length()) : (i &lt; data.length())))))); i++) {</span>
+<span class="nc" id="L148">                                ListenerUtil.loopListener.listen(&quot;_loopCounter396&quot;, ++_loopCounter396);</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(19971)) {</span>
+                                    // Allow cancellation (note: media sync has no finish command, so just throw)
+<span class="nc bnc" id="L151" title="All 2 branches missed.">                                    if (Connection.getIsCancelled()) {</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(19970)) {</span>
+<span class="nc" id="L153">                                            Timber.i(&quot;Sync was cancelled&quot;);</span>
+                                        }
+<span class="nc" id="L155">                                        throw new RuntimeException(USER_ABORTED_SYNC.toString());</span>
+                                    }
+                                }
+<span class="nc" id="L158">                                String fname = data.getJSONArray(i).getString(0);</span>
+<span class="nc" id="L159">                                int rusn = data.getJSONArray(i).getInt(1);</span>
+<span class="nc" id="L160">                                String rsum = null;</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(19973)) {</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">                                    if (!data.getJSONArray(i).isNull(2)) {</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(19972)) {</span>
+                                            // return `&quot;null&quot;` as a string
+<span class="nc" id="L165">                                            rsum = data.getJSONArray(i).optString(2);</span>
+                                        }
+                                    }
+                                }
+<span class="nc" id="L169">                                Pair&lt;String, Integer&gt; info = mCol.getMedia().syncInfo(fname);</span>
+<span class="nc" id="L170">                                String lsum = info.first;</span>
+<span class="nc" id="L171">                                int ldirty = info.second;</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(19974)) {</span>
+<span class="nc bnc" id="L173" title="All 4 branches missed.">                                    mCol.log(String.format(Locale.US, &quot;check: lsum=%s rsum=%s ldirty=%d rusn=%d fname=%s&quot;, TextUtils.isEmpty(lsum) ? &quot;&quot; : lsum.subSequence(0, 4), TextUtils.isEmpty(rsum) ? &quot;&quot; : rsum.subSequence(0, 4), ldirty, rusn, fname));</span>
+                                }
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(19992)) {</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">                                    if (!TextUtils.isEmpty(rsum)) {</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(19990)) {</span>
+                                            // added/changed remotely
+<span class="nc bnc" id="L179" title="All 10 branches missed.">                                            if ((ListenerUtil.mutListener.listen(19986) ? (TextUtils.isEmpty(lsum) &amp;&amp; !lsum.equals(rsum)) : (TextUtils.isEmpty(lsum) || !lsum.equals(rsum)))) {</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(19988)) {</span>
+<span class="nc" id="L181">                                                    mCol.log(&quot;will fetch&quot;);</span>
+                                                }
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(19989)) {</span>
+<span class="nc" id="L184">                                                    need.add(fname);</span>
+                                                }
+                                            } else {
+<span class="nc bnc" id="L187" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(19987)) {</span>
+<span class="nc" id="L188">                                                    mCol.log(&quot;have same already&quot;);</span>
+                                                }
+                                            }
+                                        }
+<span class="nc bnc" id="L192" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(19991)) {</span>
+<span class="nc" id="L193">                                            mCol.getMedia().markClean(Collections.singletonList(fname));</span>
+                                        }
+<span class="nc bnc" id="L195" title="All 2 branches missed.">                                    } else if (!TextUtils.isEmpty(lsum)) {</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(19985)) {</span>
+                                            // deleted remotely
+<span class="nc bnc" id="L198" title="All 22 branches missed.">                                            if ((ListenerUtil.mutListener.listen(19981) ? (ldirty &gt;= 0) : (ListenerUtil.mutListener.listen(19980) ? (ldirty &lt;= 0) : (ListenerUtil.mutListener.listen(19979) ? (ldirty &gt; 0) : (ListenerUtil.mutListener.listen(19978) ? (ldirty &lt; 0) : (ListenerUtil.mutListener.listen(19977) ? (ldirty != 0) : (ldirty == 0))))))) {</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(19983)) {</span>
+<span class="nc" id="L200">                                                    mCol.log(&quot;delete local&quot;);</span>
+                                                }
+<span class="nc bnc" id="L202" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(19984)) {</span>
+<span class="nc" id="L203">                                                    mCol.getMedia().syncDelete(fname);</span>
+                                                }
+                                            } else {
+<span class="nc bnc" id="L206" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(19982)) {</span>
+                                                    // conflict: local add overrides remote delete
+<span class="nc" id="L208">                                                    mCol.log(&quot;conflict; will send&quot;);</span>
+                                                }
+                                            }
+                                        }
+                                    } else {
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(19975)) {</span>
+                                            // deleted both sides
+<span class="nc" id="L215">                                            mCol.log(&quot;both sides deleted&quot;);</span>
+                                        }
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(19976)) {</span>
+<span class="nc" id="L218">                                            mCol.getMedia().markClean(Collections.singletonList(fname));</span>
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L225" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(19999)) {</span>
+<span class="nc" id="L226">                        _downloadFiles(need);</span>
+                    }
+<span class="nc bnc" id="L228" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20000)) {</span>
+<span class="nc" id="L229">                        mCol.log(&quot;update last usn to &quot; + lastUsn);</span>
+                    }
+<span class="nc bnc" id="L231" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20001)) {</span>
+                        // commits
+<span class="nc" id="L233">                        mCol.getMedia().setLastUsn(lastUsn);</span>
+                    }
+<span class="nc" id="L235">                }</span>
+            }
+        }
+<span class="nc" id="L238">        boolean updateConflict = false;</span>
+<span class="nc" id="L239">        int toSend = mCol.getMedia().dirtyCount();</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20030)) {</span>
+            {
+<span class="nc" id="L242">                long _loopCounter398 = 0;</span>
+                while (true) {
+<span class="nc" id="L244">                    ListenerUtil.loopListener.listen(&quot;_loopCounter398&quot;, ++_loopCounter398);</span>
+<span class="nc" id="L245">                    Pair&lt;File, List&lt;String&gt;&gt; changesZip = mCol.getMedia().mediaChangesZip();</span>
+<span class="nc" id="L246">                    File zip = changesZip.first;</span>
+                    try {
+<span class="nc" id="L248">                        List&lt;String&gt; fnames = changesZip.second;</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20009)) {</span>
+<span class="nc bnc" id="L250" title="All 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(20008) ? (fnames.size() &gt;= 0) : (ListenerUtil.mutListener.listen(20007) ? (fnames.size() &lt;= 0) : (ListenerUtil.mutListener.listen(20006) ? (fnames.size() &gt; 0) : (ListenerUtil.mutListener.listen(20005) ? (fnames.size() &lt; 0) : (ListenerUtil.mutListener.listen(20004) ? (fnames.size() != 0) : (fnames.size() == 0))))))) {</span>
+                                break;
+                            }
+                        }
+<span class="nc bnc" id="L254" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20010)) {</span>
+<span class="nc" id="L255">                            mCon.publishProgress(String.format(AnkiDroidApp.getAppResources().getString(R.string.sync_media_changes_count), toSend));</span>
+                        }
+<span class="nc" id="L257">                        JSONArray changes = mServer.uploadChanges(zip);</span>
+<span class="nc" id="L258">                        int processedCnt = changes.getInt(0);</span>
+<span class="nc" id="L259">                        int serverLastUsn = changes.getInt(1);</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20011)) {</span>
+<span class="nc" id="L261">                            mCol.getMedia().markClean(fnames.subList(0, processedCnt));</span>
+                        }
+<span class="nc bnc" id="L263" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20012)) {</span>
+<span class="nc" id="L264">                            mCol.log(String.format(Locale.US, &quot;processed %d, serverUsn %d, clientUsn %d&quot;, processedCnt, serverLastUsn, lastUsn));</span>
+                        }
+<span class="nc bnc" id="L266" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20028)) {</span>
+<span class="nc bnc" id="L267" title="All 70 branches missed.">                            if ((ListenerUtil.mutListener.listen(20021) ? ((ListenerUtil.mutListener.listen(20016) ? (serverLastUsn % processedCnt) : (ListenerUtil.mutListener.listen(20015) ? (serverLastUsn / processedCnt) : (ListenerUtil.mutListener.listen(20014) ? (serverLastUsn * processedCnt) : (ListenerUtil.mutListener.listen(20013) ? (serverLastUsn + processedCnt) : (serverLastUsn - processedCnt))))) &gt;= lastUsn) : (ListenerUtil.mutListener.listen(20020) ? ((ListenerUtil.mutListener.listen(20016) ? (serverLastUsn % processedCnt) : (ListenerUtil.mutListener.listen(20015) ? (serverLastUsn / processedCnt) : (ListenerUtil.mutListener.listen(20014) ? (serverLastUsn * processedCnt) : (ListenerUtil.mutListener.listen(20013) ? (serverLastUsn + processedCnt) : (serverLastUsn - processedCnt))))) &lt;= lastUsn) : (ListenerUtil.mutListener.listen(20019) ? ((ListenerUtil.mutListener.listen(20016) ? (serverLastUsn % processedCnt) : (ListenerUtil.mutListener.listen(20015) ? (serverLastUsn / processedCnt) : (ListenerUtil.mutListener.listen(20014) ? (serverLastUsn * processedCnt) : (ListenerUtil.mutListener.listen(20013) ? (serverLastUsn + processedCnt) : (serverLastUsn - processedCnt))))) &gt; lastUsn) : (ListenerUtil.mutListener.listen(20018) ? ((ListenerUtil.mutListener.listen(20016) ? (serverLastUsn % processedCnt) : (ListenerUtil.mutListener.listen(20015) ? (serverLastUsn / processedCnt) : (ListenerUtil.mutListener.listen(20014) ? (serverLastUsn * processedCnt) : (ListenerUtil.mutListener.listen(20013) ? (serverLastUsn + processedCnt) : (serverLastUsn - processedCnt))))) &lt; lastUsn) : (ListenerUtil.mutListener.listen(20017) ? ((ListenerUtil.mutListener.listen(20016) ? (serverLastUsn % processedCnt) : (ListenerUtil.mutListener.listen(20015) ? (serverLastUsn / processedCnt) : (ListenerUtil.mutListener.listen(20014) ? (serverLastUsn * processedCnt) : (ListenerUtil.mutListener.listen(20013) ? (serverLastUsn + processedCnt) : (serverLastUsn - processedCnt))))) != lastUsn) : ((ListenerUtil.mutListener.listen(20016) ? (serverLastUsn % processedCnt) : (ListenerUtil.mutListener.listen(20015) ? (serverLastUsn / processedCnt) : (ListenerUtil.mutListener.listen(20014) ? (serverLastUsn * processedCnt) : (ListenerUtil.mutListener.listen(20013) ? (serverLastUsn + processedCnt) : (serverLastUsn - processedCnt))))) == lastUsn))))))) {</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20025)) {</span>
+<span class="nc" id="L269">                                    mCol.log(&quot;lastUsn in sync, updating local&quot;);</span>
+                                }
+<span class="nc bnc" id="L271" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20026)) {</span>
+<span class="nc" id="L272">                                    lastUsn = serverLastUsn;</span>
+                                }
+<span class="nc bnc" id="L274" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20027)) {</span>
+                                    // commits
+<span class="nc" id="L276">                                    mCol.getMedia().setLastUsn(serverLastUsn);</span>
+                                }
+                            } else {
+<span class="nc bnc" id="L279" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20022)) {</span>
+<span class="nc" id="L280">                                    mCol.log(&quot;concurrent update, skipping usn update&quot;);</span>
+                                }
+<span class="nc bnc" id="L282" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20023)) {</span>
+                                    // commit for markClean
+<span class="nc" id="L284">                                    mCol.getMedia().getDb().commit();</span>
+                                }
+<span class="nc bnc" id="L286" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20024)) {</span>
+<span class="nc" id="L287">                                    updateConflict = true;</span>
+                                }
+                            }
+                        }
+<span class="nc bnc" id="L291" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20029)) {</span>
+<span class="nc" id="L292">                            toSend -= processedCnt;</span>
+                        }
+                    } finally {
+<span class="nc bnc" id="L295" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20003)) {</span>
+<span class="nc" id="L296">                            zip.delete();</span>
+                        }
+                    }
+<span class="nc" id="L299">                }</span>
+            }
+        }
+<span class="nc bnc" id="L302" title="All 2 branches missed.">        if (updateConflict) {</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20031)) {</span>
+<span class="nc" id="L304">                mCol.log(&quot;restart sync due to concurrent update&quot;);</span>
+            }
+<span class="nc" id="L306">            return sync();</span>
+        }
+<span class="nc" id="L308">        int lcnt = mCol.getMedia().mediacount();</span>
+<span class="nc" id="L309">        String sRet = mServer.mediaSanity(lcnt);</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">        if (&quot;OK&quot;.equals(sRet)) {</span>
+<span class="nc" id="L311">            return new Pair&lt;&gt;(OK, null);</span>
+        } else {
+<span class="nc bnc" id="L313" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20032)) {</span>
+<span class="nc" id="L314">                mCol.getMedia().forceResync();</span>
+            }
+<span class="nc" id="L316">            return new Pair&lt;&gt;(ARBITRARY_STRING, sRet);</span>
+        }
+    }
+
+    private void _downloadFiles(List&lt;String&gt; fnames) {
+<span class="nc bnc" id="L321" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20033)) {</span>
+<span class="nc" id="L322">            mCol.log(fnames.size() + &quot; files to fetch&quot;);</span>
+        }
+<span class="nc bnc" id="L324" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20052)) {</span>
+            {
+<span class="nc" id="L326">                long _loopCounter399 = 0;</span>
+<span class="nc bnc" id="L327" title="All 22 branches missed.">                while ((ListenerUtil.mutListener.listen(20051) ? (fnames.size() &gt;= 0) : (ListenerUtil.mutListener.listen(20050) ? (fnames.size() &lt;= 0) : (ListenerUtil.mutListener.listen(20049) ? (fnames.size() &lt; 0) : (ListenerUtil.mutListener.listen(20048) ? (fnames.size() != 0) : (ListenerUtil.mutListener.listen(20047) ? (fnames.size() == 0) : (fnames.size() &gt; 0))))))) {</span>
+<span class="nc" id="L328">                    ListenerUtil.loopListener.listen(&quot;_loopCounter399&quot;, ++_loopCounter399);</span>
+                    try {
+<span class="nc" id="L330">                        List&lt;String&gt; top = fnames.subList(0, Math.min(fnames.size(), Consts.SYNC_ZIP_COUNT));</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20035)) {</span>
+<span class="nc" id="L332">                            mCol.log(&quot;fetch &quot; + top);</span>
+                        }
+<span class="nc" id="L334">                        ZipFile zipData = mServer.downloadFiles(top);</span>
+<span class="nc" id="L335">                        int cnt = mCol.getMedia().addFilesFromZip(zipData);</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20036)) {</span>
+<span class="nc" id="L337">                            mDownloadCount += cnt;</span>
+                        }
+<span class="nc bnc" id="L339" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20037)) {</span>
+<span class="nc" id="L340">                            mCol.log(&quot;received &quot; + cnt + &quot; files&quot;);</span>
+                        }
+<span class="nc bnc" id="L342" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20045)) {</span>
+                            // if we've reached the end and clear the fnames list manually.
+<span class="nc bnc" id="L344" title="All 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(20042) ? (cnt &gt;= fnames.size()) : (ListenerUtil.mutListener.listen(20041) ? (cnt &lt;= fnames.size()) : (ListenerUtil.mutListener.listen(20040) ? (cnt &gt; fnames.size()) : (ListenerUtil.mutListener.listen(20039) ? (cnt &lt; fnames.size()) : (ListenerUtil.mutListener.listen(20038) ? (cnt != fnames.size()) : (cnt == fnames.size()))))))) {</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20044)) {</span>
+<span class="nc" id="L346">                                    fnames.clear();</span>
+                                }
+                            } else {
+<span class="nc bnc" id="L349" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20043)) {</span>
+<span class="nc" id="L350">                                    fnames = fnames.subList(cnt, fnames.size());</span>
+                                }
+                            }
+                        }
+<span class="nc bnc" id="L354" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20046)) {</span>
+<span class="nc" id="L355">                            mCon.publishProgress(String.format(AnkiDroidApp.getAppResources().getString(R.string.sync_media_downloaded_count), mDownloadCount));</span>
+                        }
+<span class="nc" id="L357">                    } catch (IOException | UnknownHttpResponseException e) {</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20034)) {</span>
+<span class="nc" id="L359">                            Timber.e(e, &quot;Error downloading media files&quot;);</span>
+                        }
+<span class="nc" id="L361">                        throw new RuntimeException(e);</span>
+<span class="nc" id="L362">                    }</span>
+                }
+            }
+        }
+<span class="nc" id="L366">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

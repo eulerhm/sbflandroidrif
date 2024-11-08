@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ObaRegionsTask.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">obaGoogleDebug</a> &gt; <a href="index.source.html" class="el_package">org.onebusaway.android.region</a> &gt; <span class="el_source">ObaRegionsTask.java</span></div><h1>ObaRegionsTask.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (C) 2012-2015 Paul Watts (paulcwatts@gmail.com), University of South Florida
+ * and individual contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.region;
+
+import android.app.AlertDialog;
+import android.app.ProgressDialog;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.SharedPreferences;
+import android.location.Location;
+import android.os.AsyncTask;
+import android.os.Handler;
+import android.util.Log;
+
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.firebase.analytics.FirebaseAnalytics;
+
+import org.onebusaway.android.R;
+import org.onebusaway.android.app.Application;
+import org.onebusaway.android.io.ObaAnalytics;
+import org.onebusaway.android.io.elements.ObaRegion;
+import org.onebusaway.android.util.LocationUtils;
+import org.onebusaway.android.util.RegionUtils;
+import org.onebusaway.android.util.UIUtils;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * AsyncTask used to refresh region info from the Regions REST API.
+ * &lt;p/&gt;
+ * Classes utilizing this task can request a callback via MapModeController.Callback.setMyLocation()
+ * by passing in class implementing MapModeController.Callback in the constructor
+ *
+ * @author barbeau
+ */
+public class ObaRegionsTask extends AsyncTask&lt;Void, Integer, ArrayList&lt;ObaRegion&gt;&gt; {
+
+    public interface Callback {
+
+        /**
+         * Called when the ObaRegionsTask is complete
+         *
+         * @param currentRegionChanged true if the current region changed as a result of the task,
+         *                             false if it didn't change
+         */
+        public void onRegionTaskFinished(boolean currentRegionChanged);
+    }
+
+    private static final String TAG = &quot;ObaRegionsTask&quot;;
+
+<span class="nc" id="L69">    private final int CALLBACK_DELAY = 100;  //in milliseconds</span>
+
+    private Context mContext;
+
+    private ProgressDialog mProgressDialog;
+
+    private String mProgressDialogMessage;
+
+<span class="nc" id="L77">    private List&lt;ObaRegionsTask.Callback&gt; mCallbacks = new ArrayList&lt;&gt;();</span>
+
+    private final boolean mForceReload;
+
+    private final boolean mShowProgressDialog;
+
+    /**
+     * GoogleApiClient being used for Location Services
+     */
+    GoogleApiClient mGoogleApiClient;
+
+    private FirebaseAnalytics mFirebaseAnalytics;
+
+    /**
+     * @param callbacks          a callback will be made to all interfaces in this list after the
+     *                           task is complete (null if no callbacks are requested)
+     * @param force              true if the task should be forced to update region info from the
+     *                           server, false if it can return local info
+     * @param showProgressDialog true if a progress dialog should be shown to the user during the
+     *                           task, false if it should not
+     */
+    public ObaRegionsTask(Context context, List&lt;ObaRegionsTask.Callback&gt; callbacks, boolean force,
+<span class="nc" id="L99">                          boolean showProgressDialog) {</span>
+<span class="nc" id="L100">        mContext = context;</span>
+<span class="nc" id="L101">        mCallbacks = callbacks;</span>
+<span class="nc" id="L102">        mForceReload = force;</span>
+<span class="nc" id="L103">        mShowProgressDialog = showProgressDialog;</span>
+<span class="nc" id="L104">        GoogleApiAvailability api = GoogleApiAvailability.getInstance();</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (api.isGooglePlayServicesAvailable(context) == ConnectionResult.SUCCESS) {</span>
+<span class="nc" id="L106">            mGoogleApiClient = LocationUtils.getGoogleApiClientWithCallbacks(context);</span>
+<span class="nc" id="L107">            mGoogleApiClient.connect();</span>
+        }
+<span class="nc" id="L109">        mFirebaseAnalytics = FirebaseAnalytics.getInstance(context);</span>
+<span class="nc" id="L110">    }</span>
+
+    @Override
+    protected void onPreExecute() {
+<span class="nc bnc" id="L114" title="All 4 branches missed.">        if (mShowProgressDialog &amp;&amp; UIUtils.canManageDialog(mContext)) {</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">            if (mProgressDialogMessage == null){</span>
+<span class="nc" id="L116">                mProgressDialogMessage = mContext.getString(R.string.region_detecting_server);</span>
+            }
+<span class="nc" id="L118">            mProgressDialog = ProgressDialog.show(mContext, &quot;&quot;,</span>
+                    mProgressDialogMessage, true);
+<span class="nc" id="L120">            mProgressDialog.setIndeterminate(true);</span>
+<span class="nc" id="L121">            mProgressDialog.setCancelable(false);</span>
+<span class="nc" id="L122">            mProgressDialog.show();</span>
+        }
+
+<span class="nc" id="L125">        super.onPreExecute();</span>
+<span class="nc" id="L126">    }</span>
+
+    @Override
+    protected ArrayList&lt;ObaRegion&gt; doInBackground(Void... params) {
+<span class="nc" id="L130">        return RegionUtils.getRegions(mContext, mForceReload);</span>
+    }
+
+    @Override
+    protected void onPostExecute(ArrayList&lt;ObaRegion&gt; results) {
+<span class="nc bnc" id="L135" title="All 2 branches missed.">        if (results == null) {</span>
+            //This is a catastrophic failure to load region info from all sources
+<span class="nc" id="L137">            return;</span>
+        }
+
+        // Dismiss the dialog before calling the callbacks to avoid errors referencing the dialog later
+<span class="nc bnc" id="L141" title="All 4 branches missed.">        if (mShowProgressDialog &amp;&amp; UIUtils.canManageDialog(mContext) &amp;&amp; mProgressDialog</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">                .isShowing()) {</span>
+<span class="nc" id="L143">            mProgressDialog.dismiss();</span>
+        }
+
+<span class="nc" id="L146">        SharedPreferences settings = Application.getPrefs();</span>
+
+<span class="nc" id="L148">        if (settings</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">                .getBoolean(mContext.getString(R.string.preference_key_auto_select_region), true)) {</span>
+            // Pass in the GoogleApiClient initialized in constructor
+<span class="nc" id="L151">            Location myLocation = Application.getLastKnownLocation(mContext, mGoogleApiClient);</span>
+
+<span class="nc" id="L153">            ObaRegion closestRegion = RegionUtils.getClosestRegion(results, myLocation, true);</span>
+
+<span class="nc bnc" id="L155" title="All 2 branches missed.">            if (Application.get().getCurrentRegion() == null) {</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">                if (closestRegion != null) {</span>
+                    //No region has been set, so set region application-wide to closest region
+<span class="nc" id="L158">                    Application.get().setCurrentRegion(closestRegion);</span>
+<span class="nc" id="L159">                    Log.d(TAG, &quot;Detected closest region '&quot; + closestRegion.getName() + &quot;'&quot;);</span>
+<span class="nc" id="L160">                    ObaAnalytics.setRegion(mFirebaseAnalytics,  closestRegion.getName());</span>
+<span class="nc" id="L161">                    doCallback(true);</span>
+                } else {
+                    //No region has been set, and we couldn't find a usable region based on RegionUtil.isRegionUsable()
+                    //or we couldn't find a closest a region, so ask the user to pick the region
+<span class="nc" id="L165">                    haveUserChooseRegion(results);</span>
+                }
+<span class="nc bnc" id="L167" title="All 4 branches missed.">            } else if (Application.get().getCurrentRegion() != null &amp;&amp; closestRegion != null</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">                    &amp;&amp; !Application.get().getCurrentRegion().equals(closestRegion)) {</span>
+                //User is closer to a different region than the current region, so change to the closest region
+<span class="nc" id="L170">                String oldRegionName = Application.get().getCurrentRegion().getName();</span>
+<span class="nc" id="L171">                Application.get().setCurrentRegion(closestRegion);</span>
+<span class="nc" id="L172">                Log.d(TAG, &quot;Detected closer region '&quot; + closestRegion.getName()</span>
+                        + &quot;', changed from &quot; + oldRegionName + &quot; to this region.&quot;);
+<span class="nc" id="L174">                ObaAnalytics.setRegion(mFirebaseAnalytics, closestRegion.getName());</span>
+<span class="nc" id="L175">                doCallback(true);</span>
+<span class="nc bnc" id="L176" title="All 4 branches missed.">            } else if (Application.get().getCurrentRegion() != null &amp;&amp; closestRegion != null</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">                    &amp;&amp; Application.get().getCurrentRegion().equals(closestRegion)) {</span>
+                // Don't change the region - just refresh with latest Regions API contents
+<span class="nc" id="L179">                Application.get().setCurrentRegion(closestRegion, false);</span>
+<span class="nc" id="L180">                doCallback(false);</span>
+            } else {
+<span class="nc" id="L182">                doCallback(false);</span>
+            }
+<span class="nc" id="L184">        } else {</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">            if (Application.get().getCurrentRegion() == null) {</span>
+                //We don't have a region selected, and the user chose not to auto-select one, so make them pick one
+<span class="nc" id="L187">                haveUserChooseRegion(results);</span>
+            } else {
+<span class="nc" id="L189">                doCallback(false);</span>
+            }
+        }
+
+        // Tear down Location Services client
+<span class="nc bnc" id="L194" title="All 2 branches missed.">        if (mGoogleApiClient != null) {</span>
+<span class="nc" id="L195">            mGoogleApiClient.disconnect();</span>
+        }
+
+<span class="nc" id="L198">        super.onPostExecute(results);</span>
+<span class="nc" id="L199">    }</span>
+
+    private void haveUserChooseRegion(final ArrayList&lt;ObaRegion&gt; result) {
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        if (!UIUtils.canManageDialog(mContext)) {</span>
+<span class="nc" id="L203">            return;</span>
+        }
+
+        // Create dialog for user to choose
+<span class="nc" id="L207">        List&lt;String&gt; serverNames = new ArrayList&lt;String&gt;();</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">        for (ObaRegion region : result) {</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">            if (RegionUtils.isRegionUsable(region)) {</span>
+<span class="nc" id="L210">                serverNames.add(region.getName());</span>
+            }
+<span class="nc" id="L212">        }</span>
+
+<span class="nc" id="L214">        Collections.sort(serverNames);</span>
+
+<span class="nc" id="L216">        final CharSequence[] items = serverNames</span>
+<span class="nc" id="L217">                .toArray(new CharSequence[serverNames.size()]);</span>
+
+<span class="nc" id="L219">        AlertDialog.Builder builder = new AlertDialog.Builder(mContext);</span>
+<span class="nc" id="L220">        builder.setTitle(mContext.getString(R.string.region_choose_region));</span>
+<span class="nc" id="L221">        builder.setCancelable(false);</span>
+<span class="nc" id="L222">        builder.setItems(items, new DialogInterface.OnClickListener() {</span>
+
+            public void onClick(DialogInterface dialog, int item) {
+<span class="nc bnc" id="L225" title="All 2 branches missed.">                for (ObaRegion region : result) {</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">                    if (region.getName().equals(items[item])) {</span>
+                        //Set the region application-wide
+<span class="nc" id="L228">                        Application.get().setCurrentRegion(region);</span>
+<span class="nc" id="L229">                        Log.d(TAG, &quot;User chose region '&quot; + items[item] + &quot;'.&quot;);</span>
+<span class="nc" id="L230">                        doCallback(true);</span>
+<span class="nc" id="L231">                        break;</span>
+                    }
+<span class="nc" id="L233">                }</span>
+<span class="nc" id="L234">            }</span>
+        });
+
+<span class="nc" id="L237">        AlertDialog alert = builder.create();</span>
+<span class="nc" id="L238">        alert.show();</span>
+<span class="nc" id="L239">    }</span>
+
+    private void doCallback(final boolean currentRegionChanged) {
+        // If we execute on same thread immediately after setting Region, map UI may try to call
+        // OBA REST API before the new region info is set in Application.  So, pause briefly.
+<span class="nc" id="L244">        final Handler mPauseForCallbackHandler = new Handler();</span>
+<span class="nc" id="L245">        final Runnable mPauseForCallback = new Runnable() {</span>
+            public void run() {
+                // Map may not have triggered call to OBA REST API, so we force one here
+<span class="nc bnc" id="L248" title="All 2 branches missed.">                if (mCallbacks != null) {</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                    for (Callback callback : mCallbacks) {</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">                        if (callback != null) {</span>
+<span class="nc" id="L251">                            callback.onRegionTaskFinished(currentRegionChanged);</span>
+                        }
+<span class="nc" id="L253">                    }</span>
+                }
+<span class="nc" id="L255">            }</span>
+        };
+<span class="nc" id="L257">        mPauseForCallbackHandler.postDelayed(mPauseForCallback,</span>
+                CALLBACK_DELAY);
+<span class="nc" id="L259">    }</span>
+
+    public void setProgressDialogMessage(String progressDialogMessage) {
+<span class="nc" id="L262">        mProgressDialogMessage = progressDialogMessage;</span>
+<span class="nc" id="L263">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.2.0</div></body></html>

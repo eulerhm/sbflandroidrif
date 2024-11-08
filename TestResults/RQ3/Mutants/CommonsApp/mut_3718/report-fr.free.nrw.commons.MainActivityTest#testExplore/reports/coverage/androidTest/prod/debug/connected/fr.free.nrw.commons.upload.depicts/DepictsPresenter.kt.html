@@ -1,0 +1,282 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DepictsPresenter.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.upload.depicts</a> &gt; <span class="el_source">DepictsPresenter.kt</span></div><h1>DepictsPresenter.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.upload.depicts
+
+import android.annotation.SuppressLint
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import fr.free.nrw.commons.bookmarks.items.BookmarkItemsController
+import fr.free.nrw.commons.Media
+import fr.free.nrw.commons.di.CommonsApplicationModule
+import fr.free.nrw.commons.repository.UploadRepository
+import fr.free.nrw.commons.upload.structure.depictions.DepictedItem
+import fr.free.nrw.commons.wikidata.WikidataDisambiguationItems
+import io.reactivex.Flowable
+import io.reactivex.Scheduler
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.disposables.CompositeDisposable
+import io.reactivex.processors.PublishProcessor
+import io.reactivex.schedulers.Schedulers
+import timber.log.Timber
+import java.lang.reflect.Proxy
+import java.util.*
+import javax.inject.Inject
+import javax.inject.Named
+import javax.inject.Singleton
+
+/**
+ * presenter for DepictsFragment
+ */
+<span class="nc" id="L28">@Singleton</span>
+<span class="nc" id="L29">class DepictsPresenter @Inject constructor(</span>
+<span class="nc" id="L30">    private val repository: UploadRepository,</span>
+<span class="nc" id="L31">    @param:Named(CommonsApplicationModule.IO_THREAD) private val ioScheduler: Scheduler,</span>
+<span class="nc" id="L32">    @param:Named(CommonsApplicationModule.MAIN_THREAD) private val mainThreadScheduler: Scheduler</span>
+) : DepictsContract.UserActionListener {
+
+    companion object {
+<span class="nc" id="L36">        private val DUMMY = proxy&lt;DepictsContract.View&gt;()</span>
+    }
+
+<span class="nc" id="L39">    private var view = DUMMY</span>
+<span class="nc" id="L40">    private val compositeDisposable: CompositeDisposable = CompositeDisposable()</span>
+<span class="nc" id="L41">    private val searchTerm: PublishProcessor&lt;String&gt; = PublishProcessor.create()</span>
+<span class="nc" id="L42">    private val depictedItems: MutableLiveData&lt;List&lt;DepictedItem&gt;&gt; = MutableLiveData()</span>
+    private var media: Media? = null
+    @Inject
+<span class="nc bnc" id="L45" title="All 2 branches missed.">    lateinit var depictsDao: DepictsDao</span>
+
+    /**
+     * Helps to get all bookmarked items
+     */
+    @Inject
+<span class="nc bnc" id="L51" title="All 2 branches missed.">    lateinit var controller: BookmarkItemsController</span>
+
+    @Inject
+<span class="nc bnc" id="L54" title="All 2 branches missed.">    lateinit var depictsHelper: DepictEditHelper</span>
+
+    override fun onAttachView(view: DepictsContract.View) {
+<span class="nc" id="L57">        this.view = view</span>
+<span class="nc" id="L58">        compositeDisposable.add(</span>
+<span class="nc" id="L59">            searchTerm</span>
+<span class="nc" id="L60">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L61">                .doOnNext { view.showProgress(true) }</span>
+<span class="nc" id="L62">                .switchMap(::searchResultsWithTerm)</span>
+<span class="nc" id="L63">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L64">                .subscribe(</span>
+<span class="nc" id="L65">                    { (results, term) -&gt;</span>
+<span class="nc" id="L66">                        view.showProgress(false)</span>
+<span class="nc bnc" id="L67" title="All 6 branches missed.">                        view.showError(results.isEmpty() &amp;&amp; term.isNotEmpty())</span>
+<span class="nc" id="L68">                        depictedItems.value = results</span>
+<span class="nc" id="L69">                    },</span>
+<span class="nc" id="L70">                    { t: Throwable? -&gt;</span>
+<span class="nc" id="L71">                        view.showProgress(false)</span>
+<span class="nc" id="L72">                        view.showError(true)</span>
+<span class="nc" id="L73">                        Timber.e(t)</span>
+<span class="nc" id="L74">                    }</span>
+                )
+        )
+<span class="nc" id="L77">    }</span>
+
+    private fun searchResultsWithTerm(term: String): Flowable&lt;Pair&lt;List&lt;DepictedItem&gt;, String&gt;&gt; {
+<span class="nc" id="L80">        return searchResults(term).map { Pair(it, term) }</span>
+    }
+
+    private fun searchResults(querystring: String): Flowable&lt;List&lt;DepictedItem&gt;&gt; {
+<span class="nc" id="L84">        var recentDepictedItemList: MutableList&lt;DepictedItem&gt; = ArrayList();</span>
+        //show recentDepictedItemList when queryString is empty
+<span class="nc bnc" id="L86" title="All 4 branches missed.">        if (querystring.isEmpty()) {</span>
+<span class="nc" id="L87">            recentDepictedItemList = getRecentDepictedItems();</span>
+        }
+
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        if (media == null) {</span>
+<span class="nc" id="L91">            return repository.searchAllEntities(querystring)</span>
+<span class="nc" id="L92">                .subscribeOn(ioScheduler)</span>
+<span class="nc" id="L93">                .map { repository.selectedDepictions + it + recentDepictedItemList + controller.loadFavoritesItems() }</span>
+<span class="nc" id="L94">                .map { it.filterNot { item -&gt; WikidataDisambiguationItems.isDisambiguationItem(item.instanceOfs) } }</span>
+<span class="nc" id="L95">                .map { it.distinctBy(DepictedItem::id) }</span>
+
+        } else {
+<span class="nc" id="L98">            return Flowable.zip(repository.getDepictions(repository.selectedExistingDepictions)</span>
+<span class="nc" id="L99">                .map { list -&gt; list.map {</span>
+<span class="nc" id="L100">                    DepictedItem(it.name, it.description, it.imageUrl, it.instanceOfs,</span>
+<span class="nc" id="L101">                        it.commonsCategories, true, it.id)</span>
+                }
+            },
+<span class="nc" id="L104">                repository.searchAllEntities(querystring)</span>
+<span class="nc" id="L105">            ) { it1, it2 -&gt;</span>
+<span class="nc" id="L106">                it1 + it2</span>
+            }
+<span class="nc" id="L108">                .subscribeOn(ioScheduler)</span>
+<span class="nc" id="L109">                .map { repository.selectedDepictions + it + recentDepictedItemList + controller.loadFavoritesItems() }</span>
+<span class="nc" id="L110">                .map { it.filterNot { item -&gt; WikidataDisambiguationItems.isDisambiguationItem(item.instanceOfs) } }</span>
+<span class="nc" id="L111">                .map { it.distinctBy(DepictedItem::id) }</span>
+
+        }
+    }
+
+    override fun onDetachView() {
+<span class="nc" id="L117">        view = DUMMY</span>
+<span class="nc" id="L118">        media = null</span>
+<span class="nc" id="L119">        compositeDisposable.clear()</span>
+<span class="nc" id="L120">    }</span>
+
+    /**
+     * Selects the place depictions retrieved by the repository
+     */
+    override fun selectPlaceDepictions() {
+<span class="nc" id="L126">        compositeDisposable.add(repository.placeDepictions</span>
+<span class="nc" id="L127">            .subscribeOn(ioScheduler)</span>
+<span class="nc" id="L128">            .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L129">            .subscribe(::selectNewDepictions)</span>
+        )
+<span class="nc" id="L131">    }</span>
+
+    /**
+     * Selects each [DepictedItem] in a given list as if they were clicked by the user by calling
+     * [onDepictItemClicked] for each depiction and adding the depictions to [depictedItems]
+     */
+    private fun selectNewDepictions(toSelect: List&lt;DepictedItem&gt;) {
+<span class="nc" id="L138">        toSelect.forEach {</span>
+<span class="nc" id="L139">            it.isSelected = true</span>
+<span class="nc" id="L140">            repository.onDepictItemClicked(it, media)</span>
+<span class="nc" id="L141">        }</span>
+
+        // Add the new selections to the list of depicted items so that the selections appear
+        // immediately (i.e. without any search term queries)
+<span class="nc bnc" id="L145" title="All 2 branches missed.">        depictedItems.value?.toMutableList()</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">            ?.let { toSelect + it }</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">            ?.distinctBy(DepictedItem::id)</span>
+<span class="nc" id="L148">            ?.let { depictedItems.value = it }</span>
+<span class="nc" id="L149">    }</span>
+
+    override fun clearPreviousSelection() {
+<span class="nc" id="L152">        repository.cleanup()</span>
+<span class="nc" id="L153">    }</span>
+
+    override fun onPreviousButtonClicked() {
+<span class="nc" id="L156">        view.goToPreviousScreen()</span>
+<span class="nc" id="L157">    }</span>
+
+    override fun onDepictItemClicked(depictedItem: DepictedItem) {
+<span class="nc" id="L160">        repository.onDepictItemClicked(depictedItem, media)</span>
+<span class="nc" id="L161">    }</span>
+
+    override fun getDepictedItems(): LiveData&lt;List&lt;DepictedItem&gt;&gt; {
+<span class="nc" id="L164">        return depictedItems;</span>
+    }
+
+    /**
+     * asks the repository to fetch depictions for the query
+     * @param query
+     */
+    override fun searchForDepictions(query: String) {
+<span class="nc" id="L172">        searchTerm.onNext(query)</span>
+<span class="nc" id="L173">    }</span>
+
+    /**
+     * Check if depictions were selected
+     * from the depiction list
+     */
+    override fun verifyDepictions() {
+<span class="nc bnc" id="L180" title="All 4 branches missed.">        if (repository.selectedDepictions.isNotEmpty()) {</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">            if (::depictsDao.isInitialized) {</span>
+                //save all the selected Depicted item in room Database
+<span class="nc" id="L183">                depictsDao.savingDepictsInRoomDataBase(repository.selectedDepictions)</span>
+            }
+<span class="nc" id="L185">            view.goToNextScreen()</span>
+        } else {
+<span class="nc" id="L187">            view.noDepictionSelected()</span>
+        }
+<span class="nc" id="L189">    }</span>
+
+    /**
+     * Gets the selected depicts and send them for posting to the server
+     * and saves them in local storage
+     */
+    @SuppressLint(&quot;CheckResult&quot;)
+    override fun updateDepictions(media: Media) {
+<span class="nc bnc" id="L197" title="All 4 branches missed.">        if (repository.selectedDepictions.isNotEmpty()</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">            || repository.selectedExistingDepictions.size != view.existingDepictions.size</span>
+        ) {
+<span class="nc" id="L200">            view.showProgressDialog()</span>
+<span class="nc" id="L201">            val selectedDepictions: MutableList&lt;String&gt; =</span>
+<span class="nc" id="L202">                (repository.selectedDepictions.map { it.id }.toMutableList()</span>
+<span class="nc" id="L203">                        + repository.selectedExistingDepictions).toMutableList()</span>
+
+<span class="nc bnc" id="L205" title="All 4 branches missed.">            if (selectedDepictions.isNotEmpty()) {</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">                if (::depictsDao.isInitialized) {</span>
+                    //save all the selected Depicted item in room Database
+<span class="nc" id="L208">                    depictsDao.savingDepictsInRoomDataBase(repository.selectedDepictions)</span>
+                }
+
+<span class="nc" id="L211">                compositeDisposable.add(</span>
+<span class="nc" id="L212">                    depictsHelper.makeDepictionEdit(view.fragmentContext, media, selectedDepictions)</span>
+<span class="nc" id="L213">                        .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L214">                        .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L215">                        .subscribe({</span>
+<span class="nc" id="L216">                            media.depictionIds = selectedDepictions</span>
+<span class="nc" id="L217">                            repository.cleanup()</span>
+<span class="nc" id="L218">                            view.dismissProgressDialog()</span>
+<span class="nc" id="L219">                            view.updateDepicts()</span>
+<span class="nc" id="L220">                            view.goBackToPreviousScreen()</span>
+<span class="nc" id="L221">                        })</span>
+<span class="nc" id="L222">                        {</span>
+<span class="nc" id="L223">                            Timber.e(</span>
+<span class="nc" id="L224">                                &quot;Failed to update depictions&quot;</span>
+                            )
+<span class="nc" id="L226">                        }</span>
+                )
+            }
+        } else {
+<span class="nc" id="L230">            repository.cleanup()</span>
+<span class="nc" id="L231">            view.noDepictionSelected()</span>
+        }
+<span class="nc" id="L233">    }</span>
+
+    override fun onAttachViewWithMedia(view: DepictsContract.View, media: Media) {
+<span class="nc" id="L236">        this.view = view</span>
+<span class="nc" id="L237">        this.media = media</span>
+<span class="nc" id="L238">        repository.selectedExistingDepictions = view.existingDepictions</span>
+<span class="nc" id="L239">        compositeDisposable.add(</span>
+<span class="nc" id="L240">            searchTerm</span>
+<span class="nc" id="L241">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L242">                .doOnNext { view.showProgress(true) }</span>
+<span class="nc" id="L243">                .switchMap(::searchResultsWithTerm)</span>
+<span class="nc" id="L244">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L245">                .subscribe(</span>
+<span class="nc" id="L246">                    { (results, term) -&gt;</span>
+<span class="nc" id="L247">                        view.showProgress(false)</span>
+<span class="nc bnc" id="L248" title="All 6 branches missed.">                        view.showError(results.isEmpty() &amp;&amp; term.isNotEmpty())</span>
+<span class="nc" id="L249">                        depictedItems.value = results</span>
+<span class="nc" id="L250">                    },</span>
+<span class="nc" id="L251">                    { t: Throwable? -&gt;</span>
+<span class="nc" id="L252">                        view.showProgress(false)</span>
+<span class="nc" id="L253">                        view.showError(true)</span>
+<span class="nc" id="L254">                        Timber.e(t)</span>
+<span class="nc" id="L255">                    }</span>
+                )
+        )
+<span class="nc" id="L258">    }</span>
+
+    /**
+     * Get the depicts from DepictsRoomdataBase
+     */
+    fun getRecentDepictedItems(): MutableList&lt;DepictedItem&gt; {
+<span class="nc" id="L264">        val depictedItemList: MutableList&lt;DepictedItem&gt; = ArrayList()</span>
+<span class="nc" id="L265">        val depictsList = depictsDao.depictsList()</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">        for (i in depictsList.indices) {</span>
+<span class="nc" id="L267">            val depictedItem = depictsList[i].item</span>
+<span class="nc" id="L268">            depictedItemList.add(depictedItem)</span>
+        }
+<span class="nc" id="L270">        return depictedItemList</span>
+    }
+}
+
+/**
+ * This creates a dynamic proxy instance of the class,
+ * proxy is to control access to the target object
+ * here our target object is the view.
+ * Thus we when onDettach method of fragment is called we replace the binding of view to our object with the proxy instance
+ */
+inline fun &lt;reified T&gt; proxy() = Proxy
+<span class="nc" id="L281">    .newProxyInstance(T::class.java.classLoader, arrayOf(T::class.java)) { _, _, _ -&gt; null } as T</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

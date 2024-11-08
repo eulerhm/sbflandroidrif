@@ -1,0 +1,1342 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Stats.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.libanki.stats</a> &gt; <span class="el_source">Stats.java</span></div><h1>Stats.java</h1><pre class="source lang-java linenums">/****************************************************************************************
+ * Copyright (c) 2011 Norbert Nagold &lt;norbert.nagold@gmail.com&gt;                         *
+ * Copyright (c) 2014 Michael Goldbach &lt;michael@m-goldbach.net&gt;                         *
+ *                                                                                      *
+ * This program is free software; you can redistribute it and/or modify it under        *
+ * the terms of the GNU General Public License as published by the Free Software        *
+ * Foundation; either version 3 of the License, or (at your option) any later           *
+ * version.                                                                             *
+ *                                                                                      *
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                      *
+ * You should have received a copy of the GNU General Public License along with         *
+ * this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ ****************************************************************************************/
+
+package com.ichi2.libanki.stats;
+
+import android.content.Context;
+import android.database.Cursor;
+import android.text.TextUtils;
+import android.util.Pair;
+
+import com.ichi2.anki.AnkiDroidApp;
+import com.ichi2.anki.R;
+import com.ichi2.anki.stats.OverviewStatsBuilder;
+import com.ichi2.anki.stats.OverviewStatsBuilder.OverviewStats.AnswerButtonsOverview;
+import com.ichi2.anki.stats.StatsMetaInfo;
+import com.ichi2.libanki.Collection;
+import com.ichi2.libanki.Consts;
+import com.ichi2.libanki.Utils;
+import com.ichi2.libanki.Deck;
+import com.ichi2.libanki.utils.Time;
+
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Vector;
+
+import timber.log.Timber;
+
+
+@SuppressWarnings({&quot;PMD.ExcessiveClassLength&quot;,&quot;PMD.AvoidThrowingRawExceptionTypes&quot;,&quot;PMD.AvoidReassigningParameters&quot;,
+        &quot;PMD.NPathComplexity&quot;,&quot;PMD.MethodNamingConventions&quot;,&quot;PMD.ExcessiveMethodLength&quot;,&quot;PMD.OneDeclarationPerLine&quot;,
+        &quot;PMD.SwitchStmtsShouldHaveDefault&quot;,&quot;PMD.EmptyIfStmt&quot;})
+public class Stats {
+
+<span class="nc" id="L51">    public enum AxisType {</span>
+<span class="nc" id="L52">        TYPE_MONTH(30, R.string.stats_period_month),</span>
+<span class="nc" id="L53">        TYPE_YEAR(365, R.string.stats_period_year),</span>
+<span class="nc" id="L54">        TYPE_LIFE(-1, R.string.stats_period_lifetime);</span>
+
+        public final int days;
+        public final int descriptionId;
+<span class="nc" id="L58">        AxisType(int dayss, int descriptionId) {</span>
+<span class="nc" id="L59">            this.days = dayss;</span>
+<span class="nc" id="L60">            this.descriptionId = descriptionId;</span>
+<span class="nc" id="L61">        }</span>
+    }
+
+<span class="nc" id="L64">    public enum ChartType {FORECAST, REVIEW_COUNT, REVIEW_TIME,</span>
+<span class="nc" id="L65">        INTERVALS, HOURLY_BREAKDOWN, WEEKLY_BREAKDOWN, ANSWER_BUTTONS, CARDS_TYPES, OTHER}</span>
+
+    private final Collection mCol;
+    private final boolean mWholeCollection;
+    private final long mDeckId;
+<span class="nc" id="L70">    private boolean mDynamicAxis = false;</span>
+    private double[][] mSeriesList;
+
+<span class="nc" id="L73">    private boolean mHasColoredCumulative = false;</span>
+    private AxisType mType;
+    private int mTitle;
+    private boolean mBackwards;
+    private int[] mValueLabels;
+    private int[] mColors;
+    private int[] mAxisTitles;
+<span class="nc" id="L80">    private int mMaxCards = 0;</span>
+<span class="nc" id="L81">    private int mMaxElements = 0;</span>
+<span class="nc" id="L82">    private double mFirstElement = 0;</span>
+<span class="nc" id="L83">    private double mLastElement = 0;</span>
+<span class="nc" id="L84">    private int mZeroIndex = 0;</span>
+<span class="nc" id="L85">    private boolean mFoundLearnCards = false;</span>
+<span class="nc" id="L86">    private boolean mFoundCramCards = false;</span>
+    private boolean mFoundRelearnCards;
+<span class="nc" id="L88">    private double[][] mCumulative = null;</span>
+    private String mAverage;
+    private String mLongest;
+    private double mPeak;
+    private double mMcount;
+
+    public static final long SECONDS_PER_DAY = 86400L;
+    public static final long ALL_DECKS_ID = 0L;
+
+<span class="nc" id="L97">    public Stats(Collection col, long did) {</span>
+<span class="nc" id="L98">        mCol = col;</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        mWholeCollection = (did == ALL_DECKS_ID);</span>
+<span class="nc" id="L100">        mDeckId = did;</span>
+<span class="nc" id="L101">    }</span>
+
+    public double[][] getSeriesList() {
+<span class="nc" id="L104">        return mSeriesList;</span>
+    }
+    public double[][] getCumulative() {
+<span class="nc" id="L107">        return mCumulative;</span>
+    }
+
+
+    public Object[] getMetaInfo() {
+        String title;
+<span class="nc bnc" id="L113" title="All 2 branches missed.">        if (mWholeCollection) {</span>
+<span class="nc" id="L114">            title = AnkiDroidApp.getInstance().getResources().getString(R.string.card_browser_all_decks);</span>
+        } else {
+<span class="nc" id="L116">            title = mCol.getDecks().get(mDeckId).getString(&quot;name&quot;);</span>
+        }
+<span class="nc" id="L118">        return new Object[] {/*0*/ mType, /*1*/mTitle, /*2*/mBackwards, /*3*/mValueLabels, /*4*/mColors,</span>
+<span class="nc" id="L119">         /*5*/mAxisTitles, /*6*/title, /*7*/mMaxCards, /*8*/mMaxElements, /*9*/mFirstElement, /*10*/mLastElement,</span>
+<span class="nc" id="L120">                /*11*/mZeroIndex, /*12*/mFoundLearnCards, /*13*/mFoundCramCards, /*14*/mFoundRelearnCards, /*15*/mAverage,</span>
+<span class="nc" id="L121">                /*16*/mLongest, /*17*/mPeak, /*18*/mMcount, /*19*/mHasColoredCumulative, /*20*/mDynamicAxis};</span>
+    }
+
+
+    /**
+     * Today's statistics
+     */
+    public int[] calculateTodayStats(){
+<span class="nc" id="L129">        String lim = _getDeckFilter();</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">        if (lim.length() &gt; 0) {</span>
+<span class="nc" id="L131">            lim = &quot; and &quot; + lim;</span>
+        }
+
+<span class="nc" id="L134">        String query = &quot;select count(), sum(time)/1000, &quot;+</span>
+                &quot;sum(case when ease = 1 then 1 else 0 end), &quot;+ /* failed */
+                &quot;sum(case when type = &quot; + Consts.CARD_TYPE_NEW + &quot; then 1 else 0 end), &quot;+ /* learning */
+                &quot;sum(case when type = &quot; + Consts.CARD_TYPE_LRN + &quot; then 1 else 0 end), &quot;+ /* review */
+                &quot;sum(case when type = &quot; + Consts.CARD_TYPE_REV + &quot; then 1 else 0 end), &quot;+ /* relearn */
+                &quot;sum(case when type = &quot; + Consts.CARD_TYPE_RELEARNING + &quot; then 1 else 0 end) &quot;+ /* filter */
+                &quot;from revlog &quot;+
+                &quot;where ease &gt; 0 &quot;+  // Anki Desktop logs a '0' ease for manual reschedules, ignore them https://github.com/ankidroid/Anki-Android/issues/8008
+<span class="nc" id="L142">                &quot;and id &gt; &quot; + ((mCol.getSched().getDayCutoff()-SECONDS_PER_DAY)*1000) + &quot; &quot; +  lim;</span>
+<span class="nc" id="L143">        Timber.d(&quot;todays statistics query: %s&quot;, query);</span>
+
+        int cards, thetime, failed, lrn, rev, relrn, filt;
+<span class="nc" id="L146">        try (Cursor cur = mCol.getDb()</span>
+<span class="nc" id="L147">                    .query(query)) {</span>
+
+<span class="nc" id="L149">            cur.moveToFirst();</span>
+<span class="nc" id="L150">            cards = cur.getInt(0);</span>
+<span class="nc" id="L151">            thetime = cur.getInt(1);</span>
+<span class="nc" id="L152">            failed = cur.getInt(2);</span>
+<span class="nc" id="L153">            lrn = cur.getInt(3);</span>
+<span class="nc" id="L154">            rev = cur.getInt(4);</span>
+<span class="nc" id="L155">            relrn = cur.getInt(5);</span>
+<span class="nc" id="L156">            filt = cur.getInt(6);</span>
+
+
+
+        }
+<span class="nc" id="L161">        query = &quot;select count(), sum(case when ease = 1 then 0 else 1 end) from revlog &quot; +</span>
+                &quot;where ease &gt; 0 &quot;+ // Anki Desktop logs a '0' ease for manual reschedules, ignore them https://github.com/ankidroid/Anki-Android/issues/8008
+<span class="nc" id="L163">                &quot;and lastIvl &gt;= 21 and id &gt; &quot; + ((mCol.getSched().getDayCutoff()-SECONDS_PER_DAY)*1000) + &quot; &quot; +  lim;</span>
+<span class="nc" id="L164">        Timber.d(&quot;todays statistics query 2: %s&quot;, query);</span>
+
+        int mcnt, msum;
+<span class="nc" id="L167">        try (Cursor cur = mCol.getDb()</span>
+<span class="nc" id="L168">                    .query(query)) {</span>
+
+<span class="nc" id="L170">            cur.moveToFirst();</span>
+<span class="nc" id="L171">            mcnt = cur.getInt(0);</span>
+<span class="nc" id="L172">            msum = cur.getInt(1);</span>
+        }
+
+<span class="nc" id="L175">        return new int[]{cards, thetime, failed, lrn, rev, relrn, filt, mcnt, msum};</span>
+    }
+
+    private String getRevlogTimeFilter(AxisType timespan, boolean inverse) {
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        if (timespan == AxisType.TYPE_LIFE) {</span>
+<span class="nc" id="L180">            return &quot;&quot;;</span>
+        }
+        else {
+            String operator;
+<span class="nc bnc" id="L184" title="All 2 branches missed.">            if (inverse) {</span>
+<span class="nc" id="L185">                operator = &quot;&lt;= &quot;;</span>
+            } else {
+<span class="nc" id="L187">                operator = &quot;&gt; &quot;;</span>
+            }
+<span class="nc" id="L189">            return &quot;id &quot;+ operator + ((mCol.getSched().getDayCutoff() - (timespan.days * SECONDS_PER_DAY)) * 1000);</span>
+        }
+    }
+
+    public Pair&lt;Integer, Double&gt; getNewCards(AxisType timespan) {
+<span class="nc" id="L194">        int chunk = getChunk(timespan);</span>
+<span class="nc" id="L195">        int num = getNum(timespan);</span>
+<span class="nc" id="L196">        List&lt;String&gt; lims = new ArrayList&lt;&gt;(2);</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        if (timespan != AxisType.TYPE_LIFE) {</span>
+<span class="nc" id="L198">            lims.add(&quot;id &gt; &quot; + (mCol.getSched().getDayCutoff() - (num * chunk * SECONDS_PER_DAY)) * 1000);</span>
+        }
+<span class="nc" id="L200">        lims.add(&quot;did in &quot; + _limit());</span>
+        String lim;
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        if (!lims.isEmpty()) {</span>
+<span class="nc" id="L203">            lim = &quot;where &quot; + TextUtils.join(&quot; and &quot;, lims);</span>
+        } else {
+<span class="nc" id="L205">            lim = &quot;&quot;;</span>
+        }
+        // PORTING: tf appears unused, but was passed into the SQL query
+        double tf;
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        if (timespan == AxisType.TYPE_MONTH) {</span>
+<span class="nc" id="L210">            tf = 60.0; //minutes</span>
+        } else {
+<span class="nc" id="L212">            tf = 3600.0; //hours</span>
+        }
+
+
+<span class="nc" id="L216">        long cut = mCol.getSched().getDayCutoff();</span>
+<span class="nc" id="L217">        int cardCount= mCol.getDb().queryScalar(&quot;select count(id) from cards &quot; + lim);</span>
+
+<span class="nc" id="L219">        long periodDays = _periodDays(timespan); // 30|365|-1</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">        if (periodDays == -1) {</span>
+<span class="nc" id="L221">            periodDays = _deckAge(DeckAgeType.ADD);</span>
+        }
+        // Porting - being safe to avoid DIV0
+<span class="nc bnc" id="L224" title="All 2 branches missed.">        if (periodDays == 0) {</span>
+<span class="nc" id="L225">            Timber.w(&quot;periodDays should not be 0&quot;);</span>
+<span class="nc" id="L226">            periodDays = 1;</span>
+        }
+
+<span class="nc" id="L229">        return new Pair&lt;&gt;(cardCount, (double)cardCount / (double) periodDays);</span>
+    }
+
+<span class="nc" id="L232">    private enum DeckAgeType { ADD, REVIEW }</span>
+
+
+    private long _deckAge(DeckAgeType by) {
+<span class="nc" id="L236">        String lim = _revlogLimit();</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">        if (!TextUtils.isEmpty(lim)) {</span>
+<span class="nc" id="L238">            lim += &quot; where &quot; + lim;</span>
+        }
+<span class="nc" id="L240">        double t = 0;</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">        if (by == DeckAgeType.REVIEW) {</span>
+<span class="nc" id="L242">            t = mCol.getDb().queryLongScalar(&quot;select id from revlog &quot; + lim + &quot; order by id limit 1&quot;);</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">        } else if (by == DeckAgeType.ADD) {</span>
+<span class="nc" id="L244">            lim = &quot;where did in &quot; + Utils.ids2str(mCol.getDecks().active());</span>
+<span class="nc" id="L245">            t = mCol.getDb().queryLongScalar(&quot;select id from cards &quot; + lim + &quot; order by id limit 1&quot;);</span>
+        }
+
+        long period;
+<span class="nc bnc" id="L249" title="All 2 branches missed.">        if (t == 0) {</span>
+<span class="nc" id="L250">            period = 1;</span>
+        } else {
+<span class="nc" id="L252">            period = Math.max(1, (int)(1+((mCol.getSched().getDayCutoff() - (t/1000)) / SECONDS_PER_DAY)));</span>
+        }
+<span class="nc" id="L254">        return period;</span>
+    }
+
+
+    private String _revlogLimit() {
+<span class="nc bnc" id="L259" title="All 2 branches missed.">        if (this.mWholeCollection) {</span>
+<span class="nc" id="L260">            return &quot;&quot;;</span>
+        } else {
+<span class="nc" id="L262">            return &quot;cid in (select id from cards where did in &quot; + Utils.ids2str(mCol.getDecks().active()) + &quot;)&quot;;</span>
+        }
+    }
+
+
+    private String getRevlogFilter(AxisType timespan,boolean inverseTimeSpan){
+<span class="nc" id="L268">        ArrayList&lt;String&gt; lims = new ArrayList&lt;&gt;(2);</span>
+<span class="nc" id="L269">        String dayFilter = getRevlogTimeFilter(timespan, inverseTimeSpan);</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        if (!TextUtils.isEmpty(dayFilter)) {</span>
+<span class="nc" id="L271">            lims.add(dayFilter);</span>
+        }
+<span class="nc" id="L273">        String lim = _getDeckFilter().replaceAll(&quot;[\\[\\]]&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        if (lim.length() &gt; 0){</span>
+<span class="nc" id="L275">            lims.add(lim);</span>
+        }
+
+        // Anki Desktop logs a '0' ease for manual reschedules, ignore them https://github.com/ankidroid/Anki-Android/issues/8008
+<span class="nc" id="L279">        lims.add(&quot;ease &gt; 0&quot;);</span>
+
+<span class="nc" id="L281">        lim = &quot;WHERE &quot;;</span>
+<span class="nc" id="L282">        lim += TextUtils.join(&quot; AND &quot;, lims.toArray());</span>
+
+<span class="nc" id="L284">        return lim;</span>
+    }
+
+    public void calculateOverviewStatistics(AxisType timespan, OverviewStatsBuilder.OverviewStats oStats) {
+<span class="nc" id="L288">        oStats.allDays = timespan.days;</span>
+<span class="nc" id="L289">        String lim = getRevlogFilter(timespan,false);</span>
+<span class="nc" id="L290">        try (Cursor cur = mCol.getDb().query(</span>
+                    &quot;SELECT COUNT(*) as num_reviews, sum(case when type = &quot; + Consts.CARD_TYPE_NEW + &quot; then 1 else 0 end) as new_cards FROM revlog &quot; + lim)) {
+<span class="nc bnc" id="L292" title="All 2 branches missed.">            while (cur.moveToNext()) {</span>
+<span class="nc" id="L293">                oStats.totalReviews = cur.getInt(0);</span>
+            }
+        }
+
+<span class="nc" id="L297">        String cntquery = &quot;SELECT  COUNT(*) numDays, MIN(day) firstDay, SUM(time_per_day) sum_time  from (&quot; +</span>
+<span class="nc" id="L298">                &quot; SELECT (cast((id/1000 - &quot; + mCol.getSched().getDayCutoff() + &quot;) / &quot;+SECONDS_PER_DAY+&quot; AS INT)) AS day,  sum(time/1000.0/60.0) AS time_per_day&quot;</span>
+                + &quot; FROM revlog &quot; + lim + &quot; GROUP BY day ORDER BY day)&quot;;
+<span class="nc" id="L300">        Timber.d(&quot;Count cntquery: %s&quot;, cntquery);</span>
+<span class="nc" id="L301">        try (Cursor cur = mCol.getDb().query(cntquery)) {</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">            while (cur.moveToNext()) {</span>
+<span class="nc" id="L303">                oStats.daysStudied = cur.getInt(0);</span>
+<span class="nc" id="L304">                oStats.totalTime = cur.getDouble(2);</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">                if (timespan == AxisType.TYPE_LIFE) {</span>
+<span class="nc" id="L306">                    oStats.allDays = Math.abs(cur.getInt(1)) + 1; // +1 for today</span>
+                }
+            }
+        }
+
+<span class="nc" id="L311">        try (Cursor cur = mCol.getDb().query(</span>
+<span class="nc" id="L312">                    &quot;select avg(ivl), max(ivl) from cards where did in &quot; +_limit() + &quot; and queue = &quot; + Consts.QUEUE_TYPE_REV + &quot;&quot;)) {</span>
+<span class="nc" id="L313">            cur.moveToFirst();</span>
+<span class="nc" id="L314">            oStats.averageInterval = cur.getDouble(0);</span>
+<span class="nc" id="L315">            oStats.longestInterval = cur.getDouble(1);</span>
+        }
+<span class="nc" id="L317">        oStats.reviewsPerDayOnAll = (double) oStats.totalReviews / oStats.allDays;</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">        oStats.reviewsPerDayOnStudyDays = oStats.daysStudied == 0 ? 0 : (double) oStats.totalReviews / oStats.daysStudied;</span>
+
+<span class="nc" id="L320">        oStats.timePerDayOnAll = oStats.totalTime / oStats.allDays;</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">        oStats.timePerDayOnStudyDays = oStats.daysStudied == 0 ? 0 : oStats.totalTime / oStats.daysStudied;</span>
+
+<span class="nc" id="L323">        Pair&lt;Integer, Double&gt; newCardStats = getNewCards(timespan);</span>
+<span class="nc" id="L324">        oStats.totalNewCards = newCardStats.first;</span>
+<span class="nc" id="L325">        oStats.newCardsPerDay = newCardStats.second;</span>
+
+<span class="nc" id="L327">        ArrayList&lt;double[]&gt; list = eases(timespan);</span>
+<span class="nc" id="L328">        oStats.newCardsOverview = toOverview(0, list);</span>
+<span class="nc" id="L329">        oStats.youngCardsOverview = toOverview(1, list);</span>
+<span class="nc" id="L330">        oStats.matureCardsOverview = toOverview(2, list);</span>
+
+<span class="nc" id="L332">        String totalCountQuery = &quot;select count(id), count(distinct nid) from cards where did in &quot; + this._limit();</span>
+<span class="nc" id="L333">        try (Cursor cur = mCol.getDb().query(totalCountQuery)) {</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">            if (cur.moveToFirst()) {</span>
+<span class="nc" id="L335">                oStats.totalCards = cur.getLong(0);</span>
+<span class="nc" id="L336">                oStats.totalNotes = cur.getLong(1);</span>
+            }
+        }
+
+<span class="nc" id="L340">        String factorQuery = &quot;select\n&quot; +</span>
+                &quot;min(factor) / 10.0,\n&quot; +
+                &quot;avg(factor) / 10.0,\n&quot; +
+                &quot;max(factor) / 10.0\n&quot; +
+<span class="nc" id="L344">                &quot;from cards where did in &quot; + _limit() + &quot; and queue = &quot; + Consts.QUEUE_TYPE_REV;</span>
+<span class="nc" id="L345">        try (Cursor cur = mCol.getDb().query(factorQuery)) {</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">            if (cur.moveToFirst()) {</span>
+<span class="nc" id="L347">                oStats.lowestEase = cur.getLong(0);</span>
+<span class="nc" id="L348">                oStats.averageEase = cur.getLong(1);</span>
+<span class="nc" id="L349">                oStats.highestEase = cur.getLong(2);</span>
+            }
+        }
+<span class="nc" id="L352">    }</span>
+
+
+    private AnswerButtonsOverview toOverview(int type, ArrayList&lt;double[]&gt; list) {
+<span class="nc" id="L356">        AnswerButtonsOverview answerButtonsOverview = new AnswerButtonsOverview();</span>
+
+<span class="nc" id="L358">        final int INDEX_TYPE = 0; //0:learn; 1:young; 2:mature</span>
+<span class="nc" id="L359">        final int INDEX_EASE = 1; //1...4 - AGAIN - EASY</span>
+<span class="nc" id="L360">        final int INDEX_COUNT = 2;</span>
+
+<span class="nc" id="L362">        final double EASE_AGAIN = 1d;</span>
+
+<span class="nc bnc" id="L364" title="All 2 branches missed.">        for (double[] elements : list) {</span>
+            //if we're not of the type we're looking for, continue
+<span class="nc bnc" id="L366" title="All 2 branches missed.">            if (elements[INDEX_TYPE] != type) {</span>
+<span class="nc" id="L367">                continue;</span>
+            }
+
+<span class="nc" id="L370">            double answersCountForTypeAndEase = elements[INDEX_COUNT];</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">            boolean isAgain = elements[INDEX_EASE] == EASE_AGAIN;</span>
+
+<span class="nc" id="L373">            answerButtonsOverview.total += answersCountForTypeAndEase;</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">            answerButtonsOverview.correct += isAgain ? 0 : answersCountForTypeAndEase;</span>
+<span class="nc" id="L375">        }</span>
+
+<span class="nc" id="L377">        return answerButtonsOverview;</span>
+    }
+
+
+    public boolean calculateDue(Context context, AxisType type) {
+        // Not in libanki
+<span class="nc" id="L383">        StatsMetaInfo metaInfo = new StatsMetaInfo();</span>
+<span class="nc" id="L384">        metaInfo = new AdvancedStatistics().calculateDueAsMetaInfo(metaInfo, type, context, _limit());</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">        if (metaInfo.isStatsCalculated()) {</span>
+<span class="nc" id="L386">            mDynamicAxis = metaInfo.ismDynamicAxis();</span>
+<span class="nc" id="L387">            mHasColoredCumulative = metaInfo.ismHasColoredCumulative();</span>
+<span class="nc" id="L388">            mType = metaInfo.getmType();</span>
+<span class="nc" id="L389">            mTitle = metaInfo.getmTitle();</span>
+<span class="nc" id="L390">            mBackwards = metaInfo.ismBackwards();</span>
+<span class="nc" id="L391">            mValueLabels = metaInfo.getmValueLabels();</span>
+<span class="nc" id="L392">            mColors = metaInfo.getmColors();</span>
+<span class="nc" id="L393">            mAxisTitles = metaInfo.getmAxisTitles();</span>
+<span class="nc" id="L394">            mMaxCards = metaInfo.getmMaxCards();</span>
+<span class="nc" id="L395">            mMaxElements = metaInfo.getmMaxElements();</span>
+<span class="nc" id="L396">            mFirstElement = metaInfo.getmFirstElement();</span>
+<span class="nc" id="L397">            mLastElement = metaInfo.getmLastElement();</span>
+<span class="nc" id="L398">            mZeroIndex = metaInfo.getmZeroIndex();</span>
+<span class="nc" id="L399">            mCumulative = metaInfo.getmCumulative();</span>
+<span class="nc" id="L400">            mMcount = metaInfo.getmMcount();</span>
+<span class="nc" id="L401">            mSeriesList = metaInfo.getmSeriesList();</span>
+<span class="nc" id="L402">            return metaInfo.isDataAvailable();</span>
+        } else {
+<span class="nc" id="L404">            return calculateDue(type);</span>
+        }
+    }
+
+    /**
+     * Due and cumulative due
+     * ***********************************************************************************************
+     */
+    private boolean calculateDue(AxisType type) {
+<span class="nc" id="L413">        mHasColoredCumulative = false;</span>
+<span class="nc" id="L414">        mType = type;</span>
+<span class="nc" id="L415">        mDynamicAxis = true;</span>
+<span class="nc" id="L416">        mBackwards = true;</span>
+<span class="nc" id="L417">        mTitle = R.string.stats_forecast;</span>
+<span class="nc" id="L418">        mValueLabels = new int[] { R.string.statistics_young, R.string.statistics_mature };</span>
+<span class="nc" id="L419">        mColors = new int[] { R.attr.stats_young, R.attr.stats_mature };</span>
+<span class="nc" id="L420">        mAxisTitles = new int[] { type.ordinal(), R.string.stats_cards, R.string.stats_cumulative_cards };</span>
+<span class="nc" id="L421">        int end = 0;</span>
+<span class="nc" id="L422">        int chunk = 0;</span>
+<span class="nc bnc" id="L423" title="All 4 branches missed.">        switch (type) {</span>
+            case TYPE_MONTH:
+<span class="nc" id="L425">                end = 31;</span>
+<span class="nc" id="L426">                chunk = 1;</span>
+<span class="nc" id="L427">                break;</span>
+            case TYPE_YEAR:
+<span class="nc" id="L429">                end = 52;</span>
+<span class="nc" id="L430">                chunk = 7;</span>
+<span class="nc" id="L431">                break;</span>
+            case TYPE_LIFE:
+<span class="nc" id="L433">                end = -1;</span>
+<span class="nc" id="L434">                chunk = 30;</span>
+                break;
+        }
+
+<span class="nc" id="L438">        String lim = &quot;&quot;;// AND due - &quot; + mCol.getSched().getToday() + &quot; &gt;= &quot; + start; // leave this out in order to show</span>
+        // card too which were due the days before
+<span class="nc bnc" id="L440" title="All 2 branches missed.">        if (end != -1) {</span>
+<span class="nc" id="L441">            lim += &quot; AND day &lt;= &quot; + end;</span>
+        }
+
+<span class="nc" id="L444">        ArrayList&lt;int[]&gt; dues = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L445">        String query = &quot;SELECT (due - &quot; + mCol.getSched().getToday() + &quot;)/&quot; + chunk</span>
+                + &quot; AS day, &quot; // day
+                + &quot;count(), &quot; // all cards
+                + &quot;sum(CASE WHEN ivl &gt;= 21 THEN 1 ELSE 0 END) &quot; // mature cards
+<span class="nc" id="L449">                + &quot;FROM cards WHERE did IN &quot; + _limit() + &quot; AND queue IN (&quot; + Consts.QUEUE_TYPE_REV + &quot;,&quot; + Consts.QUEUE_TYPE_DAY_LEARN_RELEARN + &quot;)&quot; + lim</span>
+                + &quot; GROUP BY day ORDER BY day&quot;;
+<span class="nc" id="L451">        Timber.d(&quot;Forecast query: %s&quot;, query);</span>
+<span class="nc" id="L452">        try (Cursor cur = mCol</span>
+<span class="nc" id="L453">                    .getDb().query(query)) {</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">            while (cur.moveToNext()) {</span>
+<span class="nc" id="L455">                dues.add(new int[] { cur.getInt(0), cur.getInt(1), cur.getInt(2) });</span>
+            }
+        }
+        // small adjustment for a proper chartbuilding with achartengine
+<span class="nc bnc" id="L459" title="All 4 branches missed.">        if (dues.size() == 0 || dues.get(0)[0] &gt; 0) {</span>
+<span class="nc" id="L460">            dues.add(0, new int[] { 0, 0, 0 });</span>
+        }
+<span class="nc bnc" id="L462" title="All 4 branches missed.">        if (end == -1 &amp;&amp; dues.size() &lt; 2) {</span>
+<span class="nc" id="L463">            end = 31;</span>
+        }
+<span class="nc bnc" id="L465" title="All 4 branches missed.">        if (type != AxisType.TYPE_LIFE &amp;&amp; dues.get(dues.size() - 1)[0] &lt; end) {</span>
+<span class="nc" id="L466">            dues.add(new int[] { end, 0, 0 });</span>
+<span class="nc bnc" id="L467" title="All 4 branches missed.">        } else if (type == AxisType.TYPE_LIFE &amp;&amp; dues.size() &lt; 2) {</span>
+<span class="nc" id="L468">            dues.add(new int[] { Math.max(12, dues.get(dues.size() - 1)[0] + 1), 0, 0 });</span>
+        }
+
+<span class="nc" id="L471">        mSeriesList = new double[3][dues.size()];</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">        for (int i = 0; i &lt; dues.size(); i++) {</span>
+<span class="nc" id="L473">            int[] data = dues.get(i);</span>
+
+<span class="nc bnc" id="L475" title="All 2 branches missed.">            if (data[1] &gt; mMaxCards) {</span>
+<span class="nc" id="L476">                mMaxCards = data[1];</span>
+            }
+
+<span class="nc" id="L479">            mSeriesList[0][i] = data[0];</span>
+<span class="nc" id="L480">            mSeriesList[1][i] = data[1];</span>
+<span class="nc" id="L481">            mSeriesList[2][i] = data[2];</span>
+<span class="nc bnc" id="L482" title="All 2 branches missed.">            if (data[0] &gt; mLastElement) {</span>
+<span class="nc" id="L483">                mLastElement = data[0];</span>
+            }
+<span class="nc bnc" id="L485" title="All 2 branches missed.">            if (data[0] == 0) {</span>
+<span class="nc" id="L486">                mZeroIndex = i;</span>
+            }
+        }
+<span class="nc" id="L489">        mMaxElements = dues.size()-1;</span>
+<span class="nc bnc" id="L490" title="All 3 branches missed.">        switch (mType) {</span>
+            case TYPE_MONTH:
+<span class="nc" id="L492">                mLastElement = 31;</span>
+<span class="nc" id="L493">                break;</span>
+            case TYPE_YEAR:
+<span class="nc" id="L495">                mLastElement = 52;</span>
+<span class="nc" id="L496">                break;</span>
+            default:
+        }
+<span class="nc" id="L499">        mFirstElement = 0;</span>
+<span class="nc" id="L500">        mHasColoredCumulative = false;</span>
+<span class="nc" id="L501">        mCumulative = Stats.createCumulative(new double[][]{mSeriesList[0], mSeriesList[1]}, mZeroIndex);</span>
+<span class="nc" id="L502">        mMcount = mCumulative[1][mCumulative[1].length-1];</span>
+        //some adjustments to not crash the chartbuilding with emtpy data
+<span class="nc bnc" id="L504" title="All 2 branches missed.">        if (mMaxElements == 0) {</span>
+<span class="nc" id="L505">            mMaxElements = 10;</span>
+        }
+<span class="nc bnc" id="L507" title="All 2 branches missed.">        if (mMcount == 0) {</span>
+<span class="nc" id="L508">            mMcount = 10;</span>
+        }
+<span class="nc bnc" id="L510" title="All 2 branches missed.">        if (mFirstElement == mLastElement) {</span>
+<span class="nc" id="L511">            mFirstElement = 0;</span>
+<span class="nc" id="L512">            mLastElement = 6;</span>
+        }
+<span class="nc bnc" id="L514" title="All 2 branches missed.">        if (mMaxCards == 0) {</span>
+<span class="nc" id="L515">            mMaxCards = 10;</span>
+        }
+<span class="nc bnc" id="L517" title="All 2 branches missed.">        return dues.size() &gt; 0;</span>
+    }
+
+
+    public boolean calculateReviewCount(AxisType type) {
+<span class="nc" id="L522">        return calculateDone(type, ChartType.REVIEW_COUNT);</span>
+    }
+
+    public boolean calculateReviewTime(AxisType type) {
+<span class="nc" id="L526">        return calculateDone(type, ChartType.REVIEW_TIME);</span>
+    }
+
+
+    /**
+     * Calculation of Review count or Review time
+     * @param type Type
+     * @param charType CharType.REVIEW_COUNT or Chartype.REVIEW_TIME
+     */
+    private boolean calculateDone(AxisType type,  ChartType charType) {
+<span class="nc" id="L536">        mHasColoredCumulative = true;</span>
+<span class="nc" id="L537">        mDynamicAxis = true;</span>
+<span class="nc" id="L538">        mType = type;</span>
+<span class="nc" id="L539">        mBackwards = true;</span>
+<span class="nc bnc" id="L540" title="All 2 branches missed.">        if (charType == ChartType.REVIEW_COUNT) {</span>
+<span class="nc" id="L541">            mTitle = R.string.stats_review_count;</span>
+<span class="nc" id="L542">            mAxisTitles = new int[] { type.ordinal(), R.string.stats_answers, R.string.stats_cumulative_answers };</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">        } else if(charType == ChartType.REVIEW_TIME) {</span>
+<span class="nc" id="L544">            mTitle = R.string.stats_review_time;</span>
+        }
+<span class="nc" id="L546">        mValueLabels = new int[] { R.string.statistics_cram, R.string.statistics_learn, R.string.statistics_relearn, R.string.statistics_young,</span>
+                R.string.statistics_mature };
+<span class="nc" id="L548">        mColors = new int[] { R.attr.stats_cram, R.attr.stats_learn, R.attr.stats_relearn, R.attr.stats_young,</span>
+                R.attr.stats_mature };
+<span class="nc" id="L550">        int num = 0;</span>
+<span class="nc" id="L551">        int chunk = 0;</span>
+<span class="nc bnc" id="L552" title="All 4 branches missed.">        switch (type) {</span>
+            case TYPE_MONTH:
+<span class="nc" id="L554">                num = 31;</span>
+<span class="nc" id="L555">                chunk = 1;</span>
+<span class="nc" id="L556">                break;</span>
+            case TYPE_YEAR:
+<span class="nc" id="L558">                num = 52;</span>
+<span class="nc" id="L559">                chunk = 7;</span>
+<span class="nc" id="L560">                break;</span>
+            case TYPE_LIFE:
+<span class="nc" id="L562">                num = -1;</span>
+<span class="nc" id="L563">                chunk = 30;</span>
+                break;
+        }
+<span class="nc" id="L566">        ArrayList&lt;String&gt; lims = new ArrayList&lt;&gt;(2);</span>
+<span class="nc bnc" id="L567" title="All 2 branches missed.">        if (num != -1) {</span>
+<span class="nc" id="L568">            lims.add(&quot;id &gt; &quot; + ((mCol.getSched().getDayCutoff() - ((num + 1) * chunk * SECONDS_PER_DAY)) * 1000));</span>
+        }
+<span class="nc" id="L570">        String lim = _getDeckFilter().replaceAll(&quot;[\\[\\]]&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L571" title="All 2 branches missed.">        if (lim.length() &gt; 0) {</span>
+<span class="nc" id="L572">            lims.add(lim);</span>
+        }
+<span class="nc bnc" id="L574" title="All 2 branches missed.">        if (lims.size() &gt; 0) {</span>
+<span class="nc" id="L575">            lim = &quot;WHERE &quot;;</span>
+<span class="nc bnc" id="L576" title="All 2 branches missed.">            while (lims.size() &gt; 1) {</span>
+<span class="nc" id="L577">                lim += lims.remove(0) + &quot; AND &quot;;</span>
+            }
+<span class="nc" id="L579">            lim += lims.remove(0);</span>
+        } else {
+<span class="nc" id="L581">            lim = &quot;&quot;;</span>
+        }
+        String ti;
+        String tf;
+<span class="nc bnc" id="L585" title="All 2 branches missed.">        if (charType == ChartType.REVIEW_TIME) {</span>
+<span class="nc" id="L586">            ti = &quot;time/1000.0&quot;;</span>
+<span class="nc bnc" id="L587" title="All 2 branches missed.">            if (mType == AxisType.TYPE_MONTH) {</span>
+<span class="nc" id="L588">                tf = &quot;/60.0&quot;; // minutes</span>
+<span class="nc" id="L589">                mAxisTitles = new int[] { type.ordinal(), R.string.stats_minutes, R.string.stats_cumulative_time_minutes };</span>
+            } else {
+<span class="nc" id="L591">                tf = &quot;/3600.0&quot;; // hours</span>
+<span class="nc" id="L592">                mAxisTitles = new int[] { type.ordinal(), R.string.stats_hours, R.string.stats_cumulative_time_hours };</span>
+            }
+        } else {
+<span class="nc" id="L595">            ti = &quot;1&quot;;</span>
+<span class="nc" id="L596">            tf = &quot;&quot;;</span>
+        }
+<span class="nc" id="L598">        ArrayList&lt;double[]&gt; list = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L599">        String query = &quot;SELECT (cast((id/1000 - &quot; + mCol.getSched().getDayCutoff() + &quot;) / &quot;+SECONDS_PER_DAY+&quot; AS INT))/&quot;</span>
+                + chunk + &quot; AS day, &quot; + &quot;sum(CASE WHEN type = &quot; + Consts.CARD_TYPE_NEW + &quot; THEN &quot; + ti + &quot; ELSE 0 END)&quot;
+                + tf
+                + &quot;, &quot; // lrn
+                + &quot;sum(CASE WHEN type = &quot; + Consts.CARD_TYPE_LRN + &quot; AND lastIvl &lt; 21 THEN &quot; + ti + &quot; ELSE 0 END)&quot; + tf
+                + &quot;, &quot; // yng
+                + &quot;sum(CASE WHEN type = &quot; + Consts.CARD_TYPE_LRN + &quot; AND lastIvl &gt;= 21 THEN &quot; + ti + &quot; ELSE 0 END)&quot; + tf
+                + &quot;, &quot; // mtr
+                + &quot;sum(CASE WHEN type = 2 THEN &quot; + ti + &quot; ELSE 0 END)&quot; + tf + &quot;, &quot; // lapse
+                + &quot;sum(CASE WHEN type = &quot; + Consts.CARD_TYPE_RELEARNING + &quot; THEN &quot; + ti + &quot; ELSE 0 END)&quot; + tf // cram
+                + &quot; FROM revlog &quot; + lim + &quot; GROUP BY day ORDER BY day&quot;;
+
+<span class="nc" id="L611">        Timber.d(&quot;ReviewCount query: %s&quot;, query);</span>
+
+<span class="nc" id="L613">        try (Cursor cur = mCol</span>
+<span class="nc" id="L614">                    .getDb()</span>
+<span class="nc" id="L615">                    .query(query)) {</span>
+<span class="nc bnc" id="L616" title="All 2 branches missed.">            while (cur.moveToNext()) {</span>
+<span class="nc" id="L617">                list.add(new double[] { cur.getDouble(0), cur.getDouble(5), cur.getDouble(1), cur.getDouble(4),</span>
+<span class="nc" id="L618">                        cur.getDouble(2), cur.getDouble(3)});</span>
+            }
+        }
+
+
+        // small adjustment for a proper chartbuilding with achartengine
+<span class="nc bnc" id="L624" title="All 6 branches missed.">        if (type != AxisType.TYPE_LIFE &amp;&amp; (list.size() == 0 || list.get(0)[0] &gt; -num)) {</span>
+<span class="nc" id="L625">            list.add(0, new double[] { -num, 0, 0, 0, 0, 0 });</span>
+<span class="nc bnc" id="L626" title="All 4 branches missed.">        } else if (type == AxisType.TYPE_LIFE &amp;&amp; list.size() == 0) {</span>
+<span class="nc" id="L627">            list.add(0, new double[] { -12, 0, 0, 0, 0, 0 });</span>
+        }
+<span class="nc bnc" id="L629" title="All 2 branches missed.">        if (list.get(list.size() - 1)[0] &lt; 0) {</span>
+<span class="nc" id="L630">            list.add(new double[] { 0, 0, 0, 0, 0, 0 });</span>
+        }
+
+<span class="nc" id="L633">        mSeriesList = new double[6][list.size()];</span>
+<span class="nc bnc" id="L634" title="All 2 branches missed.">        for (int i = 0; i &lt; list.size(); i++) {</span>
+<span class="nc" id="L635">            double[] data = list.get(i);</span>
+<span class="nc" id="L636">            mSeriesList[0][i] = data[0]; // day</span>
+<span class="nc" id="L637">            mSeriesList[1][i] = data[1] + data[2] + data[3] + data[4] + data[5]; // cram</span>
+<span class="nc" id="L638">            mSeriesList[2][i] = data[2] + data[3] + data[4] + data[5]; // learn</span>
+<span class="nc" id="L639">            mSeriesList[3][i] = data[3] + data[4] + data[5]; // relearn</span>
+<span class="nc" id="L640">            mSeriesList[4][i] = data[4] + data[5]; // young</span>
+<span class="nc" id="L641">            mSeriesList[5][i] = data[5]; // mature</span>
+
+<span class="nc bnc" id="L643" title="All 2 branches missed.">            if (mSeriesList[1][i] &gt; mMaxCards) {</span>
+<span class="nc" id="L644">                mMaxCards = (int) Math.round(data[1] + data[2] + data[3] + data[4] + data[5]);</span>
+            }
+<span class="nc bnc" id="L646" title="All 2 branches missed.">            if (data[5] &gt;= 0.999) {</span>
+<span class="nc" id="L647">                mFoundCramCards = true;</span>
+            }
+<span class="nc bnc" id="L649" title="All 2 branches missed.">            if (data[1] &gt;= 0.999) {</span>
+<span class="nc" id="L650">                mFoundLearnCards = true;</span>
+            }
+<span class="nc bnc" id="L652" title="All 2 branches missed.">            if (data[2] &gt;= 0.999) {</span>
+<span class="nc" id="L653">                mFoundRelearnCards = true;</span>
+            }
+<span class="nc bnc" id="L655" title="All 2 branches missed.">            if (data[0] &gt; mLastElement) {</span>
+<span class="nc" id="L656">                mLastElement = data[0];</span>
+            }
+<span class="nc bnc" id="L658" title="All 2 branches missed.">            if (data[0] &lt; mFirstElement) {</span>
+<span class="nc" id="L659">                mFirstElement = data[0];</span>
+            }
+<span class="nc bnc" id="L661" title="All 2 branches missed.">            if (data[0] == 0) {</span>
+<span class="nc" id="L662">                mZeroIndex = i;</span>
+            }
+        }
+<span class="nc" id="L665">        mMaxElements = list.size()-1;</span>
+<span class="nc" id="L666">        mCumulative = new double[6][];</span>
+<span class="nc" id="L667">        mCumulative[0] = mSeriesList[0];</span>
+<span class="nc bnc" id="L668" title="All 2 branches missed.">        for (int i = 1; i &lt; mSeriesList.length; i++) {</span>
+<span class="nc" id="L669">            mCumulative[i] = createCumulative(mSeriesList[i]);</span>
+<span class="nc bnc" id="L670" title="All 2 branches missed.">            if (i &gt; 1) {</span>
+<span class="nc bnc" id="L671" title="All 2 branches missed.">                for (int j = 0; j &lt; mCumulative[i - 1].length; j++) {</span>
+<span class="nc" id="L672">                    mCumulative[i - 1][j] -= mCumulative[i][j];</span>
+                }
+            }
+        }
+
+<span class="nc bnc" id="L677" title="All 3 branches missed.">        switch (mType) {</span>
+            case TYPE_MONTH:
+<span class="nc" id="L679">                mFirstElement = -31;</span>
+<span class="nc" id="L680">                break;</span>
+            case TYPE_YEAR:
+<span class="nc" id="L682">                mFirstElement = -52;</span>
+<span class="nc" id="L683">                break;</span>
+            default:
+        }
+
+<span class="nc" id="L687">        mMcount = 0;</span>
+        // we could assume the last element to be the largest,
+        // but on some collections that may not be true due some negative values
+        //so we search for the largest element:
+<span class="nc bnc" id="L691" title="All 2 branches missed.">        for (int i = 1; i &lt; mCumulative.length; i++) {</span>
+<span class="nc bnc" id="L692" title="All 2 branches missed.">            for (int j = 0; j &lt; mCumulative[i].length; j++) {</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">                if (mMcount &lt; mCumulative[i][j])</span>
+<span class="nc" id="L694">                    mMcount = mCumulative[i][j];</span>
+            }
+        }
+
+        //some adjustments to not crash the chartbuilding with emtpy data
+<span class="nc bnc" id="L699" title="All 2 branches missed.">        if (mMaxCards == 0) {</span>
+<span class="nc" id="L700">            mMaxCards = 10;</span>
+        }
+<span class="nc bnc" id="L702" title="All 2 branches missed.">        if (mMaxElements == 0) {</span>
+<span class="nc" id="L703">            mMaxElements = 10;</span>
+        }
+<span class="nc bnc" id="L705" title="All 2 branches missed.">        if (mMcount == 0) {</span>
+<span class="nc" id="L706">            mMcount = 10;</span>
+        }
+<span class="nc bnc" id="L708" title="All 2 branches missed.">        if (mFirstElement == mLastElement) {</span>
+<span class="nc" id="L709">            mFirstElement = -10;</span>
+<span class="nc" id="L710">            mLastElement = 0;</span>
+        }
+<span class="nc bnc" id="L712" title="All 2 branches missed.">        return list.size() &gt; 0;</span>
+    }
+
+
+    private int getChunk(AxisType axisType) {
+<span class="nc bnc" id="L717" title="All 4 branches missed.">        switch (axisType) {</span>
+<span class="nc" id="L718">            case TYPE_MONTH: return 1;</span>
+<span class="nc" id="L719">            case TYPE_YEAR: return 7;</span>
+<span class="nc" id="L720">            case TYPE_LIFE: return 30;</span>
+<span class="nc" id="L721">            default: throw new IllegalStateException(String.format(&quot;Invalid axisType: %s&quot;, axisType));</span>
+        }
+    }
+
+    private int getNum(AxisType axisType) {
+<span class="nc bnc" id="L726" title="All 4 branches missed.">        switch (axisType) {</span>
+<span class="nc" id="L727">            case TYPE_MONTH: return 31;</span>
+<span class="nc" id="L728">            case TYPE_YEAR: return 52;</span>
+<span class="nc" id="L729">            case TYPE_LIFE: return -1; // Note: can also be 'None'</span>
+<span class="nc" id="L730">            default: throw new IllegalStateException(String.format(&quot;Invalid axisType: %s&quot;, axisType));</span>
+        }
+    }
+
+    /**
+     * Intervals ***********************************************************************************************
+     */
+
+    public boolean calculateIntervals(Context context, AxisType type) {
+<span class="nc" id="L739">        mDynamicAxis = true;</span>
+<span class="nc" id="L740">        mType = type;</span>
+<span class="nc" id="L741">        double all = 0, avg = 0, max_ = 0;</span>
+<span class="nc" id="L742">        mBackwards = false;</span>
+<span class="nc" id="L743">        mTitle = R.string.stats_review_intervals;</span>
+<span class="nc" id="L744">        mAxisTitles = new int[] { type.ordinal(), R.string.stats_cards, R.string.stats_percentage };</span>
+<span class="nc" id="L745">        mValueLabels = new int[] { R.string.stats_cards_intervals};</span>
+<span class="nc" id="L746">        mColors = new int[] { R.attr.stats_interval};</span>
+<span class="nc" id="L747">        int num = 0;</span>
+<span class="nc" id="L748">        String lim = &quot;&quot;;</span>
+<span class="nc" id="L749">        int chunk = 0;</span>
+<span class="nc bnc" id="L750" title="All 4 branches missed.">        switch (type) {</span>
+            case TYPE_MONTH:
+<span class="nc" id="L752">                num = 31;</span>
+<span class="nc" id="L753">                chunk = 1;</span>
+<span class="nc" id="L754">                lim = &quot; and grp &lt;= 30&quot;;</span>
+<span class="nc" id="L755">                break;</span>
+            case TYPE_YEAR:
+<span class="nc" id="L757">                num = 52;</span>
+<span class="nc" id="L758">                chunk = 7;</span>
+<span class="nc" id="L759">                lim = &quot; and grp &lt;= 52&quot;;</span>
+<span class="nc" id="L760">                break;</span>
+            case TYPE_LIFE:
+<span class="nc" id="L762">                num = -1;</span>
+<span class="nc" id="L763">                chunk = 30;</span>
+<span class="nc" id="L764">                lim = &quot;&quot;;</span>
+                break;
+        }
+
+<span class="nc" id="L768">        ArrayList&lt;double[]&gt; list = new ArrayList&lt;&gt;(52); // Max of `num`, given that we probably won't have card with more than 52 year interval</span>
+<span class="nc" id="L769">        try (Cursor cur = mCol</span>
+<span class="nc" id="L770">                    .getDb()</span>
+<span class="nc" id="L771">                    .query(</span>
+                            &quot;select ivl / &quot; + chunk + &quot; as grp, count() from cards &quot; +
+<span class="nc" id="L773">                                    &quot;where did in &quot;+ _limit() +&quot; and queue = &quot; + Consts.QUEUE_TYPE_REV + &quot; &quot; + lim + &quot; &quot; +</span>
+                                    &quot;group by grp &quot; +
+                                    &quot;order by grp&quot;)) {
+<span class="nc bnc" id="L776" title="All 2 branches missed.">            while (cur.moveToNext()) {</span>
+<span class="nc" id="L777">                list.add(new double[] {cur.getDouble(0), cur.getDouble(1)});</span>
+            }
+        }
+<span class="nc" id="L780">        try (Cursor cur = mCol</span>
+<span class="nc" id="L781">                    .getDb()</span>
+<span class="nc" id="L782">                    .query(</span>
+<span class="nc" id="L783">                            &quot;select count(), avg(ivl), max(ivl) from cards where did in &quot; +_limit() +</span>
+                                    &quot; and queue = &quot; + Consts.QUEUE_TYPE_REV + &quot;&quot;)) {
+<span class="nc" id="L785">            cur.moveToFirst();</span>
+<span class="nc" id="L786">            all = cur.getDouble(0);</span>
+<span class="nc" id="L787">            avg = cur.getDouble(1);</span>
+<span class="nc" id="L788">            max_ = cur.getDouble(2);</span>
+        }
+
+        // small adjustment for a proper chartbuilding with achartengine
+<span class="nc bnc" id="L792" title="All 4 branches missed.">        if (list.size() == 0 || list.get(0)[0] &gt; 0) {</span>
+<span class="nc" id="L793">            list.add(0, new double[] { 0, 0, 0 });</span>
+        }
+<span class="nc bnc" id="L795" title="All 4 branches missed.">        if (num == -1 &amp;&amp; list.size() &lt; 2) {</span>
+<span class="nc" id="L796">            num = 31;</span>
+        }
+<span class="nc bnc" id="L798" title="All 4 branches missed.">        if (type != AxisType.TYPE_LIFE &amp;&amp; list.get(list.size() - 1)[0] &lt; num) {</span>
+<span class="nc" id="L799">            list.add(new double[] { num, 0 });</span>
+<span class="nc bnc" id="L800" title="All 4 branches missed.">        } else if (type == AxisType.TYPE_LIFE &amp;&amp; list.size() &lt; 2) {</span>
+<span class="nc" id="L801">            list.add(new double[] { Math.max(12, list.get(list.size() - 1)[0] + 1), 0 });</span>
+        }
+
+<span class="nc" id="L804">        mLastElement = 0;</span>
+<span class="nc" id="L805">        mSeriesList = new double[2][list.size()];</span>
+<span class="nc bnc" id="L806" title="All 2 branches missed.">        for (int i = 0; i &lt; list.size(); i++) {</span>
+<span class="nc" id="L807">            double[] data = list.get(i);</span>
+<span class="nc" id="L808">            mSeriesList[0][i] = data[0]; // grp</span>
+<span class="nc" id="L809">            mSeriesList[1][i] = data[1]; // cnt</span>
+<span class="nc bnc" id="L810" title="All 2 branches missed.">            if (mSeriesList[1][i] &gt; mMaxCards)</span>
+<span class="nc" id="L811">                mMaxCards = (int) Math.round(data[1]);</span>
+<span class="nc bnc" id="L812" title="All 2 branches missed.">            if (data[0] &gt; mLastElement)</span>
+<span class="nc" id="L813">                mLastElement = data[0];</span>
+
+        }
+<span class="nc" id="L816">        mCumulative = createCumulative(mSeriesList);</span>
+<span class="nc bnc" id="L817" title="All 2 branches missed.">        for (int i = 0; i &lt; list.size(); i++) {</span>
+<span class="nc" id="L818">            mCumulative[1][i] /= all / 100;</span>
+        }
+<span class="nc" id="L820">        mMcount = 100;</span>
+
+<span class="nc bnc" id="L822" title="All 3 branches missed.">        switch (mType) {</span>
+            case TYPE_MONTH:
+<span class="nc" id="L824">                mLastElement = 31;</span>
+<span class="nc" id="L825">                break;</span>
+            case TYPE_YEAR:
+<span class="nc" id="L827">                mLastElement = 52;</span>
+<span class="nc" id="L828">                break;</span>
+            default:
+        }
+<span class="nc" id="L831">        mFirstElement = 0;</span>
+<span class="nc" id="L832">        mMaxElements = list.size() - 1;</span>
+<span class="nc" id="L833">        mAverage = Utils.timeSpan(context, Math.round(avg * SECONDS_PER_DAY));</span>
+<span class="nc" id="L834">        mLongest = Utils.timeSpan(context, Math.round(max_ * SECONDS_PER_DAY));</span>
+
+        //some adjustments to not crash the chartbuilding with emtpy data
+<span class="nc bnc" id="L837" title="All 2 branches missed.">        if (mMaxElements == 0) {</span>
+<span class="nc" id="L838">            mMaxElements = 10;</span>
+        }
+<span class="nc bnc" id="L840" title="All 2 branches missed.">        if (mMcount == 0) {</span>
+<span class="nc" id="L841">            mMcount = 10;</span>
+        }
+<span class="nc bnc" id="L843" title="All 2 branches missed.">        if (mFirstElement == mLastElement) {</span>
+<span class="nc" id="L844">            mFirstElement = 0;</span>
+<span class="nc" id="L845">            mLastElement = 6;</span>
+        }
+<span class="nc bnc" id="L847" title="All 2 branches missed.">        if (mMaxCards == 0) {</span>
+<span class="nc" id="L848">            mMaxCards = 10;</span>
+        }
+<span class="nc bnc" id="L850" title="All 2 branches missed.">        return list.size() &gt; 0;</span>
+    }
+
+    /**
+     * Hourly Breakdown
+     */
+    public boolean calculateBreakdown(AxisType type) {
+<span class="nc" id="L857">        mTitle = R.string.stats_breakdown;</span>
+<span class="nc" id="L858">        mBackwards = false;</span>
+<span class="nc" id="L859">        mAxisTitles = new int[] { R.string.stats_time_of_day, R.string.stats_percentage_correct, R.string.stats_reviews };</span>
+<span class="nc" id="L860">        mValueLabels = new int[] { R.string.stats_percentage_correct, R.string.stats_answers};</span>
+<span class="nc" id="L861">        mColors = new int[] { R.attr.stats_counts, R.attr.stats_hours};</span>
+<span class="nc" id="L862">        mType = type;</span>
+<span class="nc" id="L863">        String lim = _getDeckFilter().replaceAll(&quot;[\\[\\]]&quot;, &quot;&quot;);</span>
+
+<span class="nc bnc" id="L865" title="All 2 branches missed.">        if (lim.length() &gt; 0) {</span>
+<span class="nc" id="L866">            lim = &quot; and &quot; + lim;</span>
+        }
+        int rolloverHour;
+<span class="nc bnc" id="L869" title="All 2 branches missed.">        if (mCol.schedVer() == 1) {</span>
+<span class="nc" id="L870">            Calendar sd = mCol.crtGregorianCalendar();</span>
+<span class="nc" id="L871">            rolloverHour = sd.get(Calendar.HOUR_OF_DAY);</span>
+<span class="nc" id="L872">        } else {</span>
+<span class="nc" id="L873">            rolloverHour = mCol.getConf().optInt(&quot;rollover&quot;, 4);</span>
+        }
+<span class="nc" id="L875">        int pd = _periodDays();</span>
+<span class="nc bnc" id="L876" title="All 2 branches missed.">        if (pd &gt; 0) {</span>
+<span class="nc" id="L877">            lim += &quot; and id &gt; &quot; + ((mCol.getSched().getDayCutoff() -  (SECONDS_PER_DAY * pd)) * 1000);</span>
+        }
+<span class="nc" id="L879">        long cutoff = mCol.getSched().getDayCutoff();</span>
+<span class="nc" id="L880">        long cut = cutoff - rolloverHour * 3600;</span>
+
+<span class="nc" id="L882">        ArrayList&lt;double[]&gt; list = new ArrayList&lt;&gt;(24); // number of hours</span>
+<span class="nc" id="L883">        String query = &quot;select &quot; +</span>
+                &quot;23 - ((cast((&quot; + cut + &quot; - id/1000) / 3600.0 as int)) % 24) as hour, &quot; +
+                &quot;sum(case when ease = 1 then 0 else 1 end) / &quot; +
+                &quot;cast(count() as float) * 100, &quot; +
+                &quot;count() &quot; +
+                &quot;from revlog where type in (&quot; + Consts.CARD_TYPE_NEW + &quot;,&quot; + Consts.CARD_TYPE_LRN + &quot;,&quot; + Consts.CARD_TYPE_REV + &quot;) &quot; + lim +&quot; &quot; +
+                &quot;group by hour having count() &gt; 30 order by hour&quot;;
+<span class="nc" id="L890">        Timber.d(&quot;%d : %d breakdown query: %s&quot;, rolloverHour, cutoff, query);</span>
+<span class="nc" id="L891">        try (Cursor cur = mCol.getDb()</span>
+<span class="nc" id="L892">                    .query(query)) {</span>
+<span class="nc bnc" id="L893" title="All 2 branches missed.">            while (cur.moveToNext()) {</span>
+<span class="nc" id="L894">                list.add(new double[] { cur.getDouble(0), cur.getDouble(1), cur.getDouble(2) });</span>
+            }
+        }
+
+        //TODO adjust for breakdown, for now only copied from intervals
+        //small adjustment for a proper chartbuilding with achartengine
+<span class="nc bnc" id="L900" title="All 2 branches missed.">        if (list.size() == 0) {</span>
+<span class="nc" id="L901">            list.add(0, new double[] { 0, 0, 0 });</span>
+        }
+
+<span class="nc bnc" id="L904" title="All 2 branches missed.">        for (int i = 0; i &lt; list.size(); i++) {</span>
+<span class="nc" id="L905">            double[] data = list.get(i);</span>
+<span class="nc" id="L906">            int intHour = (int) data[0];</span>
+<span class="nc" id="L907">            int hour = (intHour - 4) % 24;</span>
+<span class="nc bnc" id="L908" title="All 2 branches missed.">            if (hour &lt; 0) {</span>
+<span class="nc" id="L909">                hour += 24;</span>
+            }
+<span class="nc" id="L911">            data[0] = hour;</span>
+<span class="nc" id="L912">            list.set(i, data);</span>
+        }
+<span class="nc" id="L914">        Collections.sort(list, (s1, s2) -&gt; Double.compare(s1[0], s2[0]));</span>
+
+<span class="nc" id="L916">        mSeriesList = new double[4][list.size()];</span>
+<span class="nc" id="L917">        mPeak = 0.0;</span>
+<span class="nc" id="L918">        mMcount = 0.0;</span>
+<span class="nc" id="L919">        double minHour = Double.MAX_VALUE;</span>
+<span class="nc" id="L920">        double maxHour = 0;</span>
+<span class="nc bnc" id="L921" title="All 2 branches missed.">        for (int i = 0; i &lt; list.size(); i++) {</span>
+<span class="nc" id="L922">            double[] data = list.get(i);</span>
+<span class="nc" id="L923">            int hour = (int)data[0];</span>
+
+            //double hour = data[0];
+<span class="nc bnc" id="L926" title="All 2 branches missed.">            if (hour &lt; minHour) {</span>
+<span class="nc" id="L927">                minHour = hour;</span>
+            }
+<span class="nc bnc" id="L929" title="All 2 branches missed.">            if (hour &gt; maxHour) {</span>
+<span class="nc" id="L930">                maxHour = hour;</span>
+            }
+<span class="nc" id="L932">            double pct = data[1];</span>
+<span class="nc bnc" id="L933" title="All 2 branches missed.">            if (pct &gt; mPeak) {</span>
+<span class="nc" id="L934">                mPeak = pct;</span>
+            }
+<span class="nc" id="L936">            mSeriesList[0][i] = hour;</span>
+<span class="nc" id="L937">            mSeriesList[1][i] = pct;</span>
+<span class="nc" id="L938">            mSeriesList[2][i] = data[2];</span>
+<span class="nc bnc" id="L939" title="All 2 branches missed.">            if (i == 0) {</span>
+<span class="nc" id="L940">                mSeriesList[3][i] = pct;</span>
+            } else {
+<span class="nc" id="L942">                double prev = mSeriesList[3][i - 1];</span>
+<span class="nc" id="L943">                double diff = pct - prev;</span>
+<span class="nc" id="L944">                diff /= 3.0;</span>
+<span class="nc" id="L945">                diff = Math.round(diff * 10.0) / 10.0;</span>
+<span class="nc" id="L946">                mSeriesList[3][i] = prev + diff;</span>
+            }
+<span class="nc bnc" id="L948" title="All 2 branches missed.">            if (data[2] &gt; mMcount) {</span>
+<span class="nc" id="L949">                mMcount = data[2];</span>
+            }
+<span class="nc bnc" id="L951" title="All 2 branches missed.">            if (mSeriesList[1][i] &gt; mMaxCards) {</span>
+<span class="nc" id="L952">                mMaxCards = (int) mSeriesList[1][i];</span>
+            }
+        }
+
+<span class="nc" id="L956">        mFirstElement = mSeriesList[0][0];</span>
+<span class="nc" id="L957">        mLastElement = mSeriesList[0][mSeriesList[0].length - 1];</span>
+<span class="nc" id="L958">        mMaxElements = (int) (maxHour - minHour);</span>
+
+        //some adjustments to not crash the chartbuilding with emtpy data
+<span class="nc bnc" id="L961" title="All 2 branches missed.">        if (mMaxElements == 0) {</span>
+<span class="nc" id="L962">            mMaxElements = 10;</span>
+        }
+<span class="nc bnc" id="L964" title="All 2 branches missed.">        if (mMcount == 0) {</span>
+<span class="nc" id="L965">            mMcount = 10;</span>
+        }
+<span class="nc bnc" id="L967" title="All 2 branches missed.">        if (mFirstElement == mLastElement) {</span>
+<span class="nc" id="L968">            mFirstElement = 0;</span>
+<span class="nc" id="L969">            mLastElement = 23;</span>
+        }
+<span class="nc bnc" id="L971" title="All 2 branches missed.">        if (mMaxCards == 0) {</span>
+<span class="nc" id="L972">            mMaxCards = 10;</span>
+        }
+<span class="nc bnc" id="L974" title="All 2 branches missed.">        return list.size() &gt; 0;</span>
+    }
+
+    /**
+     * Weekly Breakdown
+     */
+    public boolean calculateWeeklyBreakdown(AxisType type) {
+<span class="nc" id="L981">        mTitle = R.string.stats_weekly_breakdown;</span>
+<span class="nc" id="L982">        mBackwards = false;</span>
+<span class="nc" id="L983">        mAxisTitles = new int[] { R.string.stats_day_of_week, R.string.stats_percentage_correct, R.string.stats_reviews };</span>
+<span class="nc" id="L984">        mValueLabels = new int[] { R.string.stats_percentage_correct, R.string.stats_answers};</span>
+<span class="nc" id="L985">        mColors = new int[] { R.attr.stats_counts, R.attr.stats_hours};</span>
+<span class="nc" id="L986">        mType = type;</span>
+<span class="nc" id="L987">        String lim = _getDeckFilter().replaceAll(&quot;[\\[\\]]&quot;, &quot;&quot;);</span>
+
+<span class="nc bnc" id="L989" title="All 2 branches missed.">        if (lim.length() &gt; 0) {</span>
+<span class="nc" id="L990">            lim = &quot; and &quot; + lim;</span>
+        }
+
+<span class="nc" id="L993">        Calendar sd = Time.gregorianCalendar(mCol.getSched().getDayCutoff() * 1000);</span>
+
+<span class="nc" id="L995">        int pd = _periodDays();</span>
+<span class="nc bnc" id="L996" title="All 2 branches missed.">        if (pd &gt; 0) {</span>
+<span class="nc" id="L997">            pd = Math.round( pd / 7 ) * 7;</span>
+<span class="nc" id="L998">            lim += &quot; and id &gt; &quot; + ((mCol.getSched().getDayCutoff() - (SECONDS_PER_DAY * pd)) * 1000);</span>
+        }
+
+<span class="nc" id="L1001">        long cutoff = mCol.getSched().getDayCutoff();</span>
+<span class="nc" id="L1002">        ArrayList&lt;double[]&gt; list = new ArrayList&lt;&gt;(7); // one by day of the week</span>
+<span class="nc" id="L1003">        String query = &quot;SELECT strftime('%w',datetime( cast(id/ 1000  -&quot; + sd.get(Calendar.HOUR_OF_DAY) * 3600 +</span>
+                &quot; as int), 'unixepoch')) as wd, &quot; +
+                &quot;sum(case when ease = 1 then 0 else 1 end) / &quot; +
+                &quot;cast(count() as float) * 100, &quot; +
+                &quot;count() &quot; +
+                &quot;from revlog &quot; +
+                &quot;where type in (&quot; + Consts.CARD_TYPE_NEW + &quot;,&quot; + Consts.CARD_TYPE_LRN + &quot;,&quot; + Consts.CARD_TYPE_REV + &quot;) &quot; + lim +&quot; &quot; +
+                &quot;group by wd &quot; +
+                &quot;order by wd&quot;;
+<span class="nc" id="L1012">        Timber.d(sd.get(Calendar.HOUR_OF_DAY) + &quot; : &quot; +cutoff + &quot; weekly breakdown query: %s&quot;, query);</span>
+<span class="nc" id="L1013">        try (Cursor cur = mCol.getDb()</span>
+<span class="nc" id="L1014">                    .query(query)) {</span>
+<span class="nc bnc" id="L1015" title="All 2 branches missed.">            while (cur.moveToNext()) {</span>
+<span class="nc" id="L1016">                list.add(new double[] { cur.getDouble(0), cur.getDouble(1), cur.getDouble(2) });</span>
+            }
+        }
+
+        //TODO adjust for breakdown, for now only copied from intervals
+        // small adjustment for a proper chartbuilding with achartengine
+<span class="nc bnc" id="L1022" title="All 2 branches missed.">        if (list.size() == 0 ) {</span>
+<span class="nc" id="L1023">            list.add(0, new double[] { 0, 0, 0 });</span>
+        }
+
+<span class="nc" id="L1026">        mSeriesList = new double[4][list.size()];</span>
+<span class="nc" id="L1027">        mPeak = 0.0;</span>
+<span class="nc" id="L1028">        mMcount = 0.0;</span>
+<span class="nc" id="L1029">        double minHour = Double.MAX_VALUE;</span>
+<span class="nc" id="L1030">        double maxHour = 0;</span>
+<span class="nc bnc" id="L1031" title="All 2 branches missed.">        for (int i = 0; i &lt; list.size(); i++) {</span>
+<span class="nc" id="L1032">            double[] data = list.get(i);</span>
+<span class="nc" id="L1033">            int hour = (int) data[0];</span>
+
+            //double hour = data[0];
+<span class="nc bnc" id="L1036" title="All 2 branches missed.">            if (hour &lt; minHour) {</span>
+<span class="nc" id="L1037">                minHour = hour;</span>
+            }
+<span class="nc bnc" id="L1039" title="All 2 branches missed.">            if (hour &gt; maxHour) {</span>
+<span class="nc" id="L1040">                maxHour = hour;</span>
+            }
+<span class="nc" id="L1042">            double pct = data[1];</span>
+<span class="nc bnc" id="L1043" title="All 2 branches missed.">            if (pct &gt; mPeak) {</span>
+<span class="nc" id="L1044">                mPeak = pct;</span>
+            }
+
+<span class="nc" id="L1047">            mSeriesList[0][i] = hour;</span>
+<span class="nc" id="L1048">            mSeriesList[1][i] = pct;</span>
+<span class="nc" id="L1049">            mSeriesList[2][i] = data[2];</span>
+<span class="nc bnc" id="L1050" title="All 2 branches missed.">            if (i == 0) {</span>
+<span class="nc" id="L1051">                mSeriesList[3][i] = pct;</span>
+            } else {
+<span class="nc" id="L1053">                double prev = mSeriesList[3][i - 1];</span>
+<span class="nc" id="L1054">                double diff = pct - prev;</span>
+<span class="nc" id="L1055">                diff /= 3.0;</span>
+<span class="nc" id="L1056">                diff = Math.round(diff * 10.0) / 10.0;</span>
+<span class="nc" id="L1057">                mSeriesList[3][i] = prev + diff;</span>
+            }
+<span class="nc bnc" id="L1059" title="All 2 branches missed.">            if (data[2] &gt; mMcount) {</span>
+<span class="nc" id="L1060">                mMcount = data[2];</span>
+            }
+<span class="nc bnc" id="L1062" title="All 2 branches missed.">            if (mSeriesList[1][i] &gt; mMaxCards) {</span>
+<span class="nc" id="L1063">                mMaxCards = (int) mSeriesList[1][i];</span>
+            }
+        }
+<span class="nc" id="L1066">        mFirstElement = mSeriesList[0][0];</span>
+<span class="nc" id="L1067">        mLastElement = mSeriesList[0][mSeriesList[0].length - 1];</span>
+<span class="nc" id="L1068">        mMaxElements = (int) (maxHour - minHour);</span>
+
+        //some adjustments to not crash the chartbuilding with emtpy data
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">        if (mMaxElements == 0) {</span>
+<span class="nc" id="L1072">            mMaxElements = 10;</span>
+        }
+<span class="nc bnc" id="L1074" title="All 2 branches missed.">        if (mMcount == 0) {</span>
+<span class="nc" id="L1075">            mMcount = 10;</span>
+        }
+<span class="nc bnc" id="L1077" title="All 2 branches missed.">        if (mFirstElement == mLastElement) {</span>
+<span class="nc" id="L1078">            mFirstElement = 0;</span>
+<span class="nc" id="L1079">            mLastElement = 6;</span>
+        }
+<span class="nc bnc" id="L1081" title="All 2 branches missed.">        if (mMaxCards == 0) {</span>
+<span class="nc" id="L1082">            mMaxCards = 10;</span>
+        }
+<span class="nc bnc" id="L1084" title="All 2 branches missed.">        return list.size() &gt; 0;</span>
+    }
+
+
+    /**
+     * Answer Buttons
+     */
+    public boolean calculateAnswerButtons(AxisType type) {
+<span class="nc" id="L1092">        mHasColoredCumulative = false;</span>
+<span class="nc" id="L1093">        mCumulative = null;</span>
+<span class="nc" id="L1094">        mTitle = R.string.stats_answer_buttons;</span>
+<span class="nc" id="L1095">        mBackwards = false;</span>
+<span class="nc" id="L1096">        mAxisTitles = new int[] { R.string.stats_answer_type, R.string.stats_answers };</span>
+<span class="nc" id="L1097">        mValueLabels = new int[] { R.string.statistics_learn, R.string.statistics_young, R.string.statistics_mature};</span>
+<span class="nc" id="L1098">        mColors = new int[] { R.attr.stats_learn, R.attr.stats_young, R.attr.stats_mature};</span>
+<span class="nc" id="L1099">        mType = type;</span>
+<span class="nc" id="L1100">        ArrayList&lt;double[]&gt; list = eases(type);</span>
+
+        //TODO adjust for AnswerButton, for now only copied from intervals
+        // small adjustment for a proper chartbuilding with achartengine
+<span class="nc bnc" id="L1104" title="All 2 branches missed.">        if (list.size() == 0) {</span>
+<span class="nc" id="L1105">            list.add(0, new double[]{0, 1, 0});</span>
+        }
+
+<span class="nc" id="L1108">        mSeriesList = new double[4][list.size()+1];</span>
+
+<span class="nc bnc" id="L1110" title="All 2 branches missed.">        for (int i = 0; i &lt; list.size(); i++) {</span>
+<span class="nc" id="L1111">            double[] data = list.get(i);</span>
+<span class="nc" id="L1112">            int currentType = (int)data[0];</span>
+<span class="nc" id="L1113">            double ease = data[1];</span>
+<span class="nc" id="L1114">            double cnt = data[2];</span>
+
+<span class="nc bnc" id="L1116" title="All 2 branches missed.">            if (currentType == Consts.CARD_TYPE_LRN) {</span>
+<span class="nc" id="L1117">                ease += 5;</span>
+<span class="nc bnc" id="L1118" title="All 2 branches missed.">            } else if (currentType == 2) {</span>
+<span class="nc" id="L1119">                ease += 10;</span>
+            }
+<span class="nc" id="L1121">            mSeriesList[0][i] = ease;</span>
+<span class="nc" id="L1122">            mSeriesList[1 + currentType][i] = cnt;</span>
+<span class="nc bnc" id="L1123" title="All 2 branches missed.">            if (cnt &gt; mMaxCards) {</span>
+<span class="nc" id="L1124">                mMaxCards = (int) cnt;</span>
+            }
+        }
+<span class="nc" id="L1127">        mSeriesList[0][list.size()] = 15;</span>
+
+<span class="nc" id="L1129">        mFirstElement = 0.5;</span>
+<span class="nc" id="L1130">        mLastElement = 14.5;</span>
+<span class="nc" id="L1131">        mMcount = 100;</span>
+<span class="nc" id="L1132">        mMaxElements = 15;      //bars are positioned from 1 to 14</span>
+<span class="nc bnc" id="L1133" title="All 2 branches missed.">        if(mMaxCards == 0) {</span>
+<span class="nc" id="L1134">            mMaxCards = 10;</span>
+        }
+<span class="nc bnc" id="L1136" title="All 2 branches missed.">        return list.size() &gt; 0;</span>
+    }
+
+
+    private ArrayList&lt;double[]&gt; eases(AxisType type) {
+<span class="nc" id="L1141">        String lim = _getDeckFilter().replaceAll(&quot;[\\[\\]]&quot;, &quot;&quot;);</span>
+
+<span class="nc" id="L1143">        Vector&lt;String&gt; lims = new Vector&lt;&gt;();</span>
+        int days;
+
+<span class="nc bnc" id="L1146" title="All 2 branches missed.">        if (lim.length() &gt; 0) {</span>
+<span class="nc" id="L1147">            lims.add(lim);</span>
+        }
+
+<span class="nc bnc" id="L1150" title="All 2 branches missed.">        if (type == AxisType.TYPE_MONTH) {</span>
+<span class="nc" id="L1151">            days = 30;</span>
+<span class="nc bnc" id="L1152" title="All 2 branches missed.">        } else if (type == AxisType.TYPE_YEAR) {</span>
+<span class="nc" id="L1153">            days = 365;</span>
+        } else {
+<span class="nc" id="L1155">            days = -1;</span>
+        }
+
+<span class="nc bnc" id="L1158" title="All 2 branches missed.">        if (days &gt; 0) {</span>
+<span class="nc" id="L1159">            lims.add(&quot;id &gt; &quot; + ((mCol.getSched().getDayCutoff() - (days * SECONDS_PER_DAY)) * 1000));</span>
+        }
+
+        // Anki Desktop logs a '0' ease for manual reschedules, ignore them https://github.com/ankidroid/Anki-Android/issues/8008
+<span class="nc" id="L1163">        lims.add(&quot;ease &gt; 0&quot;);</span>
+
+<span class="nc" id="L1165">        lim = &quot;where &quot; + lims.get(0);</span>
+<span class="nc bnc" id="L1166" title="All 2 branches missed.">        for (int i = 1; i &lt; lims.size(); i++) {</span>
+<span class="nc" id="L1167">            lim += &quot; and &quot; + lims.get(i);</span>
+        }
+
+        String ease4repl;
+<span class="nc bnc" id="L1171" title="All 2 branches missed.">        if (mCol.schedVer() == 1) {</span>
+<span class="nc" id="L1172">            ease4repl = &quot;3&quot;;</span>
+        } else {
+<span class="nc" id="L1174">            ease4repl = &quot;ease&quot;;</span>
+        }
+<span class="nc" id="L1176">        ArrayList&lt;double[]&gt; list = new ArrayList&lt;&gt;(3 * 4); // 3 thetypes * 4 eases</span>
+<span class="nc" id="L1177">        String query = &quot;select (case &quot; +</span>
+                &quot;                when type in (&quot; + Consts.CARD_TYPE_NEW + &quot;,&quot; + Consts.CARD_TYPE_REV + &quot;) then 0 &quot; +
+                &quot;        when lastIvl &lt; 21 then 1 &quot; +
+                &quot;        else 2 end) as thetype, &quot; +
+                &quot;        (case when type in (&quot; + Consts.CARD_TYPE_NEW + &quot;,&quot; + Consts.CARD_TYPE_REV + &quot;) and ease = 4 then &quot; + ease4repl +&quot; else ease end), count() from revlog &quot; + lim + &quot; &quot; +
+                &quot;        group by thetype, ease &quot; +
+                &quot;        order by thetype, ease&quot;;
+<span class="nc" id="L1184">        Timber.d(&quot;AnswerButtons query: %s&quot;, query);</span>
+
+<span class="nc" id="L1186">        try (Cursor cur = mCol.getDb()</span>
+<span class="nc" id="L1187">                    .query(query)) {</span>
+<span class="nc bnc" id="L1188" title="All 2 branches missed.">            while (cur.moveToNext()) {</span>
+<span class="nc" id="L1189">                list.add(new double[]{cur.getDouble(0), cur.getDouble(1), cur.getDouble(2)});</span>
+            }
+        }
+<span class="nc" id="L1192">        return list;</span>
+    }
+
+
+    /**
+     * Card Types
+     */
+    public void calculateCardTypes(AxisType type) {
+<span class="nc" id="L1200">        mTitle = R.string.title_activity_template_editor;</span>
+<span class="nc" id="L1201">        mBackwards = false;</span>
+<span class="nc" id="L1202">        mAxisTitles = new int[] { R.string.stats_answer_type, R.string.stats_answers, R.string.stats_cumulative_correct_percentage };</span>
+<span class="nc" id="L1203">        mValueLabels = new int[] {R.string.statistics_mature, R.string.statistics_young_and_learn, R.string.statistics_unlearned, R.string.statistics_suspended, R.string.statistics_buried};</span>
+<span class="nc" id="L1204">        mColors = new int[] { R.attr.stats_mature, R.attr.stats_young, R.attr.stats_unseen, R.attr.stats_suspended, R.attr.stats_buried };</span>
+<span class="nc" id="L1205">        mType = type;</span>
+        double[] pieData;
+<span class="nc" id="L1207">        String query = &quot;select &quot; +</span>
+                &quot;sum(case when queue=&quot; + Consts.QUEUE_TYPE_REV + &quot; and ivl &gt;= 21 then 1 else 0 end), -- mtr\n&quot; +
+                &quot;sum(case when queue in (&quot; + Consts.QUEUE_TYPE_LRN + &quot;,&quot; + Consts.QUEUE_TYPE_DAY_LEARN_RELEARN + &quot;) or (queue=&quot; + Consts.QUEUE_TYPE_REV + &quot; and ivl &lt; 21) then 1 else 0 end), -- yng/lrn\n&quot; +
+                &quot;sum(case when queue=&quot; + Consts.QUEUE_TYPE_NEW + &quot; then 1 else 0 end), -- new\n&quot; +
+                &quot;sum(case when queue=&quot; + Consts.QUEUE_TYPE_SUSPENDED + &quot; then 1 else 0 end), -- susp\n&quot; +
+                &quot;sum(case when queue in (&quot; + Consts.QUEUE_TYPE_MANUALLY_BURIED + &quot;,&quot; + Consts.QUEUE_TYPE_SIBLING_BURIED + &quot;) then 1 else 0 end) -- buried\n&quot; +
+<span class="nc" id="L1213">                &quot;from cards where did in &quot; + _limit();</span>
+<span class="nc" id="L1214">        Timber.d(&quot;CardsTypes query: %s&quot;, query);</span>
+
+<span class="nc" id="L1216">        try (Cursor cur = mCol.getDb()</span>
+<span class="nc" id="L1217">                    .query(query)) {</span>
+
+<span class="nc" id="L1219">            cur.moveToFirst();</span>
+<span class="nc" id="L1220">            pieData = new double[]{ cur.getDouble(0), cur.getDouble(1), cur.getDouble(2), cur.getDouble(3), cur.getDouble(4) };</span>
+        }
+
+        //TODO adjust for CardsTypes, for now only copied from intervals
+        // small adjustment for a proper chartbuilding with achartengine
+//        if (list.size() == 0 || list.get(0)[0] &gt; 0) {
+//            list.add(0, new double[] { 0, 0, 0 });
+//        }
+//        if (num == -1 &amp;&amp; list.size() &lt; 2) {
+//            num = 31;
+//        }
+//        if (type != Utils.TYPE_LIFE &amp;&amp; list.get(list.size() - 1)[0] &lt; num) {
+//            list.add(new double[] { num, 0, 0 });
+//        } else if (type == Utils.TYPE_LIFE &amp;&amp; list.size() &lt; 2) {
+//            list.add(new double[] { Math.max(12, list.get(list.size() - 1)[0] + 1), 0, 0 });
+//        }
+
+<span class="nc" id="L1237">        mSeriesList = new double[1][5];</span>
+<span class="nc" id="L1238">        mSeriesList[0] = pieData;</span>
+<span class="nc" id="L1239">        mFirstElement = 0.5;</span>
+<span class="nc" id="L1240">        mLastElement = 9.5;</span>
+<span class="nc" id="L1241">        mMcount = 100;</span>
+<span class="nc" id="L1242">        mMaxElements = 10;      //bars are positioned from 1 to 14</span>
+<span class="nc bnc" id="L1243" title="All 2 branches missed.">        if (mMaxCards == 0) {</span>
+<span class="nc" id="L1244">            mMaxCards = 10;</span>
+        }
+<span class="nc" id="L1246">    }</span>
+
+    /**
+     * Tools ***********************************************************************************************
+     */
+
+    private String _limit() {
+<span class="nc" id="L1253">        return deckLimit(mDeckId, mCol);</span>
+    }
+
+
+    /**
+     * Note: NOT in libanki
+     * Return a string of deck ids for the provided deck and its children, suitable for an SQL query
+     * @param deckId the deck id to filter on, or ALL_DECKS_ID for all decks
+     * @param col collection
+     * @return
+     */
+    public static String deckLimit(long deckId, Collection col) {
+<span class="nc bnc" id="L1265" title="All 2 branches missed.">        if (deckId == ALL_DECKS_ID) {</span>
+            // All decks
+<span class="nc" id="L1267">            ArrayList&lt;Deck&gt; decks = col.getDecks().all();</span>
+<span class="nc" id="L1268">            ArrayList&lt;Long&gt; ids = new ArrayList&lt;&gt;(decks.size());</span>
+<span class="nc bnc" id="L1269" title="All 2 branches missed.">            for (Deck d : decks) {</span>
+<span class="nc" id="L1270">                ids.add(d.getLong(&quot;id&quot;));</span>
+<span class="nc" id="L1271">            }</span>
+<span class="nc" id="L1272">            return Utils.ids2str(ids);</span>
+        } else {
+            // The given deck id and its children
+<span class="nc" id="L1275">            java.util.Collection&lt;Long&gt; values = col.getDecks().children(deckId).values();</span>
+<span class="nc" id="L1276">            ArrayList&lt;Long&gt; ids = new ArrayList&lt;&gt;(values.size());</span>
+<span class="nc" id="L1277">            ids.add(deckId);</span>
+<span class="nc" id="L1278">            ids.addAll(values);</span>
+<span class="nc" id="L1279">            return Utils.ids2str(ids);</span>
+        }
+    }
+
+    private String _getDeckFilter() {
+<span class="nc bnc" id="L1284" title="All 2 branches missed.">        if (mWholeCollection) {</span>
+<span class="nc" id="L1285">            return &quot;&quot;;</span>
+        } else {
+<span class="nc" id="L1287">            return &quot;cid IN (SELECT id FROM cards WHERE did IN &quot; + _limit() + &quot;)&quot;;</span>
+        }
+    }
+
+
+    public static double[][] createCumulative(double[][] nonCumulative) {
+<span class="nc" id="L1293">        double[][] cumulativeValues = new double[2][nonCumulative[0].length];</span>
+<span class="nc" id="L1294">        cumulativeValues[0][0] = nonCumulative[0][0];</span>
+<span class="nc" id="L1295">        cumulativeValues[1][0] = nonCumulative[1][0];</span>
+<span class="nc bnc" id="L1296" title="All 2 branches missed.">        for (int i = 1; i &lt; nonCumulative[0].length; i++) {</span>
+<span class="nc" id="L1297">            cumulativeValues[0][i] = nonCumulative[0][i];</span>
+<span class="nc" id="L1298">            cumulativeValues[1][i] = cumulativeValues[1][i - 1] + nonCumulative[1][i];</span>
+        }
+<span class="nc" id="L1300">        return cumulativeValues;</span>
+    }
+
+
+    public static double[][] createCumulative(double[][] nonCumulative, int startAtIndex) {
+<span class="nc" id="L1305">        double[][] cumulativeValues = new double[2][nonCumulative[0].length - startAtIndex];</span>
+<span class="nc" id="L1306">        cumulativeValues[0][0] = nonCumulative[0][startAtIndex];</span>
+<span class="nc" id="L1307">        cumulativeValues[1][0] = nonCumulative[1][startAtIndex];</span>
+<span class="nc bnc" id="L1308" title="All 2 branches missed.">        for (int i = startAtIndex + 1; i &lt; nonCumulative[0].length; i++) {</span>
+<span class="nc" id="L1309">            cumulativeValues[0][i - startAtIndex] = nonCumulative[0][i];</span>
+<span class="nc" id="L1310">            cumulativeValues[1][i - startAtIndex] = cumulativeValues[1][i - 1 - startAtIndex] + nonCumulative[1][i];</span>
+        }
+<span class="nc" id="L1312">        return cumulativeValues;</span>
+    }
+
+
+    public static double[] createCumulative(double[] nonCumulative) {
+<span class="nc" id="L1317">        double[] cumulativeValues = new double[nonCumulative.length];</span>
+<span class="nc" id="L1318">        cumulativeValues[0] = nonCumulative[0];</span>
+<span class="nc bnc" id="L1319" title="All 2 branches missed.">        for (int i = 1; i &lt; nonCumulative.length; i++) {</span>
+<span class="nc" id="L1320">            cumulativeValues[i] = cumulativeValues[i - 1] + nonCumulative[i];</span>
+        }
+<span class="nc" id="L1322">        return cumulativeValues;</span>
+    }
+
+    private int _periodDays() {
+<span class="nc" id="L1326">        return _periodDays(mType);</span>
+    }
+
+
+    private int _periodDays(AxisType type) {
+<span class="nc bnc" id="L1331" title="All 3 branches missed.">        switch (type) {</span>
+            case TYPE_MONTH:
+<span class="nc" id="L1333">                return 30;</span>
+            case TYPE_YEAR:
+<span class="nc" id="L1335">                return 365;</span>
+            default:
+            case TYPE_LIFE:
+<span class="nc" id="L1338">                return -1;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

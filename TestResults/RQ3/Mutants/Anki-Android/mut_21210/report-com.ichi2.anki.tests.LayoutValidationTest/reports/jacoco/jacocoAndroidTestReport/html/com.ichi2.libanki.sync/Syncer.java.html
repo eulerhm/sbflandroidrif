@@ -1,0 +1,1493 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Syncer.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.libanki.sync</a> &gt; <span class="el_source">Syncer.java</span></div><h1>Syncer.java</h1><pre class="source lang-java linenums">/**
+ * ************************************************************************************
+ *  Copyright (c) 2011 Norbert Nagold &lt;norbert.nagold@gmail.com&gt;                         *
+ *  Copyright (c) 2014 Timothy Rae &lt;perceptualchaos2@gmail.com&gt;                          *
+ *                                                                                       *
+ *  This program is free software; you can redistribute it and/or modify it under        *
+ *  the terms of the GNU General Public License as published by the Free Software        *
+ *  Foundation; either version 3 of the License, or (at your option) any later           *
+ *  version.                                                                             *
+ *                                                                                       *
+ *  This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ *  WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ *  PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                       *
+ *  You should have received a copy of the GNU General Public License along with         *
+ *  this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ * **************************************************************************************
+ */
+package com.ichi2.libanki.sync;
+
+import android.database.Cursor;
+import android.database.SQLException;
+import android.util.Pair;
+import com.ichi2.anki.AnkiDroidApp;
+import com.ichi2.anki.R;
+import com.ichi2.anki.analytics.UsageAnalytics;
+import com.ichi2.anki.exception.UnknownHttpResponseException;
+import com.ichi2.async.Connection;
+import com.ichi2.libanki.DB;
+import com.ichi2.libanki.Model;
+import com.ichi2.libanki.sched.AbstractSched;
+import com.ichi2.libanki.Collection;
+import com.ichi2.libanki.Consts;
+import com.ichi2.libanki.Utils;
+import com.ichi2.libanki.Deck;
+import com.ichi2.libanki.DeckConfig;
+import com.ichi2.libanki.sched.Counts;
+import com.ichi2.utils.JSONArray;
+import com.ichi2.utils.JSONException;
+import com.ichi2.utils.JSONObject;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import androidx.annotation.NonNull;
+import okhttp3.Response;
+import timber.log.Timber;
+import static com.ichi2.libanki.sync.Syncer.ConnectionResultType.*;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+@SuppressWarnings({ // tracking HTTP transport change in github already
+&quot;deprecation&quot;, &quot;PMD.ExcessiveClassLength&quot;, &quot;PMD.AvoidThrowingRawExceptionTypes&quot;, &quot;PMD.AvoidReassigningParameters&quot;, &quot;PMD.NPathComplexity&quot;, &quot;PMD.MethodNamingConventions&quot;, &quot;PMD.ExcessiveMethodLength&quot;, &quot;PMD.SwitchStmtsShouldHaveDefault&quot;, &quot;PMD.EmptyIfStmt&quot;, &quot;PMD.SingularField&quot; })
+public class Syncer {
+
+    // Mapping of column type names to Cursor types for API &lt; 11
+    public static final int TYPE_NULL = 0;
+
+    public static final int TYPE_INTEGER = 1;
+
+    public static final int TYPE_FLOAT = 2;
+
+    public static final int TYPE_STRING = 3;
+
+    public static final int TYPE_BLOB = 4;
+
+    /**
+     * The libAnki value of `sched.mReportLimit`
+     */
+    private static final int SYNC_SCHEDULER_REPORT_LIMIT = 1000;
+
+    private final Collection mCol;
+
+    private final RemoteServer mRemoteServer;
+
+    // private long mRScm;
+    private int mMaxUsn;
+
+    private final HostNum mHostNum;
+
+    // private long mLScm;
+    private int mMinUsn;
+
+    private boolean mLNewer;
+
+    private String mSyncMsg;
+
+    private LinkedList&lt;String&gt; mTablesLeft;
+
+    private Cursor mCursor;
+
+<span class="nc" id="L94">    public Syncer(Collection col, RemoteServer server, HostNum hostNum) {</span>
+<span class="nc" id="L95">        mCol = col;</span>
+<span class="nc" id="L96">        mRemoteServer = server;</span>
+<span class="nc" id="L97">        mHostNum = hostNum;</span>
+<span class="nc" id="L98">    }</span>
+
+<span class="nc" id="L100">    public enum ConnectionResultType {</span>
+
+<span class="nc" id="L102">        BAD_AUTH(&quot;badAuth&quot;),</span>
+<span class="nc" id="L103">        NO_CHANGES(&quot;noChanges&quot;),</span>
+<span class="nc" id="L104">        CLOCK_OFF(&quot;clockOff&quot;),</span>
+<span class="nc" id="L105">        FULL_SYNC(&quot;fullSync&quot;),</span>
+<span class="nc" id="L106">        DB_ERROR(&quot;dbError&quot;),</span>
+<span class="nc" id="L107">        BASIC_CHECK_FAILED(&quot;basicCheckFailed&quot;),</span>
+<span class="nc" id="L108">        OVERWRITE_ERROR(&quot;overwriteError&quot;),</span>
+<span class="nc" id="L109">        REMOTE_DB_ERROR(&quot;remoteDbError&quot;),</span>
+<span class="nc" id="L110">        SD_ACCESS_ERROR(&quot;sdAccessError&quot;),</span>
+<span class="nc" id="L111">        FINISH_ERROR(&quot;finishError&quot;),</span>
+<span class="nc" id="L112">        IO_EXCEPTION(&quot;IOException&quot;),</span>
+<span class="nc" id="L113">        GENERIC_ERROR(&quot;genericError&quot;),</span>
+<span class="nc" id="L114">        OUT_OF_MEMORY_ERROR(&quot;outOfMemoryError&quot;),</span>
+<span class="nc" id="L115">        SANITY_CHECK_ERROR(&quot;sanityCheckError&quot;),</span>
+<span class="nc" id="L116">        SERVER_ABORT(&quot;serverAbort&quot;),</span>
+<span class="nc" id="L117">        MEDIA_SYNC_SERVER_ERROR(&quot;mediaSyncServerError&quot;),</span>
+<span class="nc" id="L118">        CUSTOM_SYNC_SERVER_URL(&quot;customSyncServerUrl&quot;),</span>
+<span class="nc" id="L119">        USER_ABORTED_SYNC(&quot;userAbortedSync&quot;),</span>
+<span class="nc" id="L120">        SUCCESS(&quot;success&quot;),</span>
+        // arbitrary error message received from sync
+<span class="nc" id="L122">        ARBITRARY_STRING(&quot;arbitraryString&quot;),</span>
+<span class="nc" id="L123">        MEDIA_SANITY_FAILED(&quot;sanityFailed&quot;),</span>
+<span class="nc" id="L124">        CORRUPT(&quot;corrupt&quot;),</span>
+<span class="nc" id="L125">        OK(&quot;OK&quot;),</span>
+        // The next three ones are the only that can be returned during login
+<span class="nc" id="L127">        UPGRADE_REQUIRED(&quot;upgradeRequired&quot;),</span>
+<span class="nc" id="L128">        CONNECTION_ERROR(&quot;connectionError&quot;),</span>
+<span class="nc" id="L129">        ERROR(&quot;error&quot;);</span>
+
+        private final String mMessage;
+
+<span class="nc" id="L133">        ConnectionResultType(String mMessage) {</span>
+<span class="nc" id="L134">            this.mMessage = mMessage;</span>
+<span class="nc" id="L135">        }</span>
+
+        public String toString() {
+<span class="nc" id="L138">            return mMessage;</span>
+        }
+    }
+
+    public Pair&lt;ConnectionResultType, Object&gt; sync(Connection con) throws UnknownHttpResponseException {
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20085)) {</span>
+<span class="nc" id="L144">            mSyncMsg = &quot;&quot;;</span>
+        }
+<span class="nc bnc" id="L146" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20086)) {</span>
+            // if the deck has any pending changes, flush them first and bump mod time
+<span class="nc" id="L148">            mCol.getSched()._updateCutoff();</span>
+        }
+<span class="nc bnc" id="L150" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20087)) {</span>
+<span class="nc" id="L151">            mCol.save();</span>
+        }
+        // step 1: login &amp; metadata
+<span class="nc" id="L154">        Response ret = mRemoteServer.meta();</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20088)) {</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">            if (ret == null) {</span>
+<span class="nc" id="L157">                return null;</span>
+            }
+        }
+<span class="nc" id="L160">        int returntype = ret.code();</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20094)) {</span>
+<span class="nc bnc" id="L162" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(20093) ? (returntype &gt;= 403) : (ListenerUtil.mutListener.listen(20092) ? (returntype &lt;= 403) : (ListenerUtil.mutListener.listen(20091) ? (returntype &gt; 403) : (ListenerUtil.mutListener.listen(20090) ? (returntype &lt; 403) : (ListenerUtil.mutListener.listen(20089) ? (returntype != 403) : (returntype == 403))))))) {</span>
+<span class="nc" id="L163">                return new Pair&lt;&gt;(BAD_AUTH, null);</span>
+            }
+        }
+        try {
+<span class="nc bnc" id="L167" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20097)) {</span>
+<span class="nc" id="L168">                mCol.getDb().getDatabase().beginTransaction();</span>
+            }
+            try {
+<span class="nc bnc" id="L171" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20099)) {</span>
+<span class="nc" id="L172">                    Timber.i(&quot;Sync: getting meta data from server&quot;);</span>
+                }
+<span class="nc" id="L174">                JSONObject rMeta = new JSONObject(ret.body().string());</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20100)) {</span>
+<span class="nc" id="L176">                    mCol.log(&quot;rmeta&quot;, rMeta);</span>
+                }
+<span class="nc bnc" id="L178" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20101)) {</span>
+<span class="nc" id="L179">                    mSyncMsg = rMeta.getString(&quot;msg&quot;);</span>
+                }
+<span class="nc bnc" id="L181" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20102)) {</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">                    if (!rMeta.getBoolean(&quot;cont&quot;)) {</span>
+                        // Don't add syncMsg; it can be fetched by UI code using the accessor
+<span class="nc" id="L184">                        return new Pair&lt;&gt;(SERVER_ABORT, null);</span>
+                    } else {
+                    }
+                }
+<span class="nc bnc" id="L188" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20103)) {</span>
+<span class="nc" id="L189">                    throwExceptionIfCancelled(con);</span>
+                }
+<span class="nc" id="L191">                long rscm = rMeta.getLong(&quot;scm&quot;);</span>
+<span class="nc" id="L192">                int rts = rMeta.getInt(&quot;ts&quot;);</span>
+<span class="nc" id="L193">                long rMod = rMeta.getLong(&quot;mod&quot;);</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20104)) {</span>
+<span class="nc" id="L195">                    mMaxUsn = rMeta.getInt(&quot;usn&quot;);</span>
+                }
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20105)) {</span>
+                    // skip uname, AnkiDroid already stores and shows it
+<span class="nc" id="L199">                    trySetHostNum(rMeta);</span>
+                }
+<span class="nc bnc" id="L201" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20106)) {</span>
+<span class="nc" id="L202">                    Timber.i(&quot;Sync: building local meta data&quot;);</span>
+                }
+<span class="nc" id="L204">                JSONObject lMeta = meta();</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20107)) {</span>
+<span class="nc" id="L206">                    mCol.log(&quot;lmeta&quot;, lMeta);</span>
+                }
+<span class="nc" id="L208">                long lMod = lMeta.getLong(&quot;mod&quot;);</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20108)) {</span>
+<span class="nc" id="L210">                    mMinUsn = lMeta.getInt(&quot;usn&quot;);</span>
+                }
+<span class="nc" id="L212">                long lscm = lMeta.getLong(&quot;scm&quot;);</span>
+<span class="nc" id="L213">                int lts = lMeta.getInt(&quot;ts&quot;);</span>
+<span class="nc bnc" id="L214" title="All 8 branches missed.">                long diff = Math.abs((ListenerUtil.mutListener.listen(20112) ? (rts % lts) : (ListenerUtil.mutListener.listen(20111) ? (rts / lts) : (ListenerUtil.mutListener.listen(20110) ? (rts * lts) : (ListenerUtil.mutListener.listen(20109) ? (rts + lts) : (rts - lts))))));</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20119)) {</span>
+<span class="nc bnc" id="L216" title="All 22 branches missed.">                    if ((ListenerUtil.mutListener.listen(20117) ? (diff &gt;= 300) : (ListenerUtil.mutListener.listen(20116) ? (diff &lt;= 300) : (ListenerUtil.mutListener.listen(20115) ? (diff &lt; 300) : (ListenerUtil.mutListener.listen(20114) ? (diff != 300) : (ListenerUtil.mutListener.listen(20113) ? (diff == 300) : (diff &gt; 300))))))) {</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20118)) {</span>
+<span class="nc" id="L218">                            mCol.log(&quot;clock off&quot;);</span>
+                        }
+<span class="nc" id="L220">                        return new Pair&lt;&gt;(CLOCK_OFF, new Object[] { diff });</span>
+                    }
+                }
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20134)) {</span>
+<span class="nc bnc" id="L224" title="All 22 branches missed.">                    if ((ListenerUtil.mutListener.listen(20124) ? (lMod &gt;= rMod) : (ListenerUtil.mutListener.listen(20123) ? (lMod &lt;= rMod) : (ListenerUtil.mutListener.listen(20122) ? (lMod &gt; rMod) : (ListenerUtil.mutListener.listen(20121) ? (lMod &lt; rMod) : (ListenerUtil.mutListener.listen(20120) ? (lMod != rMod) : (lMod == rMod))))))) {</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20132)) {</span>
+<span class="nc" id="L226">                            Timber.i(&quot;Sync: no changes - returning&quot;);</span>
+                        }
+<span class="nc bnc" id="L228" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20133)) {</span>
+<span class="nc" id="L229">                            mCol.log(&quot;no changes&quot;);</span>
+                        }
+<span class="nc" id="L231">                        return new Pair&lt;&gt;(NO_CHANGES, null);</span>
+<span class="nc bnc" id="L232" title="All 22 branches missed.">                    } else if ((ListenerUtil.mutListener.listen(20129) ? (lscm &gt;= rscm) : (ListenerUtil.mutListener.listen(20128) ? (lscm &lt;= rscm) : (ListenerUtil.mutListener.listen(20127) ? (lscm &gt; rscm) : (ListenerUtil.mutListener.listen(20126) ? (lscm &lt; rscm) : (ListenerUtil.mutListener.listen(20125) ? (lscm == rscm) : (lscm != rscm))))))) {</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20130)) {</span>
+<span class="nc" id="L234">                            Timber.i(&quot;Sync: full sync necessary - returning&quot;);</span>
+                        }
+<span class="nc bnc" id="L236" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20131)) {</span>
+<span class="nc" id="L237">                            mCol.log(&quot;schema diff&quot;);</span>
+                        }
+<span class="nc" id="L239">                        return new Pair&lt;&gt;(FULL_SYNC, null);</span>
+                    }
+                }
+<span class="nc bnc" id="L242" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20140)) {</span>
+<span class="nc bnc" id="L243" title="All 22 branches missed.">                    mLNewer = (ListenerUtil.mutListener.listen(20139) ? (lMod &gt;= rMod) : (ListenerUtil.mutListener.listen(20138) ? (lMod &lt;= rMod) : (ListenerUtil.mutListener.listen(20137) ? (lMod &lt; rMod) : (ListenerUtil.mutListener.listen(20136) ? (lMod != rMod) : (ListenerUtil.mutListener.listen(20135) ? (lMod == rMod) : (lMod &gt; rMod))))));</span>
+                }
+<span class="nc bnc" id="L245" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20142)) {</span>
+                    // step 1.5: check collection is valid
+<span class="nc bnc" id="L247" title="All 2 branches missed.">                    if (!mCol.basicCheck()) {</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20141)) {</span>
+<span class="nc" id="L249">                            mCol.log(&quot;basic check&quot;);</span>
+                        }
+<span class="nc" id="L251">                        return new Pair&lt;&gt;(BASIC_CHECK_FAILED, null);</span>
+                    }
+                }
+<span class="nc bnc" id="L254" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20143)) {</span>
+<span class="nc" id="L255">                    throwExceptionIfCancelled(con);</span>
+                }
+<span class="nc bnc" id="L257" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20144)) {</span>
+                    // step 2: deletions
+<span class="nc" id="L259">                    publishProgress(con, R.string.sync_deletions_message);</span>
+                }
+<span class="nc bnc" id="L261" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20145)) {</span>
+<span class="nc" id="L262">                    Timber.i(&quot;Sync: collection removed data&quot;);</span>
+                }
+<span class="nc" id="L264">                JSONObject lrem = removed();</span>
+<span class="nc" id="L265">                JSONObject o = new JSONObject();</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20146)) {</span>
+<span class="nc" id="L267">                    o.put(&quot;minUsn&quot;, mMinUsn);</span>
+                }
+<span class="nc bnc" id="L269" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20147)) {</span>
+<span class="nc" id="L270">                    o.put(&quot;lnewer&quot;, mLNewer);</span>
+                }
+<span class="nc bnc" id="L272" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20148)) {</span>
+<span class="nc" id="L273">                    o.put(&quot;graves&quot;, lrem);</span>
+                }
+<span class="nc bnc" id="L275" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20149)) {</span>
+<span class="nc" id="L276">                    Timber.i(&quot;Sync: sending and receiving removed data&quot;);</span>
+                }
+<span class="nc" id="L278">                JSONObject rrem = mRemoteServer.start(o);</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20150)) {</span>
+<span class="nc" id="L280">                    Timber.i(&quot;Sync: applying removed data&quot;);</span>
+                }
+<span class="nc bnc" id="L282" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20151)) {</span>
+<span class="nc" id="L283">                    throwExceptionIfCancelled(con);</span>
+                }
+<span class="nc bnc" id="L285" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20152)) {</span>
+<span class="nc" id="L286">                    remove(rrem);</span>
+                }
+<span class="nc bnc" id="L288" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20153)) {</span>
+                    // ... and small objects
+<span class="nc" id="L290">                    publishProgress(con, R.string.sync_small_objects_message);</span>
+                }
+<span class="nc bnc" id="L292" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20154)) {</span>
+<span class="nc" id="L293">                    Timber.i(&quot;Sync: collection small changes&quot;);</span>
+                }
+<span class="nc" id="L295">                JSONObject lchg = changes();</span>
+<span class="nc" id="L296">                JSONObject sch = new JSONObject();</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20155)) {</span>
+<span class="nc" id="L298">                    sch.put(&quot;changes&quot;, lchg);</span>
+                }
+<span class="nc bnc" id="L300" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20156)) {</span>
+<span class="nc" id="L301">                    Timber.i(&quot;Sync: sending and receiving small changes&quot;);</span>
+                }
+<span class="nc" id="L303">                JSONObject rchg = mRemoteServer.applyChanges(sch);</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20157)) {</span>
+<span class="nc" id="L305">                    throwExceptionIfCancelled(con);</span>
+                }
+<span class="nc bnc" id="L307" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20158)) {</span>
+<span class="nc" id="L308">                    Timber.i(&quot;Sync: merging small changes&quot;);</span>
+                }
+                try {
+<span class="nc bnc" id="L311" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20161)) {</span>
+<span class="nc" id="L312">                        mergeChanges(lchg, rchg);</span>
+                    }
+<span class="nc" id="L314">                } catch (UnexpectedSchemaChange e) {</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20159)) {</span>
+<span class="nc" id="L316">                        mRemoteServer.abort();</span>
+                    }
+<span class="nc bnc" id="L318" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20160)) {</span>
+<span class="nc" id="L319">                        _forceFullSync();</span>
+                    }
+<span class="nc" id="L321">                }</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20162)) {</span>
+                    // step 3: stream large tables from server
+<span class="nc" id="L324">                    publishProgress(con, R.string.sync_download_chunk);</span>
+                }
+<span class="nc bnc" id="L326" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20169)) {</span>
+                    {
+<span class="nc" id="L328">                        long _loopCounter400 = 0;</span>
+                        while (true) {
+<span class="nc" id="L330">                            ListenerUtil.loopListener.listen(&quot;_loopCounter400&quot;, ++_loopCounter400);</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20163)) {</span>
+<span class="nc" id="L332">                                throwExceptionIfCancelled(con);</span>
+                            }
+<span class="nc bnc" id="L334" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20164)) {</span>
+<span class="nc" id="L335">                                Timber.i(&quot;Sync: downloading chunked data&quot;);</span>
+                            }
+<span class="nc" id="L337">                            JSONObject chunk = mRemoteServer.chunk();</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20165)) {</span>
+<span class="nc" id="L339">                                mCol.log(&quot;server chunk&quot;, chunk);</span>
+                            }
+<span class="nc bnc" id="L341" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20166)) {</span>
+<span class="nc" id="L342">                                Timber.i(&quot;Sync: applying chunked data&quot;);</span>
+                            }
+<span class="nc bnc" id="L344" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20167)) {</span>
+<span class="nc" id="L345">                                applyChunk(chunk);</span>
+                            }
+<span class="nc bnc" id="L347" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20168)) {</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">                                if (chunk.getBoolean(&quot;done&quot;)) {</span>
+<span class="nc" id="L349">                                    break;</span>
+                                }
+                            }
+<span class="nc" id="L352">                        }</span>
+                    }
+                }
+<span class="nc bnc" id="L355" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20170)) {</span>
+                    // step 4: stream to server
+<span class="nc" id="L357">                    publishProgress(con, R.string.sync_upload_chunk);</span>
+                }
+<span class="nc bnc" id="L359" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20178)) {</span>
+                    {
+<span class="nc" id="L361">                        long _loopCounter401 = 0;</span>
+                        while (true) {
+<span class="nc" id="L363">                            ListenerUtil.loopListener.listen(&quot;_loopCounter401&quot;, ++_loopCounter401);</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20171)) {</span>
+<span class="nc" id="L365">                                throwExceptionIfCancelled(con);</span>
+                            }
+<span class="nc bnc" id="L367" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20172)) {</span>
+<span class="nc" id="L368">                                Timber.i(&quot;Sync: collecting chunked data&quot;);</span>
+                            }
+<span class="nc" id="L370">                            JSONObject chunk = chunk();</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20173)) {</span>
+<span class="nc" id="L372">                                mCol.log(&quot;client chunk&quot;, chunk);</span>
+                            }
+<span class="nc" id="L374">                            JSONObject sech = new JSONObject();</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20174)) {</span>
+<span class="nc" id="L376">                                sech.put(&quot;chunk&quot;, chunk);</span>
+                            }
+<span class="nc bnc" id="L378" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20175)) {</span>
+<span class="nc" id="L379">                                Timber.i(&quot;Sync: sending chunked data&quot;);</span>
+                            }
+<span class="nc bnc" id="L381" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20176)) {</span>
+<span class="nc" id="L382">                                mRemoteServer.applyChunk(sech);</span>
+                            }
+<span class="nc bnc" id="L384" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20177)) {</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">                                if (chunk.getBoolean(&quot;done&quot;)) {</span>
+<span class="nc" id="L386">                                    break;</span>
+                                }
+                            }
+<span class="nc" id="L389">                        }</span>
+                    }
+                }
+                // step 5: sanity check
+<span class="nc" id="L393">                JSONObject c = sanityCheck();</span>
+<span class="nc" id="L394">                JSONObject sanity = mRemoteServer.sanityCheck2(c);</span>
+<span class="nc bnc" id="L395" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20180)) {</span>
+<span class="nc bnc" id="L396" title="All 10 branches missed.">                    if ((ListenerUtil.mutListener.listen(20179) ? (sanity == null &amp;&amp; !&quot;ok&quot;.equals(sanity.optString(&quot;status&quot;, &quot;bad&quot;))) : (sanity == null || !&quot;ok&quot;.equals(sanity.optString(&quot;status&quot;, &quot;bad&quot;))))) {</span>
+<span class="nc" id="L397">                        return sanityCheckError(c, sanity);</span>
+                    }
+                }
+<span class="nc bnc" id="L400" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20181)) {</span>
+                    // finalize
+<span class="nc" id="L402">                    publishProgress(con, R.string.sync_finish_message);</span>
+                }
+<span class="nc bnc" id="L404" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20182)) {</span>
+<span class="nc" id="L405">                    Timber.i(&quot;Sync: sending finish command&quot;);</span>
+                }
+<span class="nc" id="L407">                long mod = mRemoteServer.finish();</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20188)) {</span>
+<span class="nc bnc" id="L409" title="All 22 branches missed.">                    if ((ListenerUtil.mutListener.listen(20187) ? (mod &gt;= 0) : (ListenerUtil.mutListener.listen(20186) ? (mod &lt;= 0) : (ListenerUtil.mutListener.listen(20185) ? (mod &gt; 0) : (ListenerUtil.mutListener.listen(20184) ? (mod &lt; 0) : (ListenerUtil.mutListener.listen(20183) ? (mod != 0) : (mod == 0))))))) {</span>
+<span class="nc" id="L410">                        return new Pair&lt;&gt;(FINISH_ERROR, null);</span>
+                    }
+                }
+<span class="nc bnc" id="L413" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20189)) {</span>
+<span class="nc" id="L414">                    Timber.i(&quot;Sync: finishing&quot;);</span>
+                }
+<span class="nc bnc" id="L416" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20190)) {</span>
+<span class="nc" id="L417">                    finish(mod);</span>
+                }
+<span class="nc bnc" id="L419" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20191)) {</span>
+<span class="nc" id="L420">                    publishProgress(con, R.string.sync_writing_db);</span>
+                }
+<span class="nc bnc" id="L422" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20192)) {</span>
+<span class="nc" id="L423">                    mCol.getDb().getDatabase().setTransactionSuccessful();</span>
+                }
+            } finally {
+<span class="nc bnc" id="L426" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20098)) {</span>
+<span class="nc" id="L427">                    DB.safeEndInTransaction(mCol.getDb());</span>
+                }
+            }
+<span class="nc" id="L430">        } catch (IllegalStateException e) {</span>
+<span class="nc" id="L431">            throw new RuntimeException(e);</span>
+<span class="nc" id="L432">        } catch (OutOfMemoryError e) {</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20095)) {</span>
+<span class="nc" id="L434">                AnkiDroidApp.sendExceptionReport(e, &quot;Syncer-sync&quot;);</span>
+            }
+<span class="nc" id="L436">            return new Pair&lt;&gt;(OUT_OF_MEMORY_ERROR, null);</span>
+<span class="nc" id="L437">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20096)) {</span>
+<span class="nc" id="L439">                AnkiDroidApp.sendExceptionReport(e, &quot;Syncer-sync&quot;);</span>
+            }
+<span class="nc" id="L441">            return new Pair&lt;&gt;(IO_EXCEPTION, null);</span>
+<span class="nc" id="L442">        }</span>
+<span class="nc" id="L443">        return new Pair&lt;&gt;(SUCCESS, null);</span>
+    }
+
+    private void trySetHostNum(JSONObject rMeta) {
+        // And it's fine to continue without one.
+        try {
+<span class="nc bnc" id="L449" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20195)) {</span>
+<span class="nc bnc" id="L450" title="All 2 branches missed.">                if (rMeta.has(&quot;hostNum&quot;)) {</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20194)) {</span>
+<span class="nc" id="L452">                        mHostNum.setHostNum(rMeta.getInt(&quot;hostNum&quot;));</span>
+                    }
+                }
+            }
+<span class="nc" id="L456">        } catch (Exception e) {</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20193)) {</span>
+<span class="nc" id="L458">                Timber.w(e, &quot;Failed to set hostNum&quot;);</span>
+            }
+<span class="nc" id="L460">        }</span>
+<span class="nc" id="L461">    }</span>
+
+    @NonNull
+    protected Pair&lt;ConnectionResultType, Object&gt; sanityCheckError(JSONObject c, JSONObject sanity) {
+<span class="nc bnc" id="L465" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20196)) {</span>
+<span class="nc" id="L466">            mCol.log(&quot;sanity check failed&quot;, c, sanity);</span>
+        }
+<span class="nc bnc" id="L468" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20197)) {</span>
+<span class="nc" id="L469">            UsageAnalytics.sendAnalyticsEvent(UsageAnalytics.Category.SYNC, &quot;sanityCheckError&quot;);</span>
+        }
+<span class="nc bnc" id="L471" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20198)) {</span>
+<span class="nc" id="L472">            _forceFullSync();</span>
+        }
+<span class="nc" id="L474">        return new Pair&lt;&gt;(SANITY_CHECK_ERROR, null);</span>
+    }
+
+    private void _forceFullSync() {
+<span class="nc bnc" id="L478" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20199)) {</span>
+            // roll back and force full sync
+<span class="nc" id="L480">            mCol.modSchemaNoCheck();</span>
+        }
+<span class="nc bnc" id="L482" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20200)) {</span>
+<span class="nc" id="L483">            mCol.save();</span>
+        }
+<span class="nc" id="L485">    }</span>
+
+    private void publishProgress(Connection con, int id) {
+<span class="nc bnc" id="L488" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20202)) {</span>
+<span class="nc bnc" id="L489" title="All 2 branches missed.">            if (con != null) {</span>
+<span class="nc bnc" id="L490" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20201)) {</span>
+<span class="nc" id="L491">                    con.publishProgress(id);</span>
+                }
+            }
+        }
+<span class="nc" id="L495">    }</span>
+
+    public JSONObject meta() throws JSONException {
+<span class="nc" id="L498">        JSONObject j = new JSONObject();</span>
+<span class="nc bnc" id="L499" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20203)) {</span>
+<span class="nc" id="L500">            j.put(&quot;mod&quot;, mCol.getMod());</span>
+        }
+<span class="nc bnc" id="L502" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20204)) {</span>
+<span class="nc" id="L503">            j.put(&quot;scm&quot;, mCol.getScm());</span>
+        }
+<span class="nc bnc" id="L505" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20205)) {</span>
+<span class="nc" id="L506">            j.put(&quot;usn&quot;, mCol.getUsnForSync());</span>
+        }
+<span class="nc bnc" id="L508" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20206)) {</span>
+<span class="nc" id="L509">            j.put(&quot;ts&quot;, mCol.getTime().intTime());</span>
+        }
+<span class="nc bnc" id="L511" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20207)) {</span>
+<span class="nc" id="L512">            j.put(&quot;musn&quot;, 0);</span>
+        }
+<span class="nc bnc" id="L514" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20208)) {</span>
+<span class="nc" id="L515">            j.put(&quot;msg&quot;, &quot;&quot;);</span>
+        }
+<span class="nc bnc" id="L517" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20209)) {</span>
+<span class="nc" id="L518">            j.put(&quot;cont&quot;, true);</span>
+        }
+<span class="nc" id="L520">        return j;</span>
+    }
+
+    /**
+     * Bundle up small objects.
+     */
+    public JSONObject changes() {
+<span class="nc" id="L527">        JSONObject o = new JSONObject();</span>
+<span class="nc bnc" id="L528" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20210)) {</span>
+<span class="nc" id="L529">            o.put(&quot;models&quot;, getModels());</span>
+        }
+<span class="nc bnc" id="L531" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20211)) {</span>
+<span class="nc" id="L532">            o.put(&quot;decks&quot;, getDecks());</span>
+        }
+<span class="nc bnc" id="L534" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20212)) {</span>
+<span class="nc" id="L535">            o.put(&quot;tags&quot;, getTags());</span>
+        }
+<span class="nc bnc" id="L537" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20215)) {</span>
+<span class="nc bnc" id="L538" title="All 2 branches missed.">            if (mLNewer) {</span>
+<span class="nc bnc" id="L539" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20213)) {</span>
+<span class="nc" id="L540">                    o.put(&quot;conf&quot;, getConf());</span>
+                }
+<span class="nc bnc" id="L542" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20214)) {</span>
+<span class="nc" id="L543">                    o.put(&quot;crt&quot;, mCol.getCrt());</span>
+                }
+            }
+        }
+<span class="nc" id="L547">        return o;</span>
+    }
+
+    public JSONObject applyChanges(JSONObject changes) throws UnexpectedSchemaChange {
+<span class="nc" id="L551">        JSONObject lchg = changes();</span>
+<span class="nc bnc" id="L552" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20216)) {</span>
+            // merge our side before returning
+<span class="nc" id="L554">            mergeChanges(lchg, changes);</span>
+        }
+<span class="nc" id="L556">        return lchg;</span>
+    }
+
+    public void mergeChanges(JSONObject lchg, JSONObject rchg) throws UnexpectedSchemaChange {
+<span class="nc bnc" id="L560" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20217)) {</span>
+            // then the other objects
+<span class="nc" id="L562">            mergeModels(rchg.getJSONArray(&quot;models&quot;));</span>
+        }
+<span class="nc bnc" id="L564" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20218)) {</span>
+<span class="nc" id="L565">            mergeDecks(rchg.getJSONArray(&quot;decks&quot;));</span>
+        }
+<span class="nc bnc" id="L567" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20219)) {</span>
+<span class="nc" id="L568">            mergeTags(rchg.getJSONArray(&quot;tags&quot;));</span>
+        }
+<span class="nc bnc" id="L570" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20221)) {</span>
+<span class="nc bnc" id="L571" title="All 2 branches missed.">            if (rchg.has(&quot;conf&quot;)) {</span>
+<span class="nc bnc" id="L572" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20220)) {</span>
+<span class="nc" id="L573">                    mergeConf(rchg.getJSONObject(&quot;conf&quot;));</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L577" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20223)) {</span>
+            // this was left out of earlier betas
+<span class="nc bnc" id="L579" title="All 2 branches missed.">            if (rchg.has(&quot;crt&quot;)) {</span>
+<span class="nc bnc" id="L580" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20222)) {</span>
+<span class="nc" id="L581">                    mCol.setCrt(rchg.getLong(&quot;crt&quot;));</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L585" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20224)) {</span>
+<span class="nc" id="L586">            prepareToChunk();</span>
+        }
+<span class="nc" id="L588">    }</span>
+
+    public JSONObject sanityCheck() {
+<span class="nc" id="L591">        JSONObject result = new JSONObject();</span>
+        try {
+<span class="nc bnc" id="L593" title="All 2 branches missed.">            if (mCol.getDb().queryScalar(&quot;SELECT count() FROM cards WHERE nid NOT IN (SELECT id FROM notes)&quot;) != 0) {</span>
+<span class="nc bnc" id="L594" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20226)) {</span>
+<span class="nc" id="L595">                    Timber.e(&quot;Sync - SanityCheck: there are cards without mother notes&quot;);</span>
+                }
+<span class="nc bnc" id="L597" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20227)) {</span>
+<span class="nc" id="L598">                    result.put(&quot;client&quot;, &quot;missing notes&quot;);</span>
+                }
+<span class="nc" id="L600">                return result;</span>
+            }
+<span class="nc bnc" id="L602" title="All 2 branches missed.">            if (mCol.getDb().queryScalar(&quot;SELECT count() FROM notes WHERE id NOT IN (SELECT DISTINCT nid FROM cards)&quot;) != 0) {</span>
+<span class="nc bnc" id="L603" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20228)) {</span>
+<span class="nc" id="L604">                    Timber.e(&quot;Sync - SanityCheck: there are notes without cards&quot;);</span>
+                }
+<span class="nc bnc" id="L606" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20229)) {</span>
+<span class="nc" id="L607">                    result.put(&quot;client&quot;, &quot;missing cards&quot;);</span>
+                }
+<span class="nc" id="L609">                return result;</span>
+            }
+<span class="nc bnc" id="L611" title="All 2 branches missed.">            if (mCol.getDb().queryScalar(&quot;SELECT count() FROM cards WHERE usn = -1&quot;) != 0) {</span>
+<span class="nc bnc" id="L612" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20230)) {</span>
+<span class="nc" id="L613">                    Timber.e(&quot;Sync - SanityCheck: there are unsynced cards&quot;);</span>
+                }
+<span class="nc bnc" id="L615" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20231)) {</span>
+<span class="nc" id="L616">                    result.put(&quot;client&quot;, &quot;cards had usn = -1&quot;);</span>
+                }
+<span class="nc" id="L618">                return result;</span>
+            }
+<span class="nc bnc" id="L620" title="All 2 branches missed.">            if (mCol.getDb().queryScalar(&quot;SELECT count() FROM notes WHERE usn = -1&quot;) != 0) {</span>
+<span class="nc bnc" id="L621" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20232)) {</span>
+<span class="nc" id="L622">                    Timber.e(&quot;Sync - SanityCheck: there are unsynced notes&quot;);</span>
+                }
+<span class="nc bnc" id="L624" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20233)) {</span>
+<span class="nc" id="L625">                    result.put(&quot;client&quot;, &quot;notes had usn = -1&quot;);</span>
+                }
+<span class="nc" id="L627">                return result;</span>
+            }
+<span class="nc bnc" id="L629" title="All 2 branches missed.">            if (mCol.getDb().queryScalar(&quot;SELECT count() FROM revlog WHERE usn = -1&quot;) != 0) {</span>
+<span class="nc bnc" id="L630" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20234)) {</span>
+<span class="nc" id="L631">                    Timber.e(&quot;Sync - SanityCheck: there are unsynced revlogs&quot;);</span>
+                }
+<span class="nc bnc" id="L633" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20235)) {</span>
+<span class="nc" id="L634">                    result.put(&quot;client&quot;, &quot;revlog had usn = -1&quot;);</span>
+                }
+<span class="nc" id="L636">                return result;</span>
+            }
+<span class="nc bnc" id="L638" title="All 2 branches missed.">            if (mCol.getDb().queryScalar(&quot;SELECT count() FROM graves WHERE usn = -1&quot;) != 0) {</span>
+<span class="nc bnc" id="L639" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20236)) {</span>
+<span class="nc" id="L640">                    Timber.e(&quot;Sync - SanityCheck: there are unsynced graves&quot;);</span>
+                }
+<span class="nc bnc" id="L642" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20237)) {</span>
+<span class="nc" id="L643">                    result.put(&quot;client&quot;, &quot;graves had usn = -1&quot;);</span>
+                }
+<span class="nc" id="L645">                return result;</span>
+            }
+            {
+<span class="nc" id="L648">                long _loopCounter402 = 0;</span>
+<span class="nc bnc" id="L649" title="All 2 branches missed.">                for (Deck g : mCol.getDecks().all()) {</span>
+<span class="nc" id="L650">                    ListenerUtil.loopListener.listen(&quot;_loopCounter402&quot;, ++_loopCounter402);</span>
+<span class="nc bnc" id="L651" title="All 2 branches missed.">                    if (g.getInt(&quot;usn&quot;) == -1) {</span>
+<span class="nc bnc" id="L652" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20238)) {</span>
+<span class="nc" id="L653">                            Timber.e(&quot;Sync - SanityCheck: unsynced deck: %s&quot;, g.getString(&quot;name&quot;));</span>
+                        }
+<span class="nc bnc" id="L655" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20239)) {</span>
+<span class="nc" id="L656">                            result.put(&quot;client&quot;, &quot;deck had usn = -1&quot;);</span>
+                        }
+<span class="nc" id="L658">                        return result;</span>
+                    }
+<span class="nc" id="L660">                }</span>
+            }
+<span class="nc bnc" id="L662" title="All 2 branches missed.">            if (mCol.getTags().minusOneValue()) {</span>
+<span class="nc bnc" id="L663" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20240)) {</span>
+<span class="nc" id="L664">                    Timber.e(&quot;Sync - SanityCheck: there are unsynced tags&quot;);</span>
+                }
+<span class="nc bnc" id="L666" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20241)) {</span>
+<span class="nc" id="L667">                    result.put(&quot;client&quot;, &quot;tag had usn = -1&quot;);</span>
+                }
+<span class="nc" id="L669">                return result;</span>
+            }
+<span class="nc" id="L671">            boolean found = false;</span>
+            {
+<span class="nc" id="L673">                long _loopCounter403 = 0;</span>
+<span class="nc bnc" id="L674" title="All 2 branches missed.">                for (JSONObject m : mCol.getModels().all()) {</span>
+<span class="nc" id="L675">                    ListenerUtil.loopListener.listen(&quot;_loopCounter403&quot;, ++_loopCounter403);</span>
+<span class="nc bnc" id="L676" title="All 2 branches missed.">                    if (mCol.getServer()) {</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20256)) {</span>
+                            // the web upgrade was mistakenly setting usn
+<span class="nc bnc" id="L679" title="All 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(20253) ? (m.getInt(&quot;usn&quot;) &gt;= 0) : (ListenerUtil.mutListener.listen(20252) ? (m.getInt(&quot;usn&quot;) &lt;= 0) : (ListenerUtil.mutListener.listen(20251) ? (m.getInt(&quot;usn&quot;) &gt; 0) : (ListenerUtil.mutListener.listen(20250) ? (m.getInt(&quot;usn&quot;) != 0) : (ListenerUtil.mutListener.listen(20249) ? (m.getInt(&quot;usn&quot;) == 0) : (m.getInt(&quot;usn&quot;) &lt; 0))))))) {</span>
+<span class="nc bnc" id="L680" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20254)) {</span>
+<span class="nc" id="L681">                                    m.put(&quot;usn&quot;, 0);</span>
+                                }
+<span class="nc bnc" id="L683" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20255)) {</span>
+<span class="nc" id="L684">                                    found = true;</span>
+                                }
+                            }
+                        }
+                    } else {
+<span class="nc bnc" id="L689" title="All 22 branches missed.">                        if ((ListenerUtil.mutListener.listen(20246) ? (m.getInt(&quot;usn&quot;) &gt;= -1) : (ListenerUtil.mutListener.listen(20245) ? (m.getInt(&quot;usn&quot;) &lt;= -1) : (ListenerUtil.mutListener.listen(20244) ? (m.getInt(&quot;usn&quot;) &gt; -1) : (ListenerUtil.mutListener.listen(20243) ? (m.getInt(&quot;usn&quot;) &lt; -1) : (ListenerUtil.mutListener.listen(20242) ? (m.getInt(&quot;usn&quot;) != -1) : (m.getInt(&quot;usn&quot;) == -1))))))) {</span>
+<span class="nc bnc" id="L690" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20247)) {</span>
+<span class="nc" id="L691">                                Timber.e(&quot;Sync - SanityCheck: unsynced model: %s&quot;, m.getString(&quot;name&quot;));</span>
+                            }
+<span class="nc bnc" id="L693" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20248)) {</span>
+<span class="nc" id="L694">                                result.put(&quot;client&quot;, &quot;model had usn = -1&quot;);</span>
+                            }
+<span class="nc" id="L696">                            return result;</span>
+                        }
+                    }
+<span class="nc" id="L699">                }</span>
+            }
+<span class="nc bnc" id="L701" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20258)) {</span>
+<span class="nc bnc" id="L702" title="All 2 branches missed.">                if (found) {</span>
+<span class="nc bnc" id="L703" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20257)) {</span>
+<span class="nc" id="L704">                        mCol.getModels().save();</span>
+                    }
+                }
+            }
+<span class="nc bnc" id="L708" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20259)) {</span>
+                // check for missing parent decks
+<span class="nc" id="L710">                mCol.getSched().deckDueList();</span>
+            }
+            // return summary of deck
+<span class="nc" id="L713">            JSONArray check = new JSONArray();</span>
+<span class="nc" id="L714">            JSONArray counts = new JSONArray();</span>
+            // We modified mReportLimit inside the scheduler, and this causes issues syncing dynamic decks.
+<span class="nc" id="L716">            AbstractSched syncScheduler = mCol.createScheduler(SYNC_SCHEDULER_REPORT_LIMIT);</span>
+<span class="nc bnc" id="L717" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20260)) {</span>
+<span class="nc" id="L718">                syncScheduler.resetCounts();</span>
+            }
+<span class="nc" id="L720">            Counts counts_ = syncScheduler.counts();</span>
+<span class="nc bnc" id="L721" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20261)) {</span>
+<span class="nc" id="L722">                counts.put(counts_.getNew());</span>
+            }
+<span class="nc bnc" id="L724" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20262)) {</span>
+<span class="nc" id="L725">                counts.put(counts_.getLrn());</span>
+            }
+<span class="nc bnc" id="L727" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20263)) {</span>
+<span class="nc" id="L728">                counts.put(counts_.getRev());</span>
+            }
+<span class="nc bnc" id="L730" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20264)) {</span>
+<span class="nc" id="L731">                check.put(counts);</span>
+            }
+<span class="nc bnc" id="L733" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20265)) {</span>
+<span class="nc" id="L734">                check.put(mCol.getDb().queryScalar(&quot;SELECT count() FROM cards&quot;));</span>
+            }
+<span class="nc bnc" id="L736" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20266)) {</span>
+<span class="nc" id="L737">                check.put(mCol.getDb().queryScalar(&quot;SELECT count() FROM notes&quot;));</span>
+            }
+<span class="nc bnc" id="L739" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20267)) {</span>
+<span class="nc" id="L740">                check.put(mCol.getDb().queryScalar(&quot;SELECT count() FROM revlog&quot;));</span>
+            }
+<span class="nc bnc" id="L742" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20268)) {</span>
+<span class="nc" id="L743">                check.put(mCol.getDb().queryScalar(&quot;SELECT count() FROM graves&quot;));</span>
+            }
+<span class="nc bnc" id="L745" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20269)) {</span>
+<span class="nc" id="L746">                check.put(mCol.getModels().all().size());</span>
+            }
+<span class="nc bnc" id="L748" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20270)) {</span>
+<span class="nc" id="L749">                check.put(mCol.getDecks().all().size());</span>
+            }
+<span class="nc bnc" id="L751" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20271)) {</span>
+<span class="nc" id="L752">                check.put(mCol.getDecks().allConf().size());</span>
+            }
+<span class="nc bnc" id="L754" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20272)) {</span>
+<span class="nc" id="L755">                result.put(&quot;client&quot;, check);</span>
+            }
+<span class="nc" id="L757">            return result;</span>
+<span class="nc" id="L758">        } catch (JSONException e) {</span>
+<span class="nc bnc" id="L759" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20225)) {</span>
+<span class="nc" id="L760">                Timber.e(e, &quot;Syncer.sanityCheck()&quot;);</span>
+            }
+<span class="nc" id="L762">            throw new RuntimeException(e);</span>
+        }
+    }
+
+    private Pair&lt;String, Object[]&gt; usnLim() {
+<span class="nc bnc" id="L767" title="All 2 branches missed.">        if (mCol.getServer()) {</span>
+<span class="nc" id="L768">            return new Pair&lt;&gt;(&quot;usn &gt;= ?&quot;, new Object[] { mMinUsn });</span>
+        } else {
+<span class="nc" id="L770">            return new Pair&lt;&gt;(&quot;usn = -1&quot;, null);</span>
+        }
+    }
+
+    public long finish() {
+<span class="nc" id="L775">        return finish(0);</span>
+    }
+
+    private long finish(long mod) {
+<span class="nc bnc" id="L779" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20279)) {</span>
+<span class="nc bnc" id="L780" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(20277) ? (mod &gt;= 0) : (ListenerUtil.mutListener.listen(20276) ? (mod &lt;= 0) : (ListenerUtil.mutListener.listen(20275) ? (mod &gt; 0) : (ListenerUtil.mutListener.listen(20274) ? (mod &lt; 0) : (ListenerUtil.mutListener.listen(20273) ? (mod != 0) : (mod == 0))))))) {</span>
+<span class="nc bnc" id="L781" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20278)) {</span>
+                    // server side; we decide new mod time
+<span class="nc" id="L783">                    mod = mCol.getTime().intTimeMS();</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L787" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20280)) {</span>
+<span class="nc" id="L788">            mCol.setLs(mod);</span>
+        }
+<span class="nc bnc" id="L790" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20285)) {</span>
+<span class="nc bnc" id="L791" title="All 8 branches missed.">            mCol.setUsnAfterSync((ListenerUtil.mutListener.listen(20284) ? (mMaxUsn % 1) : (ListenerUtil.mutListener.listen(20283) ? (mMaxUsn / 1) : (ListenerUtil.mutListener.listen(20282) ? (mMaxUsn * 1) : (ListenerUtil.mutListener.listen(20281) ? (mMaxUsn - 1) : (mMaxUsn + 1))))));</span>
+        }
+<span class="nc bnc" id="L793" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20286)) {</span>
+            // ensure we save the mod time even if no changes made
+<span class="nc" id="L795">            mCol.getDb().setMod(true);</span>
+        }
+<span class="nc bnc" id="L797" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20287)) {</span>
+<span class="nc" id="L798">            mCol.save(null, mod);</span>
+        }
+<span class="nc" id="L800">        return mod;</span>
+    }
+
+    private void prepareToChunk() {
+<span class="nc bnc" id="L804" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20288)) {</span>
+<span class="nc" id="L805">            mTablesLeft = new LinkedList&lt;&gt;();</span>
+        }
+<span class="nc bnc" id="L807" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20289)) {</span>
+<span class="nc" id="L808">            mTablesLeft.add(&quot;revlog&quot;);</span>
+        }
+<span class="nc bnc" id="L810" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20290)) {</span>
+<span class="nc" id="L811">            mTablesLeft.add(&quot;cards&quot;);</span>
+        }
+<span class="nc bnc" id="L813" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20291)) {</span>
+<span class="nc" id="L814">            mTablesLeft.add(&quot;notes&quot;);</span>
+        }
+<span class="nc bnc" id="L816" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20292)) {</span>
+<span class="nc" id="L817">            mCursor = null;</span>
+        }
+<span class="nc" id="L819">    }</span>
+
+    private Cursor cursorForTable(String table) {
+<span class="nc" id="L822">        Pair&lt;String, Object[]&gt; limAndArg = usnLim();</span>
+<span class="nc bnc" id="L823" title="All 2 branches missed.">        if (&quot;revlog&quot;.equals(table)) {</span>
+<span class="nc" id="L824">            return mCol.getDb().query(&quot;SELECT id, cid, &quot; + mMaxUsn + &quot;, ease, ivl, lastIvl, factor, time, type FROM revlog WHERE &quot; + limAndArg.first, limAndArg.second);</span>
+<span class="nc bnc" id="L825" title="All 2 branches missed.">        } else if (&quot;cards&quot;.equals(table)) {</span>
+<span class="nc" id="L826">            return mCol.getDb().query(&quot;SELECT id, nid, did, ord, mod, &quot; + mMaxUsn + &quot;, type, queue, due, ivl, factor, reps, lapses, left, odue, odid, flags, data FROM cards WHERE &quot; + limAndArg.first, limAndArg.second);</span>
+        } else {
+<span class="nc" id="L828">            return mCol.getDb().query(&quot;SELECT id, guid, mid, mod, &quot; + mMaxUsn + &quot;, tags, flds, '', '', flags, data FROM notes WHERE &quot; + limAndArg.first, limAndArg.second);</span>
+        }
+    }
+
+    private List&lt;Integer&gt; columnTypesForQuery(String table) {
+<span class="nc bnc" id="L833" title="All 2 branches missed.">        if (&quot;revlog&quot;.equals(table)) {</span>
+<span class="nc" id="L834">            return Arrays.asList(TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER);</span>
+<span class="nc bnc" id="L835" title="All 2 branches missed.">        } else if (&quot;cards&quot;.equals(table)) {</span>
+<span class="nc" id="L836">            return Arrays.asList(TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_STRING);</span>
+        } else {
+<span class="nc" id="L838">            return Arrays.asList(TYPE_INTEGER, TYPE_STRING, TYPE_INTEGER, TYPE_INTEGER, TYPE_INTEGER, TYPE_STRING, TYPE_STRING, TYPE_STRING, TYPE_STRING, TYPE_INTEGER, TYPE_STRING);</span>
+        }
+    }
+
+    public JSONObject chunk() {
+<span class="nc" id="L843">        JSONObject buf = new JSONObject();</span>
+<span class="nc bnc" id="L844" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20293)) {</span>
+<span class="nc" id="L845">            buf.put(&quot;done&quot;, false);</span>
+        }
+<span class="nc" id="L847">        int lim = 250;</span>
+<span class="nc" id="L848">        List&lt;Integer&gt; colTypes = null;</span>
+<span class="nc bnc" id="L849" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20334)) {</span>
+            {
+<span class="nc" id="L851">                long _loopCounter406 = 0;</span>
+<span class="nc bnc" id="L852" title="All 50 branches missed.">                while ((ListenerUtil.mutListener.listen(20333) ? (!mTablesLeft.isEmpty() || (ListenerUtil.mutListener.listen(20332) ? (lim &gt;= 0) : (ListenerUtil.mutListener.listen(20331) ? (lim &lt;= 0) : (ListenerUtil.mutListener.listen(20330) ? (lim &lt; 0) : (ListenerUtil.mutListener.listen(20329) ? (lim != 0) : (ListenerUtil.mutListener.listen(20328) ? (lim == 0) : (lim &gt; 0))))))) : (!mTablesLeft.isEmpty() &amp;&amp; (ListenerUtil.mutListener.listen(20332) ? (lim &gt;= 0) : (ListenerUtil.mutListener.listen(20331) ? (lim &lt;= 0) : (ListenerUtil.mutListener.listen(20330) ? (lim &lt; 0) : (ListenerUtil.mutListener.listen(20329) ? (lim != 0) : (ListenerUtil.mutListener.listen(20328) ? (lim == 0) : (lim &gt; 0))))))))) {</span>
+<span class="nc" id="L853">                    ListenerUtil.loopListener.listen(&quot;_loopCounter406&quot;, ++_loopCounter406);</span>
+<span class="nc" id="L854">                    String curTable = mTablesLeft.getFirst();</span>
+<span class="nc bnc" id="L855" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20295)) {</span>
+<span class="nc bnc" id="L856" title="All 2 branches missed.">                        if (mCursor == null) {</span>
+<span class="nc bnc" id="L857" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20294)) {</span>
+<span class="nc" id="L858">                                mCursor = cursorForTable(curTable);</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L862" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20296)) {</span>
+<span class="nc" id="L863">                        colTypes = columnTypesForQuery(curTable);</span>
+                    }
+<span class="nc" id="L865">                    JSONArray rows = new JSONArray();</span>
+<span class="nc" id="L866">                    int count = mCursor.getColumnCount();</span>
+<span class="nc" id="L867">                    int fetched = 0;</span>
+<span class="nc bnc" id="L868" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20314)) {</span>
+                        {
+<span class="nc" id="L870">                            long _loopCounter405 = 0;</span>
+<span class="nc bnc" id="L871" title="All 2 branches missed.">                            while (mCursor.moveToNext()) {</span>
+<span class="nc" id="L872">                                ListenerUtil.loopListener.listen(&quot;_loopCounter405&quot;, ++_loopCounter405);</span>
+<span class="nc" id="L873">                                JSONArray r = new JSONArray();</span>
+<span class="nc bnc" id="L874" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20306)) {</span>
+                                    {
+<span class="nc" id="L876">                                        long _loopCounter404 = 0;</span>
+<span class="nc bnc" id="L877" title="All 22 branches missed.">                                        for (int i = 0; (ListenerUtil.mutListener.listen(20305) ? (i &gt;= count) : (ListenerUtil.mutListener.listen(20304) ? (i &lt;= count) : (ListenerUtil.mutListener.listen(20303) ? (i &gt; count) : (ListenerUtil.mutListener.listen(20302) ? (i != count) : (ListenerUtil.mutListener.listen(20301) ? (i == count) : (i &lt; count)))))); i++) {</span>
+<span class="nc" id="L878">                                            ListenerUtil.loopListener.listen(&quot;_loopCounter404&quot;, ++_loopCounter404);</span>
+<span class="nc bnc" id="L879" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(20300)) {</span>
+<span class="nc bnc" id="L880" title="All 4 branches missed.">                                                switch(colTypes.get(i)) {</span>
+                                                    case TYPE_STRING:
+<span class="nc bnc" id="L882" title="All 2 branches missed.">                                                        if (!ListenerUtil.mutListener.listen(20297)) {</span>
+<span class="nc" id="L883">                                                            r.put(mCursor.getString(i));</span>
+                                                        }
+                                                        break;
+                                                    case TYPE_FLOAT:
+<span class="nc bnc" id="L887" title="All 2 branches missed.">                                                        if (!ListenerUtil.mutListener.listen(20298)) {</span>
+<span class="nc" id="L888">                                                            r.put(mCursor.getDouble(i));</span>
+                                                        }
+                                                        break;
+                                                    case TYPE_INTEGER:
+<span class="nc bnc" id="L892" title="All 2 branches missed.">                                                        if (!ListenerUtil.mutListener.listen(20299)) {</span>
+<span class="nc" id="L893">                                                            r.put(mCursor.getLong(i));</span>
+                                                        }
+                                                        break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+<span class="nc bnc" id="L901" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20307)) {</span>
+<span class="nc" id="L902">                                    rows.put(r);</span>
+                                }
+<span class="nc bnc" id="L904" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(20313)) {</span>
+<span class="nc bnc" id="L905" title="All 22 branches missed.">                                    if ((ListenerUtil.mutListener.listen(20312) ? (++fetched &gt;= lim) : (ListenerUtil.mutListener.listen(20311) ? (++fetched &lt;= lim) : (ListenerUtil.mutListener.listen(20310) ? (++fetched &gt; lim) : (ListenerUtil.mutListener.listen(20309) ? (++fetched &lt; lim) : (ListenerUtil.mutListener.listen(20308) ? (++fetched != lim) : (++fetched == lim))))))) {</span>
+<span class="nc" id="L906">                                        break;</span>
+                                    }
+                                }
+<span class="nc" id="L909">                            }</span>
+                        }
+                    }
+<span class="nc bnc" id="L912" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20325)) {</span>
+<span class="nc bnc" id="L913" title="All 22 branches missed.">                        if ((ListenerUtil.mutListener.listen(20319) ? (fetched &gt;= lim) : (ListenerUtil.mutListener.listen(20318) ? (fetched &lt;= lim) : (ListenerUtil.mutListener.listen(20317) ? (fetched &gt; lim) : (ListenerUtil.mutListener.listen(20316) ? (fetched &lt; lim) : (ListenerUtil.mutListener.listen(20315) ? (fetched == lim) : (fetched != lim))))))) {</span>
+<span class="nc bnc" id="L914" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20320)) {</span>
+                                // table is empty
+<span class="nc" id="L916">                                mTablesLeft.removeFirst();</span>
+                            }
+<span class="nc bnc" id="L918" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20321)) {</span>
+<span class="nc" id="L919">                                mCursor.close();</span>
+                            }
+<span class="nc bnc" id="L921" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20322)) {</span>
+<span class="nc" id="L922">                                mCursor = null;</span>
+                            }
+<span class="nc bnc" id="L924" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20324)) {</span>
+                                // if we're the client, mark the objects as having been sent
+<span class="nc bnc" id="L926" title="All 2 branches missed.">                                if (!mCol.getServer()) {</span>
+<span class="nc bnc" id="L927" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20323)) {</span>
+<span class="nc" id="L928">                                        mCol.getDb().execute(&quot;UPDATE &quot; + curTable + &quot; SET usn=? WHERE usn=-1&quot;, mMaxUsn);</span>
+                                    }
+                                }
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L934" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20326)) {</span>
+<span class="nc" id="L935">                        buf.put(curTable, rows);</span>
+                    }
+<span class="nc bnc" id="L937" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20327)) {</span>
+<span class="nc" id="L938">                        lim -= fetched;</span>
+                    }
+<span class="nc" id="L940">                }</span>
+            }
+        }
+<span class="nc bnc" id="L943" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20336)) {</span>
+<span class="nc bnc" id="L944" title="All 2 branches missed.">            if (mTablesLeft.isEmpty()) {</span>
+<span class="nc bnc" id="L945" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20335)) {</span>
+<span class="nc" id="L946">                    buf.put(&quot;done&quot;, true);</span>
+                }
+            }
+        }
+<span class="nc" id="L950">        return buf;</span>
+    }
+
+    public void applyChunk(JSONObject chunk) {
+<span class="nc bnc" id="L954" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20338)) {</span>
+<span class="nc bnc" id="L955" title="All 2 branches missed.">            if (chunk.has(&quot;revlog&quot;)) {</span>
+<span class="nc bnc" id="L956" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20337)) {</span>
+<span class="nc" id="L957">                    mergeRevlog(chunk.getJSONArray(&quot;revlog&quot;));</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L961" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20340)) {</span>
+<span class="nc bnc" id="L962" title="All 2 branches missed.">            if (chunk.has(&quot;cards&quot;)) {</span>
+<span class="nc bnc" id="L963" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20339)) {</span>
+<span class="nc" id="L964">                    mergeCards(chunk.getJSONArray(&quot;cards&quot;));</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L968" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20342)) {</span>
+<span class="nc bnc" id="L969" title="All 2 branches missed.">            if (chunk.has(&quot;notes&quot;)) {</span>
+<span class="nc bnc" id="L970" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20341)) {</span>
+<span class="nc" id="L971">                    mergeNotes(chunk.getJSONArray(&quot;notes&quot;));</span>
+                }
+            }
+        }
+<span class="nc" id="L975">    }</span>
+
+    private JSONObject removed() {
+<span class="nc" id="L978">        JSONArray cards = new JSONArray();</span>
+<span class="nc" id="L979">        JSONArray notes = new JSONArray();</span>
+<span class="nc" id="L980">        JSONArray decks = new JSONArray();</span>
+<span class="nc" id="L981">        Pair&lt;String, Object[]&gt; limAndArgs = usnLim();</span>
+<span class="nc" id="L982">        try (Cursor cur = mCol.getDb().query(&quot;SELECT oid, type FROM graves WHERE &quot; + limAndArgs.first, limAndArgs.second)) {</span>
+<span class="nc bnc" id="L983" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20347)) {</span>
+                {
+<span class="nc" id="L985">                    long _loopCounter407 = 0;</span>
+<span class="nc bnc" id="L986" title="All 2 branches missed.">                    while (cur.moveToNext()) {</span>
+<span class="nc" id="L987">                        ListenerUtil.loopListener.listen(&quot;_loopCounter407&quot;, ++_loopCounter407);</span>
+                        @Consts.REM_TYPE
+<span class="nc" id="L989">                        int type = cur.getInt(1);</span>
+<span class="nc bnc" id="L990" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20346)) {</span>
+<span class="nc bnc" id="L991" title="All 4 branches missed.">                            switch(type) {</span>
+                                case Consts.REM_CARD:
+<span class="nc bnc" id="L993" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20343)) {</span>
+<span class="nc" id="L994">                                        cards.put(cur.getLong(0));</span>
+                                    }
+                                    break;
+                                case Consts.REM_NOTE:
+<span class="nc bnc" id="L998" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20344)) {</span>
+<span class="nc" id="L999">                                        notes.put(cur.getLong(0));</span>
+                                    }
+                                    break;
+                                case Consts.REM_DECK:
+<span class="nc bnc" id="L1003" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20345)) {</span>
+<span class="nc" id="L1004">                                        decks.put(cur.getLong(0));</span>
+                                    }
+                                    break;
+                            }
+                        }
+<span class="nc" id="L1009">                    }</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L1013" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20349)) {</span>
+<span class="nc bnc" id="L1014" title="All 2 branches missed.">            if (!mCol.getServer()) {</span>
+<span class="nc bnc" id="L1015" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20348)) {</span>
+<span class="nc" id="L1016">                    mCol.getDb().execute(&quot;UPDATE graves SET usn=&quot; + mMaxUsn + &quot; WHERE usn=-1&quot;);</span>
+                }
+            }
+        }
+<span class="nc" id="L1020">        JSONObject o = new JSONObject();</span>
+<span class="nc bnc" id="L1021" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20350)) {</span>
+<span class="nc" id="L1022">            o.put(&quot;cards&quot;, cards);</span>
+        }
+<span class="nc bnc" id="L1024" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20351)) {</span>
+<span class="nc" id="L1025">            o.put(&quot;notes&quot;, notes);</span>
+        }
+<span class="nc bnc" id="L1027" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20352)) {</span>
+<span class="nc" id="L1028">            o.put(&quot;decks&quot;, decks);</span>
+        }
+<span class="nc" id="L1030">        return o;</span>
+    }
+
+    public JSONObject start(int minUsn, boolean lnewer, JSONObject graves) {
+<span class="nc bnc" id="L1034" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20353)) {</span>
+<span class="nc" id="L1035">            mMaxUsn = mCol.getUsnForSync();</span>
+        }
+<span class="nc bnc" id="L1037" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20354)) {</span>
+<span class="nc" id="L1038">            mMinUsn = minUsn;</span>
+        }
+<span class="nc bnc" id="L1040" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20355)) {</span>
+<span class="nc bnc" id="L1041" title="All 2 branches missed.">            mLNewer = !lnewer;</span>
+        }
+<span class="nc" id="L1043">        JSONObject lgraves = removed();</span>
+<span class="nc bnc" id="L1044" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20356)) {</span>
+<span class="nc" id="L1045">            remove(graves);</span>
+        }
+<span class="nc" id="L1047">        return lgraves;</span>
+    }
+
+    private void remove(JSONObject graves) {
+        // pretend to be the server so we don't set usn = -1
+<span class="nc" id="L1052">        boolean wasServer = mCol.getServer();</span>
+<span class="nc bnc" id="L1053" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20357)) {</span>
+<span class="nc" id="L1054">            mCol.setServer(true);</span>
+        }
+<span class="nc bnc" id="L1056" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20358)) {</span>
+            // notes first, so we don't end up with duplicate graves
+<span class="nc" id="L1058">            mCol._remNotes(graves.getJSONArray(&quot;notes&quot;).toLongList());</span>
+        }
+<span class="nc bnc" id="L1060" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20359)) {</span>
+            // then cards
+<span class="nc" id="L1062">            mCol.remCards(graves.getJSONArray(&quot;cards&quot;).toLongList(), false);</span>
+        }
+        // and decks
+<span class="nc" id="L1065">        JSONArray decks = graves.getJSONArray(&quot;decks&quot;);</span>
+<span class="nc bnc" id="L1066" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20361)) {</span>
+            {
+<span class="nc" id="L1068">                long _loopCounter408 = 0;</span>
+<span class="nc bnc" id="L1069" title="All 2 branches missed.">                for (Long did : decks.longIterable()) {</span>
+<span class="nc" id="L1070">                    ListenerUtil.loopListener.listen(&quot;_loopCounter408&quot;, ++_loopCounter408);</span>
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20360)) {</span>
+<span class="nc" id="L1072">                        mCol.getDecks().rem(did, false, false);</span>
+                    }
+<span class="nc" id="L1074">                }</span>
+            }
+        }
+<span class="nc bnc" id="L1077" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20362)) {</span>
+<span class="nc" id="L1078">            mCol.setServer(wasServer);</span>
+        }
+<span class="nc" id="L1080">    }</span>
+
+    private JSONArray getModels() {
+<span class="nc" id="L1083">        JSONArray result = new JSONArray();</span>
+<span class="nc bnc" id="L1084" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20381)) {</span>
+<span class="nc bnc" id="L1085" title="All 2 branches missed.">            if (mCol.getServer()) {</span>
+<span class="nc bnc" id="L1086" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20380)) {</span>
+                    {
+<span class="nc" id="L1088">                        long _loopCounter410 = 0;</span>
+<span class="nc bnc" id="L1089" title="All 2 branches missed.">                        for (JSONObject m : mCol.getModels().all()) {</span>
+<span class="nc" id="L1090">                            ListenerUtil.loopListener.listen(&quot;_loopCounter410&quot;, ++_loopCounter410);</span>
+<span class="nc bnc" id="L1091" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20379)) {</span>
+<span class="nc bnc" id="L1092" title="All 22 branches missed.">                                if ((ListenerUtil.mutListener.listen(20377) ? (m.getInt(&quot;usn&quot;) &lt;= mMinUsn) : (ListenerUtil.mutListener.listen(20376) ? (m.getInt(&quot;usn&quot;) &gt; mMinUsn) : (ListenerUtil.mutListener.listen(20375) ? (m.getInt(&quot;usn&quot;) &lt; mMinUsn) : (ListenerUtil.mutListener.listen(20374) ? (m.getInt(&quot;usn&quot;) != mMinUsn) : (ListenerUtil.mutListener.listen(20373) ? (m.getInt(&quot;usn&quot;) == mMinUsn) : (m.getInt(&quot;usn&quot;) &gt;= mMinUsn))))))) {</span>
+<span class="nc bnc" id="L1093" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20378)) {</span>
+<span class="nc" id="L1094">                                        result.put(m);</span>
+                                    }
+                                }
+                            }
+<span class="nc" id="L1098">                        }</span>
+<span class="nc" id="L1099">                    }</span>
+                }
+            } else {
+<span class="nc bnc" id="L1102" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20371)) {</span>
+                    {
+<span class="nc" id="L1104">                        long _loopCounter409 = 0;</span>
+<span class="nc bnc" id="L1105" title="All 2 branches missed.">                        for (JSONObject m : mCol.getModels().all()) {</span>
+<span class="nc" id="L1106">                            ListenerUtil.loopListener.listen(&quot;_loopCounter409&quot;, ++_loopCounter409);</span>
+<span class="nc bnc" id="L1107" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20370)) {</span>
+<span class="nc bnc" id="L1108" title="All 22 branches missed.">                                if ((ListenerUtil.mutListener.listen(20367) ? (m.getInt(&quot;usn&quot;) &gt;= -1) : (ListenerUtil.mutListener.listen(20366) ? (m.getInt(&quot;usn&quot;) &lt;= -1) : (ListenerUtil.mutListener.listen(20365) ? (m.getInt(&quot;usn&quot;) &gt; -1) : (ListenerUtil.mutListener.listen(20364) ? (m.getInt(&quot;usn&quot;) &lt; -1) : (ListenerUtil.mutListener.listen(20363) ? (m.getInt(&quot;usn&quot;) != -1) : (m.getInt(&quot;usn&quot;) == -1))))))) {</span>
+<span class="nc bnc" id="L1109" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20368)) {</span>
+<span class="nc" id="L1110">                                        m.put(&quot;usn&quot;, mMaxUsn);</span>
+                                    }
+<span class="nc bnc" id="L1112" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20369)) {</span>
+<span class="nc" id="L1113">                                        result.put(m);</span>
+                                    }
+                                }
+                            }
+<span class="nc" id="L1117">                        }</span>
+                    }
+                }
+<span class="nc bnc" id="L1120" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20372)) {</span>
+<span class="nc" id="L1121">                    mCol.getModels().save();</span>
+                }
+            }
+        }
+<span class="nc" id="L1125">        return result;</span>
+    }
+
+    private void mergeModels(JSONArray rchg) throws UnexpectedSchemaChange {
+<span class="nc bnc" id="L1129" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20393)) {</span>
+            {
+<span class="nc" id="L1131">                long _loopCounter411 = 0;</span>
+<span class="nc bnc" id="L1132" title="All 2 branches missed.">                for (JSONObject model : rchg.jsonObjectIterable()) {</span>
+<span class="nc" id="L1133">                    ListenerUtil.loopListener.listen(&quot;_loopCounter411&quot;, ++_loopCounter411);</span>
+<span class="nc" id="L1134">                    Model r = new Model(model);</span>
+<span class="nc" id="L1135">                    Model l = mCol.getModels().get(r.getLong(&quot;id&quot;));</span>
+<span class="nc bnc" id="L1136" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20392)) {</span>
+                        // if missing locally or server is newer, update
+<span class="nc bnc" id="L1138" title="All 50 branches missed.">                        if ((ListenerUtil.mutListener.listen(20387) ? (l == null &amp;&amp; (ListenerUtil.mutListener.listen(20386) ? (r.getLong(&quot;mod&quot;) &gt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20385) ? (r.getLong(&quot;mod&quot;) &lt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20384) ? (r.getLong(&quot;mod&quot;) &lt; l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20383) ? (r.getLong(&quot;mod&quot;) != l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20382) ? (r.getLong(&quot;mod&quot;) == l.getLong(&quot;mod&quot;)) : (r.getLong(&quot;mod&quot;) &gt; l.getLong(&quot;mod&quot;)))))))) : (l == null || (ListenerUtil.mutListener.listen(20386) ? (r.getLong(&quot;mod&quot;) &gt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20385) ? (r.getLong(&quot;mod&quot;) &lt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20384) ? (r.getLong(&quot;mod&quot;) &lt; l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20383) ? (r.getLong(&quot;mod&quot;) != l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20382) ? (r.getLong(&quot;mod&quot;) == l.getLong(&quot;mod&quot;)) : (r.getLong(&quot;mod&quot;) &gt; l.getLong(&quot;mod&quot;)))))))))) {</span>
+<span class="nc bnc" id="L1139" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20390)) {</span>
+                                // syncing algorithm should handle this in a better way.
+<span class="nc bnc" id="L1141" title="All 2 branches missed.">                                if (l != null) {</span>
+<span class="nc bnc" id="L1142" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20388)) {</span>
+<span class="nc bnc" id="L1143" title="All 2 branches missed.">                                        if (l.getJSONArray(&quot;flds&quot;).length() != r.getJSONArray(&quot;flds&quot;).length()) {</span>
+<span class="nc" id="L1144">                                            throw new UnexpectedSchemaChange();</span>
+                                        }
+                                    }
+<span class="nc bnc" id="L1147" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20389)) {</span>
+<span class="nc bnc" id="L1148" title="All 2 branches missed.">                                        if (l.getJSONArray(&quot;tmpls&quot;).length() != r.getJSONArray(&quot;tmpls&quot;).length()) {</span>
+<span class="nc" id="L1149">                                            throw new UnexpectedSchemaChange();</span>
+                                        }
+                                    }
+                                }
+                            }
+<span class="nc bnc" id="L1154" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20391)) {</span>
+<span class="nc" id="L1155">                                mCol.getModels().update(r);</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L1159">                }</span>
+            }
+        }
+<span class="nc" id="L1162">    }</span>
+
+    private JSONArray getDecks() {
+<span class="nc" id="L1165">        JSONArray result = new JSONArray();</span>
+<span class="nc bnc" id="L1166" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20423)) {</span>
+<span class="nc bnc" id="L1167" title="All 2 branches missed.">            if (mCol.getServer()) {</span>
+<span class="nc" id="L1168">                JSONArray decks = new JSONArray();</span>
+<span class="nc bnc" id="L1169" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20412)) {</span>
+                    {
+<span class="nc" id="L1171">                        long _loopCounter414 = 0;</span>
+<span class="nc bnc" id="L1172" title="All 2 branches missed.">                        for (Deck g : mCol.getDecks().all()) {</span>
+<span class="nc" id="L1173">                            ListenerUtil.loopListener.listen(&quot;_loopCounter414&quot;, ++_loopCounter414);</span>
+<span class="nc bnc" id="L1174" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20411)) {</span>
+<span class="nc bnc" id="L1175" title="All 22 branches missed.">                                if ((ListenerUtil.mutListener.listen(20409) ? (g.getInt(&quot;usn&quot;) &lt;= mMinUsn) : (ListenerUtil.mutListener.listen(20408) ? (g.getInt(&quot;usn&quot;) &gt; mMinUsn) : (ListenerUtil.mutListener.listen(20407) ? (g.getInt(&quot;usn&quot;) &lt; mMinUsn) : (ListenerUtil.mutListener.listen(20406) ? (g.getInt(&quot;usn&quot;) != mMinUsn) : (ListenerUtil.mutListener.listen(20405) ? (g.getInt(&quot;usn&quot;) == mMinUsn) : (g.getInt(&quot;usn&quot;) &gt;= mMinUsn))))))) {</span>
+<span class="nc bnc" id="L1176" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20410)) {</span>
+<span class="nc" id="L1177">                                        decks.put(g);</span>
+                                    }
+                                }
+                            }
+<span class="nc" id="L1181">                        }</span>
+                    }
+                }
+<span class="nc" id="L1184">                JSONArray dconfs = new JSONArray();</span>
+<span class="nc bnc" id="L1185" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20420)) {</span>
+                    {
+<span class="nc" id="L1187">                        long _loopCounter415 = 0;</span>
+<span class="nc bnc" id="L1188" title="All 2 branches missed.">                        for (DeckConfig g : mCol.getDecks().allConf()) {</span>
+<span class="nc" id="L1189">                            ListenerUtil.loopListener.listen(&quot;_loopCounter415&quot;, ++_loopCounter415);</span>
+<span class="nc bnc" id="L1190" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20419)) {</span>
+<span class="nc bnc" id="L1191" title="All 22 branches missed.">                                if ((ListenerUtil.mutListener.listen(20417) ? (g.getInt(&quot;usn&quot;) &lt;= mMinUsn) : (ListenerUtil.mutListener.listen(20416) ? (g.getInt(&quot;usn&quot;) &gt; mMinUsn) : (ListenerUtil.mutListener.listen(20415) ? (g.getInt(&quot;usn&quot;) &lt; mMinUsn) : (ListenerUtil.mutListener.listen(20414) ? (g.getInt(&quot;usn&quot;) != mMinUsn) : (ListenerUtil.mutListener.listen(20413) ? (g.getInt(&quot;usn&quot;) == mMinUsn) : (g.getInt(&quot;usn&quot;) &gt;= mMinUsn))))))) {</span>
+<span class="nc bnc" id="L1192" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20418)) {</span>
+<span class="nc" id="L1193">                                        dconfs.put(g);</span>
+                                    }
+                                }
+                            }
+<span class="nc" id="L1197">                        }</span>
+                    }
+                }
+<span class="nc bnc" id="L1200" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20421)) {</span>
+<span class="nc" id="L1201">                    result.put(decks);</span>
+                }
+<span class="nc bnc" id="L1203" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20422)) {</span>
+<span class="nc" id="L1204">                    result.put(dconfs);</span>
+                }
+<span class="nc" id="L1206">            } else {</span>
+<span class="nc" id="L1207">                JSONArray decks = new JSONArray();</span>
+<span class="nc bnc" id="L1208" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20397)) {</span>
+                    {
+<span class="nc" id="L1210">                        long _loopCounter412 = 0;</span>
+<span class="nc bnc" id="L1211" title="All 2 branches missed.">                        for (Deck g : mCol.getDecks().all()) {</span>
+<span class="nc" id="L1212">                            ListenerUtil.loopListener.listen(&quot;_loopCounter412&quot;, ++_loopCounter412);</span>
+<span class="nc bnc" id="L1213" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20396)) {</span>
+<span class="nc bnc" id="L1214" title="All 2 branches missed.">                                if (g.getInt(&quot;usn&quot;) == -1) {</span>
+<span class="nc bnc" id="L1215" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20394)) {</span>
+<span class="nc" id="L1216">                                        g.put(&quot;usn&quot;, mMaxUsn);</span>
+                                    }
+<span class="nc bnc" id="L1218" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20395)) {</span>
+<span class="nc" id="L1219">                                        decks.put(g);</span>
+                                    }
+                                }
+                            }
+<span class="nc" id="L1223">                        }</span>
+                    }
+                }
+<span class="nc" id="L1226">                JSONArray dconfs = new JSONArray();</span>
+<span class="nc bnc" id="L1227" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20401)) {</span>
+                    {
+<span class="nc" id="L1229">                        long _loopCounter413 = 0;</span>
+<span class="nc bnc" id="L1230" title="All 2 branches missed.">                        for (DeckConfig g : mCol.getDecks().allConf()) {</span>
+<span class="nc" id="L1231">                            ListenerUtil.loopListener.listen(&quot;_loopCounter413&quot;, ++_loopCounter413);</span>
+<span class="nc bnc" id="L1232" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20400)) {</span>
+<span class="nc bnc" id="L1233" title="All 2 branches missed.">                                if (g.getInt(&quot;usn&quot;) == -1) {</span>
+<span class="nc bnc" id="L1234" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20398)) {</span>
+<span class="nc" id="L1235">                                        g.put(&quot;usn&quot;, mMaxUsn);</span>
+                                    }
+<span class="nc bnc" id="L1237" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20399)) {</span>
+<span class="nc" id="L1238">                                        dconfs.put(g);</span>
+                                    }
+                                }
+                            }
+<span class="nc" id="L1242">                        }</span>
+                    }
+                }
+<span class="nc bnc" id="L1245" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20402)) {</span>
+<span class="nc" id="L1246">                    mCol.getDecks().save();</span>
+                }
+<span class="nc bnc" id="L1248" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20403)) {</span>
+<span class="nc" id="L1249">                    result.put(decks);</span>
+                }
+<span class="nc bnc" id="L1251" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20404)) {</span>
+<span class="nc" id="L1252">                    result.put(dconfs);</span>
+                }
+            }
+        }
+<span class="nc" id="L1256">        return result;</span>
+    }
+
+    private void mergeDecks(JSONArray rchg) {
+<span class="nc" id="L1260">        JSONArray decks = rchg.getJSONArray(0);</span>
+<span class="nc bnc" id="L1261" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20432)) {</span>
+            {
+<span class="nc" id="L1263">                long _loopCounter416 = 0;</span>
+<span class="nc bnc" id="L1264" title="All 2 branches missed.">                for (JSONObject deck : decks.jsonObjectIterable()) {</span>
+<span class="nc" id="L1265">                    ListenerUtil.loopListener.listen(&quot;_loopCounter416&quot;, ++_loopCounter416);</span>
+<span class="nc" id="L1266">                    Deck r = new Deck(deck);</span>
+<span class="nc" id="L1267">                    Deck l = mCol.getDecks().get(r.getLong(&quot;id&quot;), false);</span>
+<span class="nc bnc" id="L1268" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20431)) {</span>
+                        // if missing locally or server is newer, update
+<span class="nc bnc" id="L1270" title="All 50 branches missed.">                        if ((ListenerUtil.mutListener.listen(20429) ? (l == null &amp;&amp; (ListenerUtil.mutListener.listen(20428) ? (r.getLong(&quot;mod&quot;) &gt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20427) ? (r.getLong(&quot;mod&quot;) &lt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20426) ? (r.getLong(&quot;mod&quot;) &lt; l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20425) ? (r.getLong(&quot;mod&quot;) != l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20424) ? (r.getLong(&quot;mod&quot;) == l.getLong(&quot;mod&quot;)) : (r.getLong(&quot;mod&quot;) &gt; l.getLong(&quot;mod&quot;)))))))) : (l == null || (ListenerUtil.mutListener.listen(20428) ? (r.getLong(&quot;mod&quot;) &gt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20427) ? (r.getLong(&quot;mod&quot;) &lt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20426) ? (r.getLong(&quot;mod&quot;) &lt; l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20425) ? (r.getLong(&quot;mod&quot;) != l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20424) ? (r.getLong(&quot;mod&quot;) == l.getLong(&quot;mod&quot;)) : (r.getLong(&quot;mod&quot;) &gt; l.getLong(&quot;mod&quot;)))))))))) {</span>
+<span class="nc bnc" id="L1271" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20430)) {</span>
+<span class="nc" id="L1272">                                mCol.getDecks().update(r);</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L1276">                }</span>
+            }
+        }
+<span class="nc" id="L1279">        JSONArray confs = rchg.getJSONArray(1);</span>
+<span class="nc bnc" id="L1280" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20441)) {</span>
+            {
+<span class="nc" id="L1282">                long _loopCounter417 = 0;</span>
+<span class="nc bnc" id="L1283" title="All 2 branches missed.">                for (JSONObject deckConfig : confs.jsonObjectIterable()) {</span>
+<span class="nc" id="L1284">                    ListenerUtil.loopListener.listen(&quot;_loopCounter417&quot;, ++_loopCounter417);</span>
+<span class="nc" id="L1285">                    DeckConfig r = new DeckConfig(deckConfig);</span>
+<span class="nc" id="L1286">                    DeckConfig l = mCol.getDecks().getConf(r.getLong(&quot;id&quot;));</span>
+<span class="nc bnc" id="L1287" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20440)) {</span>
+                        // if missing locally or server is newer, update
+<span class="nc bnc" id="L1289" title="All 50 branches missed.">                        if ((ListenerUtil.mutListener.listen(20438) ? (l == null &amp;&amp; (ListenerUtil.mutListener.listen(20437) ? (r.getLong(&quot;mod&quot;) &gt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20436) ? (r.getLong(&quot;mod&quot;) &lt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20435) ? (r.getLong(&quot;mod&quot;) &lt; l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20434) ? (r.getLong(&quot;mod&quot;) != l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20433) ? (r.getLong(&quot;mod&quot;) == l.getLong(&quot;mod&quot;)) : (r.getLong(&quot;mod&quot;) &gt; l.getLong(&quot;mod&quot;)))))))) : (l == null || (ListenerUtil.mutListener.listen(20437) ? (r.getLong(&quot;mod&quot;) &gt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20436) ? (r.getLong(&quot;mod&quot;) &lt;= l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20435) ? (r.getLong(&quot;mod&quot;) &lt; l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20434) ? (r.getLong(&quot;mod&quot;) != l.getLong(&quot;mod&quot;)) : (ListenerUtil.mutListener.listen(20433) ? (r.getLong(&quot;mod&quot;) == l.getLong(&quot;mod&quot;)) : (r.getLong(&quot;mod&quot;) &gt; l.getLong(&quot;mod&quot;)))))))))) {</span>
+<span class="nc bnc" id="L1290" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20439)) {</span>
+<span class="nc" id="L1291">                                mCol.getDecks().updateConf(r);</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L1295">                }</span>
+            }
+        }
+<span class="nc" id="L1298">    }</span>
+
+    private JSONArray getTags() {
+<span class="nc" id="L1301">        JSONArray result = new JSONArray();</span>
+<span class="nc bnc" id="L1302" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20460)) {</span>
+<span class="nc bnc" id="L1303" title="All 2 branches missed.">            if (mCol.getServer()) {</span>
+<span class="nc bnc" id="L1304" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20459)) {</span>
+                    {
+<span class="nc" id="L1306">                        long _loopCounter419 = 0;</span>
+<span class="nc bnc" id="L1307" title="All 2 branches missed.">                        for (Map.Entry&lt;String, Integer&gt; t : mCol.getTags().allItems()) {</span>
+<span class="nc" id="L1308">                            ListenerUtil.loopListener.listen(&quot;_loopCounter419&quot;, ++_loopCounter419);</span>
+<span class="nc bnc" id="L1309" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20458)) {</span>
+<span class="nc bnc" id="L1310" title="All 22 branches missed.">                                if ((ListenerUtil.mutListener.listen(20456) ? (t.getValue() &lt;= mMinUsn) : (ListenerUtil.mutListener.listen(20455) ? (t.getValue() &gt; mMinUsn) : (ListenerUtil.mutListener.listen(20454) ? (t.getValue() &lt; mMinUsn) : (ListenerUtil.mutListener.listen(20453) ? (t.getValue() != mMinUsn) : (ListenerUtil.mutListener.listen(20452) ? (t.getValue() == mMinUsn) : (t.getValue() &gt;= mMinUsn))))))) {</span>
+<span class="nc bnc" id="L1311" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20457)) {</span>
+<span class="nc" id="L1312">                                        result.put(t.getKey());</span>
+                                    }
+                                }
+                            }
+<span class="nc" id="L1316">                        }</span>
+<span class="nc" id="L1317">                    }</span>
+                }
+            } else {
+<span class="nc bnc" id="L1320" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20450)) {</span>
+                    {
+<span class="nc" id="L1322">                        long _loopCounter418 = 0;</span>
+<span class="nc bnc" id="L1323" title="All 2 branches missed.">                        for (Map.Entry&lt;String, Integer&gt; t : mCol.getTags().allItems()) {</span>
+<span class="nc" id="L1324">                            ListenerUtil.loopListener.listen(&quot;_loopCounter418&quot;, ++_loopCounter418);</span>
+<span class="nc bnc" id="L1325" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20449)) {</span>
+<span class="nc bnc" id="L1326" title="All 22 branches missed.">                                if ((ListenerUtil.mutListener.listen(20446) ? (t.getValue() &gt;= -1) : (ListenerUtil.mutListener.listen(20445) ? (t.getValue() &lt;= -1) : (ListenerUtil.mutListener.listen(20444) ? (t.getValue() &gt; -1) : (ListenerUtil.mutListener.listen(20443) ? (t.getValue() &lt; -1) : (ListenerUtil.mutListener.listen(20442) ? (t.getValue() != -1) : (t.getValue() == -1))))))) {</span>
+<span class="nc" id="L1327">                                    String tag = t.getKey();</span>
+<span class="nc bnc" id="L1328" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20447)) {</span>
+<span class="nc" id="L1329">                                        mCol.getTags().add(t.getKey(), mMaxUsn);</span>
+                                    }
+<span class="nc bnc" id="L1331" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(20448)) {</span>
+<span class="nc" id="L1332">                                        result.put(tag);</span>
+                                    }
+                                }
+                            }
+<span class="nc" id="L1336">                        }</span>
+                    }
+                }
+<span class="nc bnc" id="L1339" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20451)) {</span>
+<span class="nc" id="L1340">                    mCol.getTags().save();</span>
+                }
+            }
+        }
+<span class="nc" id="L1344">        return result;</span>
+    }
+
+    private void mergeTags(JSONArray tags) {
+<span class="nc bnc" id="L1348" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20461)) {</span>
+<span class="nc" id="L1349">            mCol.getTags().register(tags.toStringList(), mMaxUsn);</span>
+        }
+<span class="nc" id="L1351">    }</span>
+
+    private void mergeRevlog(JSONArray logs) {
+<span class="nc bnc" id="L1354" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20463)) {</span>
+            {
+<span class="nc" id="L1356">                long _loopCounter420 = 0;</span>
+<span class="nc bnc" id="L1357" title="All 2 branches missed.">                for (JSONArray log : logs.jsonArrayIterable()) {</span>
+<span class="nc" id="L1358">                    ListenerUtil.loopListener.listen(&quot;_loopCounter420&quot;, ++_loopCounter420);</span>
+                    try {
+<span class="nc bnc" id="L1360" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20462)) {</span>
+<span class="nc" id="L1361">                            mCol.getDb().execute(&quot;INSERT OR IGNORE INTO revlog VALUES (?,?,?,?,?,?,?,?,?)&quot;, Utils.jsonArray2Objects(log));</span>
+                        }
+<span class="nc" id="L1363">                    } catch (SQLException e) {</span>
+<span class="nc" id="L1364">                        throw new RuntimeException(e);</span>
+<span class="nc" id="L1365">                    }</span>
+<span class="nc" id="L1366">                }</span>
+            }
+        }
+<span class="nc" id="L1369">    }</span>
+
+    private ArrayList&lt;Object[]&gt; newerRows(JSONArray data, String table, int modIdx) {
+<span class="nc" id="L1372">        long[] ids = new long[data.length()];</span>
+<span class="nc bnc" id="L1373" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20470)) {</span>
+            {
+<span class="nc" id="L1375">                long _loopCounter421 = 0;</span>
+<span class="nc bnc" id="L1376" title="All 22 branches missed.">                for (int i = 0; (ListenerUtil.mutListener.listen(20469) ? (i &gt;= data.length()) : (ListenerUtil.mutListener.listen(20468) ? (i &lt;= data.length()) : (ListenerUtil.mutListener.listen(20467) ? (i &gt; data.length()) : (ListenerUtil.mutListener.listen(20466) ? (i != data.length()) : (ListenerUtil.mutListener.listen(20465) ? (i == data.length()) : (i &lt; data.length())))))); i++) {</span>
+<span class="nc" id="L1377">                    ListenerUtil.loopListener.listen(&quot;_loopCounter421&quot;, ++_loopCounter421);</span>
+<span class="nc bnc" id="L1378" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20464)) {</span>
+<span class="nc" id="L1379">                        ids[i] = data.getJSONArray(i).getLong(0);</span>
+                    }
+                }
+            }
+        }
+<span class="nc" id="L1384">        Pair&lt;String, Object[]&gt; limAndArg = usnLim();</span>
+<span class="nc" id="L1385">        Map&lt;Long, Long&gt; lmods = new HashMap&lt;&gt;(mCol.getDb().queryScalar(&quot;SELECT count() FROM &quot; + table + &quot; WHERE id IN &quot; + Utils.ids2str(ids) + &quot; AND &quot; + limAndArg.first, limAndArg.second));</span>
+<span class="nc" id="L1386">        try (Cursor cur = mCol.getDb().query(&quot;SELECT id, mod FROM &quot; + table + &quot; WHERE id IN &quot; + Utils.ids2str(ids) + &quot; AND &quot; + limAndArg.first, limAndArg.second)) {</span>
+<span class="nc bnc" id="L1387" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(20472)) {</span>
+                {
+<span class="nc" id="L1389">                    long _loopCounter422 = 0;</span>
+<span class="nc bnc" id="L1390" title="All 2 branches missed.">                    while (cur.moveToNext()) {</span>
+<span class="nc" id="L1391">                        ListenerUtil.loopListener.listen(&quot;_loopCounter422&quot;, ++_loopCounter422);</span>
+<span class="nc bnc" id="L1392" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(20471)) {</span>
+<span class="nc" id="L1393">                            lmods.put(cur.getLong(0), cur.getLong(1));</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L1399">        ArrayList&lt;Object[]&gt; update = new ArrayList&lt;&gt;(data.length());</span>
+<span class="nc bnc" id="L1400" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20481)) {</span>
+            {
+<span class="nc" id="L1402">                long _loopCounter423 = 0;</span>
+<span class="nc bnc" id="L1403" title="All 2 branches missed.">                for (JSONArray r : data.jsonArrayIterable()) {</span>
+<span class="nc" id="L1404">                    ListenerUtil.loopListener.listen(&quot;_loopCounter423&quot;, ++_loopCounter423);</span>
+<span class="nc bnc" id="L1405" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20480)) {</span>
+<span class="nc bnc" id="L1406" title="All 50 branches missed.">                        if ((ListenerUtil.mutListener.listen(20478) ? (!lmods.containsKey(r.getLong(0)) &amp;&amp; (ListenerUtil.mutListener.listen(20477) ? (lmods.get(r.getLong(0)) &gt;= r.getLong(modIdx)) : (ListenerUtil.mutListener.listen(20476) ? (lmods.get(r.getLong(0)) &lt;= r.getLong(modIdx)) : (ListenerUtil.mutListener.listen(20475) ? (lmods.get(r.getLong(0)) &gt; r.getLong(modIdx)) : (ListenerUtil.mutListener.listen(20474) ? (lmods.get(r.getLong(0)) != r.getLong(modIdx)) : (ListenerUtil.mutListener.listen(20473) ? (lmods.get(r.getLong(0)) == r.getLong(modIdx)) : (lmods.get(r.getLong(0)) &lt; r.getLong(modIdx)))))))) : (!lmods.containsKey(r.getLong(0)) || (ListenerUtil.mutListener.listen(20477) ? (lmods.get(r.getLong(0)) &gt;= r.getLong(modIdx)) : (ListenerUtil.mutListener.listen(20476) ? (lmods.get(r.getLong(0)) &lt;= r.getLong(modIdx)) : (ListenerUtil.mutListener.listen(20475) ? (lmods.get(r.getLong(0)) &gt; r.getLong(modIdx)) : (ListenerUtil.mutListener.listen(20474) ? (lmods.get(r.getLong(0)) != r.getLong(modIdx)) : (ListenerUtil.mutListener.listen(20473) ? (lmods.get(r.getLong(0)) == r.getLong(modIdx)) : (lmods.get(r.getLong(0)) &lt; r.getLong(modIdx)))))))))) {</span>
+<span class="nc bnc" id="L1407" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(20479)) {</span>
+<span class="nc" id="L1408">                                update.add(Utils.jsonArray2Objects(r));</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L1412">                }</span>
+            }
+        }
+<span class="nc bnc" id="L1415" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20482)) {</span>
+<span class="nc" id="L1416">            mCol.log(table, data);</span>
+        }
+<span class="nc" id="L1418">        return update;</span>
+    }
+
+    private void mergeCards(JSONArray cards) {
+<span class="nc bnc" id="L1422" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20484)) {</span>
+            {
+<span class="nc" id="L1424">                long _loopCounter424 = 0;</span>
+<span class="nc bnc" id="L1425" title="All 2 branches missed.">                for (Object[] r : newerRows(cards, &quot;cards&quot;, 4)) {</span>
+<span class="nc" id="L1426">                    ListenerUtil.loopListener.listen(&quot;_loopCounter424&quot;, ++_loopCounter424);</span>
+<span class="nc bnc" id="L1427" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20483)) {</span>
+<span class="nc" id="L1428">                        mCol.getDb().execute(&quot;INSERT OR REPLACE INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)&quot;, r);</span>
+                    }
+<span class="nc" id="L1430">                }</span>
+            }
+        }
+<span class="nc" id="L1433">    }</span>
+
+    private void mergeNotes(JSONArray notes) {
+<span class="nc bnc" id="L1436" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20487)) {</span>
+            {
+<span class="nc" id="L1438">                long _loopCounter425 = 0;</span>
+<span class="nc bnc" id="L1439" title="All 2 branches missed.">                for (Object[] n : newerRows(notes, &quot;notes&quot;, 4)) {</span>
+<span class="nc" id="L1440">                    ListenerUtil.loopListener.listen(&quot;_loopCounter425&quot;, ++_loopCounter425);</span>
+<span class="nc bnc" id="L1441" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20485)) {</span>
+<span class="nc" id="L1442">                        mCol.getDb().execute(&quot;INSERT OR REPLACE INTO notes VALUES (?,?,?,?,?,?,?,?,?,?,?)&quot;, n);</span>
+                    }
+<span class="nc bnc" id="L1444" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20486)) {</span>
+<span class="nc" id="L1445">                        mCol.updateFieldCache(new long[] { ((Number) n[0]).longValue() });</span>
+                    }
+<span class="nc" id="L1447">                }</span>
+            }
+        }
+<span class="nc" id="L1450">    }</span>
+
+    public String getSyncMsg() {
+<span class="nc" id="L1453">        return mSyncMsg;</span>
+    }
+
+    private JSONObject getConf() {
+<span class="nc" id="L1457">        return mCol.getConf();</span>
+    }
+
+    private void mergeConf(JSONObject conf) {
+<span class="nc bnc" id="L1461" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20488)) {</span>
+<span class="nc" id="L1462">            mCol.setConf(conf);</span>
+        }
+<span class="nc" id="L1464">    }</span>
+
+    /**
+     * If the user asked to cancel the sync then we just throw a Runtime exception which should be gracefully handled
+     * @param con
+     */
+    private void throwExceptionIfCancelled(Connection con) {
+<span class="nc bnc" id="L1471" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(20492)) {</span>
+<span class="nc bnc" id="L1472" title="All 2 branches missed.">            if (Connection.getIsCancelled()) {</span>
+<span class="nc bnc" id="L1473" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20489)) {</span>
+<span class="nc" id="L1474">                    Timber.i(&quot;Sync was cancelled&quot;);</span>
+                }
+<span class="nc bnc" id="L1476" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(20490)) {</span>
+<span class="nc" id="L1477">                    publishProgress(con, R.string.sync_cancelled);</span>
+                }
+                try {
+<span class="nc bnc" id="L1480" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(20491)) {</span>
+<span class="nc" id="L1481">                        mRemoteServer.abort();</span>
+                    }
+<span class="nc" id="L1483">                } catch (UnknownHttpResponseException ignored) {</span>
+<span class="nc" id="L1484">                }</span>
+<span class="nc" id="L1485">                throw new RuntimeException(USER_ABORTED_SYNC.toString());</span>
+            }
+        }
+<span class="nc" id="L1488">    }</span>
+
+    private static class UnexpectedSchemaChange extends Exception {
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

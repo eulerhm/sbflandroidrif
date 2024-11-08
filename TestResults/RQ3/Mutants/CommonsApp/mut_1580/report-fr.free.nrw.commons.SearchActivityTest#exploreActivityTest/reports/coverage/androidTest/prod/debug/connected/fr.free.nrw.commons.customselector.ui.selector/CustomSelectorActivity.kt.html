@@ -1,0 +1,501 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CustomSelectorActivity.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.customselector.ui.selector</a> &gt; <span class="el_source">CustomSelectorActivity.kt</span></div><h1>CustomSelectorActivity.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.customselector.ui.selector
+
+import android.app.Activity
+import android.app.Dialog
+import android.content.Intent
+import android.content.SharedPreferences
+import android.os.Bundle
+import android.view.View
+import android.view.Window
+import android.widget.Button
+import android.widget.ImageButton
+import android.widget.TextView
+import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.lifecycle.ViewModelProvider
+import fr.free.nrw.commons.R
+import fr.free.nrw.commons.customselector.database.NotForUploadStatus
+import fr.free.nrw.commons.customselector.database.NotForUploadStatusDao
+import fr.free.nrw.commons.customselector.helper.CustomSelectorConstants
+import fr.free.nrw.commons.customselector.helper.CustomSelectorConstants.SHOULD_REFRESH
+import fr.free.nrw.commons.customselector.listeners.FolderClickListener
+import fr.free.nrw.commons.customselector.listeners.ImageSelectListener
+import fr.free.nrw.commons.customselector.model.Image
+import fr.free.nrw.commons.databinding.ActivityCustomSelectorBinding
+import fr.free.nrw.commons.databinding.CustomSelectorBottomLayoutBinding
+import fr.free.nrw.commons.databinding.CustomSelectorToolbarBinding
+import fr.free.nrw.commons.filepicker.Constants
+import fr.free.nrw.commons.media.ZoomableActivity
+import fr.free.nrw.commons.theme.BaseActivity
+import fr.free.nrw.commons.upload.FileUtilsWrapper
+import fr.free.nrw.commons.utils.CustomSelectorUtils
+import kotlinx.coroutines.*
+import java.io.File
+import java.lang.Integer.max
+import javax.inject.Inject
+
+
+/**
+ * Custom Selector Activity.
+ */
+<span class="nc" id="L40">class CustomSelectorActivity : BaseActivity(), FolderClickListener, ImageSelectListener {</span>
+
+    /**
+     * ViewBindings
+     */
+    private lateinit var binding: ActivityCustomSelectorBinding
+    private lateinit var toolbarBinding: CustomSelectorToolbarBinding
+    private lateinit var bottomSheetBinding: CustomSelectorBottomLayoutBinding
+
+    /**
+     * View model.
+     */
+    private lateinit var viewModel: CustomSelectorViewModel
+
+    /**
+     * isImageFragmentOpen is true when the image fragment is in view.
+     */
+    private var isImageFragmentOpen = false
+
+    /**
+     * Current ImageFragment attributes.
+     */
+    private var bucketId: Long = 0L
+    private lateinit var bucketName: String
+
+    /**
+     * Pref for saving selector state.
+     */
+    private lateinit var prefs: SharedPreferences
+
+    /**
+     * Maximum number of images that can be selected.
+     */
+<span class="nc" id="L73">    private val uploadLimit: Int = 20</span>
+
+    /**
+     * Flag that is marked true when the amount
+     * of selected images is greater than the upload limit.
+     */
+    private var uploadLimitExceeded: Boolean = false
+
+    /**
+     * Tracks the amount by which the upload limit has been exceeded.
+     */
+    private var uploadLimitExceededBy: Int = 0
+
+    /**
+     * View Model Factory.
+     */
+    @Inject
+<span class="nc bnc" id="L90" title="All 2 branches missed.">    lateinit var customSelectorViewModelFactory: CustomSelectorViewModelFactory</span>
+
+    /**
+     * NotForUploadStatus Dao class for database operations
+     */
+    @Inject
+<span class="nc bnc" id="L96" title="All 2 branches missed.">    lateinit var notForUploadStatusDao: NotForUploadStatusDao</span>
+
+    /**
+     * FileUtilsWrapper class to get imageSHA1 from uri
+     */
+    @Inject
+<span class="nc bnc" id="L102" title="All 2 branches missed.">    lateinit var fileUtilsWrapper: FileUtilsWrapper</span>
+
+    /**
+     * Coroutine Dispatchers and Scope.
+     */
+<span class="nc" id="L107">    private val scope: CoroutineScope = MainScope()</span>
+<span class="nc" id="L108">    private var ioDispatcher: CoroutineDispatcher = Dispatchers.IO</span>
+
+    /**
+     * Image Fragment instance
+     */
+<span class="nc" id="L113">    var imageFragment: ImageFragment? = null</span>
+
+<span class="nc" id="L115">    private var progressDialogText:String=&quot;&quot;</span>
+
+    /**
+     * onCreate Activity, sets theme, initialises the view model, setup view.
+     */
+    override fun onCreate(savedInstanceState: Bundle?) {
+<span class="nc" id="L121">        super.onCreate(savedInstanceState)</span>
+<span class="nc" id="L122">        binding = ActivityCustomSelectorBinding.inflate(layoutInflater)</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        toolbarBinding = CustomSelectorToolbarBinding.bind(binding.root)</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">        bottomSheetBinding = CustomSelectorBottomLayoutBinding.bind(binding.root)</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">        val view = binding.root</span>
+<span class="nc" id="L126">        setContentView(view)</span>
+
+<span class="nc" id="L128">        prefs = applicationContext.getSharedPreferences(&quot;CustomSelector&quot;, MODE_PRIVATE)</span>
+<span class="nc" id="L129">        viewModel = ViewModelProvider(this, customSelectorViewModelFactory).get(</span>
+            CustomSelectorViewModel::class.java
+        )
+
+<span class="nc" id="L133">        setupViews()</span>
+
+<span class="nc bnc" id="L135" title="All 4 branches missed.">        if (prefs.getBoolean(&quot;customSelectorFirstLaunch&quot;, true)) {</span>
+            // show welcome dialog on first launch
+<span class="nc" id="L137">            showWelcomeDialog()</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">            prefs.edit().putBoolean(&quot;customSelectorFirstLaunch&quot;, false).apply()</span>
+        }
+
+        // Open folder if saved in prefs.
+<span class="nc bnc" id="L142" title="All 4 branches missed.">        if (prefs.contains(FOLDER_ID)) {</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">            val lastOpenFolderId: Long = prefs.getLong(FOLDER_ID, 0L)</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">            val lastOpenFolderName: String? = prefs.getString(FOLDER_NAME, null)</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">            val lastItemId: Long = prefs.getLong(ITEM_ID, 0)</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">            lastOpenFolderName?.let { onFolderClick(lastOpenFolderId, it, lastItemId) }</span>
+        }
+<span class="nc" id="L148">    }</span>
+
+    /**
+     * When data will be send from full screen mode, it will be passed to fragment
+     */
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+<span class="nc" id="L154">        super.onActivityResult(requestCode, resultCode, data)</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">        if (requestCode == Constants.RequestCodes.RECEIVE_DATA_FROM_FULL_SCREEN_MODE &amp;&amp;</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">            resultCode == Activity.RESULT_OK</span>
+        ) {
+<span class="nc" id="L158">            val selectedImages: ArrayList&lt;Image&gt; =</span>
+<span class="nc" id="L159">                data!!</span>
+<span class="nc" id="L160">                    .getParcelableArrayListExtra(CustomSelectorConstants.NEW_SELECTED_IMAGES)!!</span>
+<span class="nc" id="L161">            val shouldRefresh = data.getBooleanExtra(SHOULD_REFRESH, false)</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">            imageFragment?.passSelectedImages(selectedImages, shouldRefresh)</span>
+        }
+<span class="nc" id="L164">    }</span>
+
+    /**
+     * Show Custom Selector Welcome Dialog.
+     */
+    private fun showWelcomeDialog() {
+<span class="nc" id="L170">        val dialog = Dialog(this)</span>
+<span class="nc" id="L171">        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)</span>
+<span class="nc" id="L172">        dialog.setContentView(R.layout.custom_selector_info_dialog)</span>
+<span class="nc" id="L173">        (dialog.findViewById(R.id.btn_ok) as Button).setOnClickListener { dialog.dismiss() }</span>
+<span class="nc" id="L174">        dialog.show()</span>
+<span class="nc" id="L175">    }</span>
+
+    /**
+     * Set up view, default folder view.
+     */
+    private fun setupViews() {
+<span class="nc" id="L181">        supportFragmentManager.beginTransaction()</span>
+<span class="nc" id="L182">            .replace(R.id.fragment_container, FolderFragment.newInstance())</span>
+<span class="nc" id="L183">            .commit()</span>
+<span class="nc" id="L184">        fetchData()</span>
+<span class="nc" id="L185">        setUpToolbar()</span>
+<span class="nc" id="L186">        setUpBottomLayout()</span>
+<span class="nc" id="L187">    }</span>
+
+    /**
+     * Set up bottom layout
+     */
+    private fun setUpBottomLayout() {
+<span class="nc" id="L193">        val done: Button = findViewById(R.id.upload)</span>
+<span class="nc" id="L194">        done.setOnClickListener { onDone() }</span>
+
+<span class="nc" id="L196">        val notForUpload: Button = findViewById(R.id.not_for_upload)</span>
+<span class="nc" id="L197">        notForUpload.setOnClickListener { onClickNotForUpload() }</span>
+<span class="nc" id="L198">    }</span>
+
+    /**
+     * Gets selected images and proceed for database operations
+     */
+    private fun onClickNotForUpload() {
+<span class="nc bnc" id="L204" title="All 2 branches missed.">        val selectedImages = viewModel.selectedImages.value</span>
+<span class="nc bnc" id="L205" title="All 6 branches missed.">        if (selectedImages.isNullOrEmpty()) {</span>
+<span class="nc" id="L206">            markAsNotForUpload(arrayListOf())</span>
+<span class="nc" id="L207">            return</span>
+        }
+<span class="nc" id="L209">        var i = 0</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">        while (i &lt; selectedImages.size) {</span>
+<span class="nc" id="L211">            val path = selectedImages[i].path</span>
+<span class="nc" id="L212">            val file = File(path)</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">            if (!file.exists()) {</span>
+<span class="nc" id="L214">                selectedImages.removeAt(i)</span>
+<span class="nc" id="L215">                i--</span>
+            }
+<span class="nc" id="L217">            i++</span>
+        }
+<span class="nc" id="L219">        markAsNotForUpload(selectedImages)</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">        toolbarBinding.imageLimitError.visibility = View.INVISIBLE</span>
+<span class="nc" id="L221">    }</span>
+
+    /**
+     * Insert selected images in the database
+     */
+    private fun markAsNotForUpload(images: ArrayList&lt;Image&gt;) {
+<span class="nc" id="L227">        insertIntoNotForUpload(images)</span>
+<span class="nc" id="L228">    }</span>
+
+    /**
+     * Initializing ImageFragment
+     */
+    fun setOnDataListener(imageFragment: ImageFragment?) {
+<span class="nc" id="L234">        this.imageFragment = imageFragment</span>
+<span class="nc" id="L235">    }</span>
+
+    /**
+     * Insert images into not for upload
+     * Remove images from not for upload
+     * Refresh the UI
+     */
+    private fun insertIntoNotForUpload(images: ArrayList&lt;Image&gt;) {
+<span class="nc" id="L243">        scope.launch {</span>
+<span class="nc" id="L244">            imageFragment!!.showMarkUnmarkProgressDialog(</span>
+<span class="nc" id="L245">                text= progressDialogText</span>
+            )
+
+<span class="nc" id="L248">            var allImagesAlreadyNotForUpload = true</span>
+<span class="nc" id="L249">            images.forEach {</span>
+<span class="nc" id="L250">                val imageSHA1 = CustomSelectorUtils.getImageSHA1(</span>
+<span class="nc" id="L251">                    it.uri,</span>
+<span class="nc" id="L252">                    ioDispatcher,</span>
+<span class="nc" id="L253">                    fileUtilsWrapper,</span>
+<span class="nc" id="L254">                    contentResolver</span>
+                )
+<span class="nc" id="L256">                val exists = notForUploadStatusDao.find(imageSHA1)</span>
+
+                // If image exists in not for upload table make allImagesAlreadyNotForUpload false
+<span class="nc bnc" id="L259" title="All 2 branches missed.">                if (exists &lt; 1) {</span>
+<span class="nc" id="L260">                    allImagesAlreadyNotForUpload = false</span>
+                }
+<span class="nc" id="L262">            }</span>
+
+            // if all images is not already marked as not for upload, insert all images in
+            // not for upload table
+<span class="nc bnc" id="L266" title="All 2 branches missed.">            if (!allImagesAlreadyNotForUpload) {</span>
+<span class="nc" id="L267">                images.forEach {</span>
+<span class="nc" id="L268">                    val imageSHA1 = CustomSelectorUtils.getImageSHA1(</span>
+<span class="nc" id="L269">                        it.uri,</span>
+<span class="nc" id="L270">                        ioDispatcher,</span>
+<span class="nc" id="L271">                        fileUtilsWrapper,</span>
+<span class="nc" id="L272">                        contentResolver</span>
+                    )
+<span class="nc" id="L274">                    notForUploadStatusDao.insert(</span>
+<span class="nc" id="L275">                        NotForUploadStatus(</span>
+<span class="nc" id="L276">                            imageSHA1</span>
+                        )
+                    )
+<span class="nc" id="L279">                }</span>
+
+                // if all images is already marked as not for upload, delete all images from
+                // not for upload table
+            } else {
+<span class="nc" id="L284">                images.forEach {</span>
+<span class="nc" id="L285">                    val imageSHA1 = CustomSelectorUtils.getImageSHA1(</span>
+<span class="nc" id="L286">                        it.uri,</span>
+<span class="nc" id="L287">                        ioDispatcher,</span>
+<span class="nc" id="L288">                        fileUtilsWrapper,</span>
+<span class="nc" id="L289">                        contentResolver</span>
+                    )
+<span class="nc" id="L291">                    notForUploadStatusDao.deleteNotForUploadWithImageSHA1(imageSHA1)</span>
+<span class="nc" id="L292">                }</span>
+            }
+
+<span class="nc" id="L295">            imageFragment!!.refresh()</span>
+<span class="nc" id="L296">            imageFragment!!.dismissMarkUnmarkProgressDialog()</span>
+
+<span class="nc" id="L298">            val bottomLayout: ConstraintLayout = findViewById(R.id.bottom_layout)</span>
+<span class="nc" id="L299">            bottomLayout.visibility = View.GONE</span>
+<span class="nc" id="L300">        }</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">        changeTitle(bucketName, 0)</span>
+<span class="nc" id="L302">    }</span>
+
+    /**
+     * Start data fetch in view model.
+     */
+    private fun fetchData() {
+<span class="nc bnc" id="L308" title="All 2 branches missed.">        viewModel.fetchImages()</span>
+<span class="nc" id="L309">    }</span>
+
+    /**
+     * Change the title of the toolbar.
+     */
+    private fun changeTitle(title: String, selectedImageCount:Int) {
+<span class="nc bnc" id="L315" title="All 4 branches missed.">        if (title.isNotEmpty()){</span>
+<span class="nc" id="L316">            val titleText = findViewById&lt;TextView&gt;(R.id.title)</span>
+<span class="nc" id="L317">            var titleWithAppendedImageCount = title</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">            if (selectedImageCount &gt; 0) {</span>
+<span class="nc" id="L319">                titleWithAppendedImageCount += &quot; (${resources.getQuantityString(R.plurals.custom_picker_images_selected_title_appendix, </span>
+<span class="nc" id="L320">                    selectedImageCount, selectedImageCount)})&quot;</span>
+            }
+<span class="nc bnc" id="L322" title="All 2 branches missed.">            if (titleText != null) {</span>
+<span class="nc" id="L323">                titleText.text = titleWithAppendedImageCount</span>
+            }
+        }
+<span class="nc" id="L326">    }</span>
+
+    /**
+     * Set up the toolbar, back listener, done listener.
+     */
+    private fun setUpToolbar() {
+<span class="nc" id="L332">        val back: ImageButton = findViewById(R.id.back)</span>
+<span class="nc" id="L333">        back.setOnClickListener { onBackPressed() }</span>
+
+<span class="nc" id="L335">        val limitError: ImageButton = findViewById(R.id.image_limit_error)</span>
+<span class="nc" id="L336">        limitError.visibility = View.INVISIBLE</span>
+<span class="nc" id="L337">        limitError.setOnClickListener { displayUploadLimitWarning() }</span>
+<span class="nc" id="L338">    }</span>
+
+    /**
+     * override on folder click, change the toolbar title on folder click.
+     */
+    override fun onFolderClick(folderId: Long, folderName: String, lastItemId: Long) {
+<span class="nc" id="L344">        supportFragmentManager.beginTransaction()</span>
+<span class="nc" id="L345">            .add(R.id.fragment_container, ImageFragment.newInstance(folderId, lastItemId))</span>
+<span class="nc" id="L346">            .addToBackStack(null)</span>
+<span class="nc" id="L347">            .commit()</span>
+
+<span class="nc" id="L349">        changeTitle(folderName, 0)</span>
+
+<span class="nc" id="L351">        bucketId = folderId</span>
+<span class="nc" id="L352">        bucketName = folderName</span>
+<span class="nc" id="L353">        isImageFragmentOpen = true</span>
+<span class="nc" id="L354">    }</span>
+
+    /**
+     * override Selected Images Change, update view model selected images and change UI.
+     */
+    override fun onSelectedImagesChanged(
+        selectedImages: ArrayList&lt;Image&gt;,
+        selectedNotForUploadImages: Int
+    ) {
+<span class="nc bnc" id="L363" title="All 2 branches missed.">        viewModel.selectedImages.value = selectedImages</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">        changeTitle(bucketName, selectedImages.size)</span>
+
+<span class="nc bnc" id="L366" title="All 2 branches missed.">        uploadLimitExceeded = selectedImages.size &gt; uploadLimit</span>
+<span class="nc" id="L367">        uploadLimitExceededBy = max(selectedImages.size - uploadLimit,0)</span>
+
+<span class="nc bnc" id="L369" title="All 4 branches missed.">        if (uploadLimitExceeded &amp;&amp; selectedNotForUploadImages == 0) {</span>
+<span class="nc bnc" id="L370" title="All 2 branches missed.">            toolbarBinding.imageLimitError.visibility = View.VISIBLE</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">            bottomSheetBinding.upload.text = resources.getString(</span>
+<span class="nc" id="L372">                R.string.custom_selector_button_limit_text, uploadLimit)</span>
+        } else {
+<span class="nc bnc" id="L374" title="All 2 branches missed.">            toolbarBinding.imageLimitError.visibility = View.INVISIBLE</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">            bottomSheetBinding.upload.text = resources.getString(R.string.upload)</span>
+        }
+
+<span class="nc bnc" id="L378" title="All 4 branches missed.">        if (uploadLimitExceeded || selectedNotForUploadImages &gt; 0) {</span>
+<span class="nc bnc" id="L379" title="All 2 branches missed.">            bottomSheetBinding.upload.isEnabled = false</span>
+<span class="nc bnc" id="L380" title="All 2 branches missed.">            bottomSheetBinding.upload.alpha = 0.5f</span>
+        } else {
+<span class="nc bnc" id="L382" title="All 2 branches missed.">            bottomSheetBinding.upload.isEnabled = true</span>
+<span class="nc bnc" id="L383" title="All 2 branches missed.">            bottomSheetBinding.upload.alpha = 1f</span>
+        }
+
+<span class="nc bnc" id="L386" title="All 2 branches missed.">        bottomSheetBinding.notForUpload.text =</span>
+<span class="nc bnc" id="L387" title="All 2 branches missed.">            when (selectedImages.size == selectedNotForUploadImages) {</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">                true -&gt; {</span>
+<span class="nc" id="L389">                    progressDialogText=getString(R.string.unmarking_as_not_for_upload)</span>
+<span class="nc" id="L390">                    getString(R.string.unmark_as_not_for_upload)</span>
+                }
+                else -&gt; {
+<span class="nc" id="L393">                    progressDialogText=getString(R.string.marking_as_not_for_upload)</span>
+<span class="nc" id="L394">                    getString(R.string.mark_as_not_for_upload)</span>
+                }
+            }
+
+<span class="nc" id="L398">        val bottomLayout: ConstraintLayout = findViewById(R.id.bottom_layout)</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">        bottomLayout.visibility = if (selectedImages.isEmpty()) View.GONE else View.VISIBLE</span>
+<span class="nc" id="L400">    }</span>
+
+    /**
+     * onLongPress
+     * @param imageUri : uri of image
+     */
+    override fun onLongPress(
+        position: Int,
+        images: ArrayList&lt;Image&gt;,
+        selectedImages: ArrayList&lt;Image&gt;
+    ) {
+<span class="nc" id="L411">        val intent = Intent(this, ZoomableActivity::class.java)</span>
+<span class="nc" id="L412">        intent.putExtra(CustomSelectorConstants.PRESENT_POSITION, position)</span>
+<span class="nc" id="L413">        intent.putParcelableArrayListExtra(</span>
+<span class="nc" id="L414">            CustomSelectorConstants.TOTAL_SELECTED_IMAGES,</span>
+<span class="nc" id="L415">            selectedImages</span>
+        )
+<span class="nc" id="L417">        intent.putExtra(CustomSelectorConstants.BUCKET_ID, bucketId)</span>
+<span class="nc" id="L418">        startActivityForResult(intent, Constants.RequestCodes.RECEIVE_DATA_FROM_FULL_SCREEN_MODE)</span>
+<span class="nc" id="L419">    }</span>
+
+    /**
+     * OnDone clicked.
+     * Get the selected images. Remove any non existent file, forward the data to finish selector.
+     */
+    fun onDone() {
+<span class="nc bnc" id="L426" title="All 2 branches missed.">            val selectedImages = viewModel.selectedImages.value</span>
+<span class="nc bnc" id="L427" title="All 6 branches missed.">            if (selectedImages.isNullOrEmpty()) {</span>
+<span class="nc" id="L428">                finishPickImages(arrayListOf())</span>
+<span class="nc" id="L429">                return</span>
+            }
+<span class="nc" id="L431">            var i = 0</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">            while (i &lt; selectedImages.size) {</span>
+<span class="nc" id="L433">                val path = selectedImages[i].path</span>
+<span class="nc" id="L434">                val file = File(path)</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">                if (!file.exists()) {</span>
+<span class="nc" id="L436">                    selectedImages.removeAt(i)</span>
+<span class="nc" id="L437">                    i--</span>
+                }
+<span class="nc" id="L439">                i++</span>
+            }
+<span class="nc" id="L441">            finishPickImages(selectedImages)</span>
+<span class="nc" id="L442">    }</span>
+
+    /**
+     * finishPickImages, Load the data to the intent and set result.
+     * Finish the activity.
+     */
+    private fun finishPickImages(images: ArrayList&lt;Image&gt;) {
+<span class="nc" id="L449">        val data = Intent()</span>
+<span class="nc" id="L450">        data.putParcelableArrayListExtra(&quot;Images&quot;, images)</span>
+<span class="nc" id="L451">        setResult(Activity.RESULT_OK, data)</span>
+<span class="nc" id="L452">        finish()</span>
+<span class="nc" id="L453">    }</span>
+
+    /**
+     * Back pressed.
+     * Change toolbar title.
+     */
+    override fun onBackPressed() {
+<span class="nc" id="L460">        super.onBackPressed()</span>
+<span class="nc" id="L461">        val fragment = supportFragmentManager.findFragmentById(R.id.fragment_container)</span>
+<span class="nc bnc" id="L462" title="All 4 branches missed.">        if (fragment != null &amp;&amp; fragment is FolderFragment) {</span>
+<span class="nc" id="L463">            isImageFragmentOpen = false</span>
+<span class="nc" id="L464">            changeTitle(getString(R.string.custom_selector_title), 0)</span>
+        }
+<span class="nc" id="L466">    }</span>
+
+    /**
+     * Displays a dialog explaining the upload limit warning.
+     */
+    private fun displayUploadLimitWarning() {
+<span class="nc" id="L472">        val dialog = Dialog(this)</span>
+<span class="nc" id="L473">        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)</span>
+<span class="nc" id="L474">        dialog.setContentView(R.layout.custom_selector_limit_dialog)</span>
+<span class="nc" id="L475">        (dialog.findViewById(R.id.btn_dismiss_limit_warning) as Button).setOnClickListener()</span>
+<span class="nc" id="L476">        { dialog.dismiss() }</span>
+<span class="nc" id="L477">        (dialog.findViewById(R.id.upload_limit_warning) as TextView).text = resources.getString(</span>
+<span class="nc" id="L478">            R.string.custom_selector_over_limit_warning, uploadLimit, uploadLimitExceededBy)</span>
+<span class="nc" id="L479">        dialog.show()</span>
+<span class="nc" id="L480">    }</span>
+
+    /**
+     * On activity destroy
+     * If image fragment is open, overwrite its attributes otherwise discard the values.
+     */
+    override fun onDestroy() {
+<span class="nc bnc" id="L487" title="All 2 branches missed.">        if (isImageFragmentOpen) {</span>
+<span class="nc bnc" id="L488" title="All 4 branches missed.">            prefs.edit().putLong(FOLDER_ID, bucketId).putString(FOLDER_NAME, bucketName).apply()</span>
+        } else {
+<span class="nc bnc" id="L490" title="All 2 branches missed.">            prefs.edit().remove(FOLDER_ID).remove(FOLDER_NAME).apply()</span>
+        }
+<span class="nc" id="L492">        super.onDestroy()</span>
+<span class="nc" id="L493">    }</span>
+
+    companion object {
+        const val FOLDER_ID: String = &quot;FolderId&quot;
+        const val FOLDER_NAME: String = &quot;FolderName&quot;
+        const val ITEM_ID: String = &quot;ItemId&quot;
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

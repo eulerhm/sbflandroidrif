@@ -1,0 +1,1448 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ExploreMapFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.explore.map</a> &gt; <span class="el_source">ExploreMapFragment.java</span></div><h1>ExploreMapFragment.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.explore.map;
+
+import static fr.free.nrw.commons.location.LocationServiceManager.LocationChangeType.LOCATION_SIGNIFICANTLY_CHANGED;
+import static fr.free.nrw.commons.location.LocationServiceManager.LocationChangeType.LOCATION_SLIGHTLY_CHANGED;
+import static fr.free.nrw.commons.utils.MapUtils.ZOOM_LEVEL;
+import android.Manifest;
+import android.Manifest.permission;
+import android.annotation.SuppressLint;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.location.Location;
+import android.location.LocationManager;
+import android.os.Bundle;
+import android.preference.PreferenceManager;
+import android.provider.Settings;
+import android.text.Html;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import android.widget.Toast;
+import androidx.activity.result.ActivityResultCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.widget.AppCompatTextView;
+import androidx.core.content.ContextCompat;
+import butterknife.BindView;
+import butterknife.ButterKnife;
+import com.google.android.material.bottomsheet.BottomSheetBehavior;
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import com.google.android.material.snackbar.Snackbar;
+import com.mapbox.mapboxsdk.annotations.Marker;
+import fr.free.nrw.commons.MapController;
+import fr.free.nrw.commons.Media;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.Utils;
+import fr.free.nrw.commons.bookmarks.locations.BookmarkLocationsDao;
+import fr.free.nrw.commons.di.CommonsDaggerSupportFragment;
+import fr.free.nrw.commons.explore.ExploreMapRootFragment;
+import fr.free.nrw.commons.explore.paging.LiveDataConverter;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.location.LocationServiceManager;
+import fr.free.nrw.commons.location.LocationUpdateListener;
+import fr.free.nrw.commons.media.MediaClient;
+import fr.free.nrw.commons.nearby.NearbyBaseMarker;
+import fr.free.nrw.commons.nearby.NearbyMarker;
+import fr.free.nrw.commons.nearby.Place;
+import fr.free.nrw.commons.utils.DialogUtil;
+import fr.free.nrw.commons.utils.MapUtils;
+import fr.free.nrw.commons.utils.NetworkUtils;
+import fr.free.nrw.commons.utils.PermissionUtils;
+import fr.free.nrw.commons.utils.SystemThemeUtils;
+import fr.free.nrw.commons.utils.ViewUtil;
+import io.reactivex.Observable;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.schedulers.Schedulers;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import javax.inject.Inject;
+import javax.inject.Named;
+import org.osmdroid.events.MapEventsReceiver;
+import org.osmdroid.events.MapListener;
+import org.osmdroid.events.ScrollEvent;
+import org.osmdroid.events.ZoomEvent;
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
+import org.osmdroid.util.GeoPoint;
+import org.osmdroid.util.constants.GeoConstants;
+import org.osmdroid.views.CustomZoomButtonsController;
+import org.osmdroid.views.overlay.ItemizedIconOverlay.OnItemGestureListener;
+import org.osmdroid.views.overlay.ItemizedOverlayWithFocus;
+import org.osmdroid.views.overlay.MapEventsOverlay;
+import org.osmdroid.views.overlay.Overlay;
+import org.osmdroid.views.overlay.OverlayItem;
+import org.osmdroid.views.overlay.ScaleBarOverlay;
+import org.osmdroid.views.overlay.ScaleDiskOverlay;
+import org.osmdroid.views.overlay.TilesOverlay;
+import timber.log.Timber;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+<span class="fc" id="L96">public class ExploreMapFragment extends CommonsDaggerSupportFragment implements ExploreMapContract.View, LocationUpdateListener {</span>
+
+    private BottomSheetBehavior bottomSheetDetailsBehavior;
+
+    private BroadcastReceiver broadcastReceiver;
+
+    private boolean isNetworkErrorOccurred;
+
+    private Snackbar snackbar;
+
+    private boolean isDarkTheme;
+
+    private boolean isPermissionDenied;
+
+    // last location of user
+    private fr.free.nrw.commons.location.LatLng lastKnownLocation;
+
+    // last location that map is focused
+    private fr.free.nrw.commons.location.LatLng lastFocusLocation;
+
+    public List&lt;Media&gt; mediaList;
+
+    // true is recenter is needed (ie. when current location is in visible map boundaries)
+    private boolean recenterToUserLocation;
+
+    private NearbyBaseMarker clickedMarker;
+
+    // the marker that user selected
+    private Marker selectedMarker;
+
+    private GeoPoint mapCenter;
+
+    private GeoPoint lastMapFocus;
+
+<span class="fc" id="L130">    IntentFilter intentFilter = new IntentFilter(MapUtils.NETWORK_INTENT_ACTION);</span>
+
+    @Inject
+    LiveDataConverter liveDataConverter;
+
+    @Inject
+    MediaClient mediaClient;
+
+    @Inject
+    LocationServiceManager locationManager;
+
+    @Inject
+    ExploreMapController exploreMapController;
+
+    @Inject
+    @Named(&quot;default_preferences&quot;)
+    JsonKvStore applicationKvStore;
+
+    @Inject
+    BookmarkLocationsDao // May be needed in future if we want to integrate bookmarking explore places
+    bookmarkLocationDao;
+
+    @Inject
+    SystemThemeUtils systemThemeUtils;
+
+    private ExploreMapPresenter presenter;
+
+    @BindView(R.id.map_view)
+    org.osmdroid.views.MapView mapView;
+
+    @BindView(R.id.bottom_sheet_details)
+    View bottomSheetDetails;
+
+    @BindView(R.id.map_progress_bar)
+    ProgressBar progressBar;
+
+    @BindView(R.id.fab_recenter)
+    FloatingActionButton fabRecenter;
+
+    @BindView(R.id.search_this_area_button)
+    Button searchThisAreaButton;
+
+    @BindView(R.id.tv_attribution)
+    AppCompatTextView tvAttribution;
+
+    @BindView(R.id.directionsButton)
+    LinearLayout directionsButton;
+
+    @BindView(R.id.commonsButton)
+    LinearLayout commonsButton;
+
+    @BindView(R.id.mediaDetailsButton)
+    LinearLayout mediaDetailsButton;
+
+    @BindView(R.id.description)
+    TextView description;
+
+    @BindView(R.id.title)
+    TextView title;
+
+    @BindView(R.id.category)
+    TextView distance;
+
+<span class="fc" id="L193">    private ActivityResultLauncher&lt;String[]&gt; activityResultLauncher = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), new ActivityResultCallback&lt;Map&lt;String, Boolean&gt;&gt;() {</span>
+
+        @Override
+        public void onActivityResult(Map&lt;String, Boolean&gt; result) {
+<span class="nc" id="L197">            boolean areAllGranted = true;</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(3919)) {</span>
+                {
+<span class="nc" id="L200">                    long _loopCounter57 = 0;</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">                    for (final boolean b : result.values()) {</span>
+<span class="nc" id="L202">                        ListenerUtil.loopListener.listen(&quot;_loopCounter57&quot;, ++_loopCounter57);</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(3918)) {</span>
+<span class="nc bnc" id="L204" title="All 10 branches missed.">                            areAllGranted = (ListenerUtil.mutListener.listen(3917) ? (areAllGranted || b) : (areAllGranted &amp;&amp; b));</span>
+                        }
+<span class="nc" id="L206">                    }</span>
+                }
+            }
+<span class="nc bnc" id="L209" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(3924)) {</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">                if (areAllGranted) {</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(3923)) {</span>
+<span class="nc" id="L212">                        locationPermissionGranted();</span>
+                    }
+                } else {
+<span class="nc bnc" id="L215" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(3922)) {</span>
+<span class="nc bnc" id="L216" title="All 2 branches missed.">                        if (shouldShowRequestPermissionRationale(permission.ACCESS_FINE_LOCATION)) {</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3921)) {</span>
+<span class="nc" id="L218">                                DialogUtil.showAlertDialog(getActivity(), getActivity().getString(R.string.location_permission_title), getActivity().getString(R.string.location_permission_rationale_nearby), getActivity().getString(android.R.string.ok), getActivity().getString(android.R.string.cancel), () -&gt; {</span>
+<span class="nc bnc" id="L219" title="All 4 branches missed.">                                    if (!(locationManager.isNetworkProviderEnabled() || locationManager.isGPSProviderEnabled())) {</span>
+<span class="nc" id="L220">                                        showLocationOffDialog();</span>
+                                    }
+<span class="nc" id="L222">                                }, () -&gt; isPermissionDenied = true, null, false);</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L225" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3920)) {</span>
+<span class="nc" id="L226">                                isPermissionDenied = true;</span>
+                            }
+                        }
+                    }
+                }
+            }
+<span class="nc" id="L232">        }</span>
+    });
+
+    @NonNull
+    public static ExploreMapFragment newInstance() {
+<span class="nc" id="L237">        ExploreMapFragment fragment = new ExploreMapFragment();</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3925)) {</span>
+<span class="nc" id="L239">            fragment.setRetainInstance(true);</span>
+        }
+<span class="nc" id="L241">        return fragment;</span>
+    }
+
+    @Override
+    public void onCreate(@Nullable final Bundle savedInstanceState) {
+<span class="nc bnc" id="L246" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3926)) {</span>
+<span class="nc" id="L247">            super.onCreate(savedInstanceState);</span>
+        }
+<span class="nc" id="L249">    }</span>
+
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+<span class="nc" id="L253">        View v = inflater.inflate(R.layout.fragment_explore_map, container, false);</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3927)) {</span>
+<span class="nc" id="L255">            ButterKnife.bind(this, v);</span>
+        }
+<span class="nc" id="L257">        return v;</span>
+    }
+
+    @Override
+    public void onViewCreated(@NonNull final View view, @Nullable final Bundle savedInstanceState) {
+<span class="nc bnc" id="L262" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3928)) {</span>
+<span class="nc" id="L263">            super.onViewCreated(view, savedInstanceState);</span>
+        }
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3929)) {</span>
+<span class="nc" id="L266">            setSearchThisAreaButtonVisibility(false);</span>
+        }
+<span class="nc bnc" id="L268" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3930)) {</span>
+<span class="nc" id="L269">            tvAttribution.setText(Html.fromHtml(getString(R.string.map_attribution)));</span>
+        }
+<span class="nc bnc" id="L271" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3931)) {</span>
+<span class="nc" id="L272">            initNetworkBroadCastReceiver();</span>
+        }
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3933)) {</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">            if (presenter == null) {</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(3932)) {</span>
+<span class="nc" id="L277">                    presenter = new ExploreMapPresenter(bookmarkLocationDao);</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3934)) {</span>
+<span class="nc" id="L282">            setHasOptionsMenu(true);</span>
+        }
+<span class="nc bnc" id="L284" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3935)) {</span>
+<span class="nc" id="L285">            isDarkTheme = systemThemeUtils.isDeviceInNightMode();</span>
+        }
+<span class="nc bnc" id="L287" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3936)) {</span>
+<span class="nc" id="L288">            isPermissionDenied = false;</span>
+        }
+<span class="nc bnc" id="L290" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3937)) {</span>
+<span class="nc" id="L291">            presenter.attachView(this);</span>
+        }
+<span class="nc bnc" id="L293" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3938)) {</span>
+<span class="nc" id="L294">            initViews();</span>
+        }
+<span class="nc bnc" id="L296" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3939)) {</span>
+<span class="nc" id="L297">            presenter.setActionListeners(applicationKvStore);</span>
+        }
+<span class="nc bnc" id="L299" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3940)) {</span>
+<span class="nc" id="L300">            org.osmdroid.config.Configuration.getInstance().load(this.getContext(), PreferenceManager.getDefaultSharedPreferences(this.getContext()));</span>
+        }
+<span class="nc bnc" id="L302" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3941)) {</span>
+<span class="nc" id="L303">            mapView.setTileSource(TileSourceFactory.WIKIMEDIA);</span>
+        }
+<span class="nc bnc" id="L305" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3942)) {</span>
+<span class="nc" id="L306">            mapView.setTilesScaledToDpi(true);</span>
+        }
+<span class="nc bnc" id="L308" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3943)) {</span>
+<span class="nc" id="L309">            org.osmdroid.config.Configuration.getInstance().getAdditionalHttpRequestProperties().put(&quot;Referer&quot;, &quot;http://maps.wikimedia.org/&quot;);</span>
+        }
+<span class="nc" id="L311">        ScaleBarOverlay scaleBarOverlay = new ScaleBarOverlay(mapView);</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3944)) {</span>
+<span class="nc" id="L313">            scaleBarOverlay.setScaleBarOffset(15, 25);</span>
+        }
+<span class="nc" id="L315">        Paint barPaint = new Paint();</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3945)) {</span>
+<span class="nc" id="L317">            barPaint.setARGB(200, 255, 250, 250);</span>
+        }
+<span class="nc bnc" id="L319" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3946)) {</span>
+<span class="nc" id="L320">            scaleBarOverlay.setBackgroundPaint(barPaint);</span>
+        }
+<span class="nc bnc" id="L322" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3947)) {</span>
+<span class="nc" id="L323">            scaleBarOverlay.enableScaleBar();</span>
+        }
+<span class="nc bnc" id="L325" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3948)) {</span>
+<span class="nc" id="L326">            mapView.getOverlays().add(scaleBarOverlay);</span>
+        }
+<span class="nc bnc" id="L328" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3949)) {</span>
+<span class="nc" id="L329">            mapView.getZoomController().setVisibility(CustomZoomButtonsController.Visibility.NEVER);</span>
+        }
+<span class="nc bnc" id="L331" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3950)) {</span>
+<span class="nc" id="L332">            mapView.setMultiTouchControls(true);</span>
+        }
+<span class="nc bnc" id="L334" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3951)) {</span>
+<span class="nc" id="L335">            mapView.getController().setZoom(ZOOM_LEVEL);</span>
+        }
+<span class="nc bnc" id="L337" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3952)) {</span>
+<span class="nc" id="L338">            performMapReadyActions();</span>
+        }
+<span class="nc bnc" id="L340" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3961)) {</span>
+<span class="nc" id="L341">            mapView.getOverlays().add(new MapEventsOverlay(new MapEventsReceiver() {</span>
+
+                @Override
+                public boolean singleTapConfirmedHelper(GeoPoint p) {
+<span class="nc bnc" id="L345" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(3957)) {</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">                        if (clickedMarker != null) {</span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3954)) {</span>
+<span class="nc" id="L348">                                removeMarker(clickedMarker);</span>
+                            }
+<span class="nc bnc" id="L350" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3955)) {</span>
+<span class="nc" id="L351">                                addMarkerToMap(clickedMarker);</span>
+                            }
+<span class="nc bnc" id="L353" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3956)) {</span>
+<span class="nc" id="L354">                                mapView.invalidate();</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L357" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3953)) {</span>
+<span class="nc" id="L358">                                Timber.e(&quot;CLICKED MARKER IS NULL&quot;);</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L362" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(3960)) {</span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">                        if (bottomSheetDetailsBehavior.getState() == BottomSheetBehavior.STATE_EXPANDED) {</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3959)) {</span>
+                                // Back should first hide the bottom sheet if it is expanded
+<span class="nc" id="L366">                                bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+                            }
+<span class="nc bnc" id="L368" title="All 2 branches missed.">                        } else if (isDetailsBottomSheetVisible()) {</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3958)) {</span>
+<span class="nc" id="L370">                                hideBottomDetailsSheet();</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L374">                    return true;</span>
+                }
+
+                @Override
+                public boolean longPressHelper(GeoPoint p) {
+<span class="nc" id="L379">                    return false;</span>
+                }
+            }));
+        }
+<span class="nc bnc" id="L383" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3990)) {</span>
+<span class="nc" id="L384">            mapView.addMapListener(new MapListener() {</span>
+
+                @Override
+                public boolean onScroll(ScrollEvent event) {
+<span class="nc bnc" id="L388" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(3989)) {</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                        if (getLastMapFocus() != null) {</span>
+<span class="nc" id="L390">                            Location mylocation = new Location(&quot;&quot;);</span>
+<span class="nc" id="L391">                            Location dest_location = new Location(&quot;&quot;);</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3962)) {</span>
+<span class="nc" id="L393">                                dest_location.setLatitude(mapView.getMapCenter().getLatitude());</span>
+                            }
+<span class="nc bnc" id="L395" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3963)) {</span>
+<span class="nc" id="L396">                                dest_location.setLongitude(mapView.getMapCenter().getLongitude());</span>
+                            }
+<span class="nc bnc" id="L398" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3964)) {</span>
+<span class="nc" id="L399">                                mylocation.setLatitude(getLastMapFocus().getLatitude());</span>
+                            }
+<span class="nc bnc" id="L401" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3965)) {</span>
+<span class="nc" id="L402">                                mylocation.setLongitude(getLastMapFocus().getLongitude());</span>
+                            }
+                            // in meters
+<span class="nc" id="L405">                            Float distance = mylocation.distanceTo(dest_location);</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(3988)) {</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">                                if (getLastMapFocus() != null) {</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(3987)) {</span>
+<span class="nc bnc" id="L409" title="All 186 branches missed.">                                        if ((ListenerUtil.mutListener.listen(3978) ? (isNetworkConnectionEstablished() || ((ListenerUtil.mutListener.listen(3977) ? ((ListenerUtil.mutListener.listen(3971) ? (event.getX() &gt;= 0) : (ListenerUtil.mutListener.listen(3970) ? (event.getX() &lt;= 0) : (ListenerUtil.mutListener.listen(3969) ? (event.getX() &lt; 0) : (ListenerUtil.mutListener.listen(3968) ? (event.getX() != 0) : (ListenerUtil.mutListener.listen(3967) ? (event.getX() == 0) : (event.getX() &gt; 0)))))) &amp;&amp; (ListenerUtil.mutListener.listen(3976) ? (event.getY() &gt;= 0) : (ListenerUtil.mutListener.listen(3975) ? (event.getY() &lt;= 0) : (ListenerUtil.mutListener.listen(3974) ? (event.getY() &lt; 0) : (ListenerUtil.mutListener.listen(3973) ? (event.getY() != 0) : (ListenerUtil.mutListener.listen(3972) ? (event.getY() == 0) : (event.getY() &gt; 0))))))) : ((ListenerUtil.mutListener.listen(3971) ? (event.getX() &gt;= 0) : (ListenerUtil.mutListener.listen(3970) ? (event.getX() &lt;= 0) : (ListenerUtil.mutListener.listen(3969) ? (event.getX() &lt; 0) : (ListenerUtil.mutListener.listen(3968) ? (event.getX() != 0) : (ListenerUtil.mutListener.listen(3967) ? (event.getX() == 0) : (event.getX() &gt; 0)))))) || (ListenerUtil.mutListener.listen(3976) ? (event.getY() &gt;= 0) : (ListenerUtil.mutListener.listen(3975) ? (event.getY() &lt;= 0) : (ListenerUtil.mutListener.listen(3974) ? (event.getY() &lt; 0) : (ListenerUtil.mutListener.listen(3973) ? (event.getY() != 0) : (ListenerUtil.mutListener.listen(3972) ? (event.getY() == 0) : (event.getY() &gt; 0)))))))))) : (isNetworkConnectionEstablished() &amp;&amp; ((ListenerUtil.mutListener.listen(3977) ? ((ListenerUtil.mutListener.listen(3971) ? (event.getX() &gt;= 0) : (ListenerUtil.mutListener.listen(3970) ? (event.getX() &lt;= 0) : (ListenerUtil.mutListener.listen(3969) ? (event.getX() &lt; 0) : (ListenerUtil.mutListener.listen(3968) ? (event.getX() != 0) : (ListenerUtil.mutListener.listen(3967) ? (event.getX() == 0) : (event.getX() &gt; 0)))))) &amp;&amp; (ListenerUtil.mutListener.listen(3976) ? (event.getY() &gt;= 0) : (ListenerUtil.mutListener.listen(3975) ? (event.getY() &lt;= 0) : (ListenerUtil.mutListener.listen(3974) ? (event.getY() &lt; 0) : (ListenerUtil.mutListener.listen(3973) ? (event.getY() != 0) : (ListenerUtil.mutListener.listen(3972) ? (event.getY() == 0) : (event.getY() &gt; 0))))))) : ((ListenerUtil.mutListener.listen(3971) ? (event.getX() &gt;= 0) : (ListenerUtil.mutListener.listen(3970) ? (event.getX() &lt;= 0) : (ListenerUtil.mutListener.listen(3969) ? (event.getX() &lt; 0) : (ListenerUtil.mutListener.listen(3968) ? (event.getX() != 0) : (ListenerUtil.mutListener.listen(3967) ? (event.getX() == 0) : (event.getX() &gt; 0)))))) || (ListenerUtil.mutListener.listen(3976) ? (event.getY() &gt;= 0) : (ListenerUtil.mutListener.listen(3975) ? (event.getY() &lt;= 0) : (ListenerUtil.mutListener.listen(3974) ? (event.getY() &lt; 0) : (ListenerUtil.mutListener.listen(3973) ? (event.getY() != 0) : (ListenerUtil.mutListener.listen(3972) ? (event.getY() == 0) : (event.getY() &gt; 0)))))))))))) {</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(3986)) {</span>
+<span class="nc bnc" id="L411" title="All 22 branches missed.">                                                if ((ListenerUtil.mutListener.listen(3983) ? (distance &gt;= 2000.0) : (ListenerUtil.mutListener.listen(3982) ? (distance &lt;= 2000.0) : (ListenerUtil.mutListener.listen(3981) ? (distance &lt; 2000.0) : (ListenerUtil.mutListener.listen(3980) ? (distance != 2000.0) : (ListenerUtil.mutListener.listen(3979) ? (distance == 2000.0) : (distance &gt; 2000.0))))))) {</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">                                                    if (!ListenerUtil.mutListener.listen(3985)) {</span>
+<span class="nc" id="L413">                                                        setSearchThisAreaButtonVisibility(true);</span>
+                                                    }
+                                                } else {
+<span class="nc bnc" id="L416" title="All 2 branches missed.">                                                    if (!ListenerUtil.mutListener.listen(3984)) {</span>
+<span class="nc" id="L417">                                                        setSearchThisAreaButtonVisibility(false);</span>
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+<span class="nc bnc" id="L424" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(3966)) {</span>
+<span class="nc" id="L425">                                        setSearchThisAreaButtonVisibility(false);</span>
+                                    }
+                                }
+                            }
+                        }
+                    }
+<span class="nc" id="L431">                    return true;</span>
+                }
+
+                @Override
+                public boolean onZoom(ZoomEvent event) {
+<span class="nc" id="L436">                    return false;</span>
+                }
+            });
+        }
+<span class="nc" id="L440">    }</span>
+
+    @Override
+    public void onResume() {
+<span class="nc bnc" id="L444" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3991)) {</span>
+<span class="nc" id="L445">            super.onResume();</span>
+        }
+<span class="nc bnc" id="L447" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3992)) {</span>
+<span class="nc" id="L448">            mapView.onResume();</span>
+        }
+<span class="nc bnc" id="L450" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3993)) {</span>
+<span class="nc" id="L451">            presenter.attachView(this);</span>
+        }
+<span class="nc bnc" id="L453" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3994)) {</span>
+<span class="nc" id="L454">            registerNetworkReceiver();</span>
+        }
+<span class="nc bnc" id="L456" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(3999)) {</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">            if (isResumed()) {</span>
+<span class="nc bnc" id="L458" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(3998)) {</span>
+<span class="nc bnc" id="L459" title="All 10 branches missed.">                    if ((ListenerUtil.mutListener.listen(3995) ? (!isPermissionDenied || !applicationKvStore.getBoolean(&quot;doNotAskForLocationPermission&quot;, false)) : (!isPermissionDenied &amp;&amp; !applicationKvStore.getBoolean(&quot;doNotAskForLocationPermission&quot;, false)))) {</span>
+<span class="nc bnc" id="L460" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(3997)) {</span>
+<span class="nc" id="L461">                            performMapReadyActions();</span>
+                        }
+                    } else {
+<span class="nc bnc" id="L464" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(3996)) {</span>
+<span class="nc" id="L465">                            startMapWithoutPermission();</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L471">    }</span>
+
+    private void startMapWithoutPermission() {
+<span class="nc bnc" id="L474" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4000)) {</span>
+<span class="nc" id="L475">            applicationKvStore.putBoolean(&quot;doNotAskForLocationPermission&quot;, true);</span>
+        }
+<span class="nc bnc" id="L477" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4001)) {</span>
+<span class="nc" id="L478">            lastKnownLocation = MapUtils.defaultLatLng;</span>
+        }
+<span class="nc bnc" id="L480" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4002)) {</span>
+<span class="nc" id="L481">            moveCameraToPosition(new GeoPoint(lastKnownLocation.getLatitude(), lastKnownLocation.getLongitude()));</span>
+        }
+<span class="nc bnc" id="L483" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4003)) {</span>
+<span class="nc" id="L484">            presenter.onMapReady(exploreMapController);</span>
+        }
+<span class="nc" id="L486">    }</span>
+
+    private void registerNetworkReceiver() {
+<span class="nc bnc" id="L489" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4005)) {</span>
+<span class="nc bnc" id="L490" title="All 2 branches missed.">            if (getActivity() != null) {</span>
+<span class="nc bnc" id="L491" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4004)) {</span>
+<span class="nc" id="L492">                    getActivity().registerReceiver(broadcastReceiver, intentFilter);</span>
+                }
+            }
+        }
+<span class="nc" id="L496">    }</span>
+
+    private void performMapReadyActions() {
+<span class="nc bnc" id="L499" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4007)) {</span>
+<span class="nc bnc" id="L500" title="All 2 branches missed.">            if (isDarkTheme) {</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4006)) {</span>
+<span class="nc" id="L502">                    mapView.getOverlayManager().getTilesOverlay().setColorFilter(TilesOverlay.INVERT_COLORS);</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L506" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4011)) {</span>
+<span class="nc bnc" id="L507" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(4008) ? (!applicationKvStore.getBoolean(&quot;doNotAskForLocationPermission&quot;, false) &amp;&amp; PermissionUtils.hasPermission(getActivity(), new String[] { Manifest.permission.ACCESS_FINE_LOCATION })) : (!applicationKvStore.getBoolean(&quot;doNotAskForLocationPermission&quot;, false) || PermissionUtils.hasPermission(getActivity(), new String[] { Manifest.permission.ACCESS_FINE_LOCATION })))) {</span>
+<span class="nc bnc" id="L508" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4010)) {</span>
+<span class="nc" id="L509">                    checkPermissionsAndPerformAction();</span>
+                }
+            } else {
+<span class="nc bnc" id="L512" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4009)) {</span>
+<span class="nc" id="L513">                    isPermissionDenied = true;</span>
+                }
+            }
+        }
+<span class="nc" id="L517">    }</span>
+
+    private void initViews() {
+<span class="nc bnc" id="L520" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4012)) {</span>
+<span class="nc" id="L521">            Timber.d(&quot;init views called&quot;);</span>
+        }
+<span class="nc bnc" id="L523" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4013)) {</span>
+<span class="nc" id="L524">            initBottomSheets();</span>
+        }
+<span class="nc bnc" id="L526" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4014)) {</span>
+<span class="nc" id="L527">            setBottomSheetCallbacks();</span>
+        }
+<span class="nc" id="L529">    }</span>
+
+    /**
+     * a) Creates bottom sheet behaviours from bottom sheet, sets initial states and visibility
+     * b) Gets the touch event on the map to perform following actions:
+     *      if bottom sheet details are expanded or collapsed hide the bottom sheet details.
+     */
+    @SuppressLint(&quot;ClickableViewAccessibility&quot;)
+    private void initBottomSheets() {
+<span class="nc bnc" id="L538" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4015)) {</span>
+<span class="nc" id="L539">            bottomSheetDetailsBehavior = BottomSheetBehavior.from(bottomSheetDetails);</span>
+        }
+<span class="nc bnc" id="L541" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4016)) {</span>
+<span class="nc" id="L542">            bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+        }
+<span class="nc bnc" id="L544" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4017)) {</span>
+<span class="nc" id="L545">            bottomSheetDetails.setVisibility(View.VISIBLE);</span>
+        }
+<span class="nc" id="L547">    }</span>
+
+    /**
+     * Defines how bottom sheets will act on click
+     */
+    private void setBottomSheetCallbacks() {
+<span class="nc bnc" id="L553" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4018)) {</span>
+<span class="nc" id="L554">            bottomSheetDetails.setOnClickListener(v -&gt; {</span>
+<span class="nc bnc" id="L555" title="All 2 branches missed.">                if (bottomSheetDetailsBehavior.getState() == BottomSheetBehavior.STATE_COLLAPSED) {</span>
+<span class="nc" id="L556">                    bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_EXPANDED);</span>
+<span class="nc bnc" id="L557" title="All 2 branches missed.">                } else if (bottomSheetDetailsBehavior.getState() == BottomSheetBehavior.STATE_EXPANDED) {</span>
+<span class="nc" id="L558">                    bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);</span>
+                }
+<span class="nc" id="L560">            });</span>
+        }
+<span class="nc" id="L562">    }</span>
+
+    @Override
+    public void onLocationChangedSignificantly(LatLng latLng) {
+<span class="nc bnc" id="L566" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4019)) {</span>
+<span class="nc" id="L567">            Timber.d(&quot;Location significantly changed&quot;);</span>
+        }
+<span class="nc bnc" id="L569" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4021)) {</span>
+<span class="nc bnc" id="L570" title="All 2 branches missed.">            if (latLng != null) {</span>
+<span class="nc bnc" id="L571" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4020)) {</span>
+<span class="nc" id="L572">                    handleLocationUpdate(latLng, LOCATION_SIGNIFICANTLY_CHANGED);</span>
+                }
+            }
+        }
+<span class="nc" id="L576">    }</span>
+
+    @Override
+    public void onLocationChangedSlightly(LatLng latLng) {
+<span class="nc bnc" id="L580" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4022)) {</span>
+<span class="nc" id="L581">            Timber.d(&quot;Location slightly changed&quot;);</span>
+        }
+<span class="nc bnc" id="L583" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4024)) {</span>
+<span class="nc bnc" id="L584" title="All 2 branches missed.">            if (latLng != null) {</span>
+<span class="nc bnc" id="L585" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4023)) {</span>
+                    // If the map has never ever shown the current location, lets do it know
+<span class="nc" id="L587">                    handleLocationUpdate(latLng, LOCATION_SLIGHTLY_CHANGED);</span>
+                }
+            }
+        }
+<span class="nc" id="L591">    }</span>
+
+    private void handleLocationUpdate(final fr.free.nrw.commons.location.LatLng latLng, final LocationServiceManager.LocationChangeType locationChangeType) {
+<span class="nc bnc" id="L594" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4025)) {</span>
+<span class="nc" id="L595">            lastKnownLocation = latLng;</span>
+        }
+<span class="nc bnc" id="L597" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4026)) {</span>
+<span class="nc" id="L598">            exploreMapController.currentLocation = lastKnownLocation;</span>
+        }
+<span class="nc bnc" id="L600" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4027)) {</span>
+<span class="nc" id="L601">            presenter.updateMap(locationChangeType);</span>
+        }
+<span class="nc" id="L603">    }</span>
+
+    @Override
+    public void onLocationChangedMedium(LatLng latLng) {
+<span class="nc" id="L607">    }</span>
+
+    @Override
+    public boolean isNetworkConnectionEstablished() {
+<span class="nc" id="L611">        return NetworkUtils.isInternetConnectionEstablished(getActivity());</span>
+    }
+
+    @Override
+    public void populatePlaces(LatLng curLatLng) {
+        final Observable&lt;MapController.ExplorePlacesInfo&gt; nearbyPlacesInfoObservable;
+<span class="nc bnc" id="L617" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4029)) {</span>
+<span class="nc bnc" id="L618" title="All 2 branches missed.">            if (curLatLng == null) {</span>
+<span class="nc bnc" id="L619" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4028)) {</span>
+<span class="nc" id="L620">                    checkPermissionsAndPerformAction();</span>
+                }
+<span class="nc" id="L622">                return;</span>
+            }
+        }
+<span class="nc bnc" id="L625" title="All 2 branches missed.">        if (curLatLng.equals(getLastMapFocus())) {</span>
+            // Means we are checking around current location
+<span class="nc" id="L627">            nearbyPlacesInfoObservable = presenter.loadAttractionsFromLocation(curLatLng, getLastMapFocus(), true);</span>
+        } else {
+<span class="nc" id="L629">            nearbyPlacesInfoObservable = presenter.loadAttractionsFromLocation(getLastMapFocus(), curLatLng, false);</span>
+        }
+<span class="nc bnc" id="L631" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4030)) {</span>
+<span class="nc" id="L632">            compositeDisposable.add(nearbyPlacesInfoObservable.subscribeOn(Schedulers.io()).observeOn(AndroidSchedulers.mainThread()).subscribe(explorePlacesInfo -&gt; {</span>
+<span class="nc" id="L633">                mediaList = explorePlacesInfo.mediaList;</span>
+<span class="nc" id="L634">                updateMapMarkers(explorePlacesInfo);</span>
+<span class="nc" id="L635">                lastMapFocus = new GeoPoint(curLatLng.getLatitude(), curLatLng.getLongitude());</span>
+<span class="nc" id="L636">            }, throwable -&gt; {</span>
+<span class="nc" id="L637">                Timber.d(throwable);</span>
+<span class="nc" id="L638">                showErrorMessage(getString(R.string.error_fetching_nearby_places) + throwable.getLocalizedMessage());</span>
+<span class="nc" id="L639">                setProgressBarVisibility(false);</span>
+<span class="nc" id="L640">                presenter.lockUnlockNearby(false);</span>
+<span class="nc" id="L641">            }));</span>
+        }
+<span class="nc bnc" id="L643" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4032)) {</span>
+<span class="nc bnc" id="L644" title="All 2 branches missed.">            if (recenterToUserLocation) {</span>
+<span class="nc bnc" id="L645" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4031)) {</span>
+<span class="nc" id="L646">                    recenterToUserLocation = false;</span>
+                }
+            }
+        }
+<span class="nc" id="L650">    }</span>
+
+    /**
+     * Updates map markers according to latest situation
+     *
+     * @param explorePlacesInfo holds several information as current location, marker list etc.
+     */
+    private void updateMapMarkers(final MapController.ExplorePlacesInfo explorePlacesInfo) {
+<span class="nc bnc" id="L658" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4033)) {</span>
+<span class="nc" id="L659">            presenter.updateMapMarkers(explorePlacesInfo, selectedMarker);</span>
+        }
+<span class="nc" id="L661">    }</span>
+
+    private void showErrorMessage(final String message) {
+<span class="nc bnc" id="L664" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4034)) {</span>
+<span class="nc" id="L665">            ViewUtil.showLongToast(getActivity(), message);</span>
+        }
+<span class="nc" id="L667">    }</span>
+
+    @Override
+    public void checkPermissionsAndPerformAction() {
+<span class="nc bnc" id="L671" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4035)) {</span>
+<span class="nc" id="L672">            Timber.d(&quot;Checking permission and perfoming action&quot;);</span>
+        }
+<span class="nc bnc" id="L674" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4036)) {</span>
+<span class="nc" id="L675">            activityResultLauncher.launch(new String[] { permission.ACCESS_FINE_LOCATION });</span>
+        }
+<span class="nc" id="L677">    }</span>
+
+    private void locationPermissionGranted() {
+<span class="nc bnc" id="L680" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4037)) {</span>
+<span class="nc" id="L681">            isPermissionDenied = false;</span>
+        }
+<span class="nc bnc" id="L683" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4038)) {</span>
+<span class="nc" id="L684">            applicationKvStore.putBoolean(&quot;doNotAskForLocationPermission&quot;, false);</span>
+        }
+<span class="nc bnc" id="L686" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4039)) {</span>
+<span class="nc" id="L687">            lastKnownLocation = locationManager.getLastLocation();</span>
+        }
+<span class="nc" id="L689">        fr.free.nrw.commons.location.LatLng target = lastKnownLocation;</span>
+<span class="nc bnc" id="L690" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4049)) {</span>
+<span class="nc bnc" id="L691" title="All 2 branches missed.">            if (lastKnownLocation != null) {</span>
+<span class="nc" id="L692">                GeoPoint targetP = new GeoPoint(target.getLatitude(), target.getLongitude());</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4045)) {</span>
+<span class="nc" id="L694">                    mapCenter = targetP;</span>
+                }
+<span class="nc bnc" id="L696" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4046)) {</span>
+<span class="nc" id="L697">                    mapView.getController().setCenter(targetP);</span>
+                }
+<span class="nc bnc" id="L699" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4047)) {</span>
+<span class="nc" id="L700">                    recenterMarkerToPosition(targetP);</span>
+                }
+<span class="nc bnc" id="L702" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4048)) {</span>
+<span class="nc" id="L703">                    moveCameraToPosition(targetP);</span>
+                }
+<span class="nc bnc" id="L705" title="All 10 branches missed.">            } else if ((ListenerUtil.mutListener.listen(4040) ? (locationManager.isGPSProviderEnabled() &amp;&amp; locationManager.isNetworkProviderEnabled()) : (locationManager.isGPSProviderEnabled() || locationManager.isNetworkProviderEnabled()))) {</span>
+<span class="nc bnc" id="L706" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4042)) {</span>
+<span class="nc" id="L707">                    locationManager.requestLocationUpdatesFromProvider(LocationManager.NETWORK_PROVIDER);</span>
+                }
+<span class="nc bnc" id="L709" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4043)) {</span>
+<span class="nc" id="L710">                    locationManager.requestLocationUpdatesFromProvider(LocationManager.GPS_PROVIDER);</span>
+                }
+<span class="nc bnc" id="L712" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4044)) {</span>
+<span class="nc" id="L713">                    setProgressBarVisibility(true);</span>
+                }
+            } else {
+<span class="nc bnc" id="L716" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4041)) {</span>
+<span class="nc" id="L717">                    Toast.makeText(getContext(), getString(R.string.nearby_location_not_available), Toast.LENGTH_LONG).show();</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L721" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4050)) {</span>
+<span class="nc" id="L722">            presenter.onMapReady(exploreMapController);</span>
+        }
+<span class="nc bnc" id="L724" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4051)) {</span>
+<span class="nc" id="L725">            registerUnregisterLocationListener(false);</span>
+        }
+<span class="nc" id="L727">    }</span>
+
+    public void registerUnregisterLocationListener(final boolean removeLocationListener) {
+<span class="nc bnc" id="L730" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4052)) {</span>
+<span class="nc" id="L731">            MapUtils.registerUnregisterLocationListener(removeLocationListener, locationManager, this);</span>
+        }
+<span class="nc" id="L733">    }</span>
+
+    @Override
+    public void recenterMap(LatLng curLatLng) {
+<span class="nc bnc" id="L737" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4060)) {</span>
+<span class="nc bnc" id="L738" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(4053) ? (isPermissionDenied &amp;&amp; curLatLng == null) : (isPermissionDenied || curLatLng == null))) {</span>
+<span class="nc bnc" id="L739" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4054)) {</span>
+<span class="nc" id="L740">                    recenterToUserLocation = true;</span>
+                }
+<span class="nc bnc" id="L742" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4055)) {</span>
+<span class="nc" id="L743">                    checkPermissionsAndPerformAction();</span>
+                }
+<span class="nc bnc" id="L745" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4059)) {</span>
+<span class="nc bnc" id="L746" title="All 26 branches missed.">                    if ((ListenerUtil.mutListener.listen(4057) ? (!isPermissionDenied || !((ListenerUtil.mutListener.listen(4056) ? (locationManager.isNetworkProviderEnabled() &amp;&amp; locationManager.isGPSProviderEnabled()) : (locationManager.isNetworkProviderEnabled() || locationManager.isGPSProviderEnabled())))) : (!isPermissionDenied &amp;&amp; !((ListenerUtil.mutListener.listen(4056) ? (locationManager.isNetworkProviderEnabled() &amp;&amp; locationManager.isGPSProviderEnabled()) : (locationManager.isNetworkProviderEnabled() || locationManager.isGPSProviderEnabled())))))) {</span>
+<span class="nc bnc" id="L747" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(4058)) {</span>
+<span class="nc" id="L748">                            showLocationOffDialog();</span>
+                        }
+                    }
+                }
+<span class="nc" id="L752">                return;</span>
+            }
+        }
+<span class="nc bnc" id="L755" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4061)) {</span>
+<span class="nc" id="L756">            recenterMarkerToPosition(new GeoPoint(curLatLng.getLatitude(), curLatLng.getLongitude()));</span>
+        }
+<span class="nc bnc" id="L758" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4062)) {</span>
+<span class="nc" id="L759">            mapView.getController().animateTo(new GeoPoint(curLatLng.getLatitude(), curLatLng.getLongitude()));</span>
+        }
+<span class="nc bnc" id="L761" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4078)) {</span>
+<span class="nc bnc" id="L762" title="All 2 branches missed.">            if (lastMapFocus != null) {</span>
+<span class="nc" id="L763">                Location mylocation = new Location(&quot;&quot;);</span>
+<span class="nc" id="L764">                Location dest_location = new Location(&quot;&quot;);</span>
+<span class="nc bnc" id="L765" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4063)) {</span>
+<span class="nc" id="L766">                    dest_location.setLatitude(mapView.getMapCenter().getLatitude());</span>
+                }
+<span class="nc bnc" id="L768" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4064)) {</span>
+<span class="nc" id="L769">                    dest_location.setLongitude(mapView.getMapCenter().getLongitude());</span>
+                }
+<span class="nc bnc" id="L771" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4065)) {</span>
+<span class="nc" id="L772">                    mylocation.setLatitude(lastMapFocus.getLatitude());</span>
+                }
+<span class="nc bnc" id="L774" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4066)) {</span>
+<span class="nc" id="L775">                    mylocation.setLongitude(lastMapFocus.getLongitude());</span>
+                }
+                // in meters
+<span class="nc" id="L778">                Float distance = mylocation.distanceTo(dest_location);</span>
+<span class="nc bnc" id="L779" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4077)) {</span>
+<span class="nc bnc" id="L780" title="All 2 branches missed.">                    if (lastMapFocus != null) {</span>
+<span class="nc bnc" id="L781" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(4076)) {</span>
+<span class="nc bnc" id="L782" title="All 2 branches missed.">                            if (isNetworkConnectionEstablished()) {</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(4075)) {</span>
+<span class="nc bnc" id="L784" title="All 22 branches missed.">                                    if ((ListenerUtil.mutListener.listen(4072) ? (distance &gt;= 2000.0) : (ListenerUtil.mutListener.listen(4071) ? (distance &lt;= 2000.0) : (ListenerUtil.mutListener.listen(4070) ? (distance &lt; 2000.0) : (ListenerUtil.mutListener.listen(4069) ? (distance != 2000.0) : (ListenerUtil.mutListener.listen(4068) ? (distance == 2000.0) : (distance &gt; 2000.0))))))) {</span>
+<span class="nc bnc" id="L785" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(4074)) {</span>
+<span class="nc" id="L786">                                            setSearchThisAreaButtonVisibility(true);</span>
+                                        }
+                                    } else {
+<span class="nc bnc" id="L789" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(4073)) {</span>
+<span class="nc" id="L790">                                            setSearchThisAreaButtonVisibility(false);</span>
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+<span class="nc bnc" id="L797" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(4067)) {</span>
+<span class="nc" id="L798">                            setSearchThisAreaButtonVisibility(false);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L804">    }</span>
+
+    @Override
+    public void showLocationOffDialog() {
+<span class="nc bnc" id="L808" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4079)) {</span>
+            // This creates a dialog box that prompts the user to enable location
+<span class="nc" id="L810">            DialogUtil.showAlertDialog(getActivity(), getString(R.string.ask_to_turn_location_on), getString(R.string.nearby_needs_location), getString(R.string.yes), getString(R.string.no), this::openLocationSettings, null);</span>
+        }
+<span class="nc" id="L812">    }</span>
+
+    @Override
+    public void openLocationSettings() {
+        // This method opens the location settings of the device along with a followup toast.
+<span class="nc" id="L817">        final Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);</span>
+<span class="nc" id="L818">        final PackageManager packageManager = getActivity().getPackageManager();</span>
+<span class="nc bnc" id="L819" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4083)) {</span>
+<span class="nc bnc" id="L820" title="All 2 branches missed.">            if (intent.resolveActivity(packageManager) != null) {</span>
+<span class="nc bnc" id="L821" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4081)) {</span>
+<span class="nc" id="L822">                    startActivity(intent);</span>
+                }
+<span class="nc bnc" id="L824" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4082)) {</span>
+<span class="nc" id="L825">                    Toast.makeText(getContext(), R.string.recommend_high_accuracy_mode, Toast.LENGTH_LONG).show();</span>
+                }
+            } else {
+<span class="nc bnc" id="L828" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4080)) {</span>
+<span class="nc" id="L829">                    Toast.makeText(getContext(), R.string.cannot_open_location_settings, Toast.LENGTH_LONG).show();</span>
+                }
+            }
+        }
+<span class="nc" id="L833">    }</span>
+
+    @Override
+    public void hideBottomDetailsSheet() {
+<span class="nc bnc" id="L837" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4084)) {</span>
+<span class="nc" id="L838">            bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+        }
+<span class="nc" id="L840">    }</span>
+
+    @Override
+    public void displayBottomSheetWithInfo(final Marker marker) {
+<span class="nc bnc" id="L844" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4085)) {</span>
+<span class="nc" id="L845">            selectedMarker = marker;</span>
+        }
+<span class="nc" id="L847">        final NearbyMarker nearbyMarker = (NearbyMarker) marker;</span>
+<span class="nc" id="L848">        final Place place = nearbyMarker.getNearbyBaseMarker().getPlace();</span>
+<span class="nc bnc" id="L849" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4086)) {</span>
+<span class="nc" id="L850">            passInfoToSheet(place);</span>
+        }
+<span class="nc bnc" id="L852" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4087)) {</span>
+<span class="nc" id="L853">            bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);</span>
+        }
+<span class="nc" id="L855">    }</span>
+
+    /**
+     * Same bottom sheet carries information for all nearby places, so we need to pass information
+     * (title, description, distance and links) to view on nearby marker click
+     *
+     * @param place Place of clicked nearby marker
+     */
+    private void passInfoToSheet(final Place place) {
+<span class="nc bnc" id="L864" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4088)) {</span>
+<span class="nc" id="L865">            directionsButton.setOnClickListener(view -&gt; Utils.handleGeoCoordinates(getActivity(), place.getLocation()));</span>
+        }
+<span class="nc bnc" id="L867" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4089)) {</span>
+<span class="nc bnc" id="L868" title="All 2 branches missed.">            commonsButton.setVisibility(place.hasCommonsLink() ? View.VISIBLE : View.GONE);</span>
+        }
+<span class="nc bnc" id="L870" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4090)) {</span>
+<span class="nc" id="L871">            commonsButton.setOnClickListener(view -&gt; Utils.handleWebUrl(getContext(), place.siteLinks.getCommonsLink()));</span>
+        }
+<span class="nc" id="L873">        int index = 0;</span>
+<span class="nc bnc" id="L874" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4094)) {</span>
+            {
+<span class="nc" id="L876">                long _loopCounter58 = 0;</span>
+<span class="nc bnc" id="L877" title="All 2 branches missed.">                for (Media media : mediaList) {</span>
+<span class="nc" id="L878">                    ListenerUtil.loopListener.listen(&quot;_loopCounter58&quot;, ++_loopCounter58);</span>
+<span class="nc bnc" id="L879" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(4092)) {</span>
+<span class="nc bnc" id="L880" title="All 2 branches missed.">                        if (media.getFilename().equals(place.name)) {</span>
+<span class="nc" id="L881">                            int finalIndex = index;</span>
+<span class="nc bnc" id="L882" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4091)) {</span>
+<span class="nc" id="L883">                                mediaDetailsButton.setOnClickListener(view -&gt; {</span>
+<span class="nc" id="L884">                                    ((ExploreMapRootFragment) getParentFragment()).onMediaClicked(finalIndex);</span>
+<span class="nc" id="L885">                                });</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L889" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(4093)) {</span>
+<span class="nc" id="L890">                        index++;</span>
+                    }
+<span class="nc" id="L892">                }</span>
+            }
+        }
+<span class="nc bnc" id="L895" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4095)) {</span>
+<span class="nc" id="L896">            title.setText(place.name.substring(5, place.name.lastIndexOf(&quot;.&quot;)));</span>
+        }
+<span class="nc bnc" id="L898" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4096)) {</span>
+<span class="nc" id="L899">            distance.setText(place.distance);</span>
+        }
+        // Remove label since it is double information
+<span class="nc" id="L902">        String descriptionText = place.getLongDescription().replace(place.getName() + &quot; (&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L903" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4097)) {</span>
+<span class="nc bnc" id="L904" title="All 2 branches missed.">            descriptionText = (descriptionText.equals(place.getLongDescription()) ? descriptionText : descriptionText.replaceFirst(&quot;.$&quot;, &quot;&quot;));</span>
+        }
+<span class="nc bnc" id="L906" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4098)) {</span>
+            // Set the short description after we remove place name from long description
+<span class="nc" id="L908">            description.setText(descriptionText);</span>
+        }
+<span class="nc" id="L910">    }</span>
+
+    @Override
+    public void addSearchThisAreaButtonAction() {
+<span class="nc bnc" id="L914" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4099)) {</span>
+<span class="nc" id="L915">            searchThisAreaButton.setOnClickListener(presenter.onSearchThisAreaClicked());</span>
+        }
+<span class="nc" id="L917">    }</span>
+
+    @Override
+    public void setSearchThisAreaButtonVisibility(boolean isVisible) {
+<span class="nc bnc" id="L921" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4102)) {</span>
+<span class="nc bnc" id="L922" title="All 2 branches missed.">            if (isVisible) {</span>
+<span class="nc bnc" id="L923" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4101)) {</span>
+<span class="nc" id="L924">                    searchThisAreaButton.setVisibility(View.VISIBLE);</span>
+                }
+            } else {
+<span class="nc bnc" id="L927" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4100)) {</span>
+<span class="nc" id="L928">                    searchThisAreaButton.setVisibility(View.GONE);</span>
+                }
+            }
+        }
+<span class="nc" id="L932">    }</span>
+
+    @Override
+    public void setProgressBarVisibility(boolean isVisible) {
+<span class="nc bnc" id="L936" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4105)) {</span>
+<span class="nc bnc" id="L937" title="All 2 branches missed.">            if (isVisible) {</span>
+<span class="nc bnc" id="L938" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4104)) {</span>
+<span class="nc" id="L939">                    progressBar.setVisibility(View.VISIBLE);</span>
+                }
+            } else {
+<span class="nc bnc" id="L942" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4103)) {</span>
+<span class="nc" id="L943">                    progressBar.setVisibility(View.GONE);</span>
+                }
+            }
+        }
+<span class="nc" id="L947">    }</span>
+
+    @Override
+    public boolean isDetailsBottomSheetVisible() {
+<span class="nc bnc" id="L951" title="All 2 branches missed.">        if (bottomSheetDetails.getVisibility() == View.VISIBLE) {</span>
+<span class="nc" id="L952">            return true;</span>
+        } else {
+<span class="nc" id="L954">            return false;</span>
+        }
+    }
+
+    @Override
+    public boolean isSearchThisAreaButtonVisible() {
+<span class="nc bnc" id="L960" title="All 2 branches missed.">        if (searchThisAreaButton.getVisibility() == View.VISIBLE) {</span>
+<span class="nc" id="L961">            return true;</span>
+        } else {
+<span class="nc" id="L963">            return false;</span>
+        }
+    }
+
+    @Override
+    public LatLng getLastLocation() {
+<span class="nc bnc" id="L969" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4107)) {</span>
+<span class="nc bnc" id="L970" title="All 2 branches missed.">            if (lastKnownLocation == null) {</span>
+<span class="nc bnc" id="L971" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4106)) {</span>
+<span class="nc" id="L972">                    lastKnownLocation = locationManager.getLastLocation();</span>
+                }
+            }
+        }
+<span class="nc" id="L976">        return lastKnownLocation;</span>
+    }
+
+    @Override
+    public void disableFABRecenter() {
+<span class="nc bnc" id="L981" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4108)) {</span>
+<span class="nc" id="L982">            fabRecenter.setEnabled(false);</span>
+        }
+<span class="nc" id="L984">    }</span>
+
+    @Override
+    public void enableFABRecenter() {
+<span class="nc bnc" id="L988" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4109)) {</span>
+<span class="nc" id="L989">            fabRecenter.setEnabled(true);</span>
+        }
+<span class="nc" id="L991">    }</span>
+
+    /**
+     * Adds a markers to the map based on the list of NearbyBaseMarker.
+     *
+     * @param nearbyBaseMarkers The NearbyBaseMarker object representing the markers to be added.
+     */
+    @Override
+    public void addMarkersToMap(List&lt;NearbyBaseMarker&gt; nearbyBaseMarkers) {
+<span class="nc bnc" id="L1000" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4110)) {</span>
+<span class="nc" id="L1001">            clearAllMarkers();</span>
+        }
+<span class="nc bnc" id="L1003" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4117)) {</span>
+            {
+<span class="nc" id="L1005">                long _loopCounter59 = 0;</span>
+<span class="nc bnc" id="L1006" title="All 22 branches missed.">                for (int i = 0; (ListenerUtil.mutListener.listen(4116) ? (i &gt;= nearbyBaseMarkers.size()) : (ListenerUtil.mutListener.listen(4115) ? (i &lt;= nearbyBaseMarkers.size()) : (ListenerUtil.mutListener.listen(4114) ? (i &gt; nearbyBaseMarkers.size()) : (ListenerUtil.mutListener.listen(4113) ? (i != nearbyBaseMarkers.size()) : (ListenerUtil.mutListener.listen(4112) ? (i == nearbyBaseMarkers.size()) : (i &lt; nearbyBaseMarkers.size())))))); i++) {</span>
+<span class="nc" id="L1007">                    ListenerUtil.loopListener.listen(&quot;_loopCounter59&quot;, ++_loopCounter59);</span>
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(4111)) {</span>
+<span class="nc" id="L1009">                        addMarkerToMap(nearbyBaseMarkers.get(i));</span>
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L1014" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4118)) {</span>
+<span class="nc" id="L1015">            mapView.invalidate();</span>
+        }
+<span class="nc" id="L1017">    }</span>
+
+    /**
+     * Adds a marker to the map based on the specified NearbyBaseMarker.
+     *
+     * @param nearbyBaseMarker The NearbyBaseMarker object representing the marker to be added.
+     */
+    private void addMarkerToMap(NearbyBaseMarker nearbyBaseMarker) {
+<span class="nc" id="L1025">        ArrayList&lt;OverlayItem&gt; items = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1026">        Bitmap icon = nearbyBaseMarker.getMarker().getIcon().getBitmap();</span>
+<span class="nc" id="L1027">        Drawable d = new BitmapDrawable(getResources(), icon);</span>
+<span class="nc" id="L1028">        GeoPoint point = new GeoPoint(nearbyBaseMarker.getPlace().location.getLatitude(), nearbyBaseMarker.getPlace().location.getLongitude());</span>
+<span class="nc" id="L1029">        OverlayItem item = new OverlayItem(nearbyBaseMarker.getPlace().name, null, point);</span>
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4119)) {</span>
+<span class="nc" id="L1031">            item.setMarker(d);</span>
+        }
+<span class="nc bnc" id="L1033" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4120)) {</span>
+<span class="nc" id="L1034">            items.add(item);</span>
+        }
+<span class="nc" id="L1036">        ItemizedOverlayWithFocus overlay = new ItemizedOverlayWithFocus(items, new OnItemGestureListener&lt;OverlayItem&gt;() {</span>
+
+            @Override
+            public boolean onItemSingleTapUp(int index, OverlayItem item) {
+<span class="nc" id="L1040">                final Place place = nearbyBaseMarker.getPlace();</span>
+<span class="nc bnc" id="L1041" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4125)) {</span>
+<span class="nc bnc" id="L1042" title="All 2 branches missed.">                    if (clickedMarker != null) {</span>
+<span class="nc bnc" id="L1043" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(4121)) {</span>
+<span class="nc" id="L1044">                            removeMarker(clickedMarker);</span>
+                        }
+<span class="nc bnc" id="L1046" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(4122)) {</span>
+<span class="nc" id="L1047">                            addMarkerToMap(clickedMarker);</span>
+                        }
+<span class="nc bnc" id="L1049" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(4123)) {</span>
+<span class="nc" id="L1050">                            bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+                        }
+<span class="nc bnc" id="L1052" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(4124)) {</span>
+<span class="nc" id="L1053">                            bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L1057" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4126)) {</span>
+<span class="nc" id="L1058">                    clickedMarker = nearbyBaseMarker;</span>
+                }
+<span class="nc bnc" id="L1060" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4127)) {</span>
+<span class="nc" id="L1061">                    passInfoToSheet(place);</span>
+                }
+<span class="nc" id="L1063">                return true;</span>
+            }
+
+            @Override
+            public boolean onItemLongPress(int index, OverlayItem item) {
+<span class="nc" id="L1068">                return false;</span>
+            }
+<span class="nc" id="L1070">        }, getContext());</span>
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4128)) {</span>
+<span class="nc" id="L1072">            overlay.setFocusItemsOnTap(true);</span>
+        }
+<span class="nc bnc" id="L1074" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4129)) {</span>
+            // Add the overlay to the map
+<span class="nc" id="L1076">            mapView.getOverlays().add(overlay);</span>
+        }
+<span class="nc" id="L1078">    }</span>
+
+    /**
+     * Removes a marker from the map based on the specified NearbyBaseMarker.
+     *
+     * @param nearbyBaseMarker The NearbyBaseMarker object representing the marker to be removed.
+     */
+    private void removeMarker(NearbyBaseMarker nearbyBaseMarker) {
+<span class="nc" id="L1086">        Place place = nearbyBaseMarker.getPlace();</span>
+<span class="nc" id="L1087">        List&lt;Overlay&gt; overlays = mapView.getOverlays();</span>
+        ItemizedOverlayWithFocus item;
+        {
+<span class="nc" id="L1090">            long _loopCounter60 = 0;</span>
+<span class="nc bnc" id="L1091" title="All 22 branches missed.">            for (int i = 0; (ListenerUtil.mutListener.listen(4138) ? (i &gt;= overlays.size()) : (ListenerUtil.mutListener.listen(4137) ? (i &lt;= overlays.size()) : (ListenerUtil.mutListener.listen(4136) ? (i &gt; overlays.size()) : (ListenerUtil.mutListener.listen(4135) ? (i != overlays.size()) : (ListenerUtil.mutListener.listen(4134) ? (i == overlays.size()) : (i &lt; overlays.size())))))); i++) {</span>
+<span class="nc" id="L1092">                ListenerUtil.loopListener.listen(&quot;_loopCounter60&quot;, ++_loopCounter60);</span>
+<span class="nc bnc" id="L1093" title="All 2 branches missed.">                if (overlays.get(i) instanceof ItemizedOverlayWithFocus) {</span>
+<span class="nc" id="L1094">                    item = (ItemizedOverlayWithFocus) overlays.get(i);</span>
+<span class="nc" id="L1095">                    OverlayItem overlayItem = item.getItem(0);</span>
+<span class="nc bnc" id="L1096" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(4133)) {</span>
+<span class="nc bnc" id="L1097" title="All 10 branches missed.">                        if ((ListenerUtil.mutListener.listen(4130) ? (place.location.getLatitude() == overlayItem.getPoint().getLatitude() || place.location.getLongitude() == overlayItem.getPoint().getLongitude()) : (place.location.getLatitude() == overlayItem.getPoint().getLatitude() &amp;&amp; place.location.getLongitude() == overlayItem.getPoint().getLongitude()))) {</span>
+<span class="nc bnc" id="L1098" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4131)) {</span>
+<span class="nc" id="L1099">                                mapView.getOverlays().remove(i);</span>
+                            }
+<span class="nc bnc" id="L1101" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4132)) {</span>
+<span class="nc" id="L1102">                                mapView.invalidate();</span>
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L1110">    }</span>
+
+    /**
+     * Clears all markers from the map and resets certain map overlays and gestures. After clearing
+     * markers, it re-adds a scale bar overlay and rotation gesture overlay to the map.
+     */
+    @Override
+    public void clearAllMarkers() {
+<span class="nc bnc" id="L1118" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4139)) {</span>
+<span class="nc" id="L1119">            mapView.getOverlayManager().clear();</span>
+        }
+<span class="nc" id="L1121">        GeoPoint geoPoint = mapCenter;</span>
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4156)) {</span>
+<span class="nc bnc" id="L1123" title="All 2 branches missed.">            if (geoPoint != null) {</span>
+<span class="nc" id="L1124">                List&lt;Overlay&gt; overlays = mapView.getOverlays();</span>
+<span class="nc" id="L1125">                ScaleDiskOverlay diskOverlay = new ScaleDiskOverlay(this.getContext(), geoPoint, 2000, GeoConstants.UnitOfMeasure.foot);</span>
+<span class="nc" id="L1126">                Paint circlePaint = new Paint();</span>
+<span class="nc bnc" id="L1127" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4140)) {</span>
+<span class="nc" id="L1128">                    circlePaint.setColor(Color.rgb(128, 128, 128));</span>
+                }
+<span class="nc bnc" id="L1130" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4141)) {</span>
+<span class="nc" id="L1131">                    circlePaint.setStyle(Paint.Style.STROKE);</span>
+                }
+<span class="nc bnc" id="L1133" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4142)) {</span>
+<span class="nc" id="L1134">                    circlePaint.setStrokeWidth(2f);</span>
+                }
+<span class="nc bnc" id="L1136" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4143)) {</span>
+<span class="nc" id="L1137">                    diskOverlay.setCirclePaint2(circlePaint);</span>
+                }
+<span class="nc" id="L1139">                Paint diskPaint = new Paint();</span>
+<span class="nc bnc" id="L1140" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4144)) {</span>
+<span class="nc" id="L1141">                    diskPaint.setColor(Color.argb(40, 128, 128, 128));</span>
+                }
+<span class="nc bnc" id="L1143" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4145)) {</span>
+<span class="nc" id="L1144">                    diskPaint.setStyle(Paint.Style.FILL_AND_STROKE);</span>
+                }
+<span class="nc bnc" id="L1146" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4146)) {</span>
+<span class="nc" id="L1147">                    diskOverlay.setCirclePaint1(diskPaint);</span>
+                }
+<span class="nc bnc" id="L1149" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4147)) {</span>
+<span class="nc" id="L1150">                    diskOverlay.setDisplaySizeMin(900);</span>
+                }
+<span class="nc bnc" id="L1152" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4148)) {</span>
+<span class="nc" id="L1153">                    diskOverlay.setDisplaySizeMax(1700);</span>
+                }
+<span class="nc bnc" id="L1155" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4149)) {</span>
+<span class="nc" id="L1156">                    mapView.getOverlays().add(diskOverlay);</span>
+                }
+<span class="nc" id="L1158">                org.osmdroid.views.overlay.Marker startMarker = new org.osmdroid.views.overlay.Marker(mapView);</span>
+<span class="nc bnc" id="L1159" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4150)) {</span>
+<span class="nc" id="L1160">                    startMarker.setPosition(geoPoint);</span>
+                }
+<span class="nc bnc" id="L1162" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4151)) {</span>
+<span class="nc" id="L1163">                    startMarker.setAnchor(org.osmdroid.views.overlay.Marker.ANCHOR_CENTER, org.osmdroid.views.overlay.Marker.ANCHOR_BOTTOM);</span>
+                }
+<span class="nc bnc" id="L1165" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4152)) {</span>
+<span class="nc" id="L1166">                    startMarker.setIcon(ContextCompat.getDrawable(this.getContext(), R.drawable.current_location_marker));</span>
+                }
+<span class="nc bnc" id="L1168" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4153)) {</span>
+<span class="nc" id="L1169">                    startMarker.setTitle(&quot;Your Location&quot;);</span>
+                }
+<span class="nc bnc" id="L1171" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4154)) {</span>
+<span class="nc" id="L1172">                    startMarker.setTextLabelFontSize(24);</span>
+                }
+<span class="nc bnc" id="L1174" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4155)) {</span>
+<span class="nc" id="L1175">                    mapView.getOverlays().add(startMarker);</span>
+                }
+            }
+        }
+<span class="nc" id="L1179">        ScaleBarOverlay scaleBarOverlay = new ScaleBarOverlay(mapView);</span>
+<span class="nc bnc" id="L1180" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4157)) {</span>
+<span class="nc" id="L1181">            scaleBarOverlay.setScaleBarOffset(15, 25);</span>
+        }
+<span class="nc" id="L1183">        Paint barPaint = new Paint();</span>
+<span class="nc bnc" id="L1184" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4158)) {</span>
+<span class="nc" id="L1185">            barPaint.setARGB(200, 255, 250, 250);</span>
+        }
+<span class="nc bnc" id="L1187" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4159)) {</span>
+<span class="nc" id="L1188">            scaleBarOverlay.setBackgroundPaint(barPaint);</span>
+        }
+<span class="nc bnc" id="L1190" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4160)) {</span>
+<span class="nc" id="L1191">            scaleBarOverlay.enableScaleBar();</span>
+        }
+<span class="nc bnc" id="L1193" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4161)) {</span>
+<span class="nc" id="L1194">            mapView.getOverlays().add(scaleBarOverlay);</span>
+        }
+<span class="nc bnc" id="L1196" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4170)) {</span>
+<span class="nc" id="L1197">            mapView.getOverlays().add(new MapEventsOverlay(new MapEventsReceiver() {</span>
+
+                @Override
+                public boolean singleTapConfirmedHelper(GeoPoint p) {
+<span class="nc bnc" id="L1201" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(4166)) {</span>
+<span class="nc bnc" id="L1202" title="All 2 branches missed.">                        if (clickedMarker != null) {</span>
+<span class="nc bnc" id="L1203" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4163)) {</span>
+<span class="nc" id="L1204">                                removeMarker(clickedMarker);</span>
+                            }
+<span class="nc bnc" id="L1206" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4164)) {</span>
+<span class="nc" id="L1207">                                addMarkerToMap(clickedMarker);</span>
+                            }
+<span class="nc bnc" id="L1209" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4165)) {</span>
+<span class="nc" id="L1210">                                mapView.invalidate();</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L1213" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4162)) {</span>
+<span class="nc" id="L1214">                                Timber.e(&quot;CLICKED MARKER IS NULL&quot;);</span>
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L1218" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(4169)) {</span>
+<span class="nc bnc" id="L1219" title="All 2 branches missed.">                        if (bottomSheetDetailsBehavior.getState() == BottomSheetBehavior.STATE_EXPANDED) {</span>
+<span class="nc bnc" id="L1220" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4168)) {</span>
+                                // Back should first hide the bottom sheet if it is expanded
+<span class="nc" id="L1222">                                bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+                            }
+<span class="nc bnc" id="L1224" title="All 2 branches missed.">                        } else if (isDetailsBottomSheetVisible()) {</span>
+<span class="nc bnc" id="L1225" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4167)) {</span>
+<span class="nc" id="L1226">                                hideBottomDetailsSheet();</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L1230">                    return true;</span>
+                }
+
+                @Override
+                public boolean longPressHelper(GeoPoint p) {
+<span class="nc" id="L1235">                    return false;</span>
+                }
+            }));
+        }
+<span class="nc bnc" id="L1239" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4171)) {</span>
+<span class="nc" id="L1240">            mapView.setMultiTouchControls(true);</span>
+        }
+<span class="nc" id="L1242">    }</span>
+
+    /**
+     * Recenters the map view to the specified GeoPoint and updates the marker to indicate the new
+     * position.
+     *
+     * @param geoPoint The GeoPoint representing the new center position for the map.
+     */
+    private void recenterMarkerToPosition(GeoPoint geoPoint) {
+<span class="nc bnc" id="L1251" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4198)) {</span>
+<span class="nc bnc" id="L1252" title="All 2 branches missed.">            if (geoPoint != null) {</span>
+<span class="nc bnc" id="L1253" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4172)) {</span>
+<span class="nc" id="L1254">                    mapView.getController().setCenter(geoPoint);</span>
+                }
+<span class="nc" id="L1256">                List&lt;Overlay&gt; overlays = mapView.getOverlays();</span>
+<span class="nc bnc" id="L1257" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4181)) {</span>
+                    {
+<span class="nc" id="L1259">                        long _loopCounter61 = 0;</span>
+<span class="nc bnc" id="L1260" title="All 22 branches missed.">                        for (int i = 0; (ListenerUtil.mutListener.listen(4180) ? (i &gt;= overlays.size()) : (ListenerUtil.mutListener.listen(4179) ? (i &lt;= overlays.size()) : (ListenerUtil.mutListener.listen(4178) ? (i &gt; overlays.size()) : (ListenerUtil.mutListener.listen(4177) ? (i != overlays.size()) : (ListenerUtil.mutListener.listen(4176) ? (i == overlays.size()) : (i &lt; overlays.size())))))); i++) {</span>
+<span class="nc" id="L1261">                            ListenerUtil.loopListener.listen(&quot;_loopCounter61&quot;, ++_loopCounter61);</span>
+<span class="nc bnc" id="L1262" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4175)) {</span>
+<span class="nc bnc" id="L1263" title="All 2 branches missed.">                                if (overlays.get(i) instanceof org.osmdroid.views.overlay.Marker) {</span>
+<span class="nc bnc" id="L1264" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(4174)) {</span>
+<span class="nc" id="L1265">                                        mapView.getOverlays().remove(i);</span>
+                                    }
+<span class="nc bnc" id="L1267" title="All 2 branches missed.">                                } else if (overlays.get(i) instanceof ScaleDiskOverlay) {</span>
+<span class="nc bnc" id="L1268" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(4173)) {</span>
+<span class="nc" id="L1269">                                        mapView.getOverlays().remove(i);</span>
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+<span class="nc" id="L1276">                ScaleDiskOverlay diskOverlay = new ScaleDiskOverlay(this.getContext(), geoPoint, 2000, GeoConstants.UnitOfMeasure.foot);</span>
+<span class="nc" id="L1277">                Paint circlePaint = new Paint();</span>
+<span class="nc bnc" id="L1278" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4182)) {</span>
+<span class="nc" id="L1279">                    circlePaint.setColor(Color.rgb(128, 128, 128));</span>
+                }
+<span class="nc bnc" id="L1281" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4183)) {</span>
+<span class="nc" id="L1282">                    circlePaint.setStyle(Paint.Style.STROKE);</span>
+                }
+<span class="nc bnc" id="L1284" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4184)) {</span>
+<span class="nc" id="L1285">                    circlePaint.setStrokeWidth(2f);</span>
+                }
+<span class="nc bnc" id="L1287" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4185)) {</span>
+<span class="nc" id="L1288">                    diskOverlay.setCirclePaint2(circlePaint);</span>
+                }
+<span class="nc" id="L1290">                Paint diskPaint = new Paint();</span>
+<span class="nc bnc" id="L1291" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4186)) {</span>
+<span class="nc" id="L1292">                    diskPaint.setColor(Color.argb(40, 128, 128, 128));</span>
+                }
+<span class="nc bnc" id="L1294" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4187)) {</span>
+<span class="nc" id="L1295">                    diskPaint.setStyle(Paint.Style.FILL_AND_STROKE);</span>
+                }
+<span class="nc bnc" id="L1297" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4188)) {</span>
+<span class="nc" id="L1298">                    diskOverlay.setCirclePaint1(diskPaint);</span>
+                }
+<span class="nc bnc" id="L1300" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4189)) {</span>
+<span class="nc" id="L1301">                    diskOverlay.setDisplaySizeMin(900);</span>
+                }
+<span class="nc bnc" id="L1303" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4190)) {</span>
+<span class="nc" id="L1304">                    diskOverlay.setDisplaySizeMax(1700);</span>
+                }
+<span class="nc bnc" id="L1306" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4191)) {</span>
+<span class="nc" id="L1307">                    mapView.getOverlays().add(diskOverlay);</span>
+                }
+<span class="nc" id="L1309">                org.osmdroid.views.overlay.Marker startMarker = new org.osmdroid.views.overlay.Marker(mapView);</span>
+<span class="nc bnc" id="L1310" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4192)) {</span>
+<span class="nc" id="L1311">                    startMarker.setPosition(geoPoint);</span>
+                }
+<span class="nc bnc" id="L1313" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4193)) {</span>
+<span class="nc" id="L1314">                    startMarker.setAnchor(org.osmdroid.views.overlay.Marker.ANCHOR_CENTER, org.osmdroid.views.overlay.Marker.ANCHOR_BOTTOM);</span>
+                }
+<span class="nc bnc" id="L1316" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4194)) {</span>
+<span class="nc" id="L1317">                    startMarker.setIcon(ContextCompat.getDrawable(this.getContext(), R.drawable.current_location_marker));</span>
+                }
+<span class="nc bnc" id="L1319" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4195)) {</span>
+<span class="nc" id="L1320">                    startMarker.setTitle(&quot;Your Location&quot;);</span>
+                }
+<span class="nc bnc" id="L1322" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4196)) {</span>
+<span class="nc" id="L1323">                    startMarker.setTextLabelFontSize(24);</span>
+                }
+<span class="nc bnc" id="L1325" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4197)) {</span>
+<span class="nc" id="L1326">                    mapView.getOverlays().add(startMarker);</span>
+                }
+            }
+        }
+<span class="nc" id="L1330">    }</span>
+
+    /**
+     * Moves the camera of the map view to the specified GeoPoint using an animation.
+     *
+     * @param geoPoint The GeoPoint representing the new camera position for the map.
+     */
+    private void moveCameraToPosition(GeoPoint geoPoint) {
+<span class="nc bnc" id="L1338" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4199)) {</span>
+<span class="nc" id="L1339">            mapView.getController().animateTo(geoPoint);</span>
+        }
+<span class="nc" id="L1341">    }</span>
+
+    @Override
+    public fr.free.nrw.commons.location.LatLng getLastMapFocus() {
+<span class="nc bnc" id="L1345" title="All 2 branches missed.">        return lastMapFocus == null ? getMapCenter() : new fr.free.nrw.commons.location.LatLng(lastMapFocus.getLatitude(), lastMapFocus.getLongitude(), 100);</span>
+    }
+
+    @Override
+    public fr.free.nrw.commons.location.LatLng getMapCenter() {
+<span class="nc" id="L1350">        fr.free.nrw.commons.location.LatLng latLnge = null;</span>
+<span class="nc bnc" id="L1351" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4201)) {</span>
+<span class="nc bnc" id="L1352" title="All 2 branches missed.">            if (mapCenter != null) {</span>
+<span class="nc bnc" id="L1353" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(4200)) {</span>
+<span class="nc" id="L1354">                    latLnge = new fr.free.nrw.commons.location.LatLng(mapCenter.getLatitude(), mapCenter.getLongitude(), 100);</span>
+                }
+            }
+        }
+<span class="nc" id="L1358">        return latLnge;</span>
+    }
+
+    @Override
+    public fr.free.nrw.commons.location.LatLng getMapFocus() {
+<span class="nc" id="L1363">        fr.free.nrw.commons.location.LatLng mapFocusedLatLng = new fr.free.nrw.commons.location.LatLng(mapView.getMapCenter().getLatitude(), mapView.getMapCenter().getLongitude(), 100);</span>
+<span class="nc" id="L1364">        return mapFocusedLatLng;</span>
+    }
+
+    @Override
+    public void setFABRecenterAction(OnClickListener onClickListener) {
+<span class="nc bnc" id="L1369" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4202)) {</span>
+<span class="nc" id="L1370">            fabRecenter.setOnClickListener(onClickListener);</span>
+        }
+<span class="nc" id="L1372">    }</span>
+
+    @Override
+    public boolean backButtonClicked() {
+<span class="nc bnc" id="L1376" title="All 2 branches missed.">        if (!(bottomSheetDetailsBehavior.getState() == BottomSheetBehavior.STATE_HIDDEN)) {</span>
+<span class="nc bnc" id="L1377" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(4203)) {</span>
+<span class="nc" id="L1378">                bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+            }
+<span class="nc" id="L1380">            return true;</span>
+        } else {
+<span class="nc" id="L1382">            return false;</span>
+        }
+    }
+
+    /**
+     * Adds network broadcast receiver to recognize connection established
+     */
+    private void initNetworkBroadCastReceiver() {
+<span class="nc bnc" id="L1390" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(4218)) {</span>
+<span class="nc" id="L1391">            broadcastReceiver = new BroadcastReceiver() {</span>
+
+                @Override
+                public void onReceive(final Context context, final Intent intent) {
+<span class="nc bnc" id="L1395" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(4217)) {</span>
+<span class="nc bnc" id="L1396" title="All 2 branches missed.">                        if (getActivity() != null) {</span>
+<span class="nc bnc" id="L1397" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(4216)) {</span>
+<span class="nc bnc" id="L1398" title="All 2 branches missed.">                                if (NetworkUtils.isInternetConnectionEstablished(getActivity())) {</span>
+<span class="nc bnc" id="L1399" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(4212)) {</span>
+<span class="nc bnc" id="L1400" title="All 2 branches missed.">                                        if (isNetworkErrorOccurred) {</span>
+<span class="nc bnc" id="L1401" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(4210)) {</span>
+<span class="nc" id="L1402">                                                presenter.updateMap(LOCATION_SIGNIFICANTLY_CHANGED);</span>
+                                            }
+<span class="nc bnc" id="L1404" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(4211)) {</span>
+<span class="nc" id="L1405">                                                isNetworkErrorOccurred = false;</span>
+                                            }
+                                        }
+                                    }
+<span class="nc bnc" id="L1409" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(4215)) {</span>
+<span class="nc bnc" id="L1410" title="All 2 branches missed.">                                        if (snackbar != null) {</span>
+<span class="nc bnc" id="L1411" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(4213)) {</span>
+<span class="nc" id="L1412">                                                snackbar.dismiss();</span>
+                                            }
+<span class="nc bnc" id="L1414" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(4214)) {</span>
+<span class="nc" id="L1415">                                                snackbar = null;</span>
+                                            }
+                                        }
+                                    }
+                                } else {
+<span class="nc bnc" id="L1420" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(4207)) {</span>
+<span class="nc bnc" id="L1421" title="All 2 branches missed.">                                        if (snackbar == null) {</span>
+<span class="nc bnc" id="L1422" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(4204)) {</span>
+<span class="nc" id="L1423">                                                snackbar = Snackbar.make(getView(), R.string.no_internet, Snackbar.LENGTH_INDEFINITE);</span>
+                                            }
+<span class="nc bnc" id="L1425" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(4205)) {</span>
+<span class="nc" id="L1426">                                                setSearchThisAreaButtonVisibility(false);</span>
+                                            }
+<span class="nc bnc" id="L1428" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(4206)) {</span>
+<span class="nc" id="L1429">                                                setProgressBarVisibility(false);</span>
+                                            }
+                                        }
+                                    }
+<span class="nc bnc" id="L1433" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(4208)) {</span>
+<span class="nc" id="L1434">                                        isNetworkErrorOccurred = true;</span>
+                                    }
+<span class="nc bnc" id="L1436" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(4209)) {</span>
+<span class="nc" id="L1437">                                        snackbar.show();</span>
+                                    }
+                                }
+                            }
+                        }
+                    }
+<span class="nc" id="L1443">                }</span>
+            };
+        }
+<span class="nc" id="L1446">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

@@ -1,0 +1,1083 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>NavigationServiceProvider.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">agencyXGoogleDebug</a> &gt; <a href="index.source.html" class="el_package">org.onebusaway.android.nav</a> &gt; <span class="el_source">NavigationServiceProvider.java</span></div><h1>NavigationServiceProvider.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (C) 2005-2019 University of South Florida
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.nav;
+
+import static android.app.PendingIntent.*;
+import com.google.firebase.analytics.FirebaseAnalytics;
+import org.onebusaway.android.R;
+import org.onebusaway.android.app.Application;
+import org.onebusaway.android.io.ObaAnalytics;
+import org.onebusaway.android.nav.model.Path;
+import org.onebusaway.android.nav.model.PathLink;
+import org.onebusaway.android.ui.TripDetailsActivity;
+import org.onebusaway.android.util.RegionUtils;
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.location.Location;
+import android.os.Build;
+import android.speech.tts.TextToSpeech;
+import android.util.Log;
+import java.text.DecimalFormat;
+import java.util.Locale;
+import androidx.core.app.NotificationCompat;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+/**
+ * This class provides the navigation functionality for the destination reminders
+ */
+public class NavigationServiceProvider implements TextToSpeech.OnInitListener {
+
+    public static final String TAG = &quot;NavServiceProvider&quot;;
+
+    private static final int EVENT_TYPE_NO_EVENT = 0;
+
+    private static final int EVENT_TYPE_UPDATE_DISTANCE = 1;
+
+    private static final int EVENT_TYPE_GET_READY = 2;
+
+    private static final int EVENT_TYPE_PULL_CORD = 3;
+
+    private static final int EVENT_TYPE_INITIAL_STARTUP = 4;
+
+    private static final int ALERT_STATE_NONE = -1;
+
+    private static final int ALERT_STATE_SHOWN_TO_RIDER = 0;
+
+    private static final int ALERT_STATE_ENDING_PATH_LINK = 1;
+
+    public static final int NOTIFICATION_ID = 33620;
+
+<span class="nc" id="L67">    private static final long[] VIBRATION_PATTERN = new long[] { 2000, 1000, 2000, 1000, 2000, 1000, 2000, 1000, 2000, 1000 };</span>
+
+    public static final int DISTANCE_THRESHOLD = 200;
+
+    // Number of times to repeat voice commands
+    private static final int NUM_PULL_CORD_REPEAT = 10;
+
+    private static final int NUM_GET_READY_REPEAT = 2;
+
+    private ProximityCalculator mProxCalculator;
+
+    // Timeout value for service provider action (default = 60 seconds);
+<span class="nc" id="L79">    private int mTimeout = 60;</span>
+
+    // Index that defines the current path link within the path (i.e. First link in a path will have index = 0, second link index = 1, etc.)
+<span class="nc" id="L82">    private int mPathLinkIndex = 0;</span>
+
+    // Path links being navigated
+    private Path mPath;
+
+<span class="nc" id="L87">    private float mAlertDistance = -1;</span>
+
+<span class="nc" id="L89">    private boolean mWaitingForConfirm = false;</span>
+
+<span class="nc" id="L91">    private Location mCurrentLocation = null;</span>
+
+    // Is Trip being resumed?
+<span class="nc" id="L94">    private boolean mResuming = false;</span>
+
+    // Trip has finished.  //Change to public
+<span class="nc" id="L97">    public boolean mFinished = false;</span>
+
+    // Get Ready triggered. //Change to public
+<span class="nc" id="L100">    public boolean mGetReady = false;</span>
+
+<span class="nc" id="L102">    public float mSectoCurDistance = -1;</span>
+
+    // TextToSpeech for speaking commands.
+    public static TextToSpeech mTTS;
+
+    // Shared Prefs
+<span class="nc" id="L108">    SharedPreferences mSettings = Application.getPrefs();</span>
+
+    // Trip ID
+    private String mTripId;
+
+    // Stop ID
+    private String mStopId;
+
+    private FirebaseAnalytics mFirebaseAnalytics;
+
+<span class="nc" id="L118">    public NavigationServiceProvider(String tripId, String stopId) {</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12263)) {</span>
+<span class="nc" id="L120">            Log.d(TAG, &quot;Creating NavigationServiceProvider...&quot;);</span>
+        }
+<span class="nc bnc" id="L122" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12264)) {</span>
+<span class="nc" id="L123">            mFirebaseAnalytics = FirebaseAnalytics.getInstance(Application.get().getApplicationContext());</span>
+        }
+<span class="nc bnc" id="L125" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12266)) {</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">            if (mTTS == null) {</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12265)) {</span>
+<span class="nc" id="L128">                    mTTS = new TextToSpeech(Application.get().getApplicationContext(), this);</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L132" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12267)) {</span>
+<span class="nc" id="L133">            mTripId = tripId;</span>
+        }
+<span class="nc bnc" id="L135" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12268)) {</span>
+<span class="nc" id="L136">            mStopId = stopId;</span>
+        }
+<span class="nc" id="L138">    }</span>
+
+<span class="nc" id="L140">    public NavigationServiceProvider(String tripId, String stopId, int flag) {</span>
+<span class="nc bnc" id="L141" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12269)) {</span>
+<span class="nc" id="L142">            Log.d(TAG, &quot;Creating NavigationServiceProvider...&quot;);</span>
+        }
+<span class="nc bnc" id="L144" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12270)) {</span>
+<span class="nc" id="L145">            mFirebaseAnalytics = FirebaseAnalytics.getInstance(Application.get().getApplicationContext());</span>
+        }
+<span class="nc bnc" id="L147" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12276)) {</span>
+<span class="nc bnc" id="L148" title="All 22 branches missed.">            mResuming = (ListenerUtil.mutListener.listen(12275) ? (flag &gt;= 1) : (ListenerUtil.mutListener.listen(12274) ? (flag &lt;= 1) : (ListenerUtil.mutListener.listen(12273) ? (flag &gt; 1) : (ListenerUtil.mutListener.listen(12272) ? (flag &lt; 1) : (ListenerUtil.mutListener.listen(12271) ? (flag != 1) : (flag == 1))))));</span>
+        }
+<span class="nc bnc" id="L150" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12278)) {</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">            if (mTTS == null) {</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12277)) {</span>
+<span class="nc" id="L153">                    mTTS = new TextToSpeech(Application.get().getApplicationContext(), this);</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L157" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12279)) {</span>
+<span class="nc" id="L158">            mTripId = tripId;</span>
+        }
+<span class="nc bnc" id="L160" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12280)) {</span>
+<span class="nc" id="L161">            mStopId = stopId;</span>
+        }
+<span class="nc" id="L163">    }</span>
+
+    /**
+     * Initialize ProximityCalculator
+     * Proximity listener will be created only upon selection of service to navigate
+     */
+    private void lazyProxInitialization() {
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12281)) {</span>
+<span class="nc" id="L171">            Log.d(TAG, &quot;ProximityCalculator initializing...&quot;);</span>
+        }
+<span class="nc bnc" id="L173" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12282)) {</span>
+<span class="nc" id="L174">            mProxCalculator = null;</span>
+        }
+<span class="nc bnc" id="L176" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12283)) {</span>
+<span class="nc" id="L177">            mProxCalculator = new ProximityCalculator(this);</span>
+        }
+<span class="nc" id="L179">    }</span>
+
+    /**
+     * Returns true if user has been notified to get ready.
+     */
+    public boolean getGetReady() {
+<span class="nc" id="L185">        return mGetReady;</span>
+    }
+
+    /**
+     * Returns true if trip is done.
+     */
+    public boolean getFinished() {
+<span class="nc" id="L192">        return mFinished;</span>
+    }
+
+    /**
+     * Returns the index of the current path link
+     */
+    public int getPathLinkIndex() {
+<span class="nc" id="L199">        return mPathLinkIndex;</span>
+    }
+
+    /**
+     * Navigates a navigation path which is composed of path links
+     */
+    public void navigate(Path path) {
+<span class="nc bnc" id="L206" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12284)) {</span>
+<span class="nc" id="L207">            Log.d(TAG, &quot;Starting navigation for service&quot;);</span>
+        }
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12285)) {</span>
+            // Create a new instance and rewrite the old one with a blank slate of ProximityListener
+<span class="nc" id="L211">            lazyProxInitialization();</span>
+        }
+<span class="nc bnc" id="L213" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12286)) {</span>
+<span class="nc" id="L214">            mPath = path;</span>
+        }
+<span class="nc bnc" id="L216" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12287)) {</span>
+<span class="nc" id="L217">            mPathLinkIndex = 0;</span>
+        }
+<span class="nc bnc" id="L219" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12288)) {</span>
+<span class="nc" id="L220">            Log.d(TAG, &quot;Number of path links: &quot; + mPath.getPathLinks().size());</span>
+        }
+        // Create new coordinate object using the &quot;Ring&quot; coordinates
+<span class="nc" id="L223">        Location firstLocation = mPath.getPathLinks().get(mPathLinkIndex).getOriginLocation();</span>
+<span class="nc" id="L224">        Location secondToLastLocation = mPath.getPathLinks().get(mPathLinkIndex).getSecondToLastLocation();</span>
+<span class="nc" id="L225">        Location lastLocation = mPath.getPathLinks().get(mPathLinkIndex).getDestinationLocation();</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12289)) {</span>
+<span class="nc" id="L227">            mAlertDistance = mPath.getPathLinks().get(mPathLinkIndex).getAlertDistance();</span>
+        }
+<span class="nc bnc" id="L229" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12290)) {</span>
+            // Have proximity listener listen for the &quot;Ring&quot; location
+<span class="nc" id="L231">            mProxCalculator.listenForDistance(mAlertDistance);</span>
+        }
+<span class="nc bnc" id="L233" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12291)) {</span>
+<span class="nc" id="L234">            mProxCalculator.listenForLocation(firstLocation, secondToLastLocation, lastLocation);</span>
+        }
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12292)) {</span>
+<span class="nc" id="L237">            mProxCalculator.mReady = false;</span>
+        }
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12293)) {</span>
+<span class="nc" id="L240">            mProxCalculator.mTrigger = false;</span>
+        }
+<span class="nc" id="L242">    }</span>
+
+    /**
+     * Resets any current routes which might be currently navigated
+     */
+    public void reset() {
+<span class="nc bnc" id="L248" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12294)) {</span>
+<span class="nc" id="L249">            mProxCalculator.listenForLocation(null, null, null);</span>
+        }
+<span class="nc" id="L251">    }</span>
+
+    public void setTimeout(int timeout) {
+<span class="nc bnc" id="L254" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12295)) {</span>
+<span class="nc" id="L255">            mTimeout = timeout;</span>
+        }
+<span class="nc" id="L257">    }</span>
+
+    public int getTimeout() {
+<span class="nc" id="L260">        return mTimeout;</span>
+    }
+
+    /**
+     * Sets the radius of detection for the ProximityListener
+     */
+    public void setRadius(float radius) {
+<span class="nc bnc" id="L267" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12296)) {</span>
+<span class="nc" id="L268">            mProxCalculator.setRadius(radius);</span>
+        }
+<span class="nc" id="L270">    }</span>
+
+    /**
+     * Returns true if there is another path link to be navigated as part of the current path that is being navigated, false if there is not another link
+     *
+     * @return true if there is another path link to be navigated as part of the current path that is being navigated, false if there is not another link
+     */
+    public boolean hasMorePathLinks() {
+<span class="nc bnc" id="L278" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12297)) {</span>
+<span class="nc" id="L279">            Log.d(TAG, &quot;Checking if path has more path links left to be navigated&quot;);</span>
+        }
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12310)) {</span>
+<span class="nc bnc" id="L282" title="All 146 branches missed.">            if ((ListenerUtil.mutListener.listen(12307) ? (mPath == null &amp;&amp; ((ListenerUtil.mutListener.listen(12306) ? (mPathLinkIndex &lt;= ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (ListenerUtil.mutListener.listen(12305) ? (mPathLinkIndex &gt; ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (ListenerUtil.mutListener.listen(12304) ? (mPathLinkIndex &lt; ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (ListenerUtil.mutListener.listen(12303) ? (mPathLinkIndex != ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (ListenerUtil.mutListener.listen(12302) ? (mPathLinkIndex == ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (mPathLinkIndex &gt;= ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1)))))))))))))) : (mPath == null || ((ListenerUtil.mutListener.listen(12306) ? (mPathLinkIndex &lt;= ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (ListenerUtil.mutListener.listen(12305) ? (mPathLinkIndex &gt; ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (ListenerUtil.mutListener.listen(12304) ? (mPathLinkIndex &lt; ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (ListenerUtil.mutListener.listen(12303) ? (mPathLinkIndex != ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (ListenerUtil.mutListener.listen(12302) ? (mPathLinkIndex == ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1))))))) : (mPathLinkIndex &gt;= ((ListenerUtil.mutListener.listen(12301) ? (mPath.getPathLinks().size() % 1) : (ListenerUtil.mutListener.listen(12300) ? (mPath.getPathLinks().size() / 1) : (ListenerUtil.mutListener.listen(12299) ? (mPath.getPathLinks().size() * 1) : (ListenerUtil.mutListener.listen(12298) ? (mPath.getPathLinks().size() + 1) : (mPath.getPathLinks().size() - 1)))))))))))))))) {</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12308)) {</span>
+                    // No more path links exist
+<span class="nc" id="L285">                    Log.d(TAG, &quot;PathLink index: &quot; + mPathLinkIndex + &quot; Number of PathLinks: &quot; + (mPath.getPathLinks().size()));</span>
+                }
+<span class="nc bnc" id="L287" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12309)) {</span>
+<span class="nc" id="L288">                    Log.d(TAG, &quot;%%%%%%N%%%%%%%%% No more PathLinks left in Path %%%%%%%%%%%%%%%%%%%%%&quot;);</span>
+                }
+<span class="nc" id="L290">                return false;</span>
+            }
+        }
+<span class="nc bnc" id="L293" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12311)) {</span>
+            // Additional path links still need to be navigated as part of this service
+<span class="nc" id="L295">            Log.d(TAG, &quot;More path links left&quot;);</span>
+        }
+<span class="nc" id="L297">        return true;</span>
+    }
+
+    /**
+     * Tells the NavigationProvider to navigate the next PathLink in the Path
+     */
+    private void navigateNextPathLink() {
+<span class="nc bnc" id="L304" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12312)) {</span>
+<span class="nc" id="L305">            Log.d(TAG, &quot;Attempting to navigate next path link&quot;);</span>
+        }
+<span class="nc bnc" id="L307" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12324)) {</span>
+<span class="nc bnc" id="L308" title="All 50 branches missed.">            if ((ListenerUtil.mutListener.listen(12318) ? (mPath != null || (ListenerUtil.mutListener.listen(12317) ? (mPathLinkIndex &gt;= mPath.getPathLinks().size()) : (ListenerUtil.mutListener.listen(12316) ? (mPathLinkIndex &lt;= mPath.getPathLinks().size()) : (ListenerUtil.mutListener.listen(12315) ? (mPathLinkIndex &gt; mPath.getPathLinks().size()) : (ListenerUtil.mutListener.listen(12314) ? (mPathLinkIndex != mPath.getPathLinks().size()) : (ListenerUtil.mutListener.listen(12313) ? (mPathLinkIndex == mPath.getPathLinks().size()) : (mPathLinkIndex &lt; mPath.getPathLinks().size()))))))) : (mPath != null &amp;&amp; (ListenerUtil.mutListener.listen(12317) ? (mPathLinkIndex &gt;= mPath.getPathLinks().size()) : (ListenerUtil.mutListener.listen(12316) ? (mPathLinkIndex &lt;= mPath.getPathLinks().size()) : (ListenerUtil.mutListener.listen(12315) ? (mPathLinkIndex &gt; mPath.getPathLinks().size()) : (ListenerUtil.mutListener.listen(12314) ? (mPathLinkIndex != mPath.getPathLinks().size()) : (ListenerUtil.mutListener.listen(12313) ? (mPathLinkIndex == mPath.getPathLinks().size()) : (mPathLinkIndex &lt; mPath.getPathLinks().size()))))))))) {</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12319)) {</span>
+<span class="nc" id="L310">                    mPathLinkIndex++;</span>
+                }
+                // Create new location using the &quot;Ring&quot; coordinates
+<span class="nc" id="L313">                PathLink link = mPath.getPathLinks().get(mPathLinkIndex);</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12320)) {</span>
+<span class="nc" id="L315">                    mAlertDistance = link.getAlertDistance();</span>
+                }
+<span class="nc bnc" id="L317" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12321)) {</span>
+                    // Have proximity listener listen for the &quot;Ring&quot; location
+<span class="nc" id="L319">                    mProxCalculator.listenForDistance(mAlertDistance);</span>
+                }
+<span class="nc bnc" id="L321" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12322)) {</span>
+<span class="nc" id="L322">                    mProxCalculator.listenForLocation(link.getOriginLocation(), link.getSecondToLastLocation(), link.getDestinationLocation());</span>
+                }
+<span class="nc bnc" id="L324" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12323)) {</span>
+<span class="nc" id="L325">                    Log.d(TAG, &quot;ProxCalculator parameters were set!&quot;);</span>
+                }
+            }
+        }
+<span class="nc" id="L329">    }</span>
+
+    /**
+     * Called from LocationListener.locationUpdated() in order to supply the Navigation Provider with the most recent location
+     */
+    public void locationUpdated(Location l) {
+<span class="nc bnc" id="L335" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12325)) {</span>
+<span class="nc" id="L336">            mCurrentLocation = l;</span>
+        }
+<span class="nc bnc" id="L338" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12326)) {</span>
+<span class="nc" id="L339">            mProxCalculator.checkProximityAll(mCurrentLocation);</span>
+        }
+<span class="nc" id="L341">    }</span>
+
+<span class="nc" id="L343">    private int sendCounter = 0;</span>
+
+    public void skipPathLink() {
+<span class="nc bnc" id="L346" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12331)) {</span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">            if (hasMorePathLinks()) {</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12328)) {</span>
+<span class="nc" id="L349">                    Log.d(TAG, &quot;About to switch link - from skipPathLink&quot;);</span>
+                }
+<span class="nc bnc" id="L351" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12329)) {</span>
+<span class="nc" id="L352">                    navigateNextPathLink();</span>
+                }
+<span class="nc bnc" id="L354" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12330)) {</span>
+                    // Reset the &quot;get ready&quot; notification alert
+<span class="nc" id="L356">                    mProxCalculator.setReady(false);</span>
+                }
+            } else {
+<span class="nc bnc" id="L359" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12327)) {</span>
+<span class="nc" id="L360">                    Log.d(TAG, &quot;No more path links!&quot;);</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L364" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12332)) {</span>
+            // Reset the proximity notification alert
+<span class="nc" id="L366">            mProxCalculator.setTrigger(false);</span>
+        }
+<span class="nc" id="L368">    }</span>
+
+    /**
+     * Detects proximity to a latitude and longitude to help navigate a path link
+     */
+    public class ProximityCalculator {
+
+        NavigationServiceProvider mNavProvider;
+
+<span class="nc" id="L377">        private float mRadius = 100;</span>
+
+<span class="nc" id="L379">        private float readyRadius = 300;</span>
+
+<span class="nc" id="L381">        private boolean mTrigger = false;</span>
+
+<span class="nc" id="L383">        private Location secondToLastCoords = null;</span>
+
+        // Coordinates of the final bus stop of the link
+<span class="nc" id="L386">        private Location lastCoords = null;</span>
+
+        // Coordinates of the first bus stop of the link
+<span class="nc" id="L389">        private Location firstCoords = null;</span>
+
+        // Actual known traveled distance loaded from link object
+<span class="nc" id="L392">        private float mDistance = -1;</span>
+
+<span class="nc" id="L394">        private float directDistance = -1;</span>
+
+<span class="nc" id="L396">        private float endDistance = -1;</span>
+
+        // Has get ready alert been played?
+<span class="nc" id="L399">        private boolean mReady = false;</span>
+
+<span class="nc" id="L401">        private boolean m100_a, m50_a, m20_a, m20_d, m50_d, m100_d = false;</span>
+
+<span class="nc" id="L403">        ProximityCalculator(NavigationServiceProvider navProvider) {</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12333)) {</span>
+<span class="nc" id="L405">                mNavProvider = navProvider;</span>
+            }
+<span class="nc bnc" id="L407" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12334)) {</span>
+<span class="nc" id="L408">                Log.d(TAG, &quot;Initializing ProximityCalculator&quot;);</span>
+            }
+<span class="nc" id="L410">        }</span>
+
+        /**
+         * Getter method for radius value of ProximityListener
+         */
+        public float getRadius() {
+<span class="nc" id="L416">            return mRadius;</span>
+        }
+
+        /**
+         * Setter method for radius value of ProximityListener
+         */
+        public void setRadius(float radius) {
+<span class="nc bnc" id="L423" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12335)) {</span>
+<span class="nc" id="L424">                mRadius = radius;</span>
+            }
+<span class="nc" id="L426">        }</span>
+
+        /**
+         * ProximityListener Functions
+         */
+        public void monitoringStateChanged(boolean value) {
+<span class="nc bnc" id="L432" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12336)) {</span>
+                // Fired when the monitoring of the ProximityListener state changes (is or is NOT active)
+<span class="nc" id="L434">                Log.d(TAG, &quot;Fired ProximityListener.monitoringStateChanged()...&quot;);</span>
+            }
+<span class="nc" id="L436">        }</span>
+
+        /**
+         * Resets triggers for proximityEvent
+         */
+        public void setTrigger(boolean t) {
+<span class="nc bnc" id="L442" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12337)) {</span>
+<span class="nc" id="L443">                mTrigger = mReady = t;</span>
+            }
+<span class="nc" id="L445">        }</span>
+
+        /**
+         * Updates the state of the navigation provider based on the provided eventType
+         *
+         * @param eventType  EVENT_TYPE_PULL_CORD for &quot;Pull the cord now&quot; event, or EVENT_TYPE_GET_READY for getting ready to exit the vehicle
+         * @param alertState ALERT_STATE_* variable is responsible for differentiating the switch of path link and alert being played.
+         */
+        boolean proximityEvent(int eventType, int alertState) {
+<span class="nc bnc" id="L454" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12391)) {</span>
+<span class="nc bnc" id="L455" title="All 22 branches missed.">                if ((ListenerUtil.mutListener.listen(12342) ? (eventType &gt;= EVENT_TYPE_PULL_CORD) : (ListenerUtil.mutListener.listen(12341) ? (eventType &lt;= EVENT_TYPE_PULL_CORD) : (ListenerUtil.mutListener.listen(12340) ? (eventType &gt; EVENT_TYPE_PULL_CORD) : (ListenerUtil.mutListener.listen(12339) ? (eventType &lt; EVENT_TYPE_PULL_CORD) : (ListenerUtil.mutListener.listen(12338) ? (eventType != EVENT_TYPE_PULL_CORD) : (eventType == EVENT_TYPE_PULL_CORD))))))) {</span>
+<span class="nc bnc" id="L456" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12390)) {</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">                        if (!mTrigger) {</span>
+<span class="nc bnc" id="L458" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12350)) {</span>
+<span class="nc" id="L459">                                mTrigger = true;</span>
+                            }
+<span class="nc bnc" id="L461" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12351)) {</span>
+<span class="nc" id="L462">                                Log.d(TAG, &quot;Proximity Event fired&quot;);</span>
+                            }
+<span class="nc bnc" id="L464" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12389)) {</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">                                if (mNavProvider.hasMorePathLinks()) {</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12378)) {</span>
+<span class="nc bnc" id="L467" title="All 22 branches missed.">                                        if ((ListenerUtil.mutListener.listen(12375) ? (alertState &gt;= ALERT_STATE_SHOWN_TO_RIDER) : (ListenerUtil.mutListener.listen(12374) ? (alertState &lt;= ALERT_STATE_SHOWN_TO_RIDER) : (ListenerUtil.mutListener.listen(12373) ? (alertState &gt; ALERT_STATE_SHOWN_TO_RIDER) : (ListenerUtil.mutListener.listen(12372) ? (alertState &lt; ALERT_STATE_SHOWN_TO_RIDER) : (ListenerUtil.mutListener.listen(12371) ? (alertState != ALERT_STATE_SHOWN_TO_RIDER) : (alertState == ALERT_STATE_SHOWN_TO_RIDER))))))) {</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12376)) {</span>
+<span class="nc" id="L469">                                                Log.d(TAG, &quot;Alert 1 Screen showed to rider&quot;);</span>
+                                            }
+<span class="nc bnc" id="L471" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12377)) {</span>
+<span class="nc" id="L472">                                                mWaitingForConfirm = true;</span>
+                                            }
+                                            // this.mNavProvider.navlistener.waypointReached(this.lastCoords);
+<span class="nc" id="L475">                                            return true;</span>
+                                        }
+                                    }
+<span class="nc bnc" id="L478" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12388)) {</span>
+<span class="nc bnc" id="L479" title="All 22 branches missed.">                                        if ((ListenerUtil.mutListener.listen(12383) ? (alertState &gt;= ALERT_STATE_ENDING_PATH_LINK) : (ListenerUtil.mutListener.listen(12382) ? (alertState &lt;= ALERT_STATE_ENDING_PATH_LINK) : (ListenerUtil.mutListener.listen(12381) ? (alertState &gt; ALERT_STATE_ENDING_PATH_LINK) : (ListenerUtil.mutListener.listen(12380) ? (alertState &lt; ALERT_STATE_ENDING_PATH_LINK) : (ListenerUtil.mutListener.listen(12379) ? (alertState != ALERT_STATE_ENDING_PATH_LINK) : (alertState == ALERT_STATE_ENDING_PATH_LINK))))))) {</span>
+<span class="nc bnc" id="L480" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12384)) {</span>
+<span class="nc" id="L481">                                                Log.d(TAG, &quot;About to switch path links - from Proximity Event&quot;);</span>
+                                            }
+<span class="nc bnc" id="L483" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12385)) {</span>
+<span class="nc" id="L484">                                                mNavProvider.navigateNextPathLink();</span>
+                                            }
+<span class="nc bnc" id="L486" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12386)) {</span>
+                                                // Reset notification alerts
+<span class="nc" id="L488">                                                mReady = false;</span>
+                                            }
+<span class="nc bnc" id="L490" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12387)) {</span>
+<span class="nc" id="L491">                                                mTrigger = false;</span>
+                                            }
+                                        }
+                                    }
+                                } else {
+<span class="nc bnc" id="L496" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12352)) {</span>
+<span class="nc" id="L497">                                        Log.d(TAG, &quot;Got to last stop&quot;);</span>
+                                    }
+<span class="nc bnc" id="L499" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12361)) {</span>
+<span class="nc bnc" id="L500" title="All 22 branches missed.">                                        if ((ListenerUtil.mutListener.listen(12357) ? (alertState &gt;= ALERT_STATE_SHOWN_TO_RIDER) : (ListenerUtil.mutListener.listen(12356) ? (alertState &lt;= ALERT_STATE_SHOWN_TO_RIDER) : (ListenerUtil.mutListener.listen(12355) ? (alertState &gt; ALERT_STATE_SHOWN_TO_RIDER) : (ListenerUtil.mutListener.listen(12354) ? (alertState &lt; ALERT_STATE_SHOWN_TO_RIDER) : (ListenerUtil.mutListener.listen(12353) ? (alertState != ALERT_STATE_SHOWN_TO_RIDER) : (alertState == ALERT_STATE_SHOWN_TO_RIDER))))))) {</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12358)) {</span>
+<span class="nc" id="L502">                                                Log.d(TAG, &quot;Alert 1 screen before last stop&quot;);</span>
+                                            }
+<span class="nc bnc" id="L504" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12359)) {</span>
+<span class="nc" id="L505">                                                mWaitingForConfirm = true;</span>
+                                            }
+<span class="nc bnc" id="L507" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12360)) {</span>
+<span class="nc" id="L508">                                                Log.d(TAG, &quot;Calling destination reached...&quot;);</span>
+                                            }
+<span class="nc" id="L510">                                            return true;</span>
+                                        }
+                                    }
+<span class="nc bnc" id="L513" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12370)) {</span>
+<span class="nc bnc" id="L514" title="All 22 branches missed.">                                        if ((ListenerUtil.mutListener.listen(12366) ? (alertState &gt;= ALERT_STATE_ENDING_PATH_LINK) : (ListenerUtil.mutListener.listen(12365) ? (alertState &lt;= ALERT_STATE_ENDING_PATH_LINK) : (ListenerUtil.mutListener.listen(12364) ? (alertState &gt; ALERT_STATE_ENDING_PATH_LINK) : (ListenerUtil.mutListener.listen(12363) ? (alertState &lt; ALERT_STATE_ENDING_PATH_LINK) : (ListenerUtil.mutListener.listen(12362) ? (alertState != ALERT_STATE_ENDING_PATH_LINK) : (alertState == ALERT_STATE_ENDING_PATH_LINK))))))) {</span>
+<span class="nc bnc" id="L515" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12367)) {</span>
+<span class="nc" id="L516">                                                Log.d(TAG, &quot;Ending navigation&quot;);</span>
+                                            }
+<span class="nc bnc" id="L518" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12368)) {</span>
+<span class="nc" id="L519">                                                mNavProvider.mPath = null;</span>
+                                            }
+<span class="nc bnc" id="L521" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(12369)) {</span>
+<span class="nc" id="L522">                                                mNavProvider.mPathLinkIndex = 0;</span>
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L530" title="All 22 branches missed.">                } else if ((ListenerUtil.mutListener.listen(12347) ? (eventType &gt;= EVENT_TYPE_GET_READY) : (ListenerUtil.mutListener.listen(12346) ? (eventType &lt;= EVENT_TYPE_GET_READY) : (ListenerUtil.mutListener.listen(12345) ? (eventType &gt; EVENT_TYPE_GET_READY) : (ListenerUtil.mutListener.listen(12344) ? (eventType &lt; EVENT_TYPE_GET_READY) : (ListenerUtil.mutListener.listen(12343) ? (eventType != EVENT_TYPE_GET_READY) : (eventType == EVENT_TYPE_GET_READY))))))) {</span>
+<span class="nc bnc" id="L531" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12349)) {</span>
+<span class="nc bnc" id="L532" title="All 2 branches missed.">                        if (!mReady) {</span>
+<span class="nc bnc" id="L533" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12348)) {</span>
+<span class="nc" id="L534">                                mReady = true;</span>
+                            }
+<span class="nc" id="L536">                            return true;</span>
+                        }
+                    }
+                }
+            }
+<span class="nc" id="L541">            return false;</span>
+        }
+
+        /**
+         * Test function used to register a location to detect proximity to
+         */
+        void listenForLocation(Location first, Location secondToLast, Location last) {
+<span class="nc bnc" id="L548" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12392)) {</span>
+<span class="nc" id="L549">                firstCoords = first;</span>
+            }
+<span class="nc bnc" id="L551" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12393)) {</span>
+<span class="nc" id="L552">                secondToLastCoords = secondToLast;</span>
+            }
+<span class="nc bnc" id="L554" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12394)) {</span>
+<span class="nc" id="L555">                lastCoords = last;</span>
+            }
+<span class="nc bnc" id="L557" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12396)) {</span>
+                // Reset distance if the manual listener is reset
+<span class="nc bnc" id="L559" title="All 2 branches missed.">                if (secondToLast == null) {</span>
+<span class="nc bnc" id="L560" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12395)) {</span>
+<span class="nc" id="L561">                        directDistance = -1;</span>
+                    }
+                }
+            }
+<span class="nc bnc" id="L565" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12398)) {</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">                if (last == null) {</span>
+<span class="nc bnc" id="L567" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12397)) {</span>
+<span class="nc" id="L568">                        endDistance = -1;</span>
+                    }
+                }
+            }
+<span class="nc" id="L572">        }</span>
+
+        /**
+         * Sets the &quot;known&quot; distance for the path link
+         */
+        void listenForDistance(float d) {
+<span class="nc bnc" id="L578" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12399)) {</span>
+<span class="nc" id="L579">                mDistance = d;</span>
+            }
+<span class="nc" id="L581">        }</span>
+
+        /**
+         * Fire proximity event to switch path link or go back to service menu
+         * when the final stop of the path link or path is reached
+         * stop_type = 0; -&gt; final stop detection
+         * stop_type = 1; -&gt; second to last stop detection
+         * speed = current speed of the bus;
+         */
+        boolean StopDetector(float distance_d, int stop_type, float speed) {
+            /* TODO: This comment was comented to avoid path link switching when the rider is 20 meters away from the bus stop
+            if ((distance_d &lt; 20) &amp;&amp; (distance_d != -1) &amp;&amp; stop_type == 0) {
+                Log.d(TAG,&quot;About to fire Proximity Event from Last Stop Detected&quot;);
+                this.trigger = false;
+                this.proximityEvent(0, 1);
+                return true;
+
+            } else */
+<span class="nc" id="L599">            float lastToSecDistance = lastCoords.distanceTo(secondToLastCoords);</span>
+<span class="nc bnc" id="L600" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12400)) {</span>
+<span class="nc" id="L601">                Log.d(TAG, &quot;Detecting stop. distance_d=&quot; + distance_d + &quot;. stop_type=&quot; + stop_type + &quot; speed=&quot; + speed);</span>
+            }
+<span class="nc bnc" id="L603" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12527)) {</span>
+<span class="nc bnc" id="L604" title="All 22 branches missed.">                if ((ListenerUtil.mutListener.listen(12405) ? (stop_type &gt;= 1) : (ListenerUtil.mutListener.listen(12404) ? (stop_type &lt;= 1) : (ListenerUtil.mutListener.listen(12403) ? (stop_type &gt; 1) : (ListenerUtil.mutListener.listen(12402) ? (stop_type &lt; 1) : (ListenerUtil.mutListener.listen(12401) ? (stop_type != 1) : (stop_type == 1))))))) {</span>
+<span class="nc bnc" id="L605" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12426)) {</span>
+                        /* Check if the bus is on the second to last stop */
+<span class="nc bnc" id="L607" title="All 458 branches missed.">                        if ((ListenerUtil.mutListener.listen(12423) ? ((ListenerUtil.mutListener.listen(12422) ? ((ListenerUtil.mutListener.listen(12416) ? (((ListenerUtil.mutListener.listen(12410) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12409) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12408) ? (distance_d &lt; 50) : (ListenerUtil.mutListener.listen(12407) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12406) ? (distance_d == 50) : (distance_d &gt; 50))))))) || ((ListenerUtil.mutListener.listen(12415) ? (distance_d &gt;= 100) : (ListenerUtil.mutListener.listen(12414) ? (distance_d &lt;= 100) : (ListenerUtil.mutListener.listen(12413) ? (distance_d &gt; 100) : (ListenerUtil.mutListener.listen(12412) ? (distance_d != 100) : (ListenerUtil.mutListener.listen(12411) ? (distance_d == 100) : (distance_d &lt; 100)))))))) : (((ListenerUtil.mutListener.listen(12410) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12409) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12408) ? (distance_d &lt; 50) : (ListenerUtil.mutListener.listen(12407) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12406) ? (distance_d == 50) : (distance_d &gt; 50))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12415) ? (distance_d &gt;= 100) : (ListenerUtil.mutListener.listen(12414) ? (distance_d &lt;= 100) : (ListenerUtil.mutListener.listen(12413) ? (distance_d &gt; 100) : (ListenerUtil.mutListener.listen(12412) ? (distance_d != 100) : (ListenerUtil.mutListener.listen(12411) ? (distance_d == 100) : (distance_d &lt; 100))))))))) || ((ListenerUtil.mutListener.listen(12421) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12420) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12419) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12418) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12417) ? (distance_d == -1) : (distance_d != -1)))))))) : ((ListenerUtil.mutListener.listen(12416) ? (((ListenerUtil.mutListener.listen(12410) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12409) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12408) ? (distance_d &lt; 50) : (ListenerUtil.mutListener.listen(12407) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12406) ? (distance_d == 50) : (distance_d &gt; 50))))))) || ((ListenerUtil.mutListener.listen(12415) ? (distance_d &gt;= 100) : (ListenerUtil.mutListener.listen(12414) ? (distance_d &lt;= 100) : (ListenerUtil.mutListener.listen(12413) ? (distance_d &gt; 100) : (ListenerUtil.mutListener.listen(12412) ? (distance_d != 100) : (ListenerUtil.mutListener.listen(12411) ? (distance_d == 100) : (distance_d &lt; 100)))))))) : (((ListenerUtil.mutListener.listen(12410) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12409) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12408) ? (distance_d &lt; 50) : (ListenerUtil.mutListener.listen(12407) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12406) ? (distance_d == 50) : (distance_d &gt; 50))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12415) ? (distance_d &gt;= 100) : (ListenerUtil.mutListener.listen(12414) ? (distance_d &lt;= 100) : (ListenerUtil.mutListener.listen(12413) ? (distance_d &gt; 100) : (ListenerUtil.mutListener.listen(12412) ? (distance_d != 100) : (ListenerUtil.mutListener.listen(12411) ? (distance_d == 100) : (distance_d &lt; 100))))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12421) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12420) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12419) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12418) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12417) ? (distance_d == -1) : (distance_d != -1))))))))) || !m100_a) : ((ListenerUtil.mutListener.listen(12422) ? ((ListenerUtil.mutListener.listen(12416) ? (((ListenerUtil.mutListener.listen(12410) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12409) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12408) ? (distance_d &lt; 50) : (ListenerUtil.mutListener.listen(12407) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12406) ? (distance_d == 50) : (distance_d &gt; 50))))))) || ((ListenerUtil.mutListener.listen(12415) ? (distance_d &gt;= 100) : (ListenerUtil.mutListener.listen(12414) ? (distance_d &lt;= 100) : (ListenerUtil.mutListener.listen(12413) ? (distance_d &gt; 100) : (ListenerUtil.mutListener.listen(12412) ? (distance_d != 100) : (ListenerUtil.mutListener.listen(12411) ? (distance_d == 100) : (distance_d &lt; 100)))))))) : (((ListenerUtil.mutListener.listen(12410) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12409) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12408) ? (distance_d &lt; 50) : (ListenerUtil.mutListener.listen(12407) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12406) ? (distance_d == 50) : (distance_d &gt; 50))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12415) ? (distance_d &gt;= 100) : (ListenerUtil.mutListener.listen(12414) ? (distance_d &lt;= 100) : (ListenerUtil.mutListener.listen(12413) ? (distance_d &gt; 100) : (ListenerUtil.mutListener.listen(12412) ? (distance_d != 100) : (ListenerUtil.mutListener.listen(12411) ? (distance_d == 100) : (distance_d &lt; 100))))))))) || ((ListenerUtil.mutListener.listen(12421) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12420) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12419) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12418) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12417) ? (distance_d == -1) : (distance_d != -1)))))))) : ((ListenerUtil.mutListener.listen(12416) ? (((ListenerUtil.mutListener.listen(12410) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12409) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12408) ? (distance_d &lt; 50) : (ListenerUtil.mutListener.listen(12407) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12406) ? (distance_d == 50) : (distance_d &gt; 50))))))) || ((ListenerUtil.mutListener.listen(12415) ? (distance_d &gt;= 100) : (ListenerUtil.mutListener.listen(12414) ? (distance_d &lt;= 100) : (ListenerUtil.mutListener.listen(12413) ? (distance_d &gt; 100) : (ListenerUtil.mutListener.listen(12412) ? (distance_d != 100) : (ListenerUtil.mutListener.listen(12411) ? (distance_d == 100) : (distance_d &lt; 100)))))))) : (((ListenerUtil.mutListener.listen(12410) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12409) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12408) ? (distance_d &lt; 50) : (ListenerUtil.mutListener.listen(12407) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12406) ? (distance_d == 50) : (distance_d &gt; 50))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12415) ? (distance_d &gt;= 100) : (ListenerUtil.mutListener.listen(12414) ? (distance_d &lt;= 100) : (ListenerUtil.mutListener.listen(12413) ? (distance_d &gt; 100) : (ListenerUtil.mutListener.listen(12412) ? (distance_d != 100) : (ListenerUtil.mutListener.listen(12411) ? (distance_d == 100) : (distance_d &lt; 100))))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12421) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12420) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12419) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12418) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12417) ? (distance_d == -1) : (distance_d != -1))))))))) &amp;&amp; !m100_a))) {</span>
+<span class="nc bnc" id="L608" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12424)) {</span>
+<span class="nc" id="L609">                                m100_a = true;</span>
+                            }
+<span class="nc bnc" id="L611" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12425)) {</span>
+<span class="nc" id="L612">                                Log.d(TAG, &quot;Case 1: false&quot;);</span>
+                            }
+<span class="nc" id="L614">                            return false;</span>
+                        }
+                    }
+<span class="nc bnc" id="L617" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12447)) {</span>
+<span class="nc bnc" id="L618" title="All 458 branches missed.">                        if ((ListenerUtil.mutListener.listen(12444) ? ((ListenerUtil.mutListener.listen(12443) ? ((ListenerUtil.mutListener.listen(12437) ? (((ListenerUtil.mutListener.listen(12431) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12430) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12429) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12428) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12427) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12436) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12435) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12434) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12433) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12432) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12431) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12430) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12429) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12428) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12427) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12436) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12435) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12434) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12433) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12432) ? (distance_d == 50) : (distance_d &lt; 50))))))))) || ((ListenerUtil.mutListener.listen(12442) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12441) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12440) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12439) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12438) ? (distance_d == -1) : (distance_d != -1)))))))) : ((ListenerUtil.mutListener.listen(12437) ? (((ListenerUtil.mutListener.listen(12431) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12430) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12429) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12428) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12427) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12436) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12435) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12434) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12433) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12432) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12431) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12430) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12429) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12428) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12427) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12436) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12435) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12434) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12433) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12432) ? (distance_d == 50) : (distance_d &lt; 50))))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12442) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12441) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12440) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12439) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12438) ? (distance_d == -1) : (distance_d != -1))))))))) || !m50_a) : ((ListenerUtil.mutListener.listen(12443) ? ((ListenerUtil.mutListener.listen(12437) ? (((ListenerUtil.mutListener.listen(12431) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12430) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12429) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12428) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12427) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12436) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12435) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12434) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12433) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12432) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12431) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12430) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12429) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12428) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12427) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12436) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12435) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12434) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12433) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12432) ? (distance_d == 50) : (distance_d &lt; 50))))))))) || ((ListenerUtil.mutListener.listen(12442) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12441) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12440) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12439) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12438) ? (distance_d == -1) : (distance_d != -1)))))))) : ((ListenerUtil.mutListener.listen(12437) ? (((ListenerUtil.mutListener.listen(12431) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12430) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12429) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12428) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12427) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12436) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12435) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12434) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12433) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12432) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12431) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12430) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12429) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12428) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12427) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12436) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12435) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12434) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12433) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12432) ? (distance_d == 50) : (distance_d &lt; 50))))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12442) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12441) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12440) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12439) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12438) ? (distance_d == -1) : (distance_d != -1))))))))) &amp;&amp; !m50_a))) {</span>
+<span class="nc bnc" id="L619" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12445)) {</span>
+<span class="nc" id="L620">                                m50_a = true;</span>
+                            }
+<span class="nc bnc" id="L622" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12446)) {</span>
+<span class="nc" id="L623">                                Log.d(TAG, &quot;Case 2: false&quot;);</span>
+                            }
+<span class="nc" id="L625">                            return false;</span>
+                        }
+                    }
+<span class="nc bnc" id="L628" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12475)) {</span>
+<span class="nc bnc" id="L629" title="All 186 branches missed.">                        if ((ListenerUtil.mutListener.listen(12459) ? ((ListenerUtil.mutListener.listen(12458) ? (((ListenerUtil.mutListener.listen(12452) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12451) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12450) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12449) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12448) ? (distance_d == 20) : (distance_d &lt; 20))))))) || ((ListenerUtil.mutListener.listen(12457) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12456) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12455) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12454) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12453) ? (distance_d == -1) : (distance_d != -1)))))))) : (((ListenerUtil.mutListener.listen(12452) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12451) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12450) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12449) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12448) ? (distance_d == 20) : (distance_d &lt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12457) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12456) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12455) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12454) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12453) ? (distance_d == -1) : (distance_d != -1))))))))) || !m20_a) : ((ListenerUtil.mutListener.listen(12458) ? (((ListenerUtil.mutListener.listen(12452) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12451) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12450) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12449) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12448) ? (distance_d == 20) : (distance_d &lt; 20))))))) || ((ListenerUtil.mutListener.listen(12457) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12456) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12455) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12454) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12453) ? (distance_d == -1) : (distance_d != -1)))))))) : (((ListenerUtil.mutListener.listen(12452) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12451) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12450) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12449) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12448) ? (distance_d == 20) : (distance_d &lt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12457) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12456) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12455) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12454) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12453) ? (distance_d == -1) : (distance_d != -1))))))))) &amp;&amp; !m20_a))) {</span>
+<span class="nc bnc" id="L630" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12460)) {</span>
+<span class="nc" id="L631">                                m20_a = true;</span>
+                            }
+<span class="nc bnc" id="L633" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12473)) {</span>
+<span class="nc bnc" id="L634" title="All 90 branches missed.">                                if ((ListenerUtil.mutListener.listen(12471) ? ((ListenerUtil.mutListener.listen(12465) ? (speed &gt;= 15) : (ListenerUtil.mutListener.listen(12464) ? (speed &lt;= 15) : (ListenerUtil.mutListener.listen(12463) ? (speed &lt; 15) : (ListenerUtil.mutListener.listen(12462) ? (speed != 15) : (ListenerUtil.mutListener.listen(12461) ? (speed == 15) : (speed &gt; 15)))))) || (ListenerUtil.mutListener.listen(12470) ? (lastToSecDistance &gt;= 100) : (ListenerUtil.mutListener.listen(12469) ? (lastToSecDistance &lt;= 100) : (ListenerUtil.mutListener.listen(12468) ? (lastToSecDistance &gt; 100) : (ListenerUtil.mutListener.listen(12467) ? (lastToSecDistance != 100) : (ListenerUtil.mutListener.listen(12466) ? (lastToSecDistance == 100) : (lastToSecDistance &lt; 100))))))) : ((ListenerUtil.mutListener.listen(12465) ? (speed &gt;= 15) : (ListenerUtil.mutListener.listen(12464) ? (speed &lt;= 15) : (ListenerUtil.mutListener.listen(12463) ? (speed &lt; 15) : (ListenerUtil.mutListener.listen(12462) ? (speed != 15) : (ListenerUtil.mutListener.listen(12461) ? (speed == 15) : (speed &gt; 15)))))) &amp;&amp; (ListenerUtil.mutListener.listen(12470) ? (lastToSecDistance &gt;= 100) : (ListenerUtil.mutListener.listen(12469) ? (lastToSecDistance &lt;= 100) : (ListenerUtil.mutListener.listen(12468) ? (lastToSecDistance &gt; 100) : (ListenerUtil.mutListener.listen(12467) ? (lastToSecDistance != 100) : (ListenerUtil.mutListener.listen(12466) ? (lastToSecDistance == 100) : (lastToSecDistance &lt; 100))))))))) {</span>
+<span class="nc bnc" id="L635" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12472)) {</span>
+<span class="nc" id="L636">                                        Log.d(TAG, &quot;Case 3: true&quot;);</span>
+                                    }
+<span class="nc" id="L638">                                    return true;</span>
+                                }
+                            }
+<span class="nc bnc" id="L641" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12474)) {</span>
+<span class="nc" id="L642">                                Log.d(TAG, &quot;Case 3: false&quot;);</span>
+                            }
+<span class="nc" id="L644">                            return false;</span>
+                        }
+                    }
+<span class="nc bnc" id="L647" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12503)) {</span>
+<span class="nc bnc" id="L648" title="All 378 branches missed.">                        if ((ListenerUtil.mutListener.listen(12488) ? ((ListenerUtil.mutListener.listen(12487) ? ((ListenerUtil.mutListener.listen(12486) ? (((ListenerUtil.mutListener.listen(12480) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12479) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12478) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12477) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12476) ? (distance_d == 20) : (distance_d &lt; 20))))))) || ((ListenerUtil.mutListener.listen(12485) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12484) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12483) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12482) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12481) ? (distance_d == -1) : (distance_d != -1)))))))) : (((ListenerUtil.mutListener.listen(12480) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12479) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12478) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12477) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12476) ? (distance_d == 20) : (distance_d &lt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12485) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12484) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12483) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12482) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12481) ? (distance_d == -1) : (distance_d != -1))))))))) || m20_a) : ((ListenerUtil.mutListener.listen(12486) ? (((ListenerUtil.mutListener.listen(12480) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12479) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12478) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12477) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12476) ? (distance_d == 20) : (distance_d &lt; 20))))))) || ((ListenerUtil.mutListener.listen(12485) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12484) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12483) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12482) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12481) ? (distance_d == -1) : (distance_d != -1)))))))) : (((ListenerUtil.mutListener.listen(12480) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12479) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12478) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12477) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12476) ? (distance_d == 20) : (distance_d &lt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12485) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12484) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12483) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12482) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12481) ? (distance_d == -1) : (distance_d != -1))))))))) &amp;&amp; m20_a)) || !m20_d) : ((ListenerUtil.mutListener.listen(12487) ? ((ListenerUtil.mutListener.listen(12486) ? (((ListenerUtil.mutListener.listen(12480) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12479) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12478) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12477) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12476) ? (distance_d == 20) : (distance_d &lt; 20))))))) || ((ListenerUtil.mutListener.listen(12485) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12484) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12483) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12482) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12481) ? (distance_d == -1) : (distance_d != -1)))))))) : (((ListenerUtil.mutListener.listen(12480) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12479) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12478) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12477) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12476) ? (distance_d == 20) : (distance_d &lt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12485) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12484) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12483) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12482) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12481) ? (distance_d == -1) : (distance_d != -1))))))))) || m20_a) : ((ListenerUtil.mutListener.listen(12486) ? (((ListenerUtil.mutListener.listen(12480) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12479) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12478) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12477) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12476) ? (distance_d == 20) : (distance_d &lt; 20))))))) || ((ListenerUtil.mutListener.listen(12485) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12484) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12483) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12482) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12481) ? (distance_d == -1) : (distance_d != -1)))))))) : (((ListenerUtil.mutListener.listen(12480) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12479) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12478) ? (distance_d &gt; 20) : (ListenerUtil.mutListener.listen(12477) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12476) ? (distance_d == 20) : (distance_d &lt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12485) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12484) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12483) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12482) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12481) ? (distance_d == -1) : (distance_d != -1))))))))) &amp;&amp; m20_a)) &amp;&amp; !m20_d))) {</span>
+<span class="nc bnc" id="L649" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12489)) {</span>
+<span class="nc" id="L650">                                m20_d = true;</span>
+                            }
+<span class="nc bnc" id="L652" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12502)) {</span>
+<span class="nc bnc" id="L653" title="All 22 branches missed.">                                if ((ListenerUtil.mutListener.listen(12494) ? (speed &gt;= 10) : (ListenerUtil.mutListener.listen(12493) ? (speed &lt;= 10) : (ListenerUtil.mutListener.listen(12492) ? (speed &gt; 10) : (ListenerUtil.mutListener.listen(12491) ? (speed != 10) : (ListenerUtil.mutListener.listen(12490) ? (speed == 10) : (speed &lt; 10))))))) {</span>
+<span class="nc bnc" id="L654" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12501)) {</span>
+<span class="nc" id="L655">                                        Log.d(TAG, &quot;Case 4: false&quot;);</span>
+                                    }
+<span class="nc" id="L657">                                    return false;</span>
+<span class="nc bnc" id="L658" title="All 22 branches missed.">                                } else if ((ListenerUtil.mutListener.listen(12499) ? (speed &gt;= 15) : (ListenerUtil.mutListener.listen(12498) ? (speed &lt;= 15) : (ListenerUtil.mutListener.listen(12497) ? (speed &lt; 15) : (ListenerUtil.mutListener.listen(12496) ? (speed != 15) : (ListenerUtil.mutListener.listen(12495) ? (speed == 15) : (speed &gt; 15))))))) {</span>
+<span class="nc bnc" id="L659" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12500)) {</span>
+<span class="nc" id="L660">                                        Log.d(TAG, &quot;Case 4: true&quot;);</span>
+                                    }
+<span class="nc" id="L662">                                    return true;</span>
+                                }
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L667" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12526)) {</span>
+<span class="nc bnc" id="L668" title="All 938 branches missed.">                        if ((ListenerUtil.mutListener.listen(12523) ? ((ListenerUtil.mutListener.listen(12521) ? ((ListenerUtil.mutListener.listen(12520) ? ((ListenerUtil.mutListener.listen(12514) ? (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50))))))))) || ((ListenerUtil.mutListener.listen(12519) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12518) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12517) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12516) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12515) ? (distance_d == -1) : (distance_d != -1)))))))) : ((ListenerUtil.mutListener.listen(12514) ? (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50))))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12519) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12518) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12517) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12516) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12515) ? (distance_d == -1) : (distance_d != -1))))))))) || !m50_d) : ((ListenerUtil.mutListener.listen(12520) ? ((ListenerUtil.mutListener.listen(12514) ? (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50))))))))) || ((ListenerUtil.mutListener.listen(12519) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12518) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12517) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12516) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12515) ? (distance_d == -1) : (distance_d != -1)))))))) : ((ListenerUtil.mutListener.listen(12514) ? (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50))))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12519) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12518) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12517) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12516) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12515) ? (distance_d == -1) : (distance_d != -1))))))))) &amp;&amp; !m50_d)) || ((ListenerUtil.mutListener.listen(12522) ? (m20_d &amp;&amp; m20_a) : (m20_d || m20_a)))) : ((ListenerUtil.mutListener.listen(12521) ? ((ListenerUtil.mutListener.listen(12520) ? ((ListenerUtil.mutListener.listen(12514) ? (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50))))))))) || ((ListenerUtil.mutListener.listen(12519) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12518) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12517) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12516) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12515) ? (distance_d == -1) : (distance_d != -1)))))))) : ((ListenerUtil.mutListener.listen(12514) ? (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50))))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12519) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12518) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12517) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12516) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12515) ? (distance_d == -1) : (distance_d != -1))))))))) || !m50_d) : ((ListenerUtil.mutListener.listen(12520) ? ((ListenerUtil.mutListener.listen(12514) ? (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50))))))))) || ((ListenerUtil.mutListener.listen(12519) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12518) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12517) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12516) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12515) ? (distance_d == -1) : (distance_d != -1)))))))) : ((ListenerUtil.mutListener.listen(12514) ? (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) || ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50)))))))) : (((ListenerUtil.mutListener.listen(12508) ? (distance_d &gt;= 20) : (ListenerUtil.mutListener.listen(12507) ? (distance_d &lt;= 20) : (ListenerUtil.mutListener.listen(12506) ? (distance_d &lt; 20) : (ListenerUtil.mutListener.listen(12505) ? (distance_d != 20) : (ListenerUtil.mutListener.listen(12504) ? (distance_d == 20) : (distance_d &gt; 20))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12513) ? (distance_d &gt;= 50) : (ListenerUtil.mutListener.listen(12512) ? (distance_d &lt;= 50) : (ListenerUtil.mutListener.listen(12511) ? (distance_d &gt; 50) : (ListenerUtil.mutListener.listen(12510) ? (distance_d != 50) : (ListenerUtil.mutListener.listen(12509) ? (distance_d == 50) : (distance_d &lt; 50))))))))) &amp;&amp; ((ListenerUtil.mutListener.listen(12519) ? (distance_d &gt;= -1) : (ListenerUtil.mutListener.listen(12518) ? (distance_d &lt;= -1) : (ListenerUtil.mutListener.listen(12517) ? (distance_d &gt; -1) : (ListenerUtil.mutListener.listen(12516) ? (distance_d &lt; -1) : (ListenerUtil.mutListener.listen(12515) ? (distance_d == -1) : (distance_d != -1))))))))) &amp;&amp; !m50_d)) &amp;&amp; ((ListenerUtil.mutListener.listen(12522) ? (m20_d &amp;&amp; m20_a) : (m20_d || m20_a)))))) {</span>
+<span class="nc bnc" id="L669" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12524)) {</span>
+<span class="nc" id="L670">                                m50_d = true;</span>
+                            }
+<span class="nc bnc" id="L672" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12525)) {</span>
+<span class="nc" id="L673">                                Log.d(TAG, &quot;Case 5: true&quot;);</span>
+                            }
+<span class="nc" id="L675">                            return true;</span>
+                        }
+                    }
+                }
+            }
+<span class="nc" id="L680">            return false;</span>
+        }
+
+        /**
+         * Checks the proximity to the provided location and returns the event type (EVENT_TYPE_*) that was triggered by the proximity to this location.
+         *
+         * @return the status update (EVENT_TYPE_*) that was triggered by the proximity to this location (if any).
+         */
+        private int checkProximityAll(Location currentLocation) {
+<span class="nc bnc" id="L689" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12548)) {</span>
+<span class="nc bnc" id="L690" title="All 2 branches missed.">                if (!mWaitingForConfirm) {</span>
+<span class="nc bnc" id="L691" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12528)) {</span>
+                        // re-calculate the distance to the final bus stop from the current location
+<span class="nc" id="L693">                        endDistance = lastCoords.distanceTo(currentLocation);</span>
+                    }
+<span class="nc bnc" id="L695" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12529)) {</span>
+                        // re-calculate the distance to second to last bus stop from the current location
+<span class="nc" id="L697">                        directDistance = secondToLastCoords.distanceTo(currentLocation);</span>
+                    }
+<span class="nc bnc" id="L699" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12530)) {</span>
+<span class="nc" id="L700">                        mSectoCurDistance = directDistance;</span>
+                    }
+<span class="nc bnc" id="L702" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12531)) {</span>
+<span class="nc" id="L703">                        Log.d(TAG, &quot;Second to last stop coordinates: &quot; + secondToLastCoords.getLatitude() + &quot;, &quot; + secondToLastCoords.getLongitude());</span>
+                    }
+<span class="nc bnc" id="L705" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12532)) {</span>
+                        // Update distance notification
+<span class="nc" id="L707">                        mNavProvider.updateUi(EVENT_TYPE_UPDATE_DISTANCE);</span>
+                    }
+<span class="nc bnc" id="L709" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12542)) {</span>
+                        // Check if distance from 2nd-to-last stop is less than threshold.
+<span class="nc bnc" id="L711" title="All 22 branches missed.">                        if ((ListenerUtil.mutListener.listen(12537) ? (directDistance &gt;= DISTANCE_THRESHOLD) : (ListenerUtil.mutListener.listen(12536) ? (directDistance &lt;= DISTANCE_THRESHOLD) : (ListenerUtil.mutListener.listen(12535) ? (directDistance &gt; DISTANCE_THRESHOLD) : (ListenerUtil.mutListener.listen(12534) ? (directDistance != DISTANCE_THRESHOLD) : (ListenerUtil.mutListener.listen(12533) ? (directDistance == DISTANCE_THRESHOLD) : (directDistance &lt; DISTANCE_THRESHOLD))))))) {</span>
+<span class="nc bnc" id="L712" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12541)) {</span>
+<span class="nc bnc" id="L713" title="All 2 branches missed.">                                if (proximityEvent(EVENT_TYPE_GET_READY, ALERT_STATE_NONE)) {</span>
+<span class="nc bnc" id="L714" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12538)) {</span>
+<span class="nc" id="L715">                                        mNavProvider.updateUi(EVENT_TYPE_GET_READY);</span>
+                                    }
+<span class="nc bnc" id="L717" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12539)) {</span>
+<span class="nc" id="L718">                                        Log.d(TAG, &quot;-----Get ready!&quot;);</span>
+                                    }
+<span class="nc bnc" id="L720" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12540)) {</span>
+<span class="nc" id="L721">                                        ObaAnalytics.reportUiEvent(mFirebaseAnalytics, Application.get().getString(R.string.analytics_label_destination_reminder), Application.get().getString(R.string.analytics_label_destination_reminder_variant_get_ready));</span>
+                                    }
+                                    // Get ready alert played
+<span class="nc" id="L724">                                    return EVENT_TYPE_GET_READY;</span>
+                                }
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L729" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(12547)) {</span>
+                        // Check if pull the cord notification should be fired.
+<span class="nc bnc" id="L731" title="All 2 branches missed.">                        if (StopDetector(directDistance, 1, currentLocation.getSpeed())) {</span>
+<span class="nc bnc" id="L732" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12546)) {</span>
+<span class="nc bnc" id="L733" title="All 2 branches missed.">                                if (proximityEvent(EVENT_TYPE_PULL_CORD, ALERT_STATE_SHOWN_TO_RIDER)) {</span>
+<span class="nc bnc" id="L734" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12543)) {</span>
+<span class="nc" id="L735">                                        mNavProvider.updateUi(EVENT_TYPE_PULL_CORD);</span>
+                                    }
+<span class="nc bnc" id="L737" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12544)) {</span>
+<span class="nc" id="L738">                                        Log.d(TAG, &quot;-----Get off the bus!&quot;);</span>
+                                    }
+<span class="nc bnc" id="L740" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12545)) {</span>
+<span class="nc" id="L741">                                        ObaAnalytics.reportUiEvent(mFirebaseAnalytics, Application.get().getString(R.string.analytics_label_destination_reminder), Application.get().getString(R.string.analytics_label_destination_reminder_variant_exit_at_next_stop));</span>
+                                    }
+                                    // Get off bus alert played
+<span class="nc" id="L744">                                    return EVENT_TYPE_PULL_CORD;</span>
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // No alerts played.
+<span class="nc" id="L752">            return EVENT_TYPE_NO_EVENT;</span>
+        }
+
+        public void resetVariablesAfterPathLinkSwitching() {
+<span class="nc bnc" id="L756" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12549)) {</span>
+<span class="nc" id="L757">                Log.d(TAG, &quot;Reseting variables after path link switching!&quot;);</span>
+            }
+<span class="nc bnc" id="L759" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12550)) {</span>
+<span class="nc" id="L760">                m100_a = false;</span>
+            }
+<span class="nc bnc" id="L762" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12551)) {</span>
+<span class="nc" id="L763">                m50_a = false;</span>
+            }
+<span class="nc bnc" id="L765" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12552)) {</span>
+<span class="nc" id="L766">                m20_a = false;</span>
+            }
+<span class="nc bnc" id="L768" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12553)) {</span>
+<span class="nc" id="L769">                m20_d = false;</span>
+            }
+<span class="nc bnc" id="L771" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12554)) {</span>
+<span class="nc" id="L772">                m50_d = false;</span>
+            }
+<span class="nc bnc" id="L774" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12555)) {</span>
+<span class="nc" id="L775">                m100_d = false;</span>
+            }
+<span class="nc" id="L777">        }</span>
+
+        public void setOnlyTrigger(boolean value) {
+<span class="nc bnc" id="L780" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12556)) {</span>
+<span class="nc" id="L781">                mTrigger = value;</span>
+            }
+<span class="nc" id="L783">        }</span>
+
+        public void setReady(boolean ready) {
+<span class="nc bnc" id="L786" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(12557)) {</span>
+<span class="nc" id="L787">                mReady = ready;</span>
+            }
+<span class="nc" id="L789">        }</span>
+    }
+
+    public void setWaitingForConfirm(boolean waitingForConfirm) {
+<span class="nc bnc" id="L793" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12558)) {</span>
+<span class="nc" id="L794">            mWaitingForConfirm = waitingForConfirm;</span>
+        }
+<span class="nc" id="L796">    }</span>
+
+    @Override
+    public void onInit(int status) {
+<span class="nc bnc" id="L800" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12561)) {</span>
+<span class="nc bnc" id="L801" title="All 2 branches missed.">            if (status == TextToSpeech.SUCCESS) {</span>
+<span class="nc bnc" id="L802" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12559)) {</span>
+<span class="nc" id="L803">                    mTTS.setLanguage(Locale.getDefault());</span>
+                }
+<span class="nc bnc" id="L805" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12560)) {</span>
+<span class="nc" id="L806">                    mTTS.setSpeechRate(0.75f);</span>
+                }
+            }
+        }
+<span class="nc" id="L810">    }</span>
+
+    /**
+     * Gets the notification to be used for starting a hosting service for the NavigationServiceProvider in the foreground
+     *
+     * @return the notification to be used for starting a hosting service for the NavigationServiceProvider in the foreground
+     */
+    public Notification getForegroundStartingNotification() {
+<span class="nc" id="L818">        return updateUi(EVENT_TYPE_INITIAL_STARTUP);</span>
+    }
+
+    /**
+     * Updates the user interface (e.g., distance display, speech) based on navigation events
+     * TODO - This method should be moved to a NavigationServiceListener class based on a listener interface
+     *
+     * @param eventType EVENT_TYPE_* variable defining the eventType update to act upon
+     * @return the notification to use for the foreground service if eventType == EVENT_TYPE_INITIAL_STARTUP, otherwise returns null
+     */
+    private Notification updateUi(int eventType) {
+<span class="nc" id="L829">        Application app = Application.get();</span>
+<span class="nc" id="L830">        TripDetailsActivity.Builder bldr = new TripDetailsActivity.Builder(app.getApplicationContext(), mTripId);</span>
+<span class="nc bnc" id="L831" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12562)) {</span>
+<span class="nc" id="L832">            bldr = bldr.setDestinationId(mStopId);</span>
+        }
+<span class="nc" id="L834">        Intent intent = bldr.getIntent();</span>
+<span class="nc bnc" id="L835" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12563)) {</span>
+<span class="nc" id="L836">            intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);</span>
+        }
+        int flags;
+<span class="nc bnc" id="L839" title="All 22 branches missed.">        if ((ListenerUtil.mutListener.listen(12568) ? (android.os.Build.VERSION.SDK_INT &lt;= android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12567) ? (android.os.Build.VERSION.SDK_INT &gt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12566) ? (android.os.Build.VERSION.SDK_INT &lt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12565) ? (android.os.Build.VERSION.SDK_INT != android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12564) ? (android.os.Build.VERSION.SDK_INT == android.os.Build.VERSION_CODES.S) : (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.S))))))) {</span>
+<span class="nc" id="L840">            flags = FLAG_UPDATE_CURRENT | FLAG_MUTABLE;</span>
+        } else {
+<span class="nc" id="L842">            flags = FLAG_UPDATE_CURRENT;</span>
+        }
+<span class="nc" id="L844">        PendingIntent pIntent = getActivity(app.getApplicationContext(), 1, intent, flags);</span>
+        // Create deletion intent to stop repeated voice comands.
+<span class="nc" id="L846">        Intent receiverIntent = new Intent(app.getApplicationContext(), NavigationReceiver.class);</span>
+        int cancelFlags;
+<span class="nc bnc" id="L848" title="All 22 branches missed.">        if ((ListenerUtil.mutListener.listen(12573) ? (android.os.Build.VERSION.SDK_INT &lt;= android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12572) ? (android.os.Build.VERSION.SDK_INT &gt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12571) ? (android.os.Build.VERSION.SDK_INT &lt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12570) ? (android.os.Build.VERSION.SDK_INT != android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(12569) ? (android.os.Build.VERSION.SDK_INT == android.os.Build.VERSION_CODES.S) : (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.S))))))) {</span>
+<span class="nc" id="L849">            cancelFlags = FLAG_MUTABLE;</span>
+        } else {
+<span class="nc" id="L851">            cancelFlags = 0;</span>
+        }
+<span class="nc" id="L853">        NotificationCompat.Builder mBuilder = new NotificationCompat.Builder(Application.get().getApplicationContext(), Application.CHANNEL_DESTINATION_ALERT_ID).setSmallIcon(R.drawable.ic_content_flag).setContentTitle(Application.get().getResources().getString(R.string.destination_reminder_title)).setContentIntent(pIntent);</span>
+<span class="nc bnc" id="L854" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12701)) {</span>
+<span class="nc bnc" id="L855" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(12578) ? (eventType &gt;= EVENT_TYPE_INITIAL_STARTUP) : (ListenerUtil.mutListener.listen(12577) ? (eventType &lt;= EVENT_TYPE_INITIAL_STARTUP) : (ListenerUtil.mutListener.listen(12576) ? (eventType &gt; EVENT_TYPE_INITIAL_STARTUP) : (ListenerUtil.mutListener.listen(12575) ? (eventType &lt; EVENT_TYPE_INITIAL_STARTUP) : (ListenerUtil.mutListener.listen(12574) ? (eventType != EVENT_TYPE_INITIAL_STARTUP) : (eventType == EVENT_TYPE_INITIAL_STARTUP))))))) {</span>
+<span class="nc bnc" id="L856" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12697)) {</span>
+                    // Build initial notification used to start the service in the foreground
+<span class="nc" id="L858">                    receiverIntent.putExtra(NavigationReceiver.ACTION_NUM, NavigationReceiver.CANCEL_TRIP);</span>
+                }
+<span class="nc bnc" id="L860" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12698)) {</span>
+<span class="nc" id="L861">                    receiverIntent.putExtra(NavigationReceiver.NOTIFICATION_ID, NOTIFICATION_ID);</span>
+                }
+<span class="nc" id="L863">                PendingIntent pCancelIntent = getBroadcast(app.getApplicationContext(), 0, receiverIntent, cancelFlags);</span>
+<span class="nc bnc" id="L864" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12699)) {</span>
+<span class="nc" id="L865">                    mBuilder.addAction(R.drawable.ic_navigation_close, app.getString(R.string.destination_reminder_cancel_trip), pCancelIntent);</span>
+                }
+<span class="nc bnc" id="L867" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12700)) {</span>
+<span class="nc" id="L868">                    mBuilder.setOngoing(true);</span>
+                }
+<span class="nc" id="L870">                return mBuilder.build();</span>
+<span class="nc bnc" id="L871" title="All 22 branches missed.">            } else if ((ListenerUtil.mutListener.listen(12583) ? (eventType &gt;= EVENT_TYPE_UPDATE_DISTANCE) : (ListenerUtil.mutListener.listen(12582) ? (eventType &lt;= EVENT_TYPE_UPDATE_DISTANCE) : (ListenerUtil.mutListener.listen(12581) ? (eventType &gt; EVENT_TYPE_UPDATE_DISTANCE) : (ListenerUtil.mutListener.listen(12580) ? (eventType &lt; EVENT_TYPE_UPDATE_DISTANCE) : (ListenerUtil.mutListener.listen(12579) ? (eventType != EVENT_TYPE_UPDATE_DISTANCE) : (eventType == EVENT_TYPE_UPDATE_DISTANCE))))))) {</span>
+                // Retrieve preferred unit and calculate distance.
+<span class="nc" id="L873">                String IMPERIAL = app.getString(R.string.preferences_preferred_units_option_imperial);</span>
+<span class="nc" id="L874">                String METRIC = app.getString(R.string.preferences_preferred_units_option_metric);</span>
+<span class="nc" id="L875">                String AUTOMATIC = app.getString(R.string.preferences_preferred_units_option_automatic);</span>
+<span class="nc" id="L876">                String preferredUnits = mSettings.getString(app.getString(R.string.preference_key_preferred_units), AUTOMATIC);</span>
+<span class="nc" id="L877">                double distance = mProxCalculator.endDistance;</span>
+                // Get miles.
+<span class="nc bnc" id="L879" title="All 8 branches missed.">                double miles = (ListenerUtil.mutListener.listen(12683) ? (distance % RegionUtils.METERS_TO_MILES) : (ListenerUtil.mutListener.listen(12682) ? (distance / RegionUtils.METERS_TO_MILES) : (ListenerUtil.mutListener.listen(12681) ? (distance - RegionUtils.METERS_TO_MILES) : (ListenerUtil.mutListener.listen(12680) ? (distance + RegionUtils.METERS_TO_MILES) : (distance * RegionUtils.METERS_TO_MILES)))));</span>
+<span class="nc bnc" id="L880" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12684)) {</span>
+                    // Get kilometers.
+<span class="nc" id="L882">                    distance /= 1000;</span>
+                }
+<span class="nc" id="L884">                DecimalFormat fmt = new DecimalFormat(&quot;0.0&quot;);</span>
+<span class="nc" id="L885">                Locale mLocale = Locale.getDefault();</span>
+<span class="nc bnc" id="L886" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12691)) {</span>
+<span class="nc bnc" id="L887" title="All 2 branches missed.">                    if (preferredUnits.equalsIgnoreCase(AUTOMATIC)) {</span>
+<span class="nc bnc" id="L888" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12687)) {</span>
+<span class="nc" id="L889">                            Log.d(TAG, &quot;Setting units automatically&quot;);</span>
+                        }
+<span class="nc bnc" id="L891" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12690)) {</span>
+                            // TODO - Method of guessing metric/imperial can definitely be improved
+<span class="nc bnc" id="L893" title="All 2 branches missed.">                            if (mLocale.getISO3Country().equalsIgnoreCase(Locale.US.getISO3Country())) {</span>
+<span class="nc bnc" id="L894" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(12689)) {</span>
+<span class="nc" id="L895">                                    mBuilder.setContentText(Application.get().getResources().getQuantityString(R.plurals.distance_miles, (int) miles, fmt.format(miles)));</span>
+                                }
+                            } else {
+<span class="nc bnc" id="L898" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(12688)) {</span>
+<span class="nc" id="L899">                                    mBuilder.setContentText(Application.get().getResources().getQuantityString(R.plurals.distance_kilometers, (int) distance, fmt.format(distance)));</span>
+                                }
+                            }
+                        }
+<span class="nc bnc" id="L903" title="All 2 branches missed.">                    } else if (preferredUnits.equalsIgnoreCase(IMPERIAL)) {</span>
+<span class="nc bnc" id="L904" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12686)) {</span>
+<span class="nc" id="L905">                            mBuilder.setContentText(Application.get().getResources().getQuantityString(R.plurals.distance_miles, (int) miles, fmt.format(miles)));</span>
+                        }
+                    } else {
+<span class="nc bnc" id="L908" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(12685)) {</span>
+<span class="nc" id="L909">                            mBuilder.setContentText(Application.get().getResources().getQuantityString(R.plurals.distance_kilometers, (int) distance, fmt.format(distance)));</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L913" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12692)) {</span>
+<span class="nc" id="L914">                    receiverIntent.putExtra(NavigationReceiver.ACTION_NUM, NavigationReceiver.CANCEL_TRIP);</span>
+                }
+<span class="nc bnc" id="L916" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12693)) {</span>
+<span class="nc" id="L917">                    receiverIntent.putExtra(NavigationReceiver.NOTIFICATION_ID, NOTIFICATION_ID);</span>
+                }
+<span class="nc" id="L919">                PendingIntent pCancelIntent = getBroadcast(app.getApplicationContext(), 0, receiverIntent, cancelFlags);</span>
+<span class="nc bnc" id="L920" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12694)) {</span>
+<span class="nc" id="L921">                    mBuilder.addAction(R.drawable.ic_navigation_close, app.getString(R.string.destination_reminder_cancel_trip), pCancelIntent);</span>
+                }
+<span class="nc bnc" id="L923" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12695)) {</span>
+<span class="nc" id="L924">                    mBuilder.setOngoing(true);</span>
+                }
+<span class="nc" id="L926">                NotificationManager mNotificationManager = (NotificationManager) Application.get().getSystemService(Context.NOTIFICATION_SERVICE);</span>
+<span class="nc bnc" id="L927" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12696)) {</span>
+<span class="nc" id="L928">                    mNotificationManager.notify(NOTIFICATION_ID, mBuilder.build());</span>
+                }
+<span class="nc bnc" id="L930" title="All 22 branches missed.">            } else if ((ListenerUtil.mutListener.listen(12588) ? (eventType &gt;= EVENT_TYPE_GET_READY) : (ListenerUtil.mutListener.listen(12587) ? (eventType &lt;= EVENT_TYPE_GET_READY) : (ListenerUtil.mutListener.listen(12586) ? (eventType &gt; EVENT_TYPE_GET_READY) : (ListenerUtil.mutListener.listen(12585) ? (eventType &lt; EVENT_TYPE_GET_READY) : (ListenerUtil.mutListener.listen(12584) ? (eventType != EVENT_TYPE_GET_READY) : (eventType == EVENT_TYPE_GET_READY))))))) {</span>
+<span class="nc bnc" id="L931" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12642)) {</span>
+                    // Get ready to pack
+<span class="nc" id="L933">                    mGetReady = true;</span>
+                }
+<span class="nc bnc" id="L935" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12647)) {</span>
+<span class="nc bnc" id="L936" title="All 8 branches missed.">                    receiverIntent.putExtra(NavigationReceiver.NOTIFICATION_ID, (ListenerUtil.mutListener.listen(12646) ? (NOTIFICATION_ID % 1) : (ListenerUtil.mutListener.listen(12645) ? (NOTIFICATION_ID / 1) : (ListenerUtil.mutListener.listen(12644) ? (NOTIFICATION_ID * 1) : (ListenerUtil.mutListener.listen(12643) ? (NOTIFICATION_ID - 1) : (NOTIFICATION_ID + 1))))));</span>
+                }
+<span class="nc bnc" id="L938" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12648)) {</span>
+<span class="nc" id="L939">                    receiverIntent.putExtra(NavigationReceiver.ACTION_NUM, NavigationReceiver.DISMISS_NOTIFICATION);</span>
+                }
+<span class="nc" id="L941">                PendingIntent pDelIntent = getBroadcast(app.getApplicationContext(), 0, receiverIntent, cancelFlags);</span>
+<span class="nc" id="L942">                String message = Application.get().getString(R.string.destination_voice_get_ready);</span>
+<span class="nc bnc" id="L943" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12671)) {</span>
+                    {
+<span class="nc" id="L945">                        long _loopCounter173 = 0;</span>
+<span class="nc bnc" id="L946" title="All 22 branches missed.">                        for (int i = 0; (ListenerUtil.mutListener.listen(12670) ? (i &gt;= NUM_GET_READY_REPEAT) : (ListenerUtil.mutListener.listen(12669) ? (i &lt;= NUM_GET_READY_REPEAT) : (ListenerUtil.mutListener.listen(12668) ? (i &gt; NUM_GET_READY_REPEAT) : (ListenerUtil.mutListener.listen(12667) ? (i != NUM_GET_READY_REPEAT) : (ListenerUtil.mutListener.listen(12666) ? (i == NUM_GET_READY_REPEAT) : (i &lt; NUM_GET_READY_REPEAT)))))); i++) {</span>
+<span class="nc" id="L947">                            ListenerUtil.loopListener.listen(&quot;_loopCounter173&quot;, ++_loopCounter173);</span>
+<span class="nc bnc" id="L948" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12654)) {</span>
+<span class="nc bnc" id="L949" title="All 22 branches missed.">                                speak(message, (ListenerUtil.mutListener.listen(12653) ? (i &gt;= 0) : (ListenerUtil.mutListener.listen(12652) ? (i &lt;= 0) : (ListenerUtil.mutListener.listen(12651) ? (i &gt; 0) : (ListenerUtil.mutListener.listen(12650) ? (i &lt; 0) : (ListenerUtil.mutListener.listen(12649) ? (i != 0) : (i == 0)))))) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD);</span>
+                            }
+<span class="nc bnc" id="L951" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12665)) {</span>
+<span class="nc bnc" id="L952" title="All 70 branches missed.">                                if ((ListenerUtil.mutListener.listen(12663) ? (i &gt;= (ListenerUtil.mutListener.listen(12658) ? (NUM_GET_READY_REPEAT % 1) : (ListenerUtil.mutListener.listen(12657) ? (NUM_GET_READY_REPEAT / 1) : (ListenerUtil.mutListener.listen(12656) ? (NUM_GET_READY_REPEAT * 1) : (ListenerUtil.mutListener.listen(12655) ? (NUM_GET_READY_REPEAT + 1) : (NUM_GET_READY_REPEAT - 1)))))) : (ListenerUtil.mutListener.listen(12662) ? (i &lt;= (ListenerUtil.mutListener.listen(12658) ? (NUM_GET_READY_REPEAT % 1) : (ListenerUtil.mutListener.listen(12657) ? (NUM_GET_READY_REPEAT / 1) : (ListenerUtil.mutListener.listen(12656) ? (NUM_GET_READY_REPEAT * 1) : (ListenerUtil.mutListener.listen(12655) ? (NUM_GET_READY_REPEAT + 1) : (NUM_GET_READY_REPEAT - 1)))))) : (ListenerUtil.mutListener.listen(12661) ? (i &gt; (ListenerUtil.mutListener.listen(12658) ? (NUM_GET_READY_REPEAT % 1) : (ListenerUtil.mutListener.listen(12657) ? (NUM_GET_READY_REPEAT / 1) : (ListenerUtil.mutListener.listen(12656) ? (NUM_GET_READY_REPEAT * 1) : (ListenerUtil.mutListener.listen(12655) ? (NUM_GET_READY_REPEAT + 1) : (NUM_GET_READY_REPEAT - 1)))))) : (ListenerUtil.mutListener.listen(12660) ? (i != (ListenerUtil.mutListener.listen(12658) ? (NUM_GET_READY_REPEAT % 1) : (ListenerUtil.mutListener.listen(12657) ? (NUM_GET_READY_REPEAT / 1) : (ListenerUtil.mutListener.listen(12656) ? (NUM_GET_READY_REPEAT * 1) : (ListenerUtil.mutListener.listen(12655) ? (NUM_GET_READY_REPEAT + 1) : (NUM_GET_READY_REPEAT - 1)))))) : (ListenerUtil.mutListener.listen(12659) ? (i == (ListenerUtil.mutListener.listen(12658) ? (NUM_GET_READY_REPEAT % 1) : (ListenerUtil.mutListener.listen(12657) ? (NUM_GET_READY_REPEAT / 1) : (ListenerUtil.mutListener.listen(12656) ? (NUM_GET_READY_REPEAT * 1) : (ListenerUtil.mutListener.listen(12655) ? (NUM_GET_READY_REPEAT + 1) : (NUM_GET_READY_REPEAT - 1)))))) : (i &lt; (ListenerUtil.mutListener.listen(12658) ? (NUM_GET_READY_REPEAT % 1) : (ListenerUtil.mutListener.listen(12657) ? (NUM_GET_READY_REPEAT / 1) : (ListenerUtil.mutListener.listen(12656) ? (NUM_GET_READY_REPEAT * 1) : (ListenerUtil.mutListener.listen(12655) ? (NUM_GET_READY_REPEAT + 1) : (NUM_GET_READY_REPEAT - 1)))))))))))) {</span>
+<span class="nc bnc" id="L953" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12664)) {</span>
+<span class="nc" id="L954">                                        silence(500, TextToSpeech.QUEUE_ADD);</span>
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+<span class="nc bnc" id="L961" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12672)) {</span>
+<span class="nc" id="L962">                    mBuilder.setContentText(message);</span>
+                }
+<span class="nc bnc" id="L964" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12673)) {</span>
+<span class="nc" id="L965">                    mBuilder.setVibrate(VIBRATION_PATTERN);</span>
+                }
+<span class="nc bnc" id="L967" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12674)) {</span>
+<span class="nc" id="L968">                    mBuilder.setDeleteIntent(pDelIntent);</span>
+                }
+<span class="nc" id="L970">                NotificationManager mNotificationManager = (NotificationManager) Application.get().getSystemService(Context.NOTIFICATION_SERVICE);</span>
+<span class="nc bnc" id="L971" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12679)) {</span>
+<span class="nc bnc" id="L972" title="All 8 branches missed.">                    mNotificationManager.notify((ListenerUtil.mutListener.listen(12678) ? (NOTIFICATION_ID % 1) : (ListenerUtil.mutListener.listen(12677) ? (NOTIFICATION_ID / 1) : (ListenerUtil.mutListener.listen(12676) ? (NOTIFICATION_ID * 1) : (ListenerUtil.mutListener.listen(12675) ? (NOTIFICATION_ID - 1) : (NOTIFICATION_ID + 1))))), mBuilder.build());</span>
+                }
+<span class="nc bnc" id="L974" title="All 22 branches missed.">            } else if ((ListenerUtil.mutListener.listen(12593) ? (eventType &gt;= EVENT_TYPE_PULL_CORD) : (ListenerUtil.mutListener.listen(12592) ? (eventType &lt;= EVENT_TYPE_PULL_CORD) : (ListenerUtil.mutListener.listen(12591) ? (eventType &gt; EVENT_TYPE_PULL_CORD) : (ListenerUtil.mutListener.listen(12590) ? (eventType &lt; EVENT_TYPE_PULL_CORD) : (ListenerUtil.mutListener.listen(12589) ? (eventType != EVENT_TYPE_PULL_CORD) : (eventType == EVENT_TYPE_PULL_CORD))))))) {</span>
+<span class="nc bnc" id="L975" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12594)) {</span>
+                    // Pull the cord
+<span class="nc" id="L977">                    mFinished = true;</span>
+                }
+<span class="nc bnc" id="L979" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12595)) {</span>
+<span class="nc" id="L980">                    receiverIntent.putExtra(NavigationReceiver.ACTION_NUM, NavigationReceiver.DISMISS_NOTIFICATION);</span>
+                }
+<span class="nc bnc" id="L982" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12600)) {</span>
+<span class="nc bnc" id="L983" title="All 8 branches missed.">                    receiverIntent.putExtra(NavigationReceiver.NOTIFICATION_ID, (ListenerUtil.mutListener.listen(12599) ? (NOTIFICATION_ID % 2) : (ListenerUtil.mutListener.listen(12598) ? (NOTIFICATION_ID / 2) : (ListenerUtil.mutListener.listen(12597) ? (NOTIFICATION_ID * 2) : (ListenerUtil.mutListener.listen(12596) ? (NOTIFICATION_ID - 2) : (NOTIFICATION_ID + 2))))));</span>
+                }
+<span class="nc" id="L985">                PendingIntent pDelIntent = getBroadcast(app.getApplicationContext(), 0, receiverIntent, cancelFlags);</span>
+<span class="nc" id="L986">                String message = Application.get().getString(R.string.destination_voice_request_stop);</span>
+<span class="nc bnc" id="L987" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12623)) {</span>
+                    {
+<span class="nc" id="L989">                        long _loopCounter172 = 0;</span>
+                        // TODO: Slow down voice commands, add count as property.
+<span class="nc bnc" id="L991" title="All 22 branches missed.">                        for (int i = 0; (ListenerUtil.mutListener.listen(12622) ? (i &gt;= NUM_PULL_CORD_REPEAT) : (ListenerUtil.mutListener.listen(12621) ? (i &lt;= NUM_PULL_CORD_REPEAT) : (ListenerUtil.mutListener.listen(12620) ? (i &gt; NUM_PULL_CORD_REPEAT) : (ListenerUtil.mutListener.listen(12619) ? (i != NUM_PULL_CORD_REPEAT) : (ListenerUtil.mutListener.listen(12618) ? (i == NUM_PULL_CORD_REPEAT) : (i &lt; NUM_PULL_CORD_REPEAT)))))); i++) {</span>
+<span class="nc" id="L992">                            ListenerUtil.loopListener.listen(&quot;_loopCounter172&quot;, ++_loopCounter172);</span>
+<span class="nc bnc" id="L993" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12606)) {</span>
+<span class="nc bnc" id="L994" title="All 22 branches missed.">                                speak(message, (ListenerUtil.mutListener.listen(12605) ? (i &gt;= 0) : (ListenerUtil.mutListener.listen(12604) ? (i &lt;= 0) : (ListenerUtil.mutListener.listen(12603) ? (i &gt; 0) : (ListenerUtil.mutListener.listen(12602) ? (i &lt; 0) : (ListenerUtil.mutListener.listen(12601) ? (i != 0) : (i == 0)))))) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD);</span>
+                            }
+<span class="nc bnc" id="L996" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(12617)) {</span>
+<span class="nc bnc" id="L997" title="All 70 branches missed.">                                if ((ListenerUtil.mutListener.listen(12615) ? (i &gt;= (ListenerUtil.mutListener.listen(12610) ? (NUM_PULL_CORD_REPEAT % 1) : (ListenerUtil.mutListener.listen(12609) ? (NUM_PULL_CORD_REPEAT / 1) : (ListenerUtil.mutListener.listen(12608) ? (NUM_PULL_CORD_REPEAT * 1) : (ListenerUtil.mutListener.listen(12607) ? (NUM_PULL_CORD_REPEAT + 1) : (NUM_PULL_CORD_REPEAT - 1)))))) : (ListenerUtil.mutListener.listen(12614) ? (i &lt;= (ListenerUtil.mutListener.listen(12610) ? (NUM_PULL_CORD_REPEAT % 1) : (ListenerUtil.mutListener.listen(12609) ? (NUM_PULL_CORD_REPEAT / 1) : (ListenerUtil.mutListener.listen(12608) ? (NUM_PULL_CORD_REPEAT * 1) : (ListenerUtil.mutListener.listen(12607) ? (NUM_PULL_CORD_REPEAT + 1) : (NUM_PULL_CORD_REPEAT - 1)))))) : (ListenerUtil.mutListener.listen(12613) ? (i &gt; (ListenerUtil.mutListener.listen(12610) ? (NUM_PULL_CORD_REPEAT % 1) : (ListenerUtil.mutListener.listen(12609) ? (NUM_PULL_CORD_REPEAT / 1) : (ListenerUtil.mutListener.listen(12608) ? (NUM_PULL_CORD_REPEAT * 1) : (ListenerUtil.mutListener.listen(12607) ? (NUM_PULL_CORD_REPEAT + 1) : (NUM_PULL_CORD_REPEAT - 1)))))) : (ListenerUtil.mutListener.listen(12612) ? (i != (ListenerUtil.mutListener.listen(12610) ? (NUM_PULL_CORD_REPEAT % 1) : (ListenerUtil.mutListener.listen(12609) ? (NUM_PULL_CORD_REPEAT / 1) : (ListenerUtil.mutListener.listen(12608) ? (NUM_PULL_CORD_REPEAT * 1) : (ListenerUtil.mutListener.listen(12607) ? (NUM_PULL_CORD_REPEAT + 1) : (NUM_PULL_CORD_REPEAT - 1)))))) : (ListenerUtil.mutListener.listen(12611) ? (i == (ListenerUtil.mutListener.listen(12610) ? (NUM_PULL_CORD_REPEAT % 1) : (ListenerUtil.mutListener.listen(12609) ? (NUM_PULL_CORD_REPEAT / 1) : (ListenerUtil.mutListener.listen(12608) ? (NUM_PULL_CORD_REPEAT * 1) : (ListenerUtil.mutListener.listen(12607) ? (NUM_PULL_CORD_REPEAT + 1) : (NUM_PULL_CORD_REPEAT - 1)))))) : (i &lt; (ListenerUtil.mutListener.listen(12610) ? (NUM_PULL_CORD_REPEAT % 1) : (ListenerUtil.mutListener.listen(12609) ? (NUM_PULL_CORD_REPEAT / 1) : (ListenerUtil.mutListener.listen(12608) ? (NUM_PULL_CORD_REPEAT * 1) : (ListenerUtil.mutListener.listen(12607) ? (NUM_PULL_CORD_REPEAT + 1) : (NUM_PULL_CORD_REPEAT - 1)))))))))))) {</span>
+<span class="nc bnc" id="L998" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(12616)) {</span>
+<span class="nc" id="L999">                                        silence(500, TextToSpeech.QUEUE_ADD);</span>
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+<span class="nc bnc" id="L1006" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12624)) {</span>
+<span class="nc" id="L1007">                    mBuilder.setContentText(message);</span>
+                }
+<span class="nc bnc" id="L1009" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12625)) {</span>
+<span class="nc" id="L1010">                    mBuilder.setVibrate(VIBRATION_PATTERN);</span>
+                }
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12626)) {</span>
+<span class="nc" id="L1013">                    mBuilder.setDeleteIntent(pDelIntent);</span>
+                }
+<span class="nc" id="L1015">                NotificationManager mNotificationManager = (NotificationManager) Application.get().getSystemService(Context.NOTIFICATION_SERVICE);</span>
+<span class="nc bnc" id="L1016" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12631)) {</span>
+<span class="nc bnc" id="L1017" title="All 8 branches missed.">                    mNotificationManager.cancel((ListenerUtil.mutListener.listen(12630) ? (NOTIFICATION_ID % 1) : (ListenerUtil.mutListener.listen(12629) ? (NOTIFICATION_ID / 1) : (ListenerUtil.mutListener.listen(12628) ? (NOTIFICATION_ID * 1) : (ListenerUtil.mutListener.listen(12627) ? (NOTIFICATION_ID - 1) : (NOTIFICATION_ID + 1))))));</span>
+                }
+<span class="nc bnc" id="L1019" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12636)) {</span>
+<span class="nc bnc" id="L1020" title="All 8 branches missed.">                    mNotificationManager.notify((ListenerUtil.mutListener.listen(12635) ? (NOTIFICATION_ID % 2) : (ListenerUtil.mutListener.listen(12634) ? (NOTIFICATION_ID / 2) : (ListenerUtil.mutListener.listen(12633) ? (NOTIFICATION_ID * 2) : (ListenerUtil.mutListener.listen(12632) ? (NOTIFICATION_ID - 2) : (NOTIFICATION_ID + 2))))), mBuilder.build());</span>
+                }
+<span class="nc bnc" id="L1022" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12637)) {</span>
+<span class="nc" id="L1023">                    mBuilder = new NotificationCompat.Builder(Application.get().getApplicationContext(), Application.CHANNEL_DESTINATION_ALERT_ID).setSmallIcon(R.drawable.ic_content_flag).setContentTitle(Application.get().getResources().getString(R.string.destination_reminder_title)).setContentIntent(pIntent).setAutoCancel(true);</span>
+                }
+<span class="nc bnc" id="L1025" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12638)) {</span>
+<span class="nc" id="L1026">                    message = Application.get().getString(R.string.destination_voice_arriving_destination);</span>
+                }
+<span class="nc bnc" id="L1028" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12639)) {</span>
+<span class="nc" id="L1029">                    mBuilder.setContentText(message);</span>
+                }
+<span class="nc bnc" id="L1031" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12640)) {</span>
+<span class="nc" id="L1032">                    mBuilder.setOngoing(false);</span>
+                }
+<span class="nc bnc" id="L1034" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12641)) {</span>
+<span class="nc" id="L1035">                    mNotificationManager.notify(NOTIFICATION_ID, mBuilder.build());</span>
+                }
+            }
+        }
+        // If we reach this point then the event_type isn't initial startup
+<span class="nc" id="L1040">        return null;</span>
+    }
+
+    /**
+     * Speak specified message out loud using TTS
+     *
+     * @param message   Message to be spoken.
+     * @param queueFlag Flag to use when adding message to queue.
+     */
+    private void speak(String message, int queueFlag) {
+<span class="nc bnc" id="L1050" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12709)) {</span>
+<span class="nc bnc" id="L1051" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(12706) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.LOLLIPOP) : (ListenerUtil.mutListener.listen(12705) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.LOLLIPOP) : (ListenerUtil.mutListener.listen(12704) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.LOLLIPOP) : (ListenerUtil.mutListener.listen(12703) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.LOLLIPOP) : (ListenerUtil.mutListener.listen(12702) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.LOLLIPOP) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.LOLLIPOP))))))) {</span>
+<span class="nc bnc" id="L1052" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12708)) {</span>
+<span class="nc" id="L1053">                    mTTS.speak(message, queueFlag, null, &quot;TRIPMESSAGE&quot;);</span>
+                }
+            } else {
+<span class="nc bnc" id="L1056" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12707)) {</span>
+<span class="nc" id="L1057">                    mTTS.speak(message, queueFlag, null);</span>
+                }
+            }
+        }
+<span class="nc" id="L1061">    }</span>
+
+    /**
+     * Play silence for specified duration.
+     *
+     * @param duration  Time in ms to play silence.
+     * @param queueFlag Flag to use when adding to the queue.
+     */
+    private void silence(long duration, int queueFlag) {
+<span class="nc bnc" id="L1070" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(12717)) {</span>
+<span class="nc bnc" id="L1071" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(12714) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.LOLLIPOP) : (ListenerUtil.mutListener.listen(12713) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.LOLLIPOP) : (ListenerUtil.mutListener.listen(12712) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.LOLLIPOP) : (ListenerUtil.mutListener.listen(12711) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.LOLLIPOP) : (ListenerUtil.mutListener.listen(12710) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.LOLLIPOP) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.LOLLIPOP))))))) {</span>
+<span class="nc bnc" id="L1072" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12716)) {</span>
+<span class="nc" id="L1073">                    mTTS.playSilentUtterance(duration, queueFlag, &quot;TRIPSILENCE&quot;);</span>
+                }
+            } else {
+<span class="nc bnc" id="L1076" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(12715)) {</span>
+<span class="nc" id="L1077">                    mTTS.playSilence(duration, queueFlag, null);</span>
+                }
+            }
+        }
+<span class="nc" id="L1081">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.2.0</div></body></html>

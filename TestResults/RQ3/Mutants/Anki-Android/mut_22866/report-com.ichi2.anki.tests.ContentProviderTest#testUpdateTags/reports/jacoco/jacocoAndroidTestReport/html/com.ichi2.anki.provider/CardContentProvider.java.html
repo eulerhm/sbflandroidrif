@@ -1,0 +1,1478 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CardContentProvider.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.anki.provider</a> &gt; <span class="el_source">CardContentProvider.java</span></div><h1>CardContentProvider.java</h1><pre class="source lang-java linenums">/***************************************************************************************
+ *                                                                                      *
+ * Copyright (c) 2015 Frank Oltmanns &lt;frank.oltmanns@gmail.com&gt;                         *
+ * Copyright (c) 2015 Timothy Rae &lt;timothy.rae@gmail.com&gt;                               *
+ * Copyright (c) 2016 Mark Carter &lt;mark@marcardar.com&gt;                                  *
+ *                                                                                      *
+ * This program is free software; you can redistribute it and/or modify it under        *
+ * the terms of the GNU General Public License as published by the Free Software        *
+ * Foundation; either version 3 of the License, or (at your option) any later           *
+ * version.                                                                             *
+ *                                                                                      *
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                      *
+ * You should have received a copy of the GNU General Public License along with         *
+ * this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ ****************************************************************************************/
+
+package com.ichi2.anki.provider;
+
+import android.content.ContentProvider;
+import android.content.ContentResolver;
+import android.content.ContentUris;
+import android.content.ContentValues;
+import android.content.Context;
+import android.content.UriMatcher;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.database.MatrixCursor;
+import android.database.sqlite.SQLiteQueryBuilder;
+import android.net.Uri;
+
+import androidx.annotation.NonNull;
+
+import android.text.TextUtils;
+import android.webkit.MimeTypeMap;
+
+import com.ichi2.anki.AnkiDroidApp;
+import com.ichi2.anki.BuildConfig;
+import com.ichi2.anki.CollectionHelper;
+import com.ichi2.anki.FlashCardsContract;
+import com.ichi2.anki.FlashCardsContract.CardTemplate;
+import com.ichi2.anki.R;
+import com.ichi2.anki.exception.ConfirmModSchemaException;
+import com.ichi2.compat.CompatHelper;
+import com.ichi2.libanki.Consts;
+import com.ichi2.libanki.Decks;
+import com.ichi2.libanki.Model;
+import com.ichi2.libanki.Media;
+import com.ichi2.libanki.exception.EmptyMediaException;
+import com.ichi2.libanki.sched.AbstractSched;
+import com.ichi2.libanki.Card;
+import com.ichi2.libanki.Collection;
+import com.ichi2.libanki.DB;
+import com.ichi2.libanki.Models;
+import com.ichi2.libanki.Note;
+import com.ichi2.libanki.Utils;
+
+import com.ichi2.libanki.Deck;
+import com.ichi2.libanki.sched.DeckDueTreeNode;
+import com.ichi2.utils.FileUtil;
+import com.ichi2.utils.JSONArray;
+import com.ichi2.utils.JSONException;
+import com.ichi2.utils.JSONObject;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+import androidx.sqlite.db.SupportSQLiteDatabase;
+import timber.log.Timber;
+
+import static com.ichi2.anki.FlashCardsContract.READ_WRITE_PERMISSION;
+import static com.ichi2.libanki.Models.NOT_FOUND_NOTE_TYPE;
+
+/**
+ * Supported URIs:
+ * .../notes (search for notes)
+ * .../notes/# (direct access to note)
+ * .../notes/#/cards (access cards of note)
+ * .../notes/#/cards/# (access specific card of note)
+ * .../models (search for models)
+ * .../models/# (direct access to model). String id 'current' can be used in place of # for the current model
+ * .../models/#/fields (access to field definitions of a model)
+ * .../models/#/templates (access to card templates of a model)
+ * .../schedule (access the study schedule)
+ * .../decks (access the deck list)
+ * .../decks/# (access the specified deck)
+ * .../selected_deck (access the currently selected deck)
+ * .../media (add media files to anki collection.media)
+ * &lt;p/&gt;
+ * Note that unlike Android's contact providers:
+ * &lt;ul&gt;
+ * &lt;li&gt;it's not possible to access cards of more than one note at a time&lt;/li&gt;
+ * &lt;li&gt;it's not possible to access cards of a note without providing the note's ID&lt;/li&gt;
+ * &lt;/ul&gt;
+ */
+<span class="fc" id="L106">public class CardContentProvider extends ContentProvider {</span>
+    private Context mContext;
+
+    /* URI types */
+    private static final int NOTES = 1000;
+    private static final int NOTES_ID = 1001;
+    private static final int NOTES_ID_CARDS = 1003;
+    private static final int NOTES_ID_CARDS_ORD = 1004;
+    private static final int NOTES_V2 = 1005;
+    private static final int MODELS = 2000;
+    private static final int MODELS_ID = 2001;
+    private static final int MODELS_ID_EMPTY_CARDS = 2002;
+    private static final int MODELS_ID_TEMPLATES = 2003;
+    private static final int MODELS_ID_TEMPLATES_ID = 2004;
+    private static final int MODELS_ID_FIELDS = 2005;
+    private static final int SCHEDULE = 3000;
+    private static final int DECKS = 4000;
+    private static final int DECK_SELECTED = 4001;
+    private static final int DECKS_ID = 4002;
+    private static final int MEDIA = 5000;
+
+<span class="fc" id="L127">    private static final UriMatcher sUriMatcher =</span>
+            new UriMatcher(UriMatcher.NO_MATCH);
+
+    static {
+        // Here you can see all the URIs at a glance
+<span class="fc" id="L132">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;notes&quot;, NOTES);</span>
+<span class="fc" id="L133">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;notes_v2&quot;, NOTES_V2);</span>
+<span class="fc" id="L134">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;notes/#&quot;, NOTES_ID);</span>
+<span class="fc" id="L135">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;notes/#/cards&quot;, NOTES_ID_CARDS);</span>
+<span class="fc" id="L136">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;notes/#/cards/#&quot;, NOTES_ID_CARDS_ORD);</span>
+<span class="fc" id="L137">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;models&quot;, MODELS);</span>
+<span class="fc" id="L138">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;models/*&quot;, MODELS_ID); // the model ID can also be &quot;current&quot;</span>
+<span class="fc" id="L139">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;models/*/empty_cards&quot;, MODELS_ID_EMPTY_CARDS);</span>
+<span class="fc" id="L140">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;models/*/templates&quot;, MODELS_ID_TEMPLATES);</span>
+<span class="fc" id="L141">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;models/*/templates/#&quot;, MODELS_ID_TEMPLATES_ID);</span>
+<span class="fc" id="L142">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;models/*/fields&quot;, MODELS_ID_FIELDS);</span>
+<span class="fc" id="L143">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;schedule/&quot;, SCHEDULE);</span>
+<span class="fc" id="L144">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;decks/&quot;, DECKS);</span>
+<span class="fc" id="L145">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;decks/#&quot;, DECKS_ID);</span>
+<span class="fc" id="L146">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;selected_deck/&quot;, DECK_SELECTED);</span>
+<span class="fc" id="L147">        sUriMatcher.addURI(FlashCardsContract.AUTHORITY, &quot;media&quot;, MEDIA);</span>
+    }
+
+    /**
+     * The names of the columns returned by this content provider differ slightly from the names
+     * given of the database columns. This list is used to convert the column names used in a
+     * projection by the user into DB column names.
+     * &lt;p/&gt;
+     * This is currently only &quot;_id&quot; (projection) vs. &quot;id&quot; (Anki DB). But should probably be
+     * applied to more columns. &quot;MID&quot;, &quot;USN&quot;, &quot;MOD&quot; are not really user friendly.
+     */
+<span class="fc" id="L158">    private static final String[] sDefaultNoteProjectionDBAccess = FlashCardsContract.Note.DEFAULT_PROJECTION.clone();</span>
+    private static final String COL_NULL_ERROR_MSG = &quot;AnkiDroid database inaccessible. Open AnkiDroid to see what's wrong.&quot;;
+
+    static {
+<span class="fc bfc" id="L162" title="All 2 branches covered.">        for (int idx = 0; idx &lt; sDefaultNoteProjectionDBAccess.length; idx++) {</span>
+<span class="fc bfc" id="L163" title="All 2 branches covered.">            if (sDefaultNoteProjectionDBAccess[idx].equals(FlashCardsContract.Note._ID)) {</span>
+<span class="fc" id="L164">                sDefaultNoteProjectionDBAccess[idx] = &quot;id as _id&quot;;</span>
+            }
+        }
+<span class="fc" id="L167">    }</span>
+
+    @Override
+    public boolean onCreate() {
+        // Initialize content provider on startup.
+<span class="fc" id="L172">        Timber.d(&quot;CardContentProvider: onCreate&quot;);</span>
+<span class="fc" id="L173">        mContext = getContext();</span>
+<span class="fc" id="L174">        return true;</span>
+    }
+
+    @Override
+    public String getType(@NonNull Uri uri) {
+        // Find out what data the user is requesting
+<span class="nc" id="L180">        int match = sUriMatcher.match(uri);</span>
+
+<span class="nc bnc" id="L182" title="All 11 branches missed.">        switch (match) {</span>
+            case NOTES_V2:
+            case NOTES:
+<span class="nc" id="L185">                return FlashCardsContract.Note.CONTENT_TYPE;</span>
+            case NOTES_ID:
+<span class="nc" id="L187">                return FlashCardsContract.Note.CONTENT_ITEM_TYPE;</span>
+            case NOTES_ID_CARDS:
+            case MODELS_ID_EMPTY_CARDS:
+<span class="nc" id="L190">                return FlashCardsContract.Card.CONTENT_TYPE;</span>
+            case NOTES_ID_CARDS_ORD:
+<span class="nc" id="L192">                return FlashCardsContract.Card.CONTENT_ITEM_TYPE;</span>
+            case MODELS:
+<span class="nc" id="L194">                return FlashCardsContract.Model.CONTENT_TYPE;</span>
+            case MODELS_ID:
+<span class="nc" id="L196">                return FlashCardsContract.Model.CONTENT_ITEM_TYPE;</span>
+            case MODELS_ID_TEMPLATES:
+<span class="nc" id="L198">                return FlashCardsContract.CardTemplate.CONTENT_TYPE;</span>
+            case MODELS_ID_TEMPLATES_ID:
+<span class="nc" id="L200">                return FlashCardsContract.CardTemplate.CONTENT_ITEM_TYPE;</span>
+            case SCHEDULE:
+<span class="nc" id="L202">                return FlashCardsContract.ReviewInfo.CONTENT_TYPE;</span>
+            case DECKS:
+            case DECK_SELECTED:
+            case DECKS_ID:
+<span class="nc" id="L206">                return FlashCardsContract.Deck.CONTENT_TYPE;</span>
+            default:
+                // Unknown URI type
+<span class="nc" id="L209">                throw new IllegalArgumentException(&quot;uri &quot; + uri + &quot; is not supported&quot;);</span>
+        }
+    }
+
+    /** Only enforce permissions for queries and inserts on Android M and above, or if its a 'rogue client' **/
+    private boolean shouldEnforceQueryOrInsertSecurity() {
+<span class="nc bnc" id="L215" title="All 4 branches missed.">        return CompatHelper.isMarshmallow() || knownRogueClient();</span>
+    }
+    /** Enforce permissions for all updates on Android M and above. Otherwise block depending on URI and client app **/
+    private boolean shouldEnforceUpdateSecurity(Uri uri) {
+<span class="nc" id="L219">        final List&lt;Integer&gt; WHITELIST = Arrays.asList(NOTES_ID_CARDS_ORD, MODELS_ID, MODELS_ID_TEMPLATES_ID, SCHEDULE, DECK_SELECTED);</span>
+<span class="nc bnc" id="L220" title="All 6 branches missed.">        return CompatHelper.isMarshmallow() || !WHITELIST.contains(sUriMatcher.match(uri)) || knownRogueClient();</span>
+    }
+
+    @Override
+    public Cursor query(@NonNull Uri uri, String[] projection, String selection, String[] selectionArgs, String order) {
+<span class="nc bnc" id="L225" title="All 4 branches missed.">        if (!hasReadWritePermission() &amp;&amp; shouldEnforceQueryOrInsertSecurity()) {</span>
+<span class="nc" id="L226">            throwSecurityException(&quot;query&quot;, uri);</span>
+        }
+
+<span class="nc" id="L229">        Collection col = CollectionHelper.getInstance().getCol(mContext);</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">        if (col == null) {</span>
+<span class="nc" id="L231">            throw new IllegalStateException(COL_NULL_ERROR_MSG);</span>
+        }
+<span class="nc" id="L233">        Timber.d(getLogMessage(&quot;query&quot;, uri));</span>
+
+        // Find out what data the user is requesting
+<span class="nc" id="L236">        int match = sUriMatcher.match(uri);</span>
+
+<span class="nc bnc" id="L238" title="All 14 branches missed.">        switch (match) {</span>
+            case NOTES_V2: {
+                /* Search for notes using direct SQL query */
+<span class="nc" id="L241">                String[] proj = sanitizeNoteProjection(projection);</span>
+<span class="nc" id="L242">                String sql = SQLiteQueryBuilder.buildQueryString(false, &quot;notes&quot;, proj, selection, null, null, order, null);</span>
+                //noinspection RedundantCast
+<span class="nc" id="L244">                return col.getDb().query(sql, (Object[]) selectionArgs); // Needed for varargs of query</span>
+            }
+            case NOTES: {
+                /* Search for notes using the libanki browser syntax */
+<span class="nc" id="L248">                String[] proj = sanitizeNoteProjection(projection);</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                String query = (selection != null) ? selection : &quot;&quot;;</span>
+<span class="nc" id="L250">                List&lt;Long&gt; noteIds = col.findNotes(query);</span>
+<span class="nc bnc" id="L251" title="All 4 branches missed.">                if ((noteIds != null) &amp;&amp; (!noteIds.isEmpty())) {</span>
+<span class="nc" id="L252">                    String sel = String.format(&quot;id in (%s)&quot;, TextUtils.join(&quot;,&quot;, noteIds));</span>
+<span class="nc" id="L253">                    String sql = SQLiteQueryBuilder.buildQueryString(false, &quot;notes&quot;, proj, sel, null, null, order, null);</span>
+<span class="nc" id="L254">                    return col.getDb().getDatabase().query(sql);</span>
+                } else {
+<span class="nc" id="L256">                    return null;</span>
+                }
+            }
+            case NOTES_ID: {
+                /* Direct access note with specific ID*/
+<span class="nc" id="L261">                String noteId = uri.getPathSegments().get(1);</span>
+<span class="nc" id="L262">                String[] proj = sanitizeNoteProjection(projection);</span>
+<span class="nc" id="L263">                String sql = SQLiteQueryBuilder.buildQueryString(false, &quot;notes&quot;, proj, &quot;id=?&quot;, null, null, order, null);</span>
+<span class="nc" id="L264">                return col.getDb().query(sql, noteId);</span>
+            }
+
+            case NOTES_ID_CARDS: {
+<span class="nc" id="L268">                Note currentNote = getNoteFromUri(uri, col);</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : FlashCardsContract.Card.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L270">                MatrixCursor rv = new MatrixCursor(columns, 1);</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">                for (Card currentCard : currentNote.cards()) {</span>
+<span class="nc" id="L272">                    addCardToCursor(currentCard, rv, col, columns);</span>
+<span class="nc" id="L273">                }</span>
+<span class="nc" id="L274">                return rv;</span>
+            }
+            case NOTES_ID_CARDS_ORD: {
+<span class="nc" id="L277">                Card currentCard = getCardFromUri(uri, col);</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : FlashCardsContract.Card.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L279">                MatrixCursor rv = new MatrixCursor(columns, 1);</span>
+<span class="nc" id="L280">                addCardToCursor(currentCard, rv, col, columns);</span>
+<span class="nc" id="L281">                return rv;</span>
+            }
+            case MODELS: {
+<span class="nc" id="L284">                Models models = col.getModels();</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : FlashCardsContract.Model.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L286">                MatrixCursor rv = new MatrixCursor(columns, 1);</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">                for (Long modelId : models.getModels().keySet()) {</span>
+<span class="nc" id="L288">                    addModelToCursor(modelId, models, rv, columns);</span>
+<span class="nc" id="L289">                }</span>
+<span class="nc" id="L290">                return rv;</span>
+            }
+            case MODELS_ID: {
+<span class="nc" id="L293">                long modelId = getModelIdFromUri(uri, col);</span>
+<span class="nc bnc" id="L294" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : FlashCardsContract.Model.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L295">                MatrixCursor rv = new MatrixCursor(columns, 1);</span>
+<span class="nc" id="L296">                addModelToCursor(modelId, col.getModels(), rv, columns);</span>
+<span class="nc" id="L297">                return rv;</span>
+            }
+            case MODELS_ID_TEMPLATES: {
+                /* Direct access model templates */
+<span class="nc" id="L301">                Models models = col.getModels();</span>
+<span class="nc" id="L302">                Model currentModel = models.get(getModelIdFromUri(uri, col));</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : CardTemplate.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L304">                MatrixCursor rv = new MatrixCursor(columns, 1);</span>
+                try {
+<span class="nc" id="L306">                    JSONArray templates = currentModel.getJSONArray(&quot;tmpls&quot;);</span>
+<span class="nc bnc" id="L307" title="All 2 branches missed.">                    for (int idx = 0; idx &lt; templates.length(); idx++) {</span>
+<span class="nc" id="L308">                        JSONObject template = templates.getJSONObject(idx);</span>
+<span class="nc" id="L309">                        addTemplateToCursor(template, currentModel, idx+1, models, rv, columns);</span>
+                    }
+<span class="nc" id="L311">                } catch (JSONException e) {</span>
+<span class="nc" id="L312">                    throw new IllegalArgumentException(&quot;Model is malformed&quot;, e);</span>
+<span class="nc" id="L313">                }</span>
+<span class="nc" id="L314">                return rv;</span>
+            }
+            case MODELS_ID_TEMPLATES_ID: {
+                /* Direct access model template with specific ID */
+<span class="nc" id="L318">                Models models = col.getModels();</span>
+<span class="nc" id="L319">                int ord = Integer.parseInt(uri.getLastPathSegment());</span>
+<span class="nc" id="L320">                Model currentModel = models.get(getModelIdFromUri(uri, col));</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : CardTemplate.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L322">                MatrixCursor rv = new MatrixCursor(columns, 1);</span>
+                try {
+<span class="nc" id="L324">                    JSONObject template = getTemplateFromUri(uri, col);</span>
+<span class="nc" id="L325">                    addTemplateToCursor(template, currentModel, ord+1, models, rv, columns);</span>
+<span class="nc" id="L326">                } catch (JSONException e) {</span>
+<span class="nc" id="L327">                    throw new IllegalArgumentException(&quot;Model is malformed&quot;, e);</span>
+<span class="nc" id="L328">                }</span>
+<span class="nc" id="L329">                return rv;</span>
+            }
+
+            case SCHEDULE: {
+<span class="nc bnc" id="L333" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : FlashCardsContract.ReviewInfo.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L334">                MatrixCursor rv = new MatrixCursor(columns, 1);</span>
+<span class="nc" id="L335">                long selectedDeckBeforeQuery = col.getDecks().selected();</span>
+<span class="nc" id="L336">                long deckIdOfTemporarilySelectedDeck = -1;</span>
+<span class="nc" id="L337">                int limit = 1; //the number of scheduled cards to return</span>
+<span class="nc" id="L338">                int selectionArgIndex = 0;</span>
+
+                //parsing the selection arguments
+<span class="nc bnc" id="L341" title="All 2 branches missed.">                if (selection != null) {</span>
+<span class="nc" id="L342">                    String[] args = selection.split(&quot;,&quot;); //split selection to get arguments like &quot;limit=?&quot;</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">                    for (String arg : args) {</span>
+<span class="nc" id="L344">                        String[] keyAndValue = arg.split(&quot;=&quot;); //split arguments into key (&quot;limit&quot;) and value (&quot;?&quot;)</span>
+                        try {
+                            //check if value is a placeholder (&quot;?&quot;), if so replace with the next value of selectionArgs
+<span class="nc bnc" id="L347" title="All 2 branches missed.">                            String value = &quot;?&quot;.equals(keyAndValue[1].trim()) ? selectionArgs[selectionArgIndex++] :</span>
+<span class="nc" id="L348">                                    keyAndValue[1];</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">                            if (&quot;limit&quot;.equals(keyAndValue[0].trim())) {</span>
+<span class="nc" id="L350">                                limit = Integer.parseInt(value);</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">                            } else if (&quot;deckID&quot;.equals(keyAndValue[0].trim())) {</span>
+<span class="nc" id="L352">                                deckIdOfTemporarilySelectedDeck = Long.parseLong(value);</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">                                if(!selectDeckWithCheck(col, deckIdOfTemporarilySelectedDeck)){</span>
+<span class="nc" id="L354">                                    return rv; //if the provided deckID is wrong, return empty cursor.</span>
+                                }
+                            }
+<span class="nc" id="L357">                        } catch (NumberFormatException nfe) {</span>
+<span class="nc" id="L358">                            nfe.printStackTrace();</span>
+<span class="nc" id="L359">                        }</span>
+                    }
+                }
+
+                //retrieve the number of cards provided by the selection parameter &quot;limit&quot;
+<span class="nc" id="L364">                col.getSched().deferReset();</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">                for (int k = 0; k&lt; limit; k++){</span>
+<span class="nc" id="L366">                    Card currentCard = col.getSched().getCard();</span>
+
+<span class="nc bnc" id="L368" title="All 2 branches missed.">                    if (currentCard == null) {</span>
+<span class="nc" id="L369">                        break;</span>
+                    }
+<span class="nc" id="L371">                    int buttonCount = col.getSched().answerButtons(currentCard);</span>
+<span class="nc" id="L372">                    JSONArray buttonTexts = new JSONArray();</span>
+<span class="nc bnc" id="L373" title="All 2 branches missed.">                    for (int i = 0; i &lt; buttonCount; i++) {</span>
+<span class="nc" id="L374">                        buttonTexts.put(col.getSched().nextIvlStr(mContext, currentCard, i + 1));</span>
+                    }
+<span class="nc" id="L376">                    addReviewInfoToCursor(currentCard, buttonTexts, buttonCount, rv, col, columns);</span>
+                }
+
+<span class="nc bnc" id="L379" title="All 2 branches missed.">                if (deckIdOfTemporarilySelectedDeck != -1) {//if the selected deck was changed</span>
+                    //change the selected deck back to the one it was before the query
+<span class="nc" id="L381">                    col.getDecks().select(selectedDeckBeforeQuery);</span>
+                }
+<span class="nc" id="L383">                return rv;</span>
+            }
+            case DECKS: {
+<span class="nc" id="L386">                List&lt;DeckDueTreeNode&gt; allDecks = col.getSched().deckDueList();</span>
+<span class="nc bnc" id="L387" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : FlashCardsContract.Deck.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L388">                MatrixCursor rv = new MatrixCursor(columns, allDecks.size());</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                for (DeckDueTreeNode deck : allDecks) {</span>
+<span class="nc" id="L390">                    long id = deck.getDid();</span>
+<span class="nc" id="L391">                    String name = deck.getFullDeckName();</span>
+<span class="nc" id="L392">                    addDeckToCursor(id, name, getDeckCountsFromDueTreeNode(deck), rv, col, columns);</span>
+<span class="nc" id="L393">                }</span>
+<span class="nc" id="L394">                return rv;</span>
+            }
+            case DECKS_ID: {
+                /* Direct access deck */
+<span class="nc bnc" id="L398" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : FlashCardsContract.Deck.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L399">                MatrixCursor rv = new MatrixCursor(columns, 1);</span>
+<span class="nc" id="L400">                List&lt;DeckDueTreeNode&gt; allDecks = col.getSched().deckDueList();</span>
+<span class="nc" id="L401">                long deckId = Long.parseLong(uri.getPathSegments().get(1));</span>
+<span class="nc bnc" id="L402" title="All 2 branches missed.">                for (DeckDueTreeNode deck : allDecks) {</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">                    if(deck.getDid() == deckId){</span>
+<span class="nc" id="L404">                        addDeckToCursor(deckId, deck.getFullDeckName(), getDeckCountsFromDueTreeNode(deck), rv, col, columns);</span>
+<span class="nc" id="L405">                        return rv;</span>
+                    }
+<span class="nc" id="L407">                }</span>
+<span class="nc" id="L408">                return rv;</span>
+            }
+            case DECK_SELECTED: {
+<span class="nc" id="L411">                long id = col.getDecks().selected();</span>
+<span class="nc" id="L412">                String name = col.getDecks().name(id);</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">                String[] columns = ((projection != null) ? projection : FlashCardsContract.Deck.DEFAULT_PROJECTION);</span>
+<span class="nc" id="L414">                MatrixCursor rv = new MatrixCursor(columns, 1);</span>
+<span class="nc" id="L415">                JSONArray counts = new JSONArray(Collections.singletonList(col.getSched().counts()));</span>
+<span class="nc" id="L416">                addDeckToCursor(id, name, counts,rv, col, columns);</span>
+<span class="nc" id="L417">                return rv;</span>
+            }
+            default:
+                // Unknown URI type
+<span class="nc" id="L421">                throw new IllegalArgumentException(&quot;uri &quot; + uri + &quot; is not supported&quot;);</span>
+        }
+    }
+
+    private JSONArray getDeckCountsFromDueTreeNode(DeckDueTreeNode deck){
+<span class="nc" id="L426">        JSONArray deckCounts = new JSONArray();</span>
+<span class="nc" id="L427">        deckCounts.put(deck.getLrnCount());</span>
+<span class="nc" id="L428">        deckCounts.put(deck.getRevCount());</span>
+<span class="nc" id="L429">        deckCounts.put(deck.getNewCount());</span>
+<span class="nc" id="L430">        return deckCounts;</span>
+    }
+
+    @Override
+    public int update(@NonNull Uri uri, ContentValues values, String selection, String[] selectionArgs) {
+<span class="pc bpc" id="L435" title="3 of 4 branches missed.">        if (!hasReadWritePermission() &amp;&amp; shouldEnforceUpdateSecurity(uri)) {</span>
+<span class="nc" id="L436">            throwSecurityException(&quot;update&quot;, uri);</span>
+        }
+<span class="fc" id="L438">        Collection col = CollectionHelper.getInstance().getCol(mContext);</span>
+<span class="pc bpc" id="L439" title="1 of 2 branches missed.">        if (col == null) {</span>
+<span class="nc" id="L440">            throw new IllegalStateException(COL_NULL_ERROR_MSG);</span>
+        }
+<span class="fc" id="L442">        col.log(getLogMessage(&quot;update&quot;, uri));</span>
+
+        // Find out what data the user is requesting
+<span class="fc" id="L445">        int match = sUriMatcher.match(uri);</span>
+<span class="fc" id="L446">        int updated = 0; // Number of updated entries (return value)</span>
+<span class="pc bpc" id="L447" title="12 of 13 branches missed.">        switch (match) {</span>
+            case NOTES_V2:
+            case NOTES:
+<span class="nc" id="L450">                throw new IllegalArgumentException(&quot;Not possible to update notes directly (only through data URI)&quot;);</span>
+            case NOTES_ID: {
+                /* Direct access note details
+                 */
+<span class="fc" id="L454">                Note currentNote = getNoteFromUri(uri, col);</span>
+                // the key of the ContentValues contains the column name
+                // the value of the ContentValues contains the row value.
+<span class="fc" id="L457">                Set&lt;Map.Entry&lt;String, Object&gt;&gt; valueSet = values.valueSet();</span>
+<span class="fc bfc" id="L458" title="All 2 branches covered.">                for (Map.Entry&lt;String, Object&gt; entry : valueSet) {</span>
+<span class="fc" id="L459">                    String key = entry.getKey();</span>
+                    // when the client does not specify FLDS, then don't update the FLDS
+<span class="pc bpc" id="L461" title="1 of 2 branches missed.">                    if (key.equals(FlashCardsContract.Note.FLDS)) {</span>
+                        // Update FLDS
+<span class="nc" id="L463">                        Timber.d(&quot;CardContentProvider: flds update...&quot;);</span>
+<span class="nc" id="L464">                        String newFldsEncoded = (String) entry.getValue();</span>
+<span class="nc" id="L465">                        String[] flds = Utils.splitFields(newFldsEncoded);</span>
+                        // Check that correct number of flds specified
+<span class="nc bnc" id="L467" title="All 2 branches missed.">                        if (flds.length != currentNote.getFields().length) {</span>
+<span class="nc" id="L468">                            throw new IllegalArgumentException(&quot;Incorrect flds argument : &quot; + newFldsEncoded);</span>
+                        }
+                        // Update the note
+<span class="nc bnc" id="L471" title="All 2 branches missed.">                        for (int idx=0; idx &lt; flds.length; idx++) {</span>
+<span class="nc" id="L472">                            currentNote.setField(idx, flds[idx]);</span>
+                        }
+<span class="nc" id="L474">                        updated++;</span>
+<span class="pc bpc" id="L475" title="1 of 2 branches missed.">                    } else if (key.equals(FlashCardsContract.Note.TAGS)) {</span>
+                        // Update tags
+<span class="fc" id="L477">                        Timber.d(&quot;CardContentProvider: tags update...&quot;);</span>
+<span class="fc" id="L478">                        Object tags = entry.getValue();</span>
+<span class="pc bpc" id="L479" title="1 of 2 branches missed.">                        if (tags != null) {</span>
+<span class="fc" id="L480">                            currentNote.setTagsFromStr(String.valueOf(tags));</span>
+                        }
+<span class="fc" id="L482">                        updated++;</span>
+<span class="fc" id="L483">                    } else {</span>
+                        // Unsupported column
+<span class="nc" id="L485">                        throw new IllegalArgumentException(&quot;Unsupported column: &quot; + key);</span>
+                    }
+<span class="fc" id="L487">                }</span>
+<span class="fc" id="L488">                Timber.d(&quot;CardContentProvider: Saving note...&quot;);</span>
+<span class="fc" id="L489">                currentNote.flush();</span>
+<span class="fc" id="L490">                break;</span>
+            }
+            case NOTES_ID_CARDS:
+                // TODO: To be implemented
+<span class="nc" id="L494">                throw new UnsupportedOperationException(&quot;Not yet implemented&quot;);</span>
+//                break;
+            case NOTES_ID_CARDS_ORD: {
+<span class="nc" id="L497">                Card currentCard = getCardFromUri(uri, col);</span>
+<span class="nc" id="L498">                boolean isDeckUpdate = false;</span>
+<span class="nc" id="L499">                long did = Decks.NOT_FOUND_DECK_ID;</span>
+                // the key of the ContentValues contains the column name
+                // the value of the ContentValues contains the row value.
+<span class="nc" id="L502">                Set&lt;Map.Entry&lt;String, Object&gt;&gt; valueSet = values.valueSet();</span>
+<span class="nc bnc" id="L503" title="All 2 branches missed.">                for (Map.Entry&lt;String, Object&gt; entry : valueSet) {</span>
+                    // Only updates on deck id is supported
+<span class="nc" id="L505">                    String key = entry.getKey();</span>
+<span class="nc" id="L506">                    isDeckUpdate = key.equals(FlashCardsContract.Card.DECK_ID);</span>
+<span class="nc" id="L507">                    did = values.getAsLong(key);</span>
+<span class="nc" id="L508">                }</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">                if (col.getDecks().isDyn(did)) {</span>
+<span class="nc" id="L510">                    throw new IllegalArgumentException(&quot;Cards cannot be moved to a filtered deck&quot;);</span>
+                }
+                /* now update the card
+                 */
+<span class="nc bnc" id="L514" title="All 4 branches missed.">                if ((isDeckUpdate) &amp;&amp; (did &gt;= 0)) {</span>
+<span class="nc" id="L515">                    Timber.d(&quot;CardContentProvider: Moving card to other deck...&quot;);</span>
+<span class="nc" id="L516">                    col.getDecks().flush();</span>
+<span class="nc" id="L517">                    currentCard.setDid(did);</span>
+<span class="nc" id="L518">                    currentCard.flush();</span>
+<span class="nc" id="L519">                    col.save();</span>
+<span class="nc" id="L520">                    updated++;</span>
+                } else {
+                    // User tries an operation that is not (yet?) supported.
+<span class="nc" id="L523">                    throw new IllegalArgumentException(&quot;Currently only updates of decks are supported&quot;);</span>
+                }
+                break;
+            }
+            case MODELS:
+<span class="nc" id="L528">                throw new IllegalArgumentException(&quot;Cannot update models in bulk&quot;);</span>
+            case MODELS_ID:
+                // Get the input parameters
+<span class="nc" id="L531">                String newModelName = values.getAsString(FlashCardsContract.Model.NAME);</span>
+<span class="nc" id="L532">                String newCss = values.getAsString(FlashCardsContract.Model.CSS);</span>
+<span class="nc" id="L533">                String newDid = values.getAsString(FlashCardsContract.Model.DECK_ID);</span>
+<span class="nc" id="L534">                String newFieldList = values.getAsString(FlashCardsContract.Model.FIELD_NAMES);</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">                if (newFieldList != null) {</span>
+                    // Changing the field names would require a full-sync
+<span class="nc" id="L537">                    throw new IllegalArgumentException(&quot;Field names cannot be changed via provider&quot;);</span>
+                }
+<span class="nc" id="L539">                Integer newSortf = values.getAsInteger(FlashCardsContract.Model.SORT_FIELD_INDEX);</span>
+<span class="nc" id="L540">                Integer newType = values.getAsInteger(FlashCardsContract.Model.TYPE);</span>
+<span class="nc" id="L541">                String newLatexPost = values.getAsString(FlashCardsContract.Model.LATEX_POST);</span>
+<span class="nc" id="L542">                String newLatexPre = values.getAsString(FlashCardsContract.Model.LATEX_PRE);</span>
+                // Get the original note JSON
+<span class="nc" id="L544">                Model model = col.getModels().get(getModelIdFromUri(uri, col));</span>
+                try {
+                    // Update model name and/or css
+<span class="nc bnc" id="L547" title="All 2 branches missed.">                    if (newModelName != null) {</span>
+<span class="nc" id="L548">                        model.put(&quot;name&quot;, newModelName);</span>
+<span class="nc" id="L549">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L551" title="All 2 branches missed.">                    if (newCss != null) {</span>
+<span class="nc" id="L552">                        model.put(&quot;css&quot;, newCss);</span>
+<span class="nc" id="L553">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L555" title="All 2 branches missed.">                    if (newDid != null) {</span>
+<span class="nc bnc" id="L556" title="All 2 branches missed.">                        if (col.getDecks().isDyn(Long.parseLong(newDid))) {</span>
+<span class="nc" id="L557">                            throw new IllegalArgumentException(&quot;Cannot set a filtered deck as default deck for a model&quot;);</span>
+                        }
+<span class="nc" id="L559">                        model.put(&quot;did&quot;, newDid);</span>
+<span class="nc" id="L560">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L562" title="All 2 branches missed.">                    if (newSortf != null) {</span>
+<span class="nc" id="L563">                        model.put(&quot;sortf&quot;, newSortf);</span>
+<span class="nc" id="L564">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L566" title="All 2 branches missed.">                    if (newType != null) {</span>
+<span class="nc" id="L567">                        model.put(&quot;type&quot;, newType);</span>
+<span class="nc" id="L568">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L570" title="All 2 branches missed.">                    if (newLatexPost != null) {</span>
+<span class="nc" id="L571">                        model.put(&quot;latexPost&quot;, newLatexPost);</span>
+<span class="nc" id="L572">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L574" title="All 2 branches missed.">                    if (newLatexPre != null) {</span>
+<span class="nc" id="L575">                        model.put(&quot;latexPre&quot;, newLatexPre);</span>
+<span class="nc" id="L576">                        updated++;</span>
+                    }
+<span class="nc" id="L578">                    col.getModels().save(model);</span>
+<span class="nc" id="L579">                    col.save();</span>
+<span class="nc" id="L580">                } catch (JSONException e) {</span>
+<span class="nc" id="L581">                    Timber.e(e, &quot;JSONException updating model&quot;);</span>
+<span class="nc" id="L582">                }</span>
+<span class="nc" id="L583">                break;</span>
+            case MODELS_ID_TEMPLATES:
+<span class="nc" id="L585">                throw new IllegalArgumentException(&quot;Cannot update templates in bulk&quot;);</span>
+            case MODELS_ID_TEMPLATES_ID:
+<span class="nc" id="L587">                Long mid = values.getAsLong(CardTemplate.MODEL_ID);</span>
+<span class="nc" id="L588">                Integer ord = values.getAsInteger(CardTemplate.ORD);</span>
+<span class="nc" id="L589">                String name = values.getAsString(CardTemplate.NAME);</span>
+<span class="nc" id="L590">                String qfmt = values.getAsString(CardTemplate.QUESTION_FORMAT);</span>
+<span class="nc" id="L591">                String afmt = values.getAsString(CardTemplate.ANSWER_FORMAT);</span>
+<span class="nc" id="L592">                String bqfmt = values.getAsString(CardTemplate.BROWSER_QUESTION_FORMAT);</span>
+<span class="nc" id="L593">                String bafmt = values.getAsString(CardTemplate.BROWSER_ANSWER_FORMAT);</span>
+                // Throw exception if read-only fields are included
+<span class="nc bnc" id="L595" title="All 4 branches missed.">                if (mid != null || ord != null) {</span>
+<span class="nc" id="L596">                    throw new IllegalArgumentException(&quot;Updates to mid or ord are not allowed&quot;);</span>
+                }
+                // Update the model
+                try {
+<span class="nc" id="L600">                    int templateOrd = Integer.parseInt(uri.getLastPathSegment());</span>
+<span class="nc" id="L601">                    Model existingModel = col.getModels().get(getModelIdFromUri(uri, col));</span>
+<span class="nc" id="L602">                    JSONArray templates = existingModel.getJSONArray(&quot;tmpls&quot;);</span>
+<span class="nc" id="L603">                    JSONObject template = templates.getJSONObject(templateOrd);</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">                    if (name != null) {</span>
+<span class="nc" id="L605">                        template.put(&quot;name&quot;, name);</span>
+<span class="nc" id="L606">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L608" title="All 2 branches missed.">                    if (qfmt != null) {</span>
+<span class="nc" id="L609">                        template.put(&quot;qfmt&quot;, qfmt);</span>
+<span class="nc" id="L610">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L612" title="All 2 branches missed.">                    if (afmt != null) {</span>
+<span class="nc" id="L613">                        template.put(&quot;afmt&quot;, afmt);</span>
+<span class="nc" id="L614">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L616" title="All 2 branches missed.">                    if (bqfmt != null) {</span>
+<span class="nc" id="L617">                        template.put(&quot;bqfmt&quot;, bqfmt);</span>
+<span class="nc" id="L618">                        updated++;</span>
+                    }
+<span class="nc bnc" id="L620" title="All 2 branches missed.">                    if (bafmt != null) {</span>
+<span class="nc" id="L621">                        template.put(&quot;bafmt&quot;, bafmt);</span>
+<span class="nc" id="L622">                        updated++;</span>
+                    }
+                    // Save the model
+<span class="nc" id="L625">                    templates.put(templateOrd, template);</span>
+<span class="nc" id="L626">                    existingModel.put(&quot;tmpls&quot;, templates);</span>
+<span class="nc" id="L627">                    col.getModels().save(existingModel, true);</span>
+<span class="nc" id="L628">                    col.save();</span>
+<span class="nc" id="L629">                } catch (JSONException e) {</span>
+<span class="nc" id="L630">                    throw new IllegalArgumentException(&quot;Model is malformed&quot;, e);</span>
+<span class="nc" id="L631">                }</span>
+                break;
+            case SCHEDULE: {
+<span class="nc" id="L634">                Set&lt;Map.Entry&lt;String, Object&gt;&gt; valueSet = values.valueSet();</span>
+<span class="nc" id="L635">                int cardOrd = -1;</span>
+<span class="nc" id="L636">                long noteID = -1;</span>
+<span class="nc" id="L637">                int ease = -1;</span>
+<span class="nc" id="L638">                long timeTaken = -1;</span>
+<span class="nc" id="L639">                int bury = -1;</span>
+<span class="nc" id="L640">                int suspend = -1;</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">                for (Map.Entry&lt;String, Object&gt; entry : valueSet) {</span>
+<span class="nc" id="L642">                    String key = entry.getKey();</span>
+
+<span class="nc bnc" id="L644" title="All 7 branches missed.">                    switch (key) {</span>
+                        case FlashCardsContract.ReviewInfo.NOTE_ID:
+<span class="nc" id="L646">                            noteID = values.getAsLong(key);</span>
+<span class="nc" id="L647">                            break;</span>
+                        case FlashCardsContract.ReviewInfo.CARD_ORD:
+<span class="nc" id="L649">                            cardOrd = values.getAsInteger(key);</span>
+<span class="nc" id="L650">                            break;</span>
+                        case FlashCardsContract.ReviewInfo.EASE:
+<span class="nc" id="L652">                            ease = values.getAsInteger(key);</span>
+<span class="nc" id="L653">                            break;</span>
+                        case FlashCardsContract.ReviewInfo.TIME_TAKEN:
+<span class="nc" id="L655">                            timeTaken = values.getAsLong(key);</span>
+<span class="nc" id="L656">                            break;</span>
+                        case FlashCardsContract.ReviewInfo.BURY:
+<span class="nc" id="L658">                            bury = values.getAsInteger(key);</span>
+<span class="nc" id="L659">                            break;</span>
+                        case FlashCardsContract.ReviewInfo.SUSPEND:
+<span class="nc" id="L661">                            suspend = values.getAsInteger(key);</span>
+                            break;
+                    }
+<span class="nc" id="L664">                }</span>
+<span class="nc bnc" id="L665" title="All 4 branches missed.">                if (cardOrd != -1 &amp;&amp; noteID != -1) {</span>
+<span class="nc" id="L666">                    Card cardToAnswer = getCard(noteID, cardOrd, col);</span>
+<span class="nc bnc" id="L667" title="All 2 branches missed.">                    if(cardToAnswer != null) {</span>
+<span class="nc bnc" id="L668" title="All 2 branches missed.">                        if( bury == 1 ) {</span>
+                            // bury card
+<span class="nc" id="L670">                            buryOrSuspendCard(col, col.getSched(), cardToAnswer, true);</span>
+<span class="nc bnc" id="L671" title="All 2 branches missed.">                        } else if (suspend == 1) {</span>
+                            // suspend card
+<span class="nc" id="L673">                            buryOrSuspendCard(col, col.getSched(), cardToAnswer, false);</span>
+                        } else {
+<span class="nc" id="L675">                            answerCard(col, col.getSched(), cardToAnswer, ease, timeTaken);</span>
+                        }
+<span class="nc" id="L677">                        updated++;</span>
+                    }else{
+<span class="nc" id="L679">                        Timber.e(&quot;Requested card with noteId %d and cardOrd %d was not found. Either the provided &quot; +</span>
+<span class="nc" id="L680">                            &quot;noteId/cardOrd were wrong or the card has been deleted in the meantime.&quot;, noteID, cardOrd);</span>
+                    }
+<span class="nc" id="L682">                }</span>
+                break;
+            }
+            case DECKS:
+<span class="nc" id="L686">                throw new IllegalArgumentException(&quot;Can't update decks in bulk&quot;);</span>
+            case DECKS_ID:
+                // TODO: be sure to throw exception if change to the dyn value of a deck is requested
+<span class="nc" id="L689">                throw new UnsupportedOperationException(&quot;Not yet implemented&quot;);</span>
+            case DECK_SELECTED: {
+<span class="nc" id="L691">                Set&lt;Map.Entry&lt;String, Object&gt;&gt; valueSet = values.valueSet();</span>
+<span class="nc bnc" id="L692" title="All 2 branches missed.">                for (Map.Entry&lt;String, Object&gt; entry : valueSet) {</span>
+<span class="nc" id="L693">                    String key = entry.getKey();</span>
+<span class="nc bnc" id="L694" title="All 2 branches missed.">                    if(key.equals(FlashCardsContract.Deck.DECK_ID)) {</span>
+<span class="nc" id="L695">                        long deckId = values.getAsLong(key);</span>
+<span class="nc bnc" id="L696" title="All 2 branches missed.">                        if(selectDeckWithCheck(col, deckId)){</span>
+<span class="nc" id="L697">                            updated ++;</span>
+                        }
+                    }
+<span class="nc" id="L700">                }</span>
+<span class="nc" id="L701">                col.save();</span>
+<span class="nc" id="L702">                break;</span>
+            }
+            default:
+                // Unknown URI type
+<span class="nc" id="L706">                throw new IllegalArgumentException(&quot;uri &quot; + uri + &quot; is not supported&quot;);</span>
+        }
+<span class="fc" id="L708">        return updated;</span>
+    }
+
+    @Override
+    public int delete(@NonNull Uri uri, String selection, String[] selectionArgs) {
+<span class="nc bnc" id="L713" title="All 2 branches missed.">        if (!hasReadWritePermission()) {</span>
+<span class="nc" id="L714">            throwSecurityException(&quot;delete&quot;, uri);</span>
+        }
+<span class="nc" id="L716">        Collection col = CollectionHelper.getInstance().getCol(mContext);</span>
+<span class="nc bnc" id="L717" title="All 2 branches missed.">        if (col == null) {</span>
+<span class="nc" id="L718">            throw new IllegalStateException(COL_NULL_ERROR_MSG);</span>
+        }
+<span class="nc" id="L720">        col.log(getLogMessage(&quot;delete&quot;, uri));</span>
+
+<span class="nc bnc" id="L722" title="All 3 branches missed.">        switch (sUriMatcher.match(uri)) {</span>
+            case NOTES_ID:
+<span class="nc" id="L724">                col.remNotes(new long[]{Long.parseLong(uri.getPathSegments().get(1))});</span>
+<span class="nc" id="L725">                return 1;</span>
+            case MODELS_ID_EMPTY_CARDS:
+<span class="nc" id="L727">                Model model = col.getModels().get(getModelIdFromUri(uri, col));</span>
+<span class="nc bnc" id="L728" title="All 2 branches missed.">                if (model == null) {</span>
+<span class="nc" id="L729">                    return -1;</span>
+                }
+<span class="nc" id="L731">                List&lt;Long&gt; cids = col.genCards(col.getModels().nids(model), model);</span>
+<span class="nc" id="L732">                col.remCards(cids);</span>
+<span class="nc" id="L733">                return cids.size();</span>
+            default:
+<span class="nc" id="L735">                throw new UnsupportedOperationException();</span>
+        }
+    }
+
+    /**
+     * This can be used to insert multiple notes into a single deck. The deck is specified as a query parameter.
+     *
+     * For example: content://com.ichi2.anki.flashcards/notes?deckId=1234567890123
+     *
+     * @param uri content Uri
+     * @param values for notes uri, it is acceptable for values to contain null items. Such items will be skipped
+     * @return number of notes added (does not include existing notes that were updated)
+     */
+    @Override
+    public int bulkInsert(@NonNull Uri uri, @NonNull ContentValues[] values) {
+<span class="nc bnc" id="L750" title="All 4 branches missed.">        if (!hasReadWritePermission() &amp;&amp; shouldEnforceQueryOrInsertSecurity()) {</span>
+<span class="nc" id="L751">            throwSecurityException(&quot;bulkInsert&quot;, uri);</span>
+        }
+
+        // by default, #bulkInsert simply calls insert for each item in #values
+        // but in some cases, we want to override this behavior
+<span class="nc" id="L756">        int match = sUriMatcher.match(uri);</span>
+<span class="nc bnc" id="L757" title="All 2 branches missed.">        if (match == NOTES) {</span>
+<span class="nc" id="L758">            String deckIdStr = uri.getQueryParameter(FlashCardsContract.Note.DECK_ID_QUERY_PARAM);</span>
+<span class="nc bnc" id="L759" title="All 2 branches missed.">            if (deckIdStr != null) {</span>
+                try {
+<span class="nc" id="L761">                    long deckId = Long.parseLong(deckIdStr);</span>
+<span class="nc" id="L762">                    return bulkInsertNotes(values, deckId);</span>
+<span class="nc" id="L763">                } catch (NumberFormatException e) {</span>
+<span class="nc" id="L764">                    Timber.d(&quot;Invalid %s: %s&quot;, FlashCardsContract.Note.DECK_ID_QUERY_PARAM, deckIdStr);</span>
+                }
+            }
+            // deckId not specified, so default to #super implementation (as in spec version 1)
+        }
+<span class="nc" id="L769">        return super.bulkInsert(uri, values);</span>
+    }
+
+    /**
+     * This implementation optimizes for when the notes are grouped according to model
+     */
+    private int bulkInsertNotes(ContentValues[] valuesArr, long deckId) {
+<span class="nc bnc" id="L776" title="All 4 branches missed.">        if (valuesArr == null || valuesArr.length == 0) {</span>
+<span class="nc" id="L777">            return 0;</span>
+        }
+<span class="nc" id="L779">        Collection col = CollectionHelper.getInstance().getCol(mContext);</span>
+<span class="nc bnc" id="L780" title="All 2 branches missed.">        if (col == null) {</span>
+<span class="nc" id="L781">            throw new IllegalStateException(COL_NULL_ERROR_MSG);</span>
+        }
+<span class="nc bnc" id="L783" title="All 2 branches missed.">        if (col.getDecks().isDyn(deckId)) {</span>
+<span class="nc" id="L784">            throw new IllegalArgumentException(&quot;A filtered deck cannot be specified as the deck in bulkInsertNotes&quot;);</span>
+        }
+<span class="nc" id="L786">        col.log(String.format(Locale.US, &quot;bulkInsertNotes: %d items.\n%s&quot;, valuesArr.length, getLogMessage(&quot;bulkInsert&quot;, null)));</span>
+
+        // for caching model information (so we don't have to query for each note)
+<span class="nc" id="L789">        long modelId = NOT_FOUND_NOTE_TYPE;</span>
+<span class="nc" id="L790">        Model model = null;</span>
+
+<span class="nc" id="L792">        col.getDecks().flush(); // is it okay to move this outside the for-loop? Is it needed at all?</span>
+<span class="nc" id="L793">        SupportSQLiteDatabase sqldb = col.getDb().getDatabase();</span>
+        try {
+<span class="nc" id="L795">            int result = 0;</span>
+<span class="nc" id="L796">            sqldb.beginTransaction();</span>
+<span class="nc bnc" id="L797" title="All 2 branches missed.">            for (int i = 0; i &lt; valuesArr.length; i++) {</span>
+<span class="nc" id="L798">                ContentValues values = valuesArr[i];</span>
+<span class="nc bnc" id="L799" title="All 2 branches missed.">                if (values == null) {</span>
+<span class="nc" id="L800">                    continue;</span>
+                }
+<span class="nc" id="L802">                String flds = values.getAsString(FlashCardsContract.Note.FLDS);</span>
+<span class="nc bnc" id="L803" title="All 2 branches missed.">                if (flds == null) {</span>
+<span class="nc" id="L804">                    continue;</span>
+                }
+<span class="nc" id="L806">                Long thisModelId = values.getAsLong(FlashCardsContract.Note.MID);</span>
+<span class="nc bnc" id="L807" title="All 4 branches missed.">                if (thisModelId == null || thisModelId &lt; 0) {</span>
+<span class="nc" id="L808">                    Timber.d(&quot;Unable to get model at index: %d&quot;, i);</span>
+<span class="nc" id="L809">                    continue;</span>
+                }
+<span class="nc" id="L811">                String[] fldsArray = Utils.splitFields(flds);</span>
+
+<span class="nc bnc" id="L813" title="All 4 branches missed.">                if (model == null || thisModelId != modelId) {</span>
+                    // new modelId so need to recalculate model, modelId and invalidate duplicateChecker (which is based on previous model)
+<span class="nc" id="L815">                    model = col.getModels().get(thisModelId);</span>
+<span class="nc" id="L816">                    modelId = thisModelId;</span>
+                }
+
+                // Create empty note
+<span class="nc" id="L820">                com.ichi2.libanki.Note newNote = new com.ichi2.libanki.Note(col, model); // for some reason we cannot pass modelId in here</span>
+                // Set fields
+                // Check that correct number of flds specified
+<span class="nc bnc" id="L823" title="All 2 branches missed.">                if (fldsArray.length != newNote.getFields().length) {</span>
+<span class="nc" id="L824">                    throw new IllegalArgumentException(&quot;Incorrect flds argument : &quot; + flds);</span>
+                }
+<span class="nc bnc" id="L826" title="All 2 branches missed.">                for (int idx = 0; idx &lt; fldsArray.length; idx++) {</span>
+<span class="nc" id="L827">                    newNote.setField(idx, fldsArray[idx]);</span>
+                }
+                // Set tags
+<span class="nc" id="L830">                String tags = values.getAsString(FlashCardsContract.Note.TAGS);</span>
+<span class="nc bnc" id="L831" title="All 2 branches missed.">                if (tags != null) {</span>
+<span class="nc" id="L832">                    newNote.setTagsFromStr(tags);</span>
+                }
+                // Add to collection
+<span class="nc" id="L835">                col.addNote(newNote);</span>
+<span class="nc bnc" id="L836" title="All 2 branches missed.">                for (Card card : newNote.cards()) {</span>
+<span class="nc" id="L837">                    card.setDid(deckId);</span>
+<span class="nc" id="L838">                    card.flush();</span>
+<span class="nc" id="L839">                }</span>
+<span class="nc" id="L840">                result++;</span>
+            }
+<span class="nc" id="L842">            col.save();</span>
+<span class="nc" id="L843">            sqldb.setTransactionSuccessful();</span>
+<span class="nc" id="L844">            return result;</span>
+        } finally {
+<span class="nc" id="L846">            DB.safeEndInTransaction(sqldb);</span>
+        }
+    }
+
+    @Override
+    public Uri insert(@NonNull Uri uri, ContentValues values) {
+<span class="nc bnc" id="L852" title="All 4 branches missed.">        if (!hasReadWritePermission() &amp;&amp; shouldEnforceQueryOrInsertSecurity()) {</span>
+<span class="nc" id="L853">            throwSecurityException(&quot;insert&quot;, uri);</span>
+        }
+<span class="nc" id="L855">        Collection col = CollectionHelper.getInstance().getCol(mContext);</span>
+<span class="nc bnc" id="L856" title="All 2 branches missed.">        if (col == null) {</span>
+<span class="nc" id="L857">            throw new IllegalStateException(COL_NULL_ERROR_MSG);</span>
+        }
+<span class="nc" id="L859">        col.log(getLogMessage(&quot;insert&quot;, uri));</span>
+
+        // Find out what data the user is requesting
+<span class="nc" id="L862">        int match = sUriMatcher.match(uri);</span>
+
+<span class="nc bnc" id="L864" title="All 14 branches missed.">        switch (match) {</span>
+            case NOTES: {
+                /* Insert new note with specified fields and tags
+                 */
+<span class="nc" id="L868">                Long modelId = values.getAsLong(FlashCardsContract.Note.MID);</span>
+<span class="nc" id="L869">                String flds = values.getAsString(FlashCardsContract.Note.FLDS);</span>
+<span class="nc" id="L870">                String tags = values.getAsString(FlashCardsContract.Note.TAGS);</span>
+                // Create empty note
+<span class="nc" id="L872">                com.ichi2.libanki.Note newNote = new com.ichi2.libanki.Note(col, col.getModels().get(modelId));</span>
+                // Set fields
+<span class="nc" id="L874">                String[] fldsArray = Utils.splitFields(flds);</span>
+                // Check that correct number of flds specified
+<span class="nc bnc" id="L876" title="All 2 branches missed.">                if (fldsArray.length != newNote.getFields().length) {</span>
+<span class="nc" id="L877">                    throw new IllegalArgumentException(&quot;Incorrect flds argument : &quot; + flds);</span>
+                }
+<span class="nc bnc" id="L879" title="All 2 branches missed.">                for (int idx=0; idx &lt; fldsArray.length; idx++) {</span>
+<span class="nc" id="L880">                    newNote.setField(idx, fldsArray[idx]);</span>
+                }
+                // Set tags
+<span class="nc bnc" id="L883" title="All 2 branches missed.">                if (tags != null) {</span>
+<span class="nc" id="L884">                    newNote.setTagsFromStr(tags);</span>
+                }
+                // Add to collection
+<span class="nc" id="L887">                col.addNote(newNote);</span>
+<span class="nc" id="L888">                col.save();</span>
+<span class="nc" id="L889">                return Uri.withAppendedPath(FlashCardsContract.Note.CONTENT_URI, Long.toString(newNote.getId()));</span>
+            }
+            case NOTES_ID:
+                // Note ID is generated automatically by libanki
+<span class="nc" id="L893">                throw new IllegalArgumentException(&quot;Not possible to insert note with specific ID&quot;);</span>
+            case NOTES_ID_CARDS:
+            case NOTES_ID_CARDS_ORD:
+                // Cards are generated automatically by libanki
+<span class="nc" id="L897">                throw new IllegalArgumentException(&quot;Not possible to insert cards directly (only through NOTES)&quot;);</span>
+            case MODELS:
+                // Get input arguments
+<span class="nc" id="L900">                String modelName = values.getAsString(FlashCardsContract.Model.NAME);</span>
+<span class="nc" id="L901">                String css = values.getAsString(FlashCardsContract.Model.CSS);</span>
+<span class="nc" id="L902">                Long did = values.getAsLong(FlashCardsContract.Model.DECK_ID);</span>
+<span class="nc" id="L903">                String fieldNames = values.getAsString(FlashCardsContract.Model.FIELD_NAMES);</span>
+<span class="nc" id="L904">                Integer numCards = values.getAsInteger(FlashCardsContract.Model.NUM_CARDS);</span>
+<span class="nc" id="L905">                Integer sortf = values.getAsInteger(FlashCardsContract.Model.SORT_FIELD_INDEX);</span>
+<span class="nc" id="L906">                Integer type = values.getAsInteger(FlashCardsContract.Model.TYPE);</span>
+<span class="nc" id="L907">                String latexPost = values.getAsString(FlashCardsContract.Model.LATEX_POST);</span>
+<span class="nc" id="L908">                String latexPre = values.getAsString(FlashCardsContract.Model.LATEX_PRE);</span>
+                // Throw exception if required fields empty
+<span class="nc bnc" id="L910" title="All 6 branches missed.">                if (modelName == null || fieldNames == null || numCards == null) {</span>
+<span class="nc" id="L911">                    throw new IllegalArgumentException(&quot;Model name, field_names, and num_cards can't be empty&quot;);</span>
+                }
+<span class="nc bnc" id="L913" title="All 4 branches missed.">                if (did != null &amp;&amp; col.getDecks().isDyn(did)) {</span>
+<span class="nc" id="L914">                    throw new IllegalArgumentException(&quot;Cannot set a filtered deck as default deck for a model&quot;);</span>
+                }
+                // Create a new model
+<span class="nc" id="L917">                Models mm = col.getModels();</span>
+<span class="nc" id="L918">                Model newModel = mm.newModel(modelName);</span>
+                try {
+                    // Add the fields
+<span class="nc" id="L921">                    String[] allFields = Utils.splitFields(fieldNames);</span>
+<span class="nc bnc" id="L922" title="All 2 branches missed.">                    for (String f: allFields) {</span>
+<span class="nc" id="L923">                        mm.addFieldInNewModel(newModel, mm.newField(f));</span>
+                    }
+                    // Add some empty card templates
+<span class="nc bnc" id="L926" title="All 2 branches missed.">                    for (int idx = 0; idx &lt; numCards; idx++) {</span>
+<span class="nc" id="L927">                        String card_name = mContext.getResources().getString(R.string.card_n_name, idx + 1);</span>
+<span class="nc" id="L928">                        JSONObject t = Models.newTemplate(card_name);</span>
+<span class="nc" id="L929">                        t.put(&quot;qfmt&quot;,String.format(&quot;{{%s}}&quot;, allFields[0]));</span>
+<span class="nc" id="L930">                        String answerField = allFields[0];</span>
+<span class="nc bnc" id="L931" title="All 2 branches missed.">                        if (allFields.length &gt; 1) {</span>
+<span class="nc" id="L932">                            answerField = allFields[1];</span>
+                        }
+<span class="nc" id="L934">                        t.put(&quot;afmt&quot;,String.format(&quot;{{FrontSide}}\\n\\n&lt;hr id=answer&gt;\\n\\n{{%s}}&quot;, answerField));</span>
+<span class="nc" id="L935">                        mm.addTemplateInNewModel(newModel, t);</span>
+                    }
+                    // Add the CSS if specified
+<span class="nc bnc" id="L938" title="All 2 branches missed.">                    if (css != null) {</span>
+<span class="nc" id="L939">                        newModel.put(&quot;css&quot;, css);</span>
+                    }
+                    // Add the did if specified
+<span class="nc bnc" id="L942" title="All 2 branches missed.">                    if (did != null) {</span>
+<span class="nc" id="L943">                        newModel.put(&quot;did&quot;, did);</span>
+                    }
+<span class="nc bnc" id="L945" title="All 4 branches missed.">                    if (sortf != null &amp;&amp; sortf &lt; allFields.length) {</span>
+<span class="nc" id="L946">                        newModel.put(&quot;sortf&quot;, sortf);</span>
+                    }
+<span class="nc bnc" id="L948" title="All 2 branches missed.">                    if (type != null) {</span>
+<span class="nc" id="L949">                        newModel.put(&quot;type&quot;, type);</span>
+                    }
+<span class="nc bnc" id="L951" title="All 2 branches missed.">                    if (latexPost != null) {</span>
+<span class="nc" id="L952">                        newModel.put(&quot;latexPost&quot;, latexPost);</span>
+                    }
+<span class="nc bnc" id="L954" title="All 2 branches missed.">                    if (latexPre != null) {</span>
+<span class="nc" id="L955">                        newModel.put(&quot;latexPre&quot;, latexPre);</span>
+                    }
+                    // Add the model to collection (from this point on edits will require a full-sync)
+<span class="nc" id="L958">                    mm.add(newModel);</span>
+<span class="nc" id="L959">                    col.save();</span>
+                    // Get the mid and return a URI
+<span class="nc" id="L961">                    String mid = Long.toString(newModel.getLong(&quot;id&quot;));</span>
+<span class="nc" id="L962">                    return Uri.withAppendedPath(FlashCardsContract.Model.CONTENT_URI, mid);</span>
+<span class="nc" id="L963">                } catch (JSONException e) {</span>
+<span class="nc" id="L964">                    Timber.e(e, &quot;Could not set a field of new model %s&quot;, modelName);</span>
+<span class="nc" id="L965">                    return null;</span>
+                }
+            case MODELS_ID:
+                // Model ID is generated automatically by libanki
+<span class="nc" id="L969">                throw new IllegalArgumentException(&quot;Not possible to insert model with specific ID&quot;);</span>
+            case MODELS_ID_TEMPLATES: {
+<span class="nc" id="L971">                Models models = col.getModels();</span>
+<span class="nc" id="L972">                Long mid = getModelIdFromUri(uri, col);</span>
+<span class="nc" id="L973">                Model existingModel = models.get(mid);</span>
+<span class="nc bnc" id="L974" title="All 2 branches missed.">                if (existingModel == null) {</span>
+<span class="nc" id="L975">                    throw new IllegalArgumentException(&quot;model missing: &quot; + mid);</span>
+                }
+<span class="nc" id="L977">                String name = values.getAsString(CardTemplate.NAME);</span>
+<span class="nc" id="L978">                String qfmt = values.getAsString(CardTemplate.QUESTION_FORMAT);</span>
+<span class="nc" id="L979">                String afmt = values.getAsString(CardTemplate.ANSWER_FORMAT);</span>
+<span class="nc" id="L980">                String bqfmt = values.getAsString(CardTemplate.BROWSER_QUESTION_FORMAT);</span>
+<span class="nc" id="L981">                String bafmt = values.getAsString(CardTemplate.BROWSER_ANSWER_FORMAT);</span>
+                try {
+<span class="nc" id="L983">                    JSONObject t = Models.newTemplate(name);</span>
+<span class="nc" id="L984">                    t.put(&quot;qfmt&quot;, qfmt);</span>
+<span class="nc" id="L985">                    t.put(&quot;afmt&quot;, afmt);</span>
+<span class="nc" id="L986">                    t.put(&quot;bqfmt&quot;, bqfmt);</span>
+<span class="nc" id="L987">                    t.put(&quot;bafmt&quot;, bafmt);</span>
+<span class="nc" id="L988">                    models.addTemplate(existingModel, t);</span>
+<span class="nc" id="L989">                    models.save(existingModel);</span>
+<span class="nc" id="L990">                    col.save();</span>
+<span class="nc" id="L991">                    return ContentUris.withAppendedId(uri, t.getInt(&quot;ord&quot;));</span>
+<span class="nc" id="L992">                } catch (ConfirmModSchemaException e) {</span>
+<span class="nc" id="L993">                    throw new IllegalArgumentException(&quot;Unable to add template without user requesting/accepting full-sync&quot;, e);</span>
+<span class="nc" id="L994">                } catch (JSONException e) {</span>
+<span class="nc" id="L995">                    throw new IllegalArgumentException(&quot;Unable to get ord from new template&quot;, e);</span>
+                }
+            }
+            case MODELS_ID_TEMPLATES_ID:
+<span class="nc" id="L999">                throw new IllegalArgumentException(&quot;Not possible to insert template with specific ORD&quot;);</span>
+            case MODELS_ID_FIELDS: {
+<span class="nc" id="L1001">                Models models = col.getModels();</span>
+<span class="nc" id="L1002">                long mid = getModelIdFromUri(uri, col);</span>
+<span class="nc" id="L1003">                Model existingModel = models.get(mid);</span>
+<span class="nc bnc" id="L1004" title="All 2 branches missed.">                if (existingModel == null) {</span>
+<span class="nc" id="L1005">                    throw new IllegalArgumentException(&quot;model missing: &quot; + mid);</span>
+                }
+<span class="nc" id="L1007">                String name = values.getAsString(FlashCardsContract.Model.FIELD_NAME);</span>
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">                if (name == null) {</span>
+<span class="nc" id="L1009">                    throw new IllegalArgumentException(&quot;field name missing for model: &quot; + mid);</span>
+                }
+<span class="nc" id="L1011">                JSONObject field = models.newField(name);</span>
+                try {
+<span class="nc" id="L1013">                    models.addField(existingModel, field);</span>
+<span class="nc" id="L1014">                    col.save();</span>
+<span class="nc" id="L1015">                    JSONArray flds = existingModel.getJSONArray(&quot;flds&quot;);</span>
+<span class="nc" id="L1016">                    return ContentUris.withAppendedId(uri, flds.length() - 1);</span>
+<span class="nc" id="L1017">                } catch (ConfirmModSchemaException e) {</span>
+<span class="nc" id="L1018">                    throw new IllegalArgumentException(&quot;Unable to insert field: &quot; + name, e);</span>
+<span class="nc" id="L1019">                } catch (JSONException e) {</span>
+<span class="nc" id="L1020">                    throw new IllegalArgumentException(&quot;Unable to get newly created field: &quot; + name, e);</span>
+                }
+            }
+            case SCHEDULE:
+                // Doesn't make sense to insert an object into the schedule table
+<span class="nc" id="L1025">                throw new IllegalArgumentException(&quot;Not possible to perform insert operation on schedule&quot;);</span>
+            case DECKS:
+                // Insert new deck with specified name
+<span class="nc" id="L1028">                String deckName = values.getAsString(FlashCardsContract.Deck.DECK_NAME);</span>
+<span class="nc" id="L1029">                did = col.getDecks().id(deckName, false);</span>
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">                if (did != null) {</span>
+<span class="nc" id="L1031">                    throw new IllegalArgumentException(&quot;Deck name already exists: &quot; + deckName);</span>
+                }
+<span class="nc bnc" id="L1033" title="All 2 branches missed.">                if (!Decks.isValidDeckName(deckName)) {</span>
+<span class="nc" id="L1034">                    throw new IllegalArgumentException(&quot;Invalid deck name '&quot; + deckName + &quot;'&quot;);</span>
+                }
+<span class="nc" id="L1036">                did = col.getDecks().id(deckName, true);</span>
+<span class="nc" id="L1037">                Deck deck = col.getDecks().get(did);</span>
+<span class="nc bnc" id="L1038" title="All 2 branches missed.">                if (deck != null) {</span>
+                    try {
+<span class="nc" id="L1040">                        String deckDesc = values.getAsString(FlashCardsContract.Deck.DECK_DESC);</span>
+<span class="nc bnc" id="L1041" title="All 2 branches missed.">                        if (deckDesc != null) {</span>
+<span class="nc" id="L1042">                            deck.put(&quot;desc&quot;, deckDesc);</span>
+                        }
+<span class="nc" id="L1044">                    } catch (JSONException e) {</span>
+<span class="nc" id="L1045">                        Timber.e(e, &quot;Could not set a field of new deck %s&quot;, deckName);</span>
+<span class="nc" id="L1046">                        return null;</span>
+<span class="nc" id="L1047">                    }</span>
+                }
+<span class="nc" id="L1049">                col.getDecks().flush();</span>
+<span class="nc" id="L1050">                return Uri.withAppendedPath(FlashCardsContract.Deck.CONTENT_ALL_URI, Long.toString(did));</span>
+            case DECK_SELECTED:
+                // Can't have more than one selected deck
+<span class="nc" id="L1053">                throw new IllegalArgumentException(&quot;Selected deck can only be queried and updated&quot;);</span>
+            case DECKS_ID:
+                // Deck ID is generated automatically by libanki
+<span class="nc" id="L1056">                throw new IllegalArgumentException(&quot;Not possible to insert deck with specific ID&quot;);</span>
+            case MEDIA:
+                // insert a media file
+                // contentvalue should have data and preferredFileName values
+<span class="nc" id="L1060">                return insertMediaFile(values, col);</span>
+            default:
+                // Unknown URI type
+<span class="nc" id="L1063">                throw new IllegalArgumentException(&quot;uri &quot; + uri + &quot; is not supported&quot;);</span>
+        }
+    }
+
+    private Uri insertMediaFile(ContentValues values, Collection col) {
+        // Insert media file using libanki.Media.addFile and return Uri for the inserted file.
+<span class="nc" id="L1069">        Uri fileUri = Uri.parse(values.getAsString(FlashCardsContract.AnkiMedia.FILE_URI));</span>
+<span class="nc" id="L1070">        String preferredName = values.getAsString(FlashCardsContract.AnkiMedia.PREFERRED_NAME);</span>
+
+
+        try {
+<span class="nc" id="L1074">            ContentResolver cR = mContext.getContentResolver();</span>
+<span class="nc" id="L1075">            Media media = col.getMedia();</span>
+            // idea, open input stream and save to cache directory, then
+            // pass this (hopefully temporary) file to the media.addFile function.
+
+<span class="nc" id="L1079">            String fileMimeType = MimeTypeMap.getSingleton().getExtensionFromMimeType(cR.getType(fileUri)); // return eg &quot;jpeg&quot;</span>
+            // should we be enforcing strict mimetypes? which types?
+            File tempFile;
+<span class="nc" id="L1082">            File externalCacheDir = mContext.getExternalCacheDir();</span>
+<span class="nc bnc" id="L1083" title="All 2 branches missed.">            if (externalCacheDir == null) {</span>
+<span class="nc" id="L1084">                Timber.e(&quot;createUI() unable to get external cache directory&quot;);</span>
+<span class="nc" id="L1085">                return null;</span>
+            }
+<span class="nc" id="L1087">            File tempMediaDir = new File(externalCacheDir.getAbsolutePath() + &quot;/temp-media&quot;);</span>
+<span class="nc bnc" id="L1088" title="All 4 branches missed.">            if (!tempMediaDir.exists() &amp;&amp; !tempMediaDir.mkdir()) {</span>
+<span class="nc" id="L1089">                Timber.e(&quot;temp-media dir did not exist and could not be created&quot;);</span>
+<span class="nc" id="L1090">                return null;</span>
+            }
+            try {
+<span class="nc" id="L1093">                tempFile = File.createTempFile(</span>
+                        preferredName+&quot;_&quot;, // the beginning of the filename.
+                        &quot;.&quot; + fileMimeType, // this is the extension, if null, '.tmp' is used, need to get the extension from MIME type?
+                        tempMediaDir
+                );
+<span class="nc" id="L1098">                tempFile.deleteOnExit();</span>
+<span class="nc" id="L1099">            } catch (Exception e) {</span>
+<span class="nc" id="L1100">                Timber.w(e, &quot;Could not create temporary media file. &quot;);</span>
+<span class="nc" id="L1101">                return null;</span>
+<span class="nc" id="L1102">            }</span>
+
+<span class="nc" id="L1104">            FileUtil.internalizeUri(fileUri, null, tempFile, cR);</span>
+
+<span class="nc" id="L1106">            String fname = media.addFile(tempFile);</span>
+<span class="nc" id="L1107">            Timber.d(&quot;insert -&gt; MEDIA: fname = %s&quot;, fname);</span>
+<span class="nc" id="L1108">            File f = new File(fname);</span>
+<span class="nc" id="L1109">            Timber.d(&quot;insert -&gt; MEDIA: f = %s&quot;, f);</span>
+<span class="nc" id="L1110">            Uri uriFromF = Uri.fromFile(f);</span>
+<span class="nc" id="L1111">            Timber.d(&quot;insert -&gt; MEDIA: uriFromF = %s&quot;, uriFromF);</span>
+<span class="nc" id="L1112">            return Uri.fromFile(new File(fname));</span>
+
+<span class="nc" id="L1114">        } catch (IOException | EmptyMediaException e) {</span>
+<span class="nc" id="L1115">            Timber.w(e, &quot;insert failed from %s&quot;, fileUri);</span>
+<span class="nc" id="L1116">            return null;</span>
+        }
+    }
+
+    private static String[] sanitizeNoteProjection(String[] projection) {
+<span class="nc bnc" id="L1121" title="All 4 branches missed.">        if (projection == null || projection.length == 0) {</span>
+<span class="nc" id="L1122">            return sDefaultNoteProjectionDBAccess;</span>
+        }
+<span class="nc" id="L1124">        List&lt;String&gt; sanitized = new ArrayList&lt;&gt;(projection.length);</span>
+<span class="nc bnc" id="L1125" title="All 2 branches missed.">        for (String column : projection) {</span>
+<span class="nc" id="L1126">            int idx = projSearch(FlashCardsContract.Note.DEFAULT_PROJECTION, column);</span>
+<span class="nc bnc" id="L1127" title="All 2 branches missed.">            if (idx &gt;= 0) {</span>
+<span class="nc" id="L1128">                sanitized.add(sDefaultNoteProjectionDBAccess[idx]);</span>
+            } else {
+<span class="nc" id="L1130">                throw new IllegalArgumentException(&quot;Unknown column &quot; + column);</span>
+            }
+        }
+<span class="nc" id="L1133">        return sanitized.toArray(new String[sanitized.size()]);</span>
+    }
+
+    private static int projSearch(String[] projection, String column) {
+<span class="nc bnc" id="L1137" title="All 2 branches missed.">        for (int i = 0; i &lt; projection.length; i++) {</span>
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">            if (projection[i].equals(column)) {</span>
+<span class="nc" id="L1139">                return i;</span>
+            }
+        }
+<span class="nc" id="L1142">        return -1;</span>
+    }
+
+    private void addModelToCursor(Long modelId, Models models, MatrixCursor rv, String[] columns) {
+<span class="nc" id="L1146">        Model jsonObject = models.get(modelId);</span>
+<span class="nc" id="L1147">        MatrixCursor.RowBuilder rb = rv.newRow();</span>
+        try {
+<span class="nc bnc" id="L1149" title="All 2 branches missed.">            for (String column : columns) {</span>
+<span class="nc bnc" id="L1150" title="All 12 branches missed.">                switch (column) {</span>
+                    case FlashCardsContract.Model._ID:
+<span class="nc" id="L1152">                        rb.add(modelId);</span>
+<span class="nc" id="L1153">                        break;</span>
+                    case FlashCardsContract.Model.NAME:
+<span class="nc" id="L1155">                        rb.add(jsonObject.getString(&quot;name&quot;));</span>
+<span class="nc" id="L1156">                        break;</span>
+                    case FlashCardsContract.Model.FIELD_NAMES:
+<span class="nc" id="L1158">                        JSONArray flds = jsonObject.getJSONArray(&quot;flds&quot;);</span>
+<span class="nc" id="L1159">                        String[] allFlds = new String[flds.length()];</span>
+<span class="nc bnc" id="L1160" title="All 2 branches missed.">                        for (int idx = 0; idx &lt; flds.length(); idx++) {</span>
+<span class="nc" id="L1161">                            allFlds[idx] = flds.getJSONObject(idx).optString(&quot;name&quot;, &quot;&quot;);</span>
+                        }
+<span class="nc" id="L1163">                        rb.add(Utils.joinFields(allFlds));</span>
+<span class="nc" id="L1164">                        break;</span>
+                    case FlashCardsContract.Model.NUM_CARDS:
+<span class="nc" id="L1166">                        rb.add(jsonObject.getJSONArray(&quot;tmpls&quot;).length());</span>
+<span class="nc" id="L1167">                        break;</span>
+                    case FlashCardsContract.Model.CSS:
+<span class="nc" id="L1169">                        rb.add(jsonObject.getString(&quot;css&quot;));</span>
+<span class="nc" id="L1170">                        break;</span>
+                    case FlashCardsContract.Model.DECK_ID:
+                        //#6378 - Anki Desktop changed schema temporarily to allow null
+<span class="nc" id="L1173">                        rb.add(jsonObject.optLong(&quot;did&quot;, Consts.DEFAULT_DECK_ID));</span>
+<span class="nc" id="L1174">                        break;</span>
+                    case FlashCardsContract.Model.SORT_FIELD_INDEX:
+<span class="nc" id="L1176">                        rb.add(jsonObject.getLong(&quot;sortf&quot;));</span>
+<span class="nc" id="L1177">                        break;</span>
+                    case FlashCardsContract.Model.TYPE:
+<span class="nc" id="L1179">                        rb.add(jsonObject.getLong(&quot;type&quot;));</span>
+<span class="nc" id="L1180">                        break;</span>
+                    case FlashCardsContract.Model.LATEX_POST:
+<span class="nc" id="L1182">                        rb.add(jsonObject.getString(&quot;latexPost&quot;));</span>
+<span class="nc" id="L1183">                        break;</span>
+                    case FlashCardsContract.Model.LATEX_PRE:
+<span class="nc" id="L1185">                        rb.add(jsonObject.getString(&quot;latexPre&quot;));</span>
+<span class="nc" id="L1186">                        break;</span>
+                    case FlashCardsContract.Model.NOTE_COUNT:
+<span class="nc" id="L1188">                        rb.add(models.useCount(jsonObject));</span>
+<span class="nc" id="L1189">                        break;</span>
+                    default:
+<span class="nc" id="L1191">                        throw new UnsupportedOperationException(&quot;Queue \&quot;&quot; + column + &quot;\&quot; is unknown&quot;);</span>
+                }
+            }
+<span class="nc" id="L1194">        } catch (JSONException e) {</span>
+<span class="nc" id="L1195">            Timber.e(e, &quot;Error parsing JSONArray&quot;);</span>
+<span class="nc" id="L1196">            throw new IllegalArgumentException(&quot;Model &quot; + modelId + &quot; is malformed&quot;, e);</span>
+<span class="nc" id="L1197">        }</span>
+<span class="nc" id="L1198">    }</span>
+
+    private void addCardToCursor(Card currentCard, MatrixCursor rv, Collection col, String[] columns) {
+        String cardName;
+        try {
+<span class="nc" id="L1203">            cardName = currentCard.template().getString(&quot;name&quot;);</span>
+<span class="nc" id="L1204">        } catch (JSONException je) {</span>
+<span class="nc" id="L1205">            throw new IllegalArgumentException(&quot;Card is using an invalid template&quot;, je);</span>
+<span class="nc" id="L1206">        }</span>
+<span class="nc" id="L1207">        String question = currentCard.q();</span>
+<span class="nc" id="L1208">        String answer = currentCard.a();</span>
+
+<span class="nc" id="L1210">        MatrixCursor.RowBuilder rb = rv.newRow();</span>
+<span class="nc bnc" id="L1211" title="All 2 branches missed.">        for (String column : columns) {</span>
+<span class="nc bnc" id="L1212" title="All 10 branches missed.">            switch (column) {</span>
+                case FlashCardsContract.Card.NOTE_ID:
+<span class="nc" id="L1214">                    rb.add(currentCard.note().getId());</span>
+<span class="nc" id="L1215">                    break;</span>
+                case FlashCardsContract.Card.CARD_ORD:
+<span class="nc" id="L1217">                    rb.add(currentCard.getOrd());</span>
+<span class="nc" id="L1218">                    break;</span>
+                case FlashCardsContract.Card.CARD_NAME:
+<span class="nc" id="L1220">                    rb.add(cardName);</span>
+<span class="nc" id="L1221">                    break;</span>
+                case FlashCardsContract.Card.DECK_ID:
+<span class="nc" id="L1223">                    rb.add(currentCard.getDid());</span>
+<span class="nc" id="L1224">                    break;</span>
+                case FlashCardsContract.Card.QUESTION:
+<span class="nc" id="L1226">                    rb.add(question);</span>
+<span class="nc" id="L1227">                    break;</span>
+                case FlashCardsContract.Card.ANSWER:
+<span class="nc" id="L1229">                    rb.add(answer);</span>
+<span class="nc" id="L1230">                    break;</span>
+                case FlashCardsContract.Card.QUESTION_SIMPLE:
+<span class="nc" id="L1232">                    rb.add(currentCard.qSimple());</span>
+<span class="nc" id="L1233">                    break;</span>
+                case FlashCardsContract.Card.ANSWER_SIMPLE:
+<span class="nc" id="L1235">                    rb.add(currentCard._getQA(false).get(&quot;a&quot;));</span>
+<span class="nc" id="L1236">                    break;</span>
+                case FlashCardsContract.Card.ANSWER_PURE:
+<span class="nc" id="L1238">                    rb.add(currentCard.getPureAnswer());</span>
+<span class="nc" id="L1239">                    break;</span>
+                default:
+<span class="nc" id="L1241">                    throw new UnsupportedOperationException(&quot;Queue \&quot;&quot; + column + &quot;\&quot; is unknown&quot;);</span>
+            }
+        }
+<span class="nc" id="L1244">    }</span>
+
+    private void addReviewInfoToCursor(Card currentCard, JSONArray nextReviewTimesJson, int buttonCount,MatrixCursor rv, Collection col, String[] columns) {
+<span class="nc" id="L1247">        MatrixCursor.RowBuilder rb = rv.newRow();</span>
+<span class="nc bnc" id="L1248" title="All 2 branches missed.">        for (String column : columns) {</span>
+<span class="nc bnc" id="L1249" title="All 6 branches missed.">            switch (column) {</span>
+                case FlashCardsContract.Card.NOTE_ID:
+<span class="nc" id="L1251">                    rb.add(currentCard.note().getId());</span>
+<span class="nc" id="L1252">                    break;</span>
+                case FlashCardsContract.ReviewInfo.CARD_ORD:
+<span class="nc" id="L1254">                    rb.add(currentCard.getOrd());</span>
+<span class="nc" id="L1255">                    break;</span>
+                case FlashCardsContract.ReviewInfo.BUTTON_COUNT:
+<span class="nc" id="L1257">                    rb.add(buttonCount);</span>
+<span class="nc" id="L1258">                    break;</span>
+                case FlashCardsContract.ReviewInfo.NEXT_REVIEW_TIMES:
+<span class="nc" id="L1260">                    rb.add(nextReviewTimesJson.toString());</span>
+<span class="nc" id="L1261">                    break;</span>
+                case FlashCardsContract.ReviewInfo.MEDIA_FILES:
+<span class="nc" id="L1263">                    rb.add(new JSONArray(col.getMedia().filesInStr(currentCard.note().getMid(), currentCard.q() + currentCard.a())));</span>
+<span class="nc" id="L1264">                    break;</span>
+                default:
+<span class="nc" id="L1266">                    throw new UnsupportedOperationException(&quot;Queue \&quot;&quot; + column + &quot;\&quot; is unknown&quot;);</span>
+            }
+        }
+<span class="nc" id="L1269">    }</span>
+
+    private void answerCard(Collection col, AbstractSched sched, Card cardToAnswer, @Consts.BUTTON_TYPE int ease, long timeTaken) {
+        try {
+<span class="nc" id="L1273">            DB db = col.getDb();</span>
+<span class="nc" id="L1274">            db.getDatabase().beginTransaction();</span>
+            try {
+<span class="nc bnc" id="L1276" title="All 2 branches missed.">                if (cardToAnswer != null) {</span>
+<span class="nc bnc" id="L1277" title="All 2 branches missed.">                    if(timeTaken != -1){</span>
+<span class="nc" id="L1278">                        cardToAnswer.setTimerStarted(col.getTime().intTimeMS()-timeTaken);</span>
+                    }
+<span class="nc" id="L1280">                    sched.answerCard(cardToAnswer, ease);</span>
+                }
+<span class="nc" id="L1282">                db.getDatabase().setTransactionSuccessful();</span>
+            } finally {
+<span class="nc" id="L1284">                DB.safeEndInTransaction(db);</span>
+            }
+<span class="nc" id="L1286">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L1287">            Timber.e(e, &quot;answerCard - RuntimeException on answering card&quot;);</span>
+<span class="nc" id="L1288">            AnkiDroidApp.sendExceptionReport(e, &quot;doInBackgroundAnswerCard&quot;);</span>
+<span class="nc" id="L1289">        }</span>
+<span class="nc" id="L1290">    }</span>
+
+
+    private void buryOrSuspendCard(Collection col, AbstractSched sched, Card card, boolean bury) {
+        try {
+<span class="nc" id="L1295">            col.getDb().executeInTransaction(() -&gt; {</span>
+<span class="nc bnc" id="L1296" title="All 2 branches missed.">                if (card != null) {</span>
+<span class="nc bnc" id="L1297" title="All 2 branches missed.">                    if(bury) {</span>
+                        // bury
+<span class="nc" id="L1299">                        sched.buryCards(new long[] {card.getId()});</span>
+                    } else {
+                        // suspend
+<span class="nc" id="L1302">                        sched.suspendCards(new long[] {card.getId()});</span>
+                    }
+                }
+<span class="nc" id="L1305">            });</span>
+<span class="nc" id="L1306">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L1307">            Timber.e(e, &quot;buryOrSuspendCard - RuntimeException on burying or suspending card&quot;);</span>
+<span class="nc" id="L1308">            AnkiDroidApp.sendExceptionReport(e, &quot;doInBackgroundBurySuspendCard&quot;);</span>
+<span class="nc" id="L1309">        }</span>
+<span class="nc" id="L1310">    }</span>
+
+    private void addTemplateToCursor(JSONObject tmpl, Model model, int id, Models models, MatrixCursor rv, String[] columns) {
+        try {
+<span class="nc" id="L1314">            MatrixCursor.RowBuilder rb = rv.newRow();</span>
+<span class="nc bnc" id="L1315" title="All 2 branches missed.">            for (String column : columns) {</span>
+<span class="nc bnc" id="L1316" title="All 10 branches missed.">                switch (column) {</span>
+                    case CardTemplate._ID:
+<span class="nc" id="L1318">                        rb.add(id);</span>
+<span class="nc" id="L1319">                        break;</span>
+                    case CardTemplate.MODEL_ID:
+<span class="nc" id="L1321">                        rb.add(model.getLong(&quot;id&quot;));</span>
+<span class="nc" id="L1322">                        break;</span>
+                    case CardTemplate.ORD:
+<span class="nc" id="L1324">                        rb.add(tmpl.getInt(&quot;ord&quot;));</span>
+<span class="nc" id="L1325">                        break;</span>
+                    case CardTemplate.NAME:
+<span class="nc" id="L1327">                        rb.add(tmpl.getString(&quot;name&quot;));</span>
+<span class="nc" id="L1328">                        break;</span>
+                    case CardTemplate.QUESTION_FORMAT:
+<span class="nc" id="L1330">                        rb.add(tmpl.getString(&quot;qfmt&quot;));</span>
+<span class="nc" id="L1331">                        break;</span>
+                    case CardTemplate.ANSWER_FORMAT:
+<span class="nc" id="L1333">                        rb.add(tmpl.getString(&quot;afmt&quot;));</span>
+<span class="nc" id="L1334">                        break;</span>
+                    case CardTemplate.BROWSER_QUESTION_FORMAT:
+<span class="nc" id="L1336">                        rb.add(tmpl.getString(&quot;bqfmt&quot;));</span>
+<span class="nc" id="L1337">                        break;</span>
+                    case CardTemplate.BROWSER_ANSWER_FORMAT:
+<span class="nc" id="L1339">                        rb.add(tmpl.getString(&quot;bafmt&quot;));</span>
+<span class="nc" id="L1340">                        break;</span>
+                    case CardTemplate.CARD_COUNT:
+<span class="nc" id="L1342">                        rb.add(models.tmplUseCount(model, tmpl.getInt(&quot;ord&quot;)));</span>
+<span class="nc" id="L1343">                        break;</span>
+                    default:
+<span class="nc" id="L1345">                        throw new UnsupportedOperationException(&quot;Support for column \&quot;&quot; + column +</span>
+                                &quot;\&quot; is not implemented&quot;);
+                }
+            }
+<span class="nc" id="L1349">        } catch (JSONException e) {</span>
+<span class="nc" id="L1350">            Timber.e(e, &quot;Error adding template to cursor&quot;);</span>
+<span class="nc" id="L1351">            throw new IllegalArgumentException(&quot;Template is malformed&quot;, e);</span>
+<span class="nc" id="L1352">        }</span>
+<span class="nc" id="L1353">    }</span>
+
+    private void addDeckToCursor(long id, String name, JSONArray deckCounts, MatrixCursor rv, Collection col, String[] columns) {
+<span class="nc" id="L1356">        MatrixCursor.RowBuilder rb = rv.newRow();</span>
+<span class="nc bnc" id="L1357" title="All 2 branches missed.">        for (String column : columns) {</span>
+<span class="nc bnc" id="L1358" title="All 7 branches missed.">            switch (column) {</span>
+                case FlashCardsContract.Deck.DECK_NAME:
+<span class="nc" id="L1360">                    rb.add(name);</span>
+<span class="nc" id="L1361">                    break;</span>
+                case FlashCardsContract.Deck.DECK_ID:
+<span class="nc" id="L1363">                    rb.add(id);</span>
+<span class="nc" id="L1364">                    break;</span>
+                case FlashCardsContract.Deck.DECK_COUNTS:
+<span class="nc" id="L1366">                    rb.add(deckCounts);</span>
+<span class="nc" id="L1367">                    break;</span>
+                case FlashCardsContract.Deck.OPTIONS:
+<span class="nc" id="L1369">                    String config = col.getDecks().confForDid(id).toString();</span>
+<span class="nc" id="L1370">                    rb.add(config);</span>
+<span class="nc" id="L1371">                    break;</span>
+                case FlashCardsContract.Deck.DECK_DYN:
+<span class="nc" id="L1373">                    rb.add(col.getDecks().isDyn(id));</span>
+<span class="nc" id="L1374">                    break;</span>
+                case FlashCardsContract.Deck.DECK_DESC:
+<span class="nc" id="L1376">                    String desc = col.getDecks().getActualDescription();</span>
+<span class="nc" id="L1377">                    rb.add(desc);</span>
+                    break;
+            }
+        }
+<span class="nc" id="L1381">    }</span>
+
+    private boolean selectDeckWithCheck(Collection col, long did){
+<span class="nc bnc" id="L1384" title="All 2 branches missed.">        if (col.getDecks().get(did, false) != null) {</span>
+<span class="nc" id="L1385">            col.getDecks().select(did);</span>
+<span class="nc" id="L1386">            return true;</span>
+        } else {
+<span class="nc" id="L1388">            Timber.e(&quot;Requested deck with id %d was not found in deck list. Either the deckID provided was wrong&quot; +</span>
+                    &quot;or the deck has been deleted in the meantime.&quot;
+<span class="nc" id="L1390">                    , did);</span>
+<span class="nc" id="L1391">            return false;</span>
+        }
+    }
+
+    private Card getCardFromUri(Uri uri, Collection col) {
+<span class="nc" id="L1396">        long noteId = Long.parseLong(uri.getPathSegments().get(1));</span>
+<span class="nc" id="L1397">        int ord = Integer.parseInt(uri.getPathSegments().get(3));</span>
+<span class="nc" id="L1398">        return getCard(noteId, ord, col);</span>
+    }
+
+    private Card getCard(long noteId, int ord, Collection col){
+<span class="nc" id="L1402">        Note currentNote = col.getNote(noteId);</span>
+<span class="nc" id="L1403">        Card currentCard = null;</span>
+<span class="nc bnc" id="L1404" title="All 2 branches missed.">        for(Card card : currentNote.cards()){</span>
+<span class="nc bnc" id="L1405" title="All 2 branches missed.">            if(card.getOrd() == ord){</span>
+<span class="nc" id="L1406">                currentCard = card;</span>
+            }
+<span class="nc" id="L1408">        }</span>
+<span class="nc bnc" id="L1409" title="All 2 branches missed.">        if (currentCard == null) {</span>
+<span class="nc" id="L1410">            throw new IllegalArgumentException(&quot;Card with ord &quot; + ord + &quot; does not exist for note &quot; + noteId);</span>
+        }
+<span class="nc" id="L1412">        return currentCard;</span>
+    }
+
+    private Note getNoteFromUri(Uri uri, Collection col) {
+<span class="fc" id="L1416">        long noteId = Long.parseLong(uri.getPathSegments().get(1));</span>
+<span class="fc" id="L1417">        return col.getNote(noteId);</span>
+    }
+
+
+    private long getModelIdFromUri(Uri uri, Collection col) {
+<span class="nc" id="L1422">        String modelIdSegment = uri.getPathSegments().get(1);</span>
+        long id;
+<span class="nc bnc" id="L1424" title="All 2 branches missed.">        if (modelIdSegment.equals(FlashCardsContract.Model.CURRENT_MODEL_ID)) {</span>
+<span class="nc" id="L1425">            id = col.getModels().current().optLong(&quot;id&quot;, -1);</span>
+        } else {
+            try {
+<span class="nc" id="L1428">                id = Long.parseLong(uri.getPathSegments().get(1));</span>
+<span class="nc" id="L1429">            } catch (NumberFormatException e) {</span>
+<span class="nc" id="L1430">                throw new IllegalArgumentException(&quot;Model ID must be either numeric or the String CURRENT_MODEL_ID&quot;);</span>
+<span class="nc" id="L1431">            }</span>
+        }
+<span class="nc" id="L1433">        return id;</span>
+    }
+
+    private JSONObject getTemplateFromUri(Uri uri, Collection col) throws JSONException {
+<span class="nc" id="L1437">        JSONObject model = col.getModels().get(getModelIdFromUri(uri, col));</span>
+<span class="nc" id="L1438">        int ord = Integer.parseInt(uri.getLastPathSegment());</span>
+<span class="nc" id="L1439">        return model.getJSONArray(&quot;tmpls&quot;).getJSONObject(ord);</span>
+    }
+
+    private void throwSecurityException(String methodName, Uri uri) {
+<span class="nc" id="L1443">        String msg = String.format(&quot;Permission not granted for: %s&quot;, getLogMessage(methodName, uri));</span>
+<span class="nc" id="L1444">        Timber.e(msg);</span>
+<span class="nc" id="L1445">        throw new SecurityException(msg);</span>
+    }
+
+    private String getLogMessage(String methodName, Uri uri) {
+<span class="fc" id="L1449">        final String format = &quot;%s.%s %s (%s)&quot;;</span>
+<span class="pc bpc" id="L1450" title="1 of 2 branches missed.">        String path = uri == null ? null : uri.getPath();</span>
+<span class="fc" id="L1451">        return String.format(format, getClass().getSimpleName(), methodName, path, getCallingPackage());</span>
+    }
+
+    @SuppressWarnings(&quot;BooleanMethodIsAlwaysInverted&quot;)
+    private boolean hasReadWritePermission() {
+<span class="pc bpc" id="L1456" title="1 of 2 branches missed.">        if (BuildConfig.DEBUG) {    // Allow self-calling of the provider only in debug builds (e.g. for unit tests)</span>
+<span class="pc bpc" id="L1457" title="1 of 2 branches missed.">            return mContext.checkCallingOrSelfPermission(READ_WRITE_PERMISSION) == PackageManager.PERMISSION_GRANTED;</span>
+        }
+<span class="nc bnc" id="L1459" title="All 2 branches missed.">        return mContext.checkCallingPermission(READ_WRITE_PERMISSION) == PackageManager.PERMISSION_GRANTED;</span>
+    }
+
+
+    /** Returns true if the calling package is known to be &quot;rogue&quot; and should be blocked.
+     Calling package might be rogue if it has not declared #READ_WRITE_PERMISSION in its manifest, or if blacklisted **/
+    private boolean knownRogueClient() {
+<span class="nc" id="L1466">        final PackageManager pm = mContext.getPackageManager();</span>
+        try {
+<span class="nc" id="L1468">            PackageInfo callingPi = pm.getPackageInfo(getCallingPackage(), PackageManager.GET_PERMISSIONS);</span>
+<span class="nc bnc" id="L1469" title="All 4 branches missed.">             if (callingPi == null || callingPi.requestedPermissions == null) {</span>
+<span class="nc" id="L1470">                 return false;</span>
+             }
+<span class="nc bnc" id="L1472" title="All 2 branches missed.">             return !Arrays.asList(callingPi.requestedPermissions).contains(READ_WRITE_PERMISSION);</span>
+<span class="nc" id="L1473">        } catch (PackageManager.NameNotFoundException e) {</span>
+<span class="nc" id="L1474">            return false;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

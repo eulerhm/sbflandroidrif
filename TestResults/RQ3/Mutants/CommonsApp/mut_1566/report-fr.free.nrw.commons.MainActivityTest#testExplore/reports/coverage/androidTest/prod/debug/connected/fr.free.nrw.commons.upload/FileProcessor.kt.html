@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FileProcessor.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.upload</a> &gt; <span class="el_source">FileProcessor.kt</span></div><h1>FileProcessor.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.upload
+
+import android.content.ContentResolver
+import android.content.Context
+import android.net.Uri
+import androidx.exifinterface.media.ExifInterface
+import fr.free.nrw.commons.R
+import fr.free.nrw.commons.kvstore.JsonKvStore
+import fr.free.nrw.commons.location.LatLng
+import fr.free.nrw.commons.mwapi.CategoryApi
+import fr.free.nrw.commons.mwapi.OkHttpJsonApiClient
+import fr.free.nrw.commons.settings.Prefs
+import fr.free.nrw.commons.upload.structure.depictions.DepictModel
+import io.reactivex.Observable
+import io.reactivex.disposables.CompositeDisposable
+import io.reactivex.disposables.Disposable
+import io.reactivex.schedulers.Schedulers
+import timber.log.Timber
+import java.io.File
+import java.io.IOException
+import java.util.*
+import javax.inject.Inject
+import javax.inject.Named
+
+/**
+ * Processing of the image filePath that is about to be uploaded via ShareActivity is done here
+ */
+
+private const val DEFAULT_SUGGESTION_RADIUS_IN_METRES = 100
+private const val MAX_SUGGESTION_RADIUS_IN_METRES = 1000
+private const val RADIUS_STEP_SIZE_IN_METRES = 100
+private const val MIN_NEARBY_RESULTS = 5
+
+<span class="nc" id="L34">class FileProcessor @Inject constructor(</span>
+<span class="nc" id="L35">    private val context: Context,</span>
+<span class="nc" id="L36">    private val contentResolver: ContentResolver,</span>
+<span class="nc" id="L37">    private val gpsCategoryModel: GpsCategoryModel,</span>
+<span class="nc" id="L38">    private val depictsModel: DepictModel,</span>
+<span class="nc" id="L39">    @param:Named(&quot;default_preferences&quot;) private val defaultKvStore: JsonKvStore,</span>
+<span class="nc" id="L40">    private val apiCall: CategoryApi,</span>
+<span class="nc" id="L41">    private val okHttpJsonApiClient: OkHttpJsonApiClient</span>
+) {
+<span class="nc" id="L43">    private val compositeDisposable = CompositeDisposable()</span>
+
+    fun cleanup() {
+<span class="nc" id="L46">        compositeDisposable.clear()</span>
+<span class="nc" id="L47">    }</span>
+
+    /**
+     * Processes filePath coordinates, either from EXIF data or user location
+     */
+    fun processFileCoordinates(similarImageInterface: SimilarImageInterface,
+                               filePath: String?, inAppPictureLocation: LatLng?)
+            : ImageCoordinates {
+<span class="nc" id="L55">        val exifInterface: ExifInterface? = try {</span>
+<span class="nc" id="L56">            ExifInterface(filePath!!)</span>
+<span class="nc" id="L57">        } catch (e: IOException) {</span>
+<span class="nc" id="L58">            Timber.e(e)</span>
+<span class="nc" id="L59">            null</span>
+        }
+        // Redact EXIF data as indicated in preferences.
+<span class="nc" id="L62">        redactExifTags(exifInterface, getExifTagsToRedact())</span>
+<span class="nc" id="L63">        Timber.d(&quot;Calling GPSExtractor&quot;)</span>
+<span class="nc" id="L64">        val originalImageCoordinates = ImageCoordinates(exifInterface, inAppPictureLocation)</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">        if (originalImageCoordinates.decimalCoords == null) {</span>
+            //Find other photos taken around the same time which has gps coordinates
+<span class="nc" id="L67">            findOtherImages(</span>
+<span class="nc" id="L68">                File(filePath),</span>
+<span class="nc" id="L69">                similarImageInterface</span>
+            )
+        } else {
+<span class="nc" id="L72">            prePopulateCategoriesAndDepictionsBy(originalImageCoordinates)</span>
+        }
+<span class="nc" id="L74">        return originalImageCoordinates</span>
+    }
+
+    /**
+     * Gets EXIF Tags from preferences to be redacted.
+     *
+     * @return tags to be redacted
+     */
+    fun getExifTagsToRedact(): Set&lt;String&gt; {
+<span class="nc" id="L83">        val prefManageEXIFTags =</span>
+<span class="nc bnc" id="L84" title="All 2 branches missed.">            defaultKvStore.getStringSet(Prefs.MANAGED_EXIF_TAGS) ?: emptySet()</span>
+<span class="nc" id="L85">        val redactTags: Set&lt;String&gt; =</span>
+<span class="nc" id="L86">            context.resources.getStringArray(R.array.pref_exifTag_values).toSet()</span>
+<span class="nc" id="L87">        return redactTags - prefManageEXIFTags</span>
+    }
+
+    /**
+     * Redacts EXIF metadata as indicated in preferences.
+     *
+     * @param exifInterface ExifInterface object
+     * @param redactTags    tags to be redacted
+     */
+    fun redactExifTags(exifInterface: ExifInterface?, redactTags: Set&lt;String&gt;) {
+<span class="nc" id="L97">        compositeDisposable.add(</span>
+<span class="nc" id="L98">            Observable.fromIterable(redactTags)</span>
+<span class="nc" id="L99">                .flatMap { Observable.fromArray(*FileMetadataUtils.getTagsFromPref(it)) }</span>
+<span class="nc" id="L100">                .subscribe(</span>
+<span class="nc" id="L101">                    { redactTag(exifInterface, it) },</span>
+<span class="nc" id="L102">                    { Timber.d(it) },</span>
+<span class="nc" id="L103">                    { save(exifInterface) }</span>
+                )
+        )
+<span class="nc" id="L106">    }</span>
+
+    private fun save(exifInterface: ExifInterface?) {
+<span class="nc" id="L109">        try {</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">            exifInterface?.saveAttributes()</span>
+<span class="nc" id="L111">        } catch (e: IOException) {</span>
+<span class="nc" id="L112">            Timber.w(&quot;EXIF redaction failed: %s&quot;, e.toString())</span>
+        }
+<span class="nc" id="L114">    }</span>
+
+    private fun redactTag(exifInterface: ExifInterface?, tag: String) {
+<span class="nc" id="L117">        Timber.d(&quot;Checking for tag: %s&quot;, tag)</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        exifInterface?.getAttribute(tag)</span>
+<span class="nc bnc" id="L119" title="All 6 branches missed.">            ?.takeIf { it.isNotEmpty() }</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">            ?.let { attributeName -&gt;</span>
+<span class="nc" id="L121">                exifInterface.setAttribute(tag, null).also {</span>
+<span class="nc" id="L122">                    Timber.d(&quot;Exif tag $tag with value $attributeName redacted.&quot;)</span>
+<span class="nc" id="L123">                }</span>
+<span class="nc" id="L124">            }</span>
+<span class="nc" id="L125">    }</span>
+
+    /**
+     * Find other images around the same location that were taken within the last 20 sec
+     *
+     * @param originalImageCoordinates
+     * @param fileBeingProcessed
+     * @param similarImageInterface
+     */
+    private fun findOtherImages(
+        fileBeingProcessed: File,
+        similarImageInterface: SimilarImageInterface
+    ) {
+<span class="nc" id="L138">        val oneHundredAndTwentySeconds = 120 * 1000L</span>
+        //Time when the original image was created
+<span class="nc" id="L140">        val timeOfCreation = fileBeingProcessed.lastModified()</span>
+<span class="nc" id="L141">        LongRange</span>
+<span class="nc" id="L142">        val timeOfCreationRange =</span>
+<span class="nc" id="L143">            timeOfCreation - oneHundredAndTwentySeconds..timeOfCreation + oneHundredAndTwentySeconds</span>
+<span class="nc" id="L144">        fileBeingProcessed.parentFile</span>
+<span class="nc" id="L145">            .listFiles()</span>
+<span class="nc" id="L146">            .asSequence()</span>
+<span class="nc bnc" id="L147" title="All 4 branches missed.">            .filter { it.lastModified() in timeOfCreationRange }</span>
+<span class="nc" id="L148">            .map { Pair(it, readImageCoordinates(it)) }</span>
+<span class="nc bnc" id="L149" title="All 4 branches missed.">            .firstOrNull { it.second?.decimalCoords != null }</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">            ?.let { fileCoordinatesPair -&gt;</span>
+<span class="nc" id="L151">                similarImageInterface.showSimilarImageFragment(</span>
+<span class="nc" id="L152">                    fileBeingProcessed.path,</span>
+<span class="nc" id="L153">                    fileCoordinatesPair.first.absolutePath,</span>
+<span class="nc" id="L154">                    fileCoordinatesPair.second</span>
+                )
+<span class="nc" id="L156">            }</span>
+<span class="nc" id="L157">    }</span>
+
+    private fun readImageCoordinates(file: File) =
+<span class="nc" id="L160">        try {</span>
+            /* Used null location as location for similar images captured before is not available
+               in case it is not present in the EXIF. */
+<span class="nc" id="L163">            ImageCoordinates(contentResolver.openInputStream(Uri.fromFile(file))!!, null)</span>
+<span class="nc" id="L164">        } catch (e: IOException) {</span>
+<span class="nc" id="L165">            Timber.e(e)</span>
+<span class="nc" id="L166">            try {</span>
+<span class="nc" id="L167">                ImageCoordinates(file.absolutePath, null)</span>
+<span class="nc" id="L168">            } catch (ex: IOException) {</span>
+<span class="nc" id="L169">                Timber.e(ex)</span>
+<span class="nc" id="L170">                null</span>
+            }
+<span class="nc" id="L172">        }</span>
+
+    /**
+     * Initiates retrieval of image coordinates or user coordinates, and caching of coordinates. Then
+     * initiates the calls to MediaWiki API through an instance of CategoryApi.
+     *
+     * @param imageCoordinates
+     */
+    fun prePopulateCategoriesAndDepictionsBy(imageCoordinates: ImageCoordinates) {
+<span class="nc bnc" id="L181" title="All 2 branches missed.">        requireNotNull(imageCoordinates.decimalCoords)</span>
+<span class="nc" id="L182">        compositeDisposable.add(</span>
+<span class="nc" id="L183">            apiCall.request(imageCoordinates.decimalCoords)</span>
+<span class="nc" id="L184">                .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L185">                .observeOn(Schedulers.io())</span>
+<span class="nc" id="L186">                .subscribe(</span>
+<span class="nc" id="L187">                    gpsCategoryModel::setCategoriesFromLocation,</span>
+<span class="nc" id="L188">                    {</span>
+<span class="nc" id="L189">                        Timber.e(it)</span>
+<span class="nc" id="L190">                        gpsCategoryModel.clear()</span>
+<span class="nc" id="L191">                    }</span>
+                )
+        )
+
+<span class="nc" id="L195">        compositeDisposable.add(</span>
+<span class="nc" id="L196">            suggestNearbyDepictions(imageCoordinates)</span>
+        )
+<span class="nc" id="L198">    }</span>
+
+    private val radiiProgressionInMetres =
+<span class="nc" id="L201">        (DEFAULT_SUGGESTION_RADIUS_IN_METRES..MAX_SUGGESTION_RADIUS_IN_METRES step RADIUS_STEP_SIZE_IN_METRES)</span>
+
+    private fun suggestNearbyDepictions(imageCoordinates: ImageCoordinates): Disposable {
+<span class="nc" id="L204">        return Observable.fromIterable(radiiProgressionInMetres.map { it / 1000.0 })</span>
+<span class="nc" id="L205">            .concatMap {</span>
+<span class="nc" id="L206">                Observable.fromCallable {</span>
+<span class="nc" id="L207">                    okHttpJsonApiClient.getNearbyPlaces(</span>
+<span class="nc" id="L208">                        imageCoordinates.latLng,</span>
+<span class="nc" id="L209">                        Locale.getDefault().language,</span>
+<span class="nc" id="L210">                        it,</span>
+<span class="nc" id="L211">                        false</span>
+                    )
+                }
+            }
+<span class="nc" id="L215">            .subscribeOn(Schedulers.io())</span>
+<span class="nc bnc" id="L216" title="All 2 branches missed.">            .filter { it.size &gt;= MIN_NEARBY_RESULTS }</span>
+<span class="nc" id="L217">            .take(1)</span>
+<span class="nc" id="L218">            .subscribe(</span>
+<span class="nc" id="L219">                { depictsModel.nearbyPlaces.offer(it) },</span>
+<span class="nc" id="L220">                { Timber.e(it) }</span>
+            )
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

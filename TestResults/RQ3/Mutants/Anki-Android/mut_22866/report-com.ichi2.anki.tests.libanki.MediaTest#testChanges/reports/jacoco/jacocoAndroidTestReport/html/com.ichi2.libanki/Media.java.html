@@ -1,0 +1,1401 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Media.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">AnkiDroid</a> &gt; <a href="index.source.html" class="el_package">com.ichi2.libanki</a> &gt; <span class="el_source">Media.java</span></div><h1>Media.java</h1><pre class="source lang-java linenums">/**
+ * *************************************************************************************
+ *  Copyright (c) 2011 Kostas Spyropoulos &lt;inigo.aldana@gmail.com&gt;                       *
+ *  Copyright (c) 2014 Houssam Salem &lt;houssam.salem.au@gmail.com&gt;                        *
+ *                                                                                       *
+ *  This program is free software; you can redistribute it and/or modify it under        *
+ *  the terms of the GNU General Public License as published by the Free Software        *
+ *  Foundation; either version 3 of the License, or (at your option) any later           *
+ *  version.                                                                             *
+ *                                                                                       *
+ *  This program is distributed in the hope that it will be useful, but WITHOUT ANY      *
+ *  WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A      *
+ *  PARTICULAR PURPOSE. See the GNU General Public License for more details.             *
+ *                                                                                       *
+ *  You should have received a copy of the GNU General Public License along with         *
+ *  this program.  If not, see &lt;http://www.gnu.org/licenses/&gt;.                           *
+ * **************************************************************************************
+ */
+package com.ichi2.libanki;
+
+import android.database.Cursor;
+import android.database.SQLException;
+import android.net.Uri;
+import android.text.TextUtils;
+import android.util.Pair;
+import com.ichi2.anki.AnkiDroidApp;
+import com.ichi2.libanki.exception.EmptyMediaException;
+import com.ichi2.libanki.template.TemplateFilters;
+import com.ichi2.utils.Assert;
+import com.ichi2.utils.ExceptionUtil;
+import com.ichi2.utils.JSONArray;
+import com.ichi2.utils.JSONObject;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
+import androidx.annotation.NonNull;
+import timber.log.Timber;
+import static java.lang.Math.min;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+/**
+ * Media manager - handles the addition and removal of media files from the media directory (collection.media) and
+ * maintains the media database (collection.media.ad.db2) which is used to determine the state of files for syncing.
+ * Note that the media database has an additional prefix for AnkiDroid (.ad) to avoid any potential issues caused by
+ * users copying the file to the desktop client and vice versa.
+ * &lt;p&gt;
+ * Unlike the python version of this module, we do not (and cannot) modify the current working directory (CWD) before
+ * performing operations on media files. In python, the CWD is changed to the media directory, allowing it to easily
+ * refer to the files in the media directory by name only. In Java, we must be cautious about when to specify the full
+ * path to the file and when we need to use the filename only. In general, when we refer to a file on disk (i.e.,
+ * creating a new File() object), we must include the full path. Use the dir() method to make this step easier.&lt;br&gt;
+ * E.g: new File(dir(), &quot;filename.jpg&quot;)
+ */
+@SuppressWarnings({ &quot;PMD.AvoidThrowingRawExceptionTypes&quot;, &quot;PMD.AvoidReassigningParameters&quot;, &quot;PMD.NPathComplexity&quot;, &quot;PMD.MethodNamingConventions&quot;, &quot;PMD.ExcessiveMethodLength&quot;, &quot;PMD.OneDeclarationPerLine&quot;, &quot;PMD.SwitchStmtsShouldHaveDefault&quot;, &quot;PMD.EmptyIfStmt&quot;, &quot;PMD.SimplifyBooleanReturns&quot;, &quot;PMD.CollapsibleIfStatements&quot; })
+public class Media {
+
+<span class="fc" id="L79">    private static final Pattern fIllegalCharReg = Pattern.compile(&quot;[&gt;&lt;:\&quot;/?*^\\\\|\\x00\\r\\n]&quot;);</span>
+
+<span class="fc" id="L81">    private static final Pattern fRemotePattern = Pattern.compile(&quot;(https?|ftp)://&quot;);</span>
+
+    /**
+     * Group 1 = Contents of [sound:] tag &lt;br&gt;
+     * Group 2 = &quot;fname&quot;
+     */
+<span class="fc" id="L87">    private static final Pattern fSoundRegexps = Pattern.compile(&quot;(?i)(\\[sound:([^]]+)])&quot;);</span>
+
+    /**
+     * Group 1 = Contents of &lt;img&gt; tag &lt;br&gt;
+     * Group 2 = &quot;str&quot; &lt;br&gt;
+     * Group 3 = &quot;fname&quot; &lt;br&gt;
+     * Group 4 = Backreference to &quot;str&quot; (i.e., same type of quote character)
+     */
+<span class="fc" id="L95">    private static final Pattern fImgRegExpQ = Pattern.compile(&quot;(?i)(&lt;img[^&gt;]* src=([\&quot;'])([^&gt;]+?)(\\2)[^&gt;]*&gt;)&quot;);</span>
+
+    /**
+     * Group 1 = Contents of &lt;img&gt; tag &lt;br&gt;
+     * Group 2 = &quot;fname&quot;
+     */
+<span class="fc" id="L101">    private static final Pattern fImgRegExpU = Pattern.compile(&quot;(?i)(&lt;img[^&gt;]* src=(?!['\&quot;])([^ &gt;]+)[^&gt;]*?&gt;)&quot;);</span>
+
+<span class="fc" id="L103">    public static final List&lt;Pattern&gt; mRegexps = Arrays.asList(fSoundRegexps, fImgRegExpQ, fImgRegExpU);</span>
+
+    private final Collection mCol;
+
+    private final String mDir;
+
+    private DB mDb;
+
+<span class="fc" id="L111">    public Media(Collection col, boolean server) {</span>
+<span class="fc" id="L112">        mCol = col;</span>
+<span class="pc bpc" id="L113" title="1 of 2 branches missed.">        if (server) {</span>
+<span class="nc" id="L114">            mDir = null;</span>
+<span class="nc" id="L115">            return;</span>
+        }
+        // media directory
+<span class="fc" id="L118">        mDir = getCollectionMediaPath(col.getPath());</span>
+<span class="fc" id="L119">        File fd = new File(mDir);</span>
+<span class="pc bpc" id="L120" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22840)) {</span>
+<span class="fc bfc" id="L121" title="All 2 branches covered.">            if (!fd.exists()) {</span>
+<span class="pc bpc" id="L122" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22839)) {</span>
+<span class="pc bpc" id="L123" title="1 of 2 branches missed.">                    if (!fd.mkdir()) {</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22838)) {</span>
+<span class="nc" id="L125">                            Timber.e(&quot;Cannot create media directory: %s&quot;, mDir);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="pc bpc" id="L131" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22841)) {</span>
+            // change database
+<span class="fc" id="L133">            connect();</span>
+        }
+<span class="fc" id="L135">    }</span>
+
+    @NonNull
+    public static String getCollectionMediaPath(String collectionPath) {
+<span class="fc" id="L139">        return collectionPath.replaceFirst(&quot;\\.anki2$&quot;, &quot;.media&quot;);</span>
+    }
+
+    public void connect() {
+<span class="pc bpc" id="L143" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22842)) {</span>
+<span class="pc bpc" id="L144" title="1 of 2 branches missed.">            if (mCol.getServer()) {</span>
+<span class="nc" id="L145">                return;</span>
+            }
+        }
+        // the db to the desktop or vice versa.
+<span class="fc" id="L149">        String path = dir() + &quot;.ad.db2&quot;;</span>
+<span class="fc" id="L150">        File dbFile = new File(path);</span>
+<span class="fc bfc" id="L151" title="All 2 branches covered.">        boolean create = !(dbFile.exists());</span>
+<span class="pc bpc" id="L152" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22843)) {</span>
+<span class="fc" id="L153">            mDb = new DB(path);</span>
+        }
+<span class="pc bpc" id="L155" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22845)) {</span>
+<span class="fc bfc" id="L156" title="All 2 branches covered.">            if (create) {</span>
+<span class="pc bpc" id="L157" title="1 of 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22844)) {</span>
+<span class="fc" id="L158">                    _initDB();</span>
+                }
+            }
+        }
+<span class="pc bpc" id="L162" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22846)) {</span>
+<span class="fc" id="L163">            maybeUpgrade();</span>
+        }
+<span class="fc" id="L165">    }</span>
+
+    public void _initDB() {
+<span class="fc" id="L168">        String sql = &quot;create table media (\n&quot; + &quot; fname text not null primary key,\n&quot; + &quot; csum text,           -- null indicates deleted file\n&quot; + &quot; mtime int not null,  -- zero if deleted\n&quot; + &quot; dirty int not null\n&quot; + &quot;);\n&quot; + &quot;create index idx_media_dirty on media (dirty);\n&quot; + &quot;create table meta (dirMod int, lastUsn int); insert into meta values (0, 0);&quot;;</span>
+<span class="pc bpc" id="L169" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22847)) {</span>
+<span class="fc" id="L170">            mDb.executeScript(sql);</span>
+        }
+<span class="fc" id="L172">    }</span>
+
+    public void maybeUpgrade() {
+<span class="fc" id="L175">        String oldpath = dir() + &quot;.db&quot;;</span>
+<span class="fc" id="L176">        File oldDbFile = new File(oldpath);</span>
+<span class="pc bpc" id="L177" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22859)) {</span>
+<span class="pc bpc" id="L178" title="1 of 2 branches missed.">            if (oldDbFile.exists()) {</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22848)) {</span>
+<span class="nc" id="L180">                    mDb.execute(String.format(Locale.US, &quot;attach \&quot;%s\&quot; as old&quot;, oldpath));</span>
+                }
+                try {
+<span class="nc" id="L183">                    String sql = &quot;insert into media\n&quot; + &quot; select m.fname, csum, mod, ifnull((select 1 from log l2 where l2.fname=m.fname), 0) as dirty\n&quot; + &quot; from old.media m\n&quot; + &quot; left outer join old.log l using (fname)\n&quot; + &quot; union\n&quot; + &quot; select fname, null, 0, 1 from old.log where type=&quot; + Consts.CARD_TYPE_LRN + &quot;;&quot;;</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22851)) {</span>
+<span class="nc" id="L185">                        mDb.execute(sql);</span>
+                    }
+<span class="nc bnc" id="L187" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22852)) {</span>
+<span class="nc" id="L188">                        mDb.execute(&quot;delete from meta&quot;);</span>
+                    }
+<span class="nc bnc" id="L190" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22853)) {</span>
+<span class="nc" id="L191">                        mDb.execute(&quot;insert into meta select dirMod, usn from old.meta&quot;);</span>
+                    }
+<span class="nc bnc" id="L193" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22854)) {</span>
+<span class="nc" id="L194">                        mDb.commit();</span>
+                    }
+<span class="nc" id="L196">                } catch (Exception e) {</span>
+                    // if we couldn't import the old db for some reason, just start anew
+<span class="nc" id="L198">                    StringWriter sw = new StringWriter();</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22849)) {</span>
+<span class="nc" id="L200">                        e.printStackTrace(new PrintWriter(sw));</span>
+                    }
+<span class="nc bnc" id="L202" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22850)) {</span>
+<span class="nc" id="L203">                        mCol.log(&quot;failed to import old media db:&quot; + sw.toString());</span>
+                    }
+<span class="nc" id="L205">                }</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22855)) {</span>
+<span class="nc" id="L207">                    mDb.execute(&quot;detach old&quot;);</span>
+                }
+<span class="nc" id="L209">                File newDbFile = new File(oldpath + &quot;.old&quot;);</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22857)) {</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">                    if (newDbFile.exists()) {</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22856)) {</span>
+<span class="nc" id="L213">                            newDbFile.delete();</span>
+                        }
+                    }
+                }
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22858)) {</span>
+<span class="nc" id="L218">                    oldDbFile.renameTo(newDbFile);</span>
+                }
+            }
+        }
+<span class="fc" id="L222">    }</span>
+
+    public void close() {
+<span class="pc bpc" id="L225" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22860)) {</span>
+<span class="pc bpc" id="L226" title="1 of 2 branches missed.">            if (mCol.getServer()) {</span>
+<span class="nc" id="L227">                return;</span>
+            }
+        }
+<span class="pc bpc" id="L230" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22861)) {</span>
+<span class="fc" id="L231">            mDb.close();</span>
+        }
+<span class="pc bpc" id="L233" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22862)) {</span>
+<span class="fc" id="L234">            mDb = null;</span>
+        }
+<span class="fc" id="L236">    }</span>
+
+    private void _deleteDB() {
+<span class="nc" id="L239">        String path = mDb.getPath();</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22863)) {</span>
+<span class="nc" id="L241">            close();</span>
+        }
+<span class="nc bnc" id="L243" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22864)) {</span>
+<span class="nc" id="L244">            (new File(path)).delete();</span>
+        }
+<span class="nc bnc" id="L246" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22865)) {</span>
+<span class="nc" id="L247">            connect();</span>
+        }
+<span class="nc" id="L249">    }</span>
+
+    public String dir() {
+<span class="fc" id="L252">        return mDir;</span>
+    }
+
+    /**
+     * In AnkiDroid, adding a media file will not only copy it to the media directory, but will also insert an entry
+     * into the media database marking it as a new addition.
+     */
+    public String addFile(File ofile) throws IOException, EmptyMediaException {
+<span class="pc bpc" id="L260" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22872)) {</span>
+<span class="pc bpc" id="L261" title="42 of 50 branches missed.">            if ((ListenerUtil.mutListener.listen(22871) ? (ofile == null &amp;&amp; (ListenerUtil.mutListener.listen(22870) ? (ofile.length() &gt;= 0) : (ListenerUtil.mutListener.listen(22869) ? (ofile.length() &lt;= 0) : (ListenerUtil.mutListener.listen(22868) ? (ofile.length() &gt; 0) : (ListenerUtil.mutListener.listen(22867) ? (ofile.length() &lt; 0) : (ListenerUtil.mutListener.listen(22866) ? (ofile.length() != 0) : (ofile.length() == 0))))))) : (ofile == null || (ListenerUtil.mutListener.listen(22870) ? (ofile.length() &gt;= 0) : (ListenerUtil.mutListener.listen(22869) ? (ofile.length() &lt;= 0) : (ListenerUtil.mutListener.listen(22868) ? (ofile.length() &gt; 0) : (ListenerUtil.mutListener.listen(22867) ? (ofile.length() &lt; 0) : (ListenerUtil.mutListener.listen(22866) ? (ofile.length() != 0) : (ofile.length() == 0))))))))) {</span>
+<span class="fc" id="L262">                throw new EmptyMediaException();</span>
+            }
+        }
+<span class="nc" id="L265">        String fname = writeData(ofile);</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22873)) {</span>
+<span class="nc" id="L267">            markFileAdd(fname);</span>
+        }
+<span class="nc" id="L269">        return fname;</span>
+    }
+
+    /**
+     * Copy a file to the media directory and return the filename it was stored as.
+     * &lt;p&gt;
+     * Unlike the python version of this method, we don't read the file into memory as a string. All our operations are
+     * done on streams opened on the file, so there is no second parameter for the string object here.
+     */
+    private String writeData(File ofile) throws IOException {
+        // get the file name
+<span class="nc" id="L280">        String fname = ofile.getName();</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22874)) {</span>
+            // make sure we write it in NFC form and return an NFC-encoded reference
+<span class="nc" id="L283">            fname = Utils.nfcNormalized(fname);</span>
+        }
+        // ensure it's a valid finename
+<span class="nc" id="L286">        String base = cleanFilename(fname);</span>
+<span class="nc" id="L287">        String[] split = Utils.splitFilename(base);</span>
+<span class="nc" id="L288">        String root = split[0];</span>
+<span class="nc" id="L289">        String ext = split[1];</span>
+        // find the first available name
+<span class="nc" id="L291">        String csum = Utils.fileChecksum(ofile);</span>
+        {
+<span class="nc" id="L293">            long _loopCounter543 = 0;</span>
+            while (true) {
+<span class="nc" id="L295">                ListenerUtil.loopListener.listen(&quot;_loopCounter543&quot;, ++_loopCounter543);</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22875)) {</span>
+<span class="nc" id="L297">                    fname = root + ext;</span>
+                }
+<span class="nc" id="L299">                File path = new File(dir(), fname);</span>
+                // if it doesn't exist, copy it directly
+<span class="nc bnc" id="L301" title="All 2 branches missed.">                if (!path.exists()) {</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22876)) {</span>
+<span class="nc" id="L303">                        Utils.copyFile(ofile, path);</span>
+                    }
+<span class="nc" id="L305">                    return fname;</span>
+                }
+                // if it's identical, reuse
+<span class="nc bnc" id="L308" title="All 2 branches missed.">                if (Utils.fileChecksum(path).equals(csum)) {</span>
+<span class="nc" id="L309">                    return fname;</span>
+                }
+                // otherwise, increment the index in the filename
+<span class="nc" id="L312">                Pattern reg = Pattern.compile(&quot; \\((\\d+)\\)$&quot;);</span>
+<span class="nc" id="L313">                Matcher m = reg.matcher(root);</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22883)) {</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">                    if (!m.find()) {</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22882)) {</span>
+<span class="nc" id="L317">                            root = root + &quot; (1)&quot;;</span>
+                        }
+                    } else {
+<span class="nc" id="L320">                        int n = Integer.parseInt(m.group(1));</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22881)) {</span>
+<span class="nc bnc" id="L322" title="All 8 branches missed.">                            root = String.format(Locale.US, &quot; (%d)&quot;, (ListenerUtil.mutListener.listen(22880) ? (n % 1) : (ListenerUtil.mutListener.listen(22879) ? (n / 1) : (ListenerUtil.mutListener.listen(22878) ? (n * 1) : (ListenerUtil.mutListener.listen(22877) ? (n - 1) : (n + 1))))));</span>
+                        }
+                    }
+                }
+<span class="nc" id="L326">            }</span>
+        }
+    }
+
+    public List&lt;String&gt; filesInStr(Long mid, String string) {
+<span class="nc" id="L331">        return filesInStr(mid, string, false);</span>
+    }
+
+    /**
+     * Extract media filenames from an HTML string.
+     *
+     * @param string The string to scan for media filenames ([sound:...] or &lt;img...&gt;).
+     * @param includeRemote If true will also include external http/https/ftp urls.
+     * @return A list containing all the sound and image filenames found in the input string.
+     */
+    public List&lt;String&gt; filesInStr(Long mid, String string, boolean includeRemote) {
+<span class="nc" id="L342">        List&lt;String&gt; l = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L343">        Model model = mCol.getModels().get(mid);</span>
+<span class="nc" id="L344">        List&lt;String&gt; strings = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22887)) {</span>
+<span class="nc bnc" id="L346" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(22884) ? (model.isCloze() || string.contains(&quot;{{c&quot;)) : (model.isCloze() &amp;&amp; string.contains(&quot;{{c&quot;)))) {</span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22886)) {</span>
+                    // possibilities so we can render latex
+<span class="nc" id="L349">                    strings = _expandClozes(string);</span>
+                }
+            } else {
+<span class="nc bnc" id="L352" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22885)) {</span>
+<span class="nc" id="L353">                    strings.add(string);</span>
+                }
+            }
+        }
+        {
+<span class="nc" id="L358">            long _loopCounter546 = 0;</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">            for (String s : strings) {</span>
+<span class="nc" id="L360">                ListenerUtil.loopListener.listen(&quot;_loopCounter546&quot;, ++_loopCounter546);</span>
+                // handle latex
+<span class="nc" id="L362">                s = LaTeX.mungeQA(s, mCol, model);</span>
+                // extract filenames
+                Matcher m;
+                {
+<span class="nc" id="L366">                    long _loopCounter545 = 0;</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">                    for (Pattern p : mRegexps) {</span>
+<span class="nc" id="L368">                        ListenerUtil.loopListener.listen(&quot;_loopCounter545&quot;, ++_loopCounter545);</span>
+                        // the index based on which pattern we are using
+<span class="nc bnc" id="L370" title="All 4 branches missed.">                        int fnameIdx = p.equals(fSoundRegexps) ? 2 : p.equals(fImgRegExpU) ? 2 : 3;</span>
+<span class="nc" id="L371">                        m = p.matcher(s);</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22891)) {</span>
+                            {
+<span class="nc" id="L374">                                long _loopCounter544 = 0;</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">                                while (m.find()) {</span>
+<span class="nc" id="L376">                                    ListenerUtil.loopListener.listen(&quot;_loopCounter544&quot;, ++_loopCounter544);</span>
+<span class="nc" id="L377">                                    String fname = m.group(fnameIdx);</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">                                    boolean isLocal = !fRemotePattern.matcher(fname.toLowerCase(Locale.getDefault())).find();</span>
+<span class="nc bnc" id="L379" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(22890)) {</span>
+<span class="nc bnc" id="L380" title="All 10 branches missed.">                                        if ((ListenerUtil.mutListener.listen(22888) ? (isLocal &amp;&amp; includeRemote) : (isLocal || includeRemote))) {</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(22889)) {</span>
+<span class="nc" id="L382">                                                l.add(fname);</span>
+                                            }
+                                        }
+                                    }
+<span class="nc" id="L386">                                }</span>
+                            }
+                        }
+<span class="nc" id="L389">                    }</span>
+                }
+<span class="nc" id="L391">            }</span>
+        }
+<span class="nc" id="L393">        return l;</span>
+    }
+
+    private List&lt;String&gt; _expandClozes(String string) {
+<span class="nc" id="L397">        Set&lt;String&gt; ords = new TreeSet&lt;&gt;();</span>
+        // In Android, } should be escaped
+        @SuppressWarnings(&quot;RegExpRedundantEscape&quot;)
+<span class="nc" id="L400">        Matcher m = Pattern.compile(&quot;\\{\\{c(\\d+)::.+?\\}\\}&quot;).matcher(string);</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22893)) {</span>
+            {
+<span class="nc" id="L403">                long _loopCounter547 = 0;</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">                while (m.find()) {</span>
+<span class="nc" id="L405">                    ListenerUtil.loopListener.listen(&quot;_loopCounter547&quot;, ++_loopCounter547);</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22892)) {</span>
+<span class="nc" id="L407">                        ords.add(m.group(1));</span>
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L412" title="All 8 branches missed.">        ArrayList&lt;String&gt; strings = new ArrayList&lt;&gt;((ListenerUtil.mutListener.listen(22897) ? (ords.size() % 1) : (ListenerUtil.mutListener.listen(22896) ? (ords.size() / 1) : (ListenerUtil.mutListener.listen(22895) ? (ords.size() * 1) : (ListenerUtil.mutListener.listen(22894) ? (ords.size() - 1) : (ords.size() + 1))))));</span>
+<span class="nc" id="L413">        String clozeReg = TemplateFilters.clozeReg;</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22905)) {</span>
+            {
+<span class="nc" id="L416">                long _loopCounter549 = 0;</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">                for (String ord : ords) {</span>
+<span class="nc" id="L418">                    ListenerUtil.loopListener.listen(&quot;_loopCounter549&quot;, ++_loopCounter549);</span>
+<span class="nc" id="L419">                    StringBuffer buf = new StringBuffer();</span>
+<span class="nc bnc" id="L420" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22898)) {</span>
+<span class="nc" id="L421">                        m = Pattern.compile(String.format(Locale.US, clozeReg, ord)).matcher(string);</span>
+                    }
+<span class="nc bnc" id="L423" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22902)) {</span>
+                        {
+<span class="nc" id="L425">                            long _loopCounter548 = 0;</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">                            while (m.find()) {</span>
+<span class="nc" id="L427">                                ListenerUtil.loopListener.listen(&quot;_loopCounter548&quot;, ++_loopCounter548);</span>
+<span class="nc bnc" id="L428" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(22901)) {</span>
+<span class="nc bnc" id="L429" title="All 2 branches missed.">                                    if (!TextUtils.isEmpty(m.group(4))) {</span>
+<span class="nc bnc" id="L430" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(22900)) {</span>
+<span class="nc" id="L431">                                            m.appendReplacement(buf, &quot;[$4]&quot;);</span>
+                                        }
+                                    } else {
+<span class="nc bnc" id="L434" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(22899)) {</span>
+<span class="nc" id="L435">                                            m.appendReplacement(buf, TemplateFilters.CLOZE_DELETION_REPLACEMENT);</span>
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L442" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22903)) {</span>
+<span class="nc" id="L443">                        m.appendTail(buf);</span>
+                    }
+<span class="nc" id="L445">                    String s = buf.toString().replaceAll(String.format(Locale.US, clozeReg, &quot;.+?&quot;), &quot;$2&quot;);</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22904)) {</span>
+<span class="nc" id="L447">                        strings.add(s);</span>
+                    }
+<span class="nc" id="L449">                }</span>
+            }
+        }
+<span class="nc bnc" id="L452" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22906)) {</span>
+<span class="nc" id="L453">            strings.add(string.replaceAll(String.format(Locale.US, clozeReg, &quot;.+?&quot;), &quot;$2&quot;));</span>
+        }
+<span class="nc" id="L455">        return strings;</span>
+    }
+
+    /**
+     * Strips a string from media references.
+     *
+     * @param txt The string to be cleared of media references.
+     * @return The media-free string.
+     */
+    public String strip(String txt) {
+<span class="nc bnc" id="L465" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22908)) {</span>
+            {
+<span class="nc" id="L467">                long _loopCounter550 = 0;</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">                for (Pattern p : mRegexps) {</span>
+<span class="nc" id="L469">                    ListenerUtil.loopListener.listen(&quot;_loopCounter550&quot;, ++_loopCounter550);</span>
+<span class="nc bnc" id="L470" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22907)) {</span>
+<span class="nc" id="L471">                        txt = p.matcher(txt).replaceAll(&quot;&quot;);</span>
+                    }
+<span class="nc" id="L473">                }</span>
+            }
+        }
+<span class="nc" id="L476">        return txt;</span>
+    }
+
+    public String escapeImages(String string) {
+<span class="nc" id="L480">        return escapeImages(string, false);</span>
+    }
+
+    /**
+     * Percent-escape UTF-8 characters in local image filenames.
+     * @param string The string to search for image references and escape the filenames.
+     * @return The string with the filenames of any local images percent-escaped as UTF-8.
+     */
+    public String escapeImages(String string, boolean unescape) {
+<span class="nc bnc" id="L489" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22914)) {</span>
+            {
+<span class="nc" id="L491">                long _loopCounter552 = 0;</span>
+<span class="nc bnc" id="L492" title="All 2 branches missed.">                for (Pattern p : Arrays.asList(fImgRegExpQ, fImgRegExpU)) {</span>
+<span class="nc" id="L493">                    ListenerUtil.loopListener.listen(&quot;_loopCounter552&quot;, ++_loopCounter552);</span>
+<span class="nc" id="L494">                    Matcher m = p.matcher(string);</span>
+                    // the index based on which pattern we are using
+<span class="nc bnc" id="L496" title="All 2 branches missed.">                    int fnameIdx = p.equals(fImgRegExpU) ? 2 : 3;</span>
+<span class="nc bnc" id="L497" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22913)) {</span>
+                        {
+<span class="nc" id="L499">                            long _loopCounter551 = 0;</span>
+<span class="nc bnc" id="L500" title="All 2 branches missed.">                            while (m.find()) {</span>
+<span class="nc" id="L501">                                ListenerUtil.loopListener.listen(&quot;_loopCounter551&quot;, ++_loopCounter551);</span>
+<span class="nc" id="L502">                                String tag = m.group(0);</span>
+<span class="nc" id="L503">                                String fname = m.group(fnameIdx);</span>
+<span class="nc bnc" id="L504" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(22912)) {</span>
+<span class="nc bnc" id="L505" title="All 2 branches missed.">                                    if (fRemotePattern.matcher(fname).find()) {</span>
+                                    } else {
+<span class="nc bnc" id="L507" title="All 2 branches missed.">                                        if (!ListenerUtil.mutListener.listen(22911)) {</span>
+<span class="nc bnc" id="L508" title="All 2 branches missed.">                                            if (unescape) {</span>
+<span class="nc bnc" id="L509" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(22910)) {</span>
+<span class="nc" id="L510">                                                    string = string.replace(tag, tag.replace(fname, Uri.decode(fname)));</span>
+                                                }
+                                            } else {
+<span class="nc bnc" id="L513" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(22909)) {</span>
+<span class="nc" id="L514">                                                    string = string.replace(tag, tag.replace(fname, Uri.encode(fname, &quot;/&quot;)));</span>
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+<span class="nc" id="L520">                            }</span>
+                        }
+                    }
+<span class="nc" id="L523">                }</span>
+            }
+        }
+<span class="nc" id="L526">        return string;</span>
+    }
+
+    /**
+     * Finds missing, unused and invalid media files
+     *
+     * @return A list containing three lists of files (missingFiles, unusedFiles, invalidFiles)
+     */
+    public List&lt;List&lt;String&gt;&gt; check() {
+<span class="nc" id="L535">        return check(null);</span>
+    }
+
+    private List&lt;List&lt;String&gt;&gt; check(File[] local) {
+<span class="nc" id="L539">        File mdir = new File(dir());</span>
+        // gather all media references in NFC form
+<span class="nc" id="L541">        Set&lt;String&gt; allRefs = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L542">        try (Cursor cur = mCol.getDb().query(&quot;select id, mid, flds from notes&quot;)) {</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(22920)) {</span>
+                {
+<span class="nc" id="L545">                    long _loopCounter554 = 0;</span>
+<span class="nc bnc" id="L546" title="All 2 branches missed.">                    while (cur.moveToNext()) {</span>
+<span class="nc" id="L547">                        ListenerUtil.loopListener.listen(&quot;_loopCounter554&quot;, ++_loopCounter554);</span>
+<span class="nc" id="L548">                        long nid = cur.getLong(0);</span>
+<span class="nc" id="L549">                        long mid = cur.getLong(1);</span>
+<span class="nc" id="L550">                        String flds = cur.getString(2);</span>
+<span class="nc" id="L551">                        List&lt;String&gt; noteRefs = filesInStr(mid, flds);</span>
+<span class="nc bnc" id="L552" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22918)) {</span>
+                            {
+<span class="nc" id="L554">                                long _loopCounter553 = 0;</span>
+                                // check the refs are in NFC
+<span class="nc bnc" id="L556" title="All 2 branches missed.">                                for (String f : noteRefs) {</span>
+<span class="nc" id="L557">                                    ListenerUtil.loopListener.listen(&quot;_loopCounter553&quot;, ++_loopCounter553);</span>
+<span class="nc bnc" id="L558" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(22917)) {</span>
+                                        // if they're not, we'll need to fix them first
+<span class="nc bnc" id="L560" title="All 2 branches missed.">                                        if (!f.equals(Utils.nfcNormalized(f))) {</span>
+<span class="nc bnc" id="L561" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(22915)) {</span>
+<span class="nc" id="L562">                                                _normalizeNoteRefs(nid);</span>
+                                            }
+<span class="nc bnc" id="L564" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(22916)) {</span>
+<span class="nc" id="L565">                                                noteRefs = filesInStr(mid, flds);</span>
+                                            }
+                                            break;
+                                        }
+                                    }
+<span class="nc" id="L570">                                }</span>
+                            }
+                        }
+<span class="nc bnc" id="L573" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22919)) {</span>
+<span class="nc" id="L574">                            allRefs.addAll(noteRefs);</span>
+                        }
+<span class="nc" id="L576">                    }</span>
+                }
+            }
+        }
+        // loop through media folder
+<span class="nc" id="L581">        List&lt;String&gt; unused = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L582">        List&lt;String&gt; invalid = new ArrayList&lt;&gt;();</span>
+        File[] files;
+<span class="nc bnc" id="L584" title="All 2 branches missed.">        if (local == null) {</span>
+<span class="nc" id="L585">            files = mdir.listFiles();</span>
+        } else {
+<span class="nc" id="L587">            files = local;</span>
+        }
+<span class="nc" id="L589">        boolean renamedFiles = false;</span>
+        {
+<span class="nc" id="L591">            long _loopCounter555 = 0;</span>
+<span class="nc bnc" id="L592" title="All 2 branches missed.">            for (File file : files) {</span>
+<span class="nc" id="L593">                ListenerUtil.loopListener.listen(&quot;_loopCounter555&quot;, ++_loopCounter555);</span>
+<span class="nc bnc" id="L594" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22922)) {</span>
+<span class="nc bnc" id="L595" title="All 2 branches missed.">                    if (local == null) {</span>
+<span class="nc bnc" id="L596" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22921)) {</span>
+<span class="nc bnc" id="L597" title="All 2 branches missed.">                            if (file.isDirectory()) {</span>
+                                // ignore directories
+<span class="nc" id="L599">                                continue;</span>
+                            }
+                        }
+                    }
+                }
+<span class="nc bnc" id="L604" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22923)) {</span>
+<span class="nc bnc" id="L605" title="All 2 branches missed.">                    if (file.getName().startsWith(&quot;_&quot;)) {</span>
+                        // leading _ says to ignore file
+<span class="nc" id="L607">                        continue;</span>
+                    }
+                }
+<span class="nc" id="L610">                File nfcFile = new File(dir(), Utils.nfcNormalized(file.getName()));</span>
+                // we enforce NFC fs encoding
+<span class="nc bnc" id="L612" title="All 2 branches missed.">                if (local == null) {</span>
+<span class="nc bnc" id="L613" title="All 2 branches missed.">                    if (!file.getName().equals(nfcFile.getName())) {</span>
+<span class="nc bnc" id="L614" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22928)) {</span>
+                            // delete if we already have the NFC form, otherwise rename
+<span class="nc bnc" id="L616" title="All 2 branches missed.">                            if (nfcFile.exists()) {</span>
+<span class="nc bnc" id="L617" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(22926)) {</span>
+<span class="nc" id="L618">                                    file.delete();</span>
+                                }
+<span class="nc bnc" id="L620" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(22927)) {</span>
+<span class="nc" id="L621">                                    renamedFiles = true;</span>
+                                }
+                            } else {
+<span class="nc bnc" id="L624" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(22924)) {</span>
+<span class="nc" id="L625">                                    file.renameTo(nfcFile);</span>
+                                }
+<span class="nc bnc" id="L627" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(22925)) {</span>
+<span class="nc" id="L628">                                    renamedFiles = true;</span>
+                                }
+                            }
+                        }
+<span class="nc" id="L632">                        file = nfcFile;</span>
+                    }
+                }
+<span class="nc bnc" id="L635" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22931)) {</span>
+                    // compare
+<span class="nc bnc" id="L637" title="All 2 branches missed.">                    if (!allRefs.contains(nfcFile.getName())) {</span>
+<span class="nc bnc" id="L638" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22930)) {</span>
+<span class="nc" id="L639">                            unused.add(file.getName());</span>
+                        }
+                    } else {
+<span class="nc bnc" id="L642" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22929)) {</span>
+<span class="nc" id="L643">                            allRefs.remove(nfcFile.getName());</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L649" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22932)) {</span>
+            // to make sure the renamed files are not marked as unused
+<span class="nc bnc" id="L651" title="All 2 branches missed.">            if (renamedFiles) {</span>
+<span class="nc" id="L652">                return check(local);</span>
+            }
+        }
+<span class="nc" id="L655">        List&lt;String&gt; nohave = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L656" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22935)) {</span>
+            {
+<span class="nc" id="L658">                long _loopCounter556 = 0;</span>
+<span class="nc bnc" id="L659" title="All 2 branches missed.">                for (String x : allRefs) {</span>
+<span class="nc" id="L660">                    ListenerUtil.loopListener.listen(&quot;_loopCounter556&quot;, ++_loopCounter556);</span>
+<span class="nc bnc" id="L661" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22934)) {</span>
+<span class="nc bnc" id="L662" title="All 2 branches missed.">                        if (!x.startsWith(&quot;_&quot;)) {</span>
+<span class="nc bnc" id="L663" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22933)) {</span>
+<span class="nc" id="L664">                                nohave.add(x);</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L668">                }</span>
+            }
+        }
+        // make sure the media DB is valid
+        try {
+<span class="nc bnc" id="L673" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(22937)) {</span>
+<span class="nc" id="L674">                findChanges();</span>
+            }
+<span class="nc" id="L676">        } catch (SQLException ignored) {</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(22936)) {</span>
+<span class="nc" id="L678">                _deleteDB();</span>
+            }
+<span class="nc" id="L680">        }</span>
+<span class="nc" id="L681">        List&lt;List&lt;String&gt;&gt; result = new ArrayList&lt;&gt;(3);</span>
+<span class="nc bnc" id="L682" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22938)) {</span>
+<span class="nc" id="L683">            result.add(nohave);</span>
+        }
+<span class="nc bnc" id="L685" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22939)) {</span>
+<span class="nc" id="L686">            result.add(unused);</span>
+        }
+<span class="nc bnc" id="L688" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22940)) {</span>
+<span class="nc" id="L689">            result.add(invalid);</span>
+        }
+<span class="nc" id="L691">        return result;</span>
+    }
+
+    private void _normalizeNoteRefs(long nid) {
+<span class="nc" id="L695">        Note note = mCol.getNote(nid);</span>
+<span class="nc" id="L696">        String[] flds = note.getFields();</span>
+<span class="nc bnc" id="L697" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22948)) {</span>
+            {
+<span class="nc" id="L699">                long _loopCounter557 = 0;</span>
+<span class="nc bnc" id="L700" title="All 22 branches missed.">                for (int c = 0; (ListenerUtil.mutListener.listen(22947) ? (c &gt;= flds.length) : (ListenerUtil.mutListener.listen(22946) ? (c &lt;= flds.length) : (ListenerUtil.mutListener.listen(22945) ? (c &gt; flds.length) : (ListenerUtil.mutListener.listen(22944) ? (c != flds.length) : (ListenerUtil.mutListener.listen(22943) ? (c == flds.length) : (c &lt; flds.length)))))); c++) {</span>
+<span class="nc" id="L701">                    ListenerUtil.loopListener.listen(&quot;_loopCounter557&quot;, ++_loopCounter557);</span>
+<span class="nc" id="L702">                    String fld = flds[c];</span>
+<span class="nc" id="L703">                    String nfc = Utils.nfcNormalized(fld);</span>
+<span class="nc bnc" id="L704" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(22942)) {</span>
+<span class="nc bnc" id="L705" title="All 2 branches missed.">                        if (!nfc.equals(fld)) {</span>
+<span class="nc bnc" id="L706" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(22941)) {</span>
+<span class="nc" id="L707">                                note.setField(c, nfc);</span>
+                            }
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L714" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22949)) {</span>
+<span class="nc" id="L715">            note.flush();</span>
+        }
+<span class="nc" id="L717">    }</span>
+
+    public boolean have(String fname) {
+<span class="nc" id="L720">        return new File(dir(), fname).exists();</span>
+    }
+
+    public String stripIllegal(String str) {
+<span class="nc" id="L724">        Matcher m = fIllegalCharReg.matcher(str);</span>
+<span class="nc" id="L725">        return m.replaceAll(&quot;&quot;);</span>
+    }
+
+    public boolean hasIllegal(String str) {
+<span class="nc" id="L729">        Matcher m = fIllegalCharReg.matcher(str);</span>
+<span class="nc" id="L730">        return m.find();</span>
+    }
+
+    public String cleanFilename(String fname) {
+<span class="nc bnc" id="L734" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22950)) {</span>
+<span class="nc" id="L735">            fname = stripIllegal(fname);</span>
+        }
+<span class="nc bnc" id="L737" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22951)) {</span>
+<span class="nc" id="L738">            fname = _cleanWin32Filename(fname);</span>
+        }
+<span class="nc bnc" id="L740" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22952)) {</span>
+<span class="nc" id="L741">            fname = _cleanLongFilename(fname);</span>
+        }
+<span class="nc bnc" id="L743" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22954)) {</span>
+<span class="nc bnc" id="L744" title="All 2 branches missed.">            if (&quot;&quot;.equals(fname)) {</span>
+<span class="nc bnc" id="L745" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22953)) {</span>
+<span class="nc" id="L746">                    fname = &quot;renamed&quot;;</span>
+                }
+            }
+        }
+<span class="nc" id="L750">        return fname;</span>
+    }
+
+    /**
+     * This method only change things on windows. So it's the
+     * identity here.
+     */
+    private String _cleanWin32Filename(String fname) {
+<span class="nc" id="L758">        return fname;</span>
+    }
+
+    private String _cleanLongFilename(String fname) {
+        /* a fairly safe limit that should work on typical windows
+         paths and on eCryptfs partitions, even with a duplicate
+         suffix appended */
+<span class="nc" id="L765">        int namemax = 136;</span>
+        // 240 for windows
+<span class="nc" id="L767">        int pathmax = 1024;</span>
+        // ideally, name should be normalized. Without access to nio.Paths library, it's hard to do it really correctly. This is still a better approximation than nothing.
+<span class="nc" id="L769">        int dirlen = fname.length();</span>
+<span class="nc bnc" id="L770" title="All 8 branches missed.">        int remaining = (ListenerUtil.mutListener.listen(22958) ? (pathmax % dirlen) : (ListenerUtil.mutListener.listen(22957) ? (pathmax / dirlen) : (ListenerUtil.mutListener.listen(22956) ? (pathmax * dirlen) : (ListenerUtil.mutListener.listen(22955) ? (pathmax + dirlen) : (pathmax - dirlen)))));</span>
+<span class="nc bnc" id="L771" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22959)) {</span>
+<span class="nc" id="L772">            namemax = min(remaining, namemax);</span>
+        }
+<span class="nc bnc" id="L774" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(22965)) {</span>
+<span class="nc bnc" id="L775" title="All 22 branches missed.">            Assert.that((ListenerUtil.mutListener.listen(22964) ? (namemax &gt;= 0) : (ListenerUtil.mutListener.listen(22963) ? (namemax &lt;= 0) : (ListenerUtil.mutListener.listen(22962) ? (namemax &lt; 0) : (ListenerUtil.mutListener.listen(22961) ? (namemax != 0) : (ListenerUtil.mutListener.listen(22960) ? (namemax == 0) : (namemax &gt; 0)))))), &quot;The media directory is maximally long. There is no more length available for file name.&quot;);</span>
+        }
+<span class="nc bnc" id="L777" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23000)) {</span>
+<span class="nc bnc" id="L778" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(22970) ? (fname.length() &gt;= namemax) : (ListenerUtil.mutListener.listen(22969) ? (fname.length() &lt;= namemax) : (ListenerUtil.mutListener.listen(22968) ? (fname.length() &lt; namemax) : (ListenerUtil.mutListener.listen(22967) ? (fname.length() != namemax) : (ListenerUtil.mutListener.listen(22966) ? (fname.length() == namemax) : (fname.length() &gt; namemax))))))) {</span>
+<span class="nc" id="L779">                int lastSlash = fname.indexOf(&quot;/&quot;);</span>
+<span class="nc" id="L780">                int lastDot = fname.indexOf(&quot;.&quot;);</span>
+<span class="nc bnc" id="L781" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(22999)) {</span>
+<span class="nc bnc" id="L782" title="All 90 branches missed.">                    if ((ListenerUtil.mutListener.listen(22981) ? ((ListenerUtil.mutListener.listen(22975) ? (lastDot &gt;= -1) : (ListenerUtil.mutListener.listen(22974) ? (lastDot &lt;= -1) : (ListenerUtil.mutListener.listen(22973) ? (lastDot &gt; -1) : (ListenerUtil.mutListener.listen(22972) ? (lastDot &lt; -1) : (ListenerUtil.mutListener.listen(22971) ? (lastDot != -1) : (lastDot == -1)))))) &amp;&amp; (ListenerUtil.mutListener.listen(22980) ? (lastDot &gt;= lastSlash) : (ListenerUtil.mutListener.listen(22979) ? (lastDot &lt;= lastSlash) : (ListenerUtil.mutListener.listen(22978) ? (lastDot &gt; lastSlash) : (ListenerUtil.mutListener.listen(22977) ? (lastDot != lastSlash) : (ListenerUtil.mutListener.listen(22976) ? (lastDot == lastSlash) : (lastDot &lt; lastSlash))))))) : ((ListenerUtil.mutListener.listen(22975) ? (lastDot &gt;= -1) : (ListenerUtil.mutListener.listen(22974) ? (lastDot &lt;= -1) : (ListenerUtil.mutListener.listen(22973) ? (lastDot &gt; -1) : (ListenerUtil.mutListener.listen(22972) ? (lastDot &lt; -1) : (ListenerUtil.mutListener.listen(22971) ? (lastDot != -1) : (lastDot == -1)))))) || (ListenerUtil.mutListener.listen(22980) ? (lastDot &gt;= lastSlash) : (ListenerUtil.mutListener.listen(22979) ? (lastDot &lt;= lastSlash) : (ListenerUtil.mutListener.listen(22978) ? (lastDot &gt; lastSlash) : (ListenerUtil.mutListener.listen(22977) ? (lastDot != lastSlash) : (ListenerUtil.mutListener.listen(22976) ? (lastDot == lastSlash) : (lastDot &lt; lastSlash))))))))) {</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22998)) {</span>
+                            // no dot, or before last slash
+<span class="nc" id="L785">                            fname = fname.substring(0, namemax);</span>
+                        }
+                    } else {
+<span class="nc bnc" id="L788" title="All 8 branches missed.">                        String ext = fname.substring((ListenerUtil.mutListener.listen(22985) ? (lastDot % 1) : (ListenerUtil.mutListener.listen(22984) ? (lastDot / 1) : (ListenerUtil.mutListener.listen(22983) ? (lastDot * 1) : (ListenerUtil.mutListener.listen(22982) ? (lastDot - 1) : (lastDot + 1))))));</span>
+<span class="nc" id="L789">                        String head = fname.substring(0, lastDot);</span>
+<span class="nc bnc" id="L790" title="All 8 branches missed.">                        int headmax = (ListenerUtil.mutListener.listen(22989) ? (namemax % ext.length()) : (ListenerUtil.mutListener.listen(22988) ? (namemax / ext.length()) : (ListenerUtil.mutListener.listen(22987) ? (namemax * ext.length()) : (ListenerUtil.mutListener.listen(22986) ? (namemax + ext.length()) : (namemax - ext.length())))));</span>
+<span class="nc bnc" id="L791" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22990)) {</span>
+<span class="nc" id="L792">                            head = head.substring(0, headmax);</span>
+                        }
+<span class="nc bnc" id="L794" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22991)) {</span>
+<span class="nc" id="L795">                            fname = head + ext;</span>
+                        }
+<span class="nc bnc" id="L797" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(22997)) {</span>
+<span class="nc bnc" id="L798" title="All 22 branches missed.">                            Assert.that((ListenerUtil.mutListener.listen(22996) ? (fname.length() &gt;= namemax) : (ListenerUtil.mutListener.listen(22995) ? (fname.length() &gt; namemax) : (ListenerUtil.mutListener.listen(22994) ? (fname.length() &lt; namemax) : (ListenerUtil.mutListener.listen(22993) ? (fname.length() != namemax) : (ListenerUtil.mutListener.listen(22992) ? (fname.length() == namemax) : (fname.length() &lt;= namemax)))))), &quot;The length of the file is greater than the maximal name value.&quot;);</span>
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L804">        return fname;</span>
+    }
+
+    /**
+     * Scan the media folder if it's changed, and note any changes.
+     */
+    public void findChanges() {
+<span class="nc bnc" id="L811" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23001)) {</span>
+<span class="nc" id="L812">            findChanges(false);</span>
+        }
+<span class="nc" id="L814">    }</span>
+
+    /**
+     * @param force Unconditionally scan the media folder for changes (i.e., ignore differences in recorded and current
+     *            directory mod times). Use this when rebuilding the media database.
+     */
+    public void findChanges(boolean force) {
+<span class="nc bnc" id="L821" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23004)) {</span>
+<span class="nc bnc" id="L822" title="All 10 branches missed.">            if ((ListenerUtil.mutListener.listen(23002) ? (force &amp;&amp; _changed() != null) : (force || _changed() != null))) {</span>
+<span class="nc bnc" id="L823" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23003)) {</span>
+<span class="nc" id="L824">                    _logChanges();</span>
+                }
+            }
+        }
+<span class="nc" id="L828">    }</span>
+
+    public boolean haveDirty() {
+<span class="nc bnc" id="L831" title="All 22 branches missed.">        return (ListenerUtil.mutListener.listen(23009) ? (mDb.queryScalar(&quot;select 1 from media where dirty=1 limit 1&quot;) &gt;= 0) : (ListenerUtil.mutListener.listen(23008) ? (mDb.queryScalar(&quot;select 1 from media where dirty=1 limit 1&quot;) &lt;= 0) : (ListenerUtil.mutListener.listen(23007) ? (mDb.queryScalar(&quot;select 1 from media where dirty=1 limit 1&quot;) &lt; 0) : (ListenerUtil.mutListener.listen(23006) ? (mDb.queryScalar(&quot;select 1 from media where dirty=1 limit 1&quot;) != 0) : (ListenerUtil.mutListener.listen(23005) ? (mDb.queryScalar(&quot;select 1 from media where dirty=1 limit 1&quot;) == 0) : (mDb.queryScalar(&quot;select 1 from media where dirty=1 limit 1&quot;) &gt; 0))))));</span>
+    }
+
+    /**
+     * Returns the number of seconds from epoch since the last modification to the file in path. Important: this method
+     * does not automatically append the root media directory to the path; the FULL path of the file must be specified.
+     *
+     * @param path The path to the file we are checking. path can be a file or a directory.
+     * @return The number of seconds (rounded down).
+     */
+    private long _mtime(String path) {
+<span class="fc" id="L842">        File f = new File(path);</span>
+<span class="pc bpc" id="L843" title="4 of 8 branches missed.">        return (ListenerUtil.mutListener.listen(23013) ? (f.lastModified() % 1000) : (ListenerUtil.mutListener.listen(23012) ? (f.lastModified() * 1000) : (ListenerUtil.mutListener.listen(23011) ? (f.lastModified() - 1000) : (ListenerUtil.mutListener.listen(23010) ? (f.lastModified() + 1000) : (f.lastModified() / 1000)))));</span>
+    }
+
+    private String _checksum(String path) {
+<span class="nc" id="L847">        return Utils.fileChecksum(path);</span>
+    }
+
+    /**
+     * Return dir mtime if it has changed since the last findChanges()
+     * Doesn't track edits, but user can add or remove a file to update
+     *
+     * @return The modification time of the media directory if it has changed since the last call of findChanges(). If
+     *         it hasn't, it returns null.
+     */
+    public Long _changed() {
+<span class="fc" id="L858">        long mod = mDb.queryLongScalar(&quot;select dirMod from meta&quot;);</span>
+<span class="fc" id="L859">        long mtime = _mtime(dir());</span>
+<span class="pc bpc" id="L860" title="1 of 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23025)) {</span>
+<span class="pc bpc" id="L861" title="83 of 90 branches missed.">            if ((ListenerUtil.mutListener.listen(23024) ? ((ListenerUtil.mutListener.listen(23018) ? (mod &gt;= 0) : (ListenerUtil.mutListener.listen(23017) ? (mod &lt;= 0) : (ListenerUtil.mutListener.listen(23016) ? (mod &gt; 0) : (ListenerUtil.mutListener.listen(23015) ? (mod &lt; 0) : (ListenerUtil.mutListener.listen(23014) ? (mod == 0) : (mod != 0)))))) || (ListenerUtil.mutListener.listen(23023) ? (mod &gt;= mtime) : (ListenerUtil.mutListener.listen(23022) ? (mod &lt;= mtime) : (ListenerUtil.mutListener.listen(23021) ? (mod &gt; mtime) : (ListenerUtil.mutListener.listen(23020) ? (mod &lt; mtime) : (ListenerUtil.mutListener.listen(23019) ? (mod != mtime) : (mod == mtime))))))) : ((ListenerUtil.mutListener.listen(23018) ? (mod &gt;= 0) : (ListenerUtil.mutListener.listen(23017) ? (mod &lt;= 0) : (ListenerUtil.mutListener.listen(23016) ? (mod &gt; 0) : (ListenerUtil.mutListener.listen(23015) ? (mod &lt; 0) : (ListenerUtil.mutListener.listen(23014) ? (mod == 0) : (mod != 0)))))) &amp;&amp; (ListenerUtil.mutListener.listen(23023) ? (mod &gt;= mtime) : (ListenerUtil.mutListener.listen(23022) ? (mod &lt;= mtime) : (ListenerUtil.mutListener.listen(23021) ? (mod &gt; mtime) : (ListenerUtil.mutListener.listen(23020) ? (mod &lt; mtime) : (ListenerUtil.mutListener.listen(23019) ? (mod != mtime) : (mod == mtime))))))))) {</span>
+<span class="nc" id="L862">                return null;</span>
+            }
+        }
+<span class="fc" id="L865">        return mtime;</span>
+    }
+
+    private void _logChanges() {
+<span class="nc" id="L869">        Pair&lt;List&lt;String&gt;, List&lt;String&gt;&gt; result = _changes();</span>
+<span class="nc" id="L870">        List&lt;String&gt; added = result.first;</span>
+<span class="nc" id="L871">        List&lt;String&gt; removed = result.second;</span>
+<span class="nc bnc" id="L872" title="All 8 branches missed.">        ArrayList&lt;Object[]&gt; media = new ArrayList&lt;&gt;((ListenerUtil.mutListener.listen(23029) ? (added.size() % removed.size()) : (ListenerUtil.mutListener.listen(23028) ? (added.size() / removed.size()) : (ListenerUtil.mutListener.listen(23027) ? (added.size() * removed.size()) : (ListenerUtil.mutListener.listen(23026) ? (added.size() - removed.size()) : (added.size() + removed.size()))))));</span>
+<span class="nc bnc" id="L873" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23031)) {</span>
+            {
+<span class="nc" id="L875">                long _loopCounter558 = 0;</span>
+<span class="nc bnc" id="L876" title="All 2 branches missed.">                for (String f : added) {</span>
+<span class="nc" id="L877">                    ListenerUtil.loopListener.listen(&quot;_loopCounter558&quot;, ++_loopCounter558);</span>
+<span class="nc" id="L878">                    String path = new File(dir(), f).getAbsolutePath();</span>
+<span class="nc" id="L879">                    long mt = _mtime(path);</span>
+<span class="nc bnc" id="L880" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23030)) {</span>
+<span class="nc" id="L881">                        media.add(new Object[] { f, _checksum(path), mt, 1 });</span>
+                    }
+<span class="nc" id="L883">                }</span>
+            }
+        }
+<span class="nc bnc" id="L886" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23033)) {</span>
+            {
+<span class="nc" id="L888">                long _loopCounter559 = 0;</span>
+<span class="nc bnc" id="L889" title="All 2 branches missed.">                for (String f : removed) {</span>
+<span class="nc" id="L890">                    ListenerUtil.loopListener.listen(&quot;_loopCounter559&quot;, ++_loopCounter559);</span>
+<span class="nc bnc" id="L891" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23032)) {</span>
+<span class="nc" id="L892">                        media.add(new Object[] { f, null, 0, 1 });</span>
+                    }
+<span class="nc" id="L894">                }</span>
+            }
+        }
+<span class="nc bnc" id="L897" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23034)) {</span>
+            // update media db
+<span class="nc" id="L899">            mDb.executeMany(&quot;insert or replace into media values (?,?,?,?)&quot;, media);</span>
+        }
+<span class="nc bnc" id="L901" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23035)) {</span>
+<span class="nc" id="L902">            mDb.execute(&quot;update meta set dirMod = ?&quot;, _mtime(dir()));</span>
+        }
+<span class="nc bnc" id="L904" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23036)) {</span>
+<span class="nc" id="L905">            mDb.commit();</span>
+        }
+<span class="nc" id="L907">    }</span>
+
+    private Pair&lt;List&lt;String&gt;, List&lt;String&gt;&gt; _changes() {
+<span class="nc" id="L910">        Map&lt;String, Object[]&gt; cache = new HashMap&lt;&gt;(mDb.queryScalar(&quot;SELECT count() FROM media WHERE csum IS NOT NULL&quot;));</span>
+<span class="nc" id="L911">        try (Cursor cur = mDb.query(&quot;select fname, csum, mtime from media where csum is not null&quot;)) {</span>
+<span class="nc bnc" id="L912" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23038)) {</span>
+                {
+<span class="nc" id="L914">                    long _loopCounter560 = 0;</span>
+<span class="nc bnc" id="L915" title="All 2 branches missed.">                    while (cur.moveToNext()) {</span>
+<span class="nc" id="L916">                        ListenerUtil.loopListener.listen(&quot;_loopCounter560&quot;, ++_loopCounter560);</span>
+<span class="nc" id="L917">                        String name = cur.getString(0);</span>
+<span class="nc" id="L918">                        String csum = cur.getString(1);</span>
+<span class="nc" id="L919">                        long mod = cur.getLong(2);</span>
+<span class="nc bnc" id="L920" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23037)) {</span>
+<span class="nc" id="L921">                            cache.put(name, new Object[] { csum, mod, false });</span>
+                        }
+<span class="nc" id="L923">                    }</span>
+                }
+            }
+<span class="nc" id="L926">        } catch (SQLException e) {</span>
+<span class="nc" id="L927">            throw new RuntimeException(e);</span>
+<span class="nc" id="L928">        }</span>
+<span class="nc" id="L929">        List&lt;String&gt; added = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L930">        List&lt;String&gt; removed = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L931" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23079)) {</span>
+            {
+<span class="nc" id="L933">                long _loopCounter561 = 0;</span>
+                // loop through on-disk files
+<span class="nc bnc" id="L935" title="All 2 branches missed.">                for (File f : new File(dir()).listFiles()) {</span>
+<span class="nc" id="L936">                    ListenerUtil.loopListener.listen(&quot;_loopCounter561&quot;, ++_loopCounter561);</span>
+<span class="nc bnc" id="L937" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23039)) {</span>
+                        // ignore folders and thumbs.db
+<span class="nc bnc" id="L939" title="All 2 branches missed.">                        if (f.isDirectory()) {</span>
+<span class="nc" id="L940">                            continue;</span>
+                        }
+                    }
+<span class="nc" id="L943">                    String fname = f.getName();</span>
+<span class="nc bnc" id="L944" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23040)) {</span>
+<span class="nc bnc" id="L945" title="All 2 branches missed.">                        if (&quot;thumbs.db&quot;.equalsIgnoreCase(fname)) {</span>
+<span class="nc" id="L946">                            continue;</span>
+                        }
+                    }
+<span class="nc bnc" id="L949" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23041)) {</span>
+                        // and files with invalid chars
+<span class="nc bnc" id="L951" title="All 2 branches missed.">                        if (hasIllegal(fname)) {</span>
+<span class="nc" id="L952">                            continue;</span>
+                        }
+                    }
+                    // empty files are invalid; clean them up and continue
+<span class="nc" id="L956">                    long sz = f.length();</span>
+<span class="nc bnc" id="L957" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23048)) {</span>
+<span class="nc bnc" id="L958" title="All 22 branches missed.">                        if ((ListenerUtil.mutListener.listen(23046) ? (sz &gt;= 0) : (ListenerUtil.mutListener.listen(23045) ? (sz &lt;= 0) : (ListenerUtil.mutListener.listen(23044) ? (sz &gt; 0) : (ListenerUtil.mutListener.listen(23043) ? (sz &lt; 0) : (ListenerUtil.mutListener.listen(23042) ? (sz != 0) : (sz == 0))))))) {</span>
+<span class="nc bnc" id="L959" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23047)) {</span>
+<span class="nc" id="L960">                                f.delete();</span>
+                            }
+                            continue;
+                        }
+                    }
+<span class="nc bnc" id="L965" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23063)) {</span>
+<span class="nc bnc" id="L966" title="All 310 branches missed.">                        if ((ListenerUtil.mutListener.listen(23061) ? (sz &gt;= (ListenerUtil.mutListener.listen(23056) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) % 1024) : (ListenerUtil.mutListener.listen(23055) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) / 1024) : (ListenerUtil.mutListener.listen(23054) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) - 1024) : (ListenerUtil.mutListener.listen(23053) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) + 1024) : ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) * 1024)))))) : (ListenerUtil.mutListener.listen(23060) ? (sz &lt;= (ListenerUtil.mutListener.listen(23056) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) % 1024) : (ListenerUtil.mutListener.listen(23055) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) / 1024) : (ListenerUtil.mutListener.listen(23054) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) - 1024) : (ListenerUtil.mutListener.listen(23053) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) + 1024) : ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) * 1024)))))) : (ListenerUtil.mutListener.listen(23059) ? (sz &lt; (ListenerUtil.mutListener.listen(23056) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) % 1024) : (ListenerUtil.mutListener.listen(23055) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) / 1024) : (ListenerUtil.mutListener.listen(23054) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) - 1024) : (ListenerUtil.mutListener.listen(23053) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) + 1024) : ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) * 1024)))))) : (ListenerUtil.mutListener.listen(23058) ? (sz != (ListenerUtil.mutListener.listen(23056) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) % 1024) : (ListenerUtil.mutListener.listen(23055) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) / 1024) : (ListenerUtil.mutListener.listen(23054) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) - 1024) : (ListenerUtil.mutListener.listen(23053) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) + 1024) : ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) * 1024)))))) : (ListenerUtil.mutListener.listen(23057) ? (sz == (ListenerUtil.mutListener.listen(23056) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) % 1024) : (ListenerUtil.mutListener.listen(23055) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) / 1024) : (ListenerUtil.mutListener.listen(23054) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) - 1024) : (ListenerUtil.mutListener.listen(23053) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) + 1024) : ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) * 1024)))))) : (sz &gt; (ListenerUtil.mutListener.listen(23056) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) % 1024) : (ListenerUtil.mutListener.listen(23055) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) / 1024) : (ListenerUtil.mutListener.listen(23054) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) - 1024) : (ListenerUtil.mutListener.listen(23053) ? ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) + 1024) : ((ListenerUtil.mutListener.listen(23052) ? (100 % 1024) : (ListenerUtil.mutListener.listen(23051) ? (100 / 1024) : (ListenerUtil.mutListener.listen(23050) ? (100 - 1024) : (ListenerUtil.mutListener.listen(23049) ? (100 + 1024) : (100 * 1024))))) * 1024)))))))))))) {</span>
+<span class="nc bnc" id="L967" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23062)) {</span>
+<span class="nc" id="L968">                                mCol.log(&quot;ignoring file over 100MB&quot;, f);</span>
+                            }
+                            continue;
+                        }
+                    }
+                    // check encoding
+<span class="nc" id="L974">                    String normf = Utils.nfcNormalized(fname);</span>
+<span class="nc bnc" id="L975" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23067)) {</span>
+<span class="nc bnc" id="L976" title="All 2 branches missed.">                        if (!fname.equals(normf)) {</span>
+                            // wrong filename encoding which will cause sync errors
+<span class="nc" id="L978">                            File nf = new File(dir(), normf);</span>
+<span class="nc bnc" id="L979" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23066)) {</span>
+<span class="nc bnc" id="L980" title="All 2 branches missed.">                                if (nf.exists()) {</span>
+<span class="nc bnc" id="L981" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23065)) {</span>
+<span class="nc" id="L982">                                        f.delete();</span>
+                                    }
+                                } else {
+<span class="nc bnc" id="L985" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23064)) {</span>
+<span class="nc" id="L986">                                        f.renameTo(nf);</span>
+                                    }
+                                }
+                            }
+                        }
+                    }
+<span class="nc bnc" id="L992" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23078)) {</span>
+                        // newly added?
+<span class="nc bnc" id="L994" title="All 2 branches missed.">                        if (!cache.containsKey(fname)) {</span>
+<span class="nc bnc" id="L995" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23077)) {</span>
+<span class="nc" id="L996">                                added.add(fname);</span>
+                            }
+                        } else {
+<span class="nc bnc" id="L999" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23075)) {</span>
+                                // modified since last time?
+<span class="nc bnc" id="L1001" title="All 22 branches missed.">                                if ((ListenerUtil.mutListener.listen(23072) ? (_mtime(f.getAbsolutePath()) &gt;= (Long) cache.get(fname)[1]) : (ListenerUtil.mutListener.listen(23071) ? (_mtime(f.getAbsolutePath()) &lt;= (Long) cache.get(fname)[1]) : (ListenerUtil.mutListener.listen(23070) ? (_mtime(f.getAbsolutePath()) &gt; (Long) cache.get(fname)[1]) : (ListenerUtil.mutListener.listen(23069) ? (_mtime(f.getAbsolutePath()) &lt; (Long) cache.get(fname)[1]) : (ListenerUtil.mutListener.listen(23068) ? (_mtime(f.getAbsolutePath()) == (Long) cache.get(fname)[1]) : (_mtime(f.getAbsolutePath()) != (Long) cache.get(fname)[1]))))))) {</span>
+<span class="nc bnc" id="L1002" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23074)) {</span>
+                                        // and has different checksum?
+<span class="nc bnc" id="L1004" title="All 2 branches missed.">                                        if (!_checksum(f.getAbsolutePath()).equals(cache.get(fname)[0])) {</span>
+<span class="nc bnc" id="L1005" title="All 2 branches missed.">                                            if (!ListenerUtil.mutListener.listen(23073)) {</span>
+<span class="nc" id="L1006">                                                added.add(fname);</span>
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+<span class="nc bnc" id="L1012" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23076)) {</span>
+                                // mark as used
+<span class="nc" id="L1014">                                cache.get(fname)[2] = true;</span>
+                            }
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc bnc" id="L1021" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23082)) {</span>
+            {
+<span class="nc" id="L1023">                long _loopCounter562 = 0;</span>
+                // look for any entries in the cache that no longer exist on disk
+<span class="nc bnc" id="L1025" title="All 2 branches missed.">                for (Map.Entry&lt;String, Object[]&gt; entry : cache.entrySet()) {</span>
+<span class="nc" id="L1026">                    ListenerUtil.loopListener.listen(&quot;_loopCounter562&quot;, ++_loopCounter562);</span>
+<span class="nc bnc" id="L1027" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23081)) {</span>
+<span class="nc bnc" id="L1028" title="All 2 branches missed.">                        if (!((Boolean) entry.getValue()[2])) {</span>
+<span class="nc bnc" id="L1029" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23080)) {</span>
+<span class="nc" id="L1030">                                removed.add(entry.getKey());</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L1034">                }</span>
+            }
+        }
+<span class="nc" id="L1037">        return new Pair&lt;&gt;(added, removed);</span>
+    }
+
+    public int lastUsn() {
+<span class="nc" id="L1041">        return mDb.queryScalar(&quot;select lastUsn from meta&quot;);</span>
+    }
+
+    public void setLastUsn(int usn) {
+<span class="nc bnc" id="L1045" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23083)) {</span>
+<span class="nc" id="L1046">            mDb.execute(&quot;update meta set lastUsn = ?&quot;, usn);</span>
+        }
+<span class="nc bnc" id="L1048" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23084)) {</span>
+<span class="nc" id="L1049">            mDb.commit();</span>
+        }
+<span class="nc" id="L1051">    }</span>
+
+    public Pair&lt;String, Integer&gt; syncInfo(String fname) {
+<span class="nc" id="L1054">        try (Cursor cur = mDb.query(&quot;select csum, dirty from media where fname=?&quot;, fname)) {</span>
+<span class="nc bnc" id="L1055" title="All 2 branches missed.">            if (cur.moveToNext()) {</span>
+<span class="nc" id="L1056">                String csum = cur.getString(0);</span>
+<span class="nc" id="L1057">                int dirty = cur.getInt(1);</span>
+<span class="nc" id="L1058">                return new Pair&lt;&gt;(csum, dirty);</span>
+            } else {
+<span class="nc" id="L1060">                return new Pair&lt;&gt;(null, 0);</span>
+            }
+<span class="nc bnc" id="L1062" title="All 2 branches missed.">        }</span>
+    }
+
+    public void markClean(List&lt;String&gt; fnames) {
+<span class="nc bnc" id="L1066" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23086)) {</span>
+            {
+<span class="nc" id="L1068">                long _loopCounter563 = 0;</span>
+<span class="nc bnc" id="L1069" title="All 2 branches missed.">                for (String fname : fnames) {</span>
+<span class="nc" id="L1070">                    ListenerUtil.loopListener.listen(&quot;_loopCounter563&quot;, ++_loopCounter563);</span>
+<span class="nc bnc" id="L1071" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23085)) {</span>
+<span class="nc" id="L1072">                        mDb.execute(&quot;update media set dirty=0 where fname=?&quot;, fname);</span>
+                    }
+<span class="nc" id="L1074">                }</span>
+            }
+        }
+<span class="nc" id="L1077">    }</span>
+
+    public void syncDelete(String fname) {
+<span class="nc" id="L1080">        File f = new File(dir(), fname);</span>
+<span class="nc bnc" id="L1081" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23088)) {</span>
+<span class="nc bnc" id="L1082" title="All 2 branches missed.">            if (f.exists()) {</span>
+<span class="nc bnc" id="L1083" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23087)) {</span>
+<span class="nc" id="L1084">                    f.delete();</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L1088" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23089)) {</span>
+<span class="nc" id="L1089">            mDb.execute(&quot;delete from media where fname=?&quot;, fname);</span>
+        }
+<span class="nc" id="L1091">    }</span>
+
+    public int mediacount() {
+<span class="nc" id="L1094">        return mDb.queryScalar(&quot;select count() from media where csum is not null&quot;);</span>
+    }
+
+    public int dirtyCount() {
+<span class="nc" id="L1098">        return mDb.queryScalar(&quot;select count() from media where dirty=1&quot;);</span>
+    }
+
+    public void forceResync() {
+<span class="nc bnc" id="L1102" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23090)) {</span>
+<span class="nc" id="L1103">            mDb.execute(&quot;delete from media&quot;);</span>
+        }
+<span class="nc bnc" id="L1105" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23091)) {</span>
+<span class="nc" id="L1106">            mDb.execute(&quot;update meta set lastUsn=0,dirMod=0&quot;);</span>
+        }
+<span class="nc bnc" id="L1108" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23092)) {</span>
+<span class="nc" id="L1109">            mDb.execute(&quot;vacuum&quot;);</span>
+        }
+<span class="nc bnc" id="L1111" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23093)) {</span>
+<span class="nc" id="L1112">            mDb.execute(&quot;analyze&quot;);</span>
+        }
+<span class="nc bnc" id="L1114" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23094)) {</span>
+<span class="nc" id="L1115">            mDb.commit();</span>
+        }
+<span class="nc" id="L1117">    }</span>
+
+    /**
+     * Unlike python, our temp zip file will be on disk instead of in memory. This avoids storing
+     * potentially large files in memory which is not feasible with Android's limited heap space.
+     * &lt;p&gt;
+     * Notes:
+     * &lt;p&gt;
+     * - The maximum size of the changes zip is decided by the constant SYNC_ZIP_SIZE. If a media file exceeds this
+     * limit, only that file (in full) will be zipped to be sent to the server.
+     * &lt;p&gt;
+     * - This method will be repeatedly called from MediaSyncer until there are no more files (marked &quot;dirty&quot; in the DB)
+     * to send.
+     * &lt;p&gt;
+     * - Since AnkiDroid avoids scanning the media folder on every sync, it is possible for a file to be marked as a
+     * new addition but actually have been deleted (e.g., with a file manager). In this case we skip over the file
+     * and mark it as removed in the database. (This behaviour differs from the desktop client).
+     * &lt;p&gt;
+     */
+    public Pair&lt;File, List&lt;String&gt;&gt; mediaChangesZip() {
+<span class="nc" id="L1137">        File f = new File(mCol.getPath().replaceFirst(&quot;collection\\.anki2$&quot;, &quot;tmpSyncToServer.zip&quot;));</span>
+<span class="nc" id="L1138">        List&lt;String&gt; fnames = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1139">        try (ZipOutputStream z = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(f)));</span>
+<span class="nc" id="L1140">            Cursor cur = mDb.query(&quot;select fname, csum from media where dirty=1 limit &quot; + Consts.SYNC_ZIP_COUNT)) {</span>
+<span class="nc bnc" id="L1141" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23096)) {</span>
+<span class="nc" id="L1142">                z.setMethod(ZipOutputStream.DEFLATED);</span>
+            }
+            // serialization step. Instead of a list of tuples, we use JSONArrays of JSONArrays.
+<span class="nc" id="L1145">            JSONArray meta = new JSONArray();</span>
+<span class="nc" id="L1146">            int sz = 0;</span>
+<span class="nc" id="L1147">            byte[] buffer = new byte[2048];</span>
+<span class="nc bnc" id="L1148" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23121)) {</span>
+                {
+<span class="nc" id="L1150">                    long _loopCounter565 = 0;</span>
+<span class="nc bnc" id="L1151" title="All 2 branches missed.">                    for (int c = 0; cur.moveToNext(); c++) {</span>
+<span class="nc" id="L1152">                        ListenerUtil.loopListener.listen(&quot;_loopCounter565&quot;, ++_loopCounter565);</span>
+<span class="nc" id="L1153">                        String fname = cur.getString(0);</span>
+<span class="nc" id="L1154">                        String csum = cur.getString(1);</span>
+<span class="nc bnc" id="L1155" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23097)) {</span>
+<span class="nc" id="L1156">                            fnames.add(fname);</span>
+                        }
+<span class="nc" id="L1158">                        String normname = Utils.nfcNormalized(fname);</span>
+<span class="nc bnc" id="L1159" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23114)) {</span>
+<span class="nc bnc" id="L1160" title="All 2 branches missed.">                            if (!TextUtils.isEmpty(csum)) {</span>
+                                try {
+<span class="nc bnc" id="L1162" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23101)) {</span>
+<span class="nc" id="L1163">                                        mCol.log(&quot;+media zip &quot; + fname);</span>
+                                    }
+<span class="nc" id="L1165">                                    File file = new File(dir(), fname);</span>
+<span class="nc" id="L1166">                                    BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file), 2048);</span>
+<span class="nc bnc" id="L1167" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23102)) {</span>
+<span class="nc" id="L1168">                                        z.putNextEntry(new ZipEntry(Integer.toString(c)));</span>
+                                    }
+<span class="nc" id="L1170">                                    int count = 0;</span>
+<span class="nc bnc" id="L1171" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23109)) {</span>
+                                        {
+<span class="nc" id="L1173">                                            long _loopCounter564 = 0;</span>
+<span class="nc bnc" id="L1174" title="All 22 branches missed.">                                            while ((ListenerUtil.mutListener.listen(23108) ? ((count = bis.read(buffer, 0, 2048)) &gt;= -1) : (ListenerUtil.mutListener.listen(23107) ? ((count = bis.read(buffer, 0, 2048)) &lt;= -1) : (ListenerUtil.mutListener.listen(23106) ? ((count = bis.read(buffer, 0, 2048)) &gt; -1) : (ListenerUtil.mutListener.listen(23105) ? ((count = bis.read(buffer, 0, 2048)) &lt; -1) : (ListenerUtil.mutListener.listen(23104) ? ((count = bis.read(buffer, 0, 2048)) == -1) : ((count = bis.read(buffer, 0, 2048)) != -1))))))) {</span>
+<span class="nc" id="L1175">                                                ListenerUtil.loopListener.listen(&quot;_loopCounter564&quot;, ++_loopCounter564);</span>
+<span class="nc bnc" id="L1176" title="All 2 branches missed.">                                                if (!ListenerUtil.mutListener.listen(23103)) {</span>
+<span class="nc" id="L1177">                                                    z.write(buffer, 0, count);</span>
+                                                }
+                                            }
+                                        }
+                                    }
+<span class="nc bnc" id="L1182" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23110)) {</span>
+<span class="nc" id="L1183">                                        z.closeEntry();</span>
+                                    }
+<span class="nc bnc" id="L1185" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23111)) {</span>
+<span class="nc" id="L1186">                                        bis.close();</span>
+                                    }
+<span class="nc bnc" id="L1188" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23112)) {</span>
+<span class="nc" id="L1189">                                        meta.put(new JSONArray().put(normname).put(Integer.toString(c)));</span>
+                                    }
+<span class="nc bnc" id="L1191" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23113)) {</span>
+<span class="nc" id="L1192">                                        sz += file.length();</span>
+                                    }
+<span class="nc" id="L1194">                                } catch (FileNotFoundException e) {</span>
+<span class="nc bnc" id="L1195" title="All 2 branches missed.">                                    if (!ListenerUtil.mutListener.listen(23100)) {</span>
+                                        // Skip over it and mark it as removed in the db.
+<span class="nc" id="L1197">                                        removeFile(fname);</span>
+                                    }
+<span class="nc" id="L1199">                                }</span>
+                            } else {
+<span class="nc bnc" id="L1201" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(23098)) {</span>
+<span class="nc" id="L1202">                                    mCol.log(&quot;-media zip &quot; + fname);</span>
+                                }
+<span class="nc bnc" id="L1204" title="All 2 branches missed.">                                if (!ListenerUtil.mutListener.listen(23099)) {</span>
+<span class="nc" id="L1205">                                    meta.put(new JSONArray().put(normname).put(&quot;&quot;));</span>
+                                }
+                            }
+                        }
+<span class="nc bnc" id="L1209" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23120)) {</span>
+<span class="nc bnc" id="L1210" title="All 22 branches missed.">                            if ((ListenerUtil.mutListener.listen(23119) ? (sz &lt;= Consts.SYNC_ZIP_SIZE) : (ListenerUtil.mutListener.listen(23118) ? (sz &gt; Consts.SYNC_ZIP_SIZE) : (ListenerUtil.mutListener.listen(23117) ? (sz &lt; Consts.SYNC_ZIP_SIZE) : (ListenerUtil.mutListener.listen(23116) ? (sz != Consts.SYNC_ZIP_SIZE) : (ListenerUtil.mutListener.listen(23115) ? (sz == Consts.SYNC_ZIP_SIZE) : (sz &gt;= Consts.SYNC_ZIP_SIZE))))))) {</span>
+<span class="nc" id="L1211">                                break;</span>
+                            }
+                        }
+                    }
+                }
+            }
+<span class="nc bnc" id="L1217" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23122)) {</span>
+<span class="nc" id="L1218">                z.putNextEntry(new ZipEntry(&quot;_meta&quot;));</span>
+            }
+<span class="nc bnc" id="L1220" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23123)) {</span>
+<span class="nc" id="L1221">                z.write(Utils.jsonToString(meta).getBytes());</span>
+            }
+<span class="nc bnc" id="L1223" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23124)) {</span>
+<span class="nc" id="L1224">                z.closeEntry();</span>
+            }
+<span class="nc bnc" id="L1226" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23125)) {</span>
+                // Don't leave lingering temp files if the VM terminates.
+<span class="nc" id="L1228">                f.deleteOnExit();</span>
+            }
+<span class="nc" id="L1230">            return new Pair&lt;&gt;(f, fnames);</span>
+<span class="nc" id="L1231">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L1232" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23095)) {</span>
+<span class="nc" id="L1233">                Timber.e(e, &quot;Failed to create media changes zip: &quot;);</span>
+            }
+<span class="nc" id="L1235">            throw new RuntimeException(e);</span>
+        }
+    }
+
+    /**
+     * Extract zip data; return the number of files extracted. Unlike the python version, this method consumes a
+     * ZipFile stored on disk instead of a String buffer. Holding the entire downloaded data in memory is not feasible
+     * since some devices can have very limited heap space.
+     *
+     * This method closes the file before it returns.
+     */
+    public int addFilesFromZip(ZipFile z) throws IOException {
+        try {
+            // get meta info first
+<span class="nc" id="L1249">            JSONObject meta = new JSONObject(Utils.convertStreamToString(z.getInputStream(z.getEntry(&quot;_meta&quot;))));</span>
+            // then loop through all files
+<span class="nc" id="L1251">            int cnt = 0;</span>
+<span class="nc" id="L1252">            ArrayList&lt;? extends ZipEntry&gt; zipEntries = Collections.list(z.entries());</span>
+<span class="nc" id="L1253">            List&lt;Object[]&gt; media = new ArrayList&lt;&gt;(zipEntries.size());</span>
+<span class="nc bnc" id="L1254" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23132)) {</span>
+                {
+<span class="nc" id="L1256">                    long _loopCounter566 = 0;</span>
+<span class="nc bnc" id="L1257" title="All 2 branches missed.">                    for (ZipEntry i : zipEntries) {</span>
+<span class="nc" id="L1258">                        ListenerUtil.loopListener.listen(&quot;_loopCounter566&quot;, ++_loopCounter566);</span>
+<span class="nc" id="L1259">                        String fileName = i.getName();</span>
+<span class="nc bnc" id="L1260" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23127)) {</span>
+<span class="nc bnc" id="L1261" title="All 2 branches missed.">                            if (&quot;_meta&quot;.equals(fileName)) {</span>
+                                // ignore previously-retrieved meta
+<span class="nc" id="L1263">                                continue;</span>
+                            }
+                        }
+<span class="nc" id="L1266">                        String name = meta.getString(fileName);</span>
+<span class="nc bnc" id="L1267" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23128)) {</span>
+                            // normalize name for platform
+<span class="nc" id="L1269">                            name = Utils.nfcNormalized(name);</span>
+                        }
+                        // save file
+<span class="nc" id="L1272">                        String destPath = (dir() + File.separator) + name;</span>
+<span class="nc" id="L1273">                        try (InputStream zipInputStream = z.getInputStream(i)) {</span>
+<span class="nc bnc" id="L1274" title="All 2 branches missed.">                            if (!ListenerUtil.mutListener.listen(23129)) {</span>
+<span class="nc" id="L1275">                                Utils.writeToFile(zipInputStream, destPath);</span>
+                            }
+                        }
+<span class="nc" id="L1278">                        String csum = Utils.fileChecksum(destPath);</span>
+<span class="nc bnc" id="L1279" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23130)) {</span>
+                            // update db
+<span class="nc" id="L1281">                            media.add(new Object[] { name, csum, _mtime(destPath), 0 });</span>
+                        }
+<span class="nc bnc" id="L1283" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(23131)) {</span>
+<span class="nc" id="L1284">                            cnt += 1;</span>
+                        }
+<span class="nc" id="L1286">                    }</span>
+                }
+            }
+<span class="nc bnc" id="L1289" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23139)) {</span>
+<span class="nc bnc" id="L1290" title="All 22 branches missed.">                if ((ListenerUtil.mutListener.listen(23137) ? (media.size() &gt;= 0) : (ListenerUtil.mutListener.listen(23136) ? (media.size() &lt;= 0) : (ListenerUtil.mutListener.listen(23135) ? (media.size() &lt; 0) : (ListenerUtil.mutListener.listen(23134) ? (media.size() != 0) : (ListenerUtil.mutListener.listen(23133) ? (media.size() == 0) : (media.size() &gt; 0))))))) {</span>
+<span class="nc bnc" id="L1291" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(23138)) {</span>
+<span class="nc" id="L1292">                        mDb.executeMany(&quot;insert or replace into media values (?,?,?,?)&quot;, media);</span>
+                    }
+                }
+            }
+<span class="nc" id="L1296">            return cnt;</span>
+        } finally {
+<span class="nc bnc" id="L1298" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23126)) {</span>
+<span class="nc" id="L1299">                z.close();</span>
+            }
+        }
+    }
+
+    /**
+     * Used by unit tests only.
+     */
+    public DB getDb() {
+<span class="fc" id="L1308">        return mDb;</span>
+    }
+
+    /**
+     * Used by other classes to determine the index of a regular expression group named &quot;fname&quot;
+     * (Anki2Importer needs this). This is needed because we didn't implement the &quot;transformNames&quot;
+     * function and have delegated its job to the caller of this class.
+     */
+    public static int indexOfFname(Pattern p) {
+<span class="nc bnc" id="L1317" title="All 4 branches missed.">        return p.equals(fSoundRegexps) ? 2 : p.equals(fImgRegExpU) ? 2 : 3;</span>
+    }
+
+    /**
+     * Add an entry into the media database for file named fname, or update it
+     * if it already exists.
+     */
+    public void markFileAdd(String fname) {
+<span class="nc bnc" id="L1325" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23140)) {</span>
+<span class="nc" id="L1326">            Timber.d(&quot;Marking media file addition in media db: %s&quot;, fname);</span>
+        }
+<span class="nc" id="L1328">        String path = new File(dir(), fname).getAbsolutePath();</span>
+<span class="nc bnc" id="L1329" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23141)) {</span>
+<span class="nc" id="L1330">            mDb.execute(&quot;insert or replace into media values (?,?,?,?)&quot;, fname, _checksum(path), _mtime(path), 1);</span>
+        }
+<span class="nc" id="L1332">    }</span>
+
+    /**
+     * Remove a file from the media directory if it exists and mark it as removed in the media database.
+     */
+    public void removeFile(String fname) {
+<span class="nc" id="L1338">        File f = new File(dir(), fname);</span>
+<span class="nc bnc" id="L1339" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23143)) {</span>
+<span class="nc bnc" id="L1340" title="All 2 branches missed.">            if (f.exists()) {</span>
+<span class="nc bnc" id="L1341" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(23142)) {</span>
+<span class="nc" id="L1342">                    f.delete();</span>
+                }
+            }
+        }
+<span class="nc bnc" id="L1346" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23144)) {</span>
+<span class="nc" id="L1347">            Timber.d(&quot;Marking media file removal in media db: %s&quot;, fname);</span>
+        }
+<span class="nc bnc" id="L1349" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23145)) {</span>
+<span class="nc" id="L1350">            mDb.execute(&quot;insert or replace into media values (?,?,?,?)&quot;, fname, null, 0, 1);</span>
+        }
+<span class="nc" id="L1352">    }</span>
+
+    /**
+     * @return True if the media db has not been populated yet.
+     */
+    public boolean needScan() {
+<span class="nc" id="L1358">        long mod = mDb.queryLongScalar(&quot;select dirMod from meta&quot;);</span>
+<span class="nc bnc" id="L1359" title="All 22 branches missed.">        return (ListenerUtil.mutListener.listen(23150) ? (mod &gt;= 0) : (ListenerUtil.mutListener.listen(23149) ? (mod &lt;= 0) : (ListenerUtil.mutListener.listen(23148) ? (mod &gt; 0) : (ListenerUtil.mutListener.listen(23147) ? (mod &lt; 0) : (ListenerUtil.mutListener.listen(23146) ? (mod != 0) : (mod == 0))))));</span>
+    }
+
+    public void rebuildIfInvalid() throws IOException {
+        try {
+<span class="nc bnc" id="L1364" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23154)) {</span>
+<span class="nc" id="L1365">                _changed();</span>
+            }
+<span class="nc" id="L1367">            return;</span>
+<span class="nc" id="L1368">        } catch (Exception e) {</span>
+<span class="nc bnc" id="L1369" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23151)) {</span>
+<span class="nc bnc" id="L1370" title="All 2 branches missed.">                if (!ExceptionUtil.containsMessage(e, &quot;no such table: meta&quot;)) {</span>
+<span class="nc" id="L1371">                    throw e;</span>
+                }
+            }
+<span class="nc bnc" id="L1374" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23152)) {</span>
+<span class="nc" id="L1375">                AnkiDroidApp.sendExceptionReport(e, &quot;media::rebuildIfInvalid&quot;);</span>
+            }
+<span class="nc bnc" id="L1377" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(23153)) {</span>
+                // TODO: We don't know the root cause of the missing meta table
+<span class="nc" id="L1379">                Timber.w(e, &quot;Error accessing media database. Rebuilding&quot;);</span>
+            }
+        }
+<span class="nc bnc" id="L1382" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23155)) {</span>
+            // Delete and recreate the file
+<span class="nc" id="L1384">            mDb.getDatabase().close();</span>
+        }
+<span class="nc" id="L1386">        String path = mDb.getPath();</span>
+<span class="nc bnc" id="L1387" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23156)) {</span>
+<span class="nc" id="L1388">            Timber.i(&quot;Deleted %s&quot;, path);</span>
+        }
+<span class="nc bnc" id="L1390" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23157)) {</span>
+<span class="nc" id="L1391">            new File(path).delete();</span>
+        }
+<span class="nc bnc" id="L1393" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23158)) {</span>
+<span class="nc" id="L1394">            mDb = new DB(path);</span>
+        }
+<span class="nc bnc" id="L1396" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(23159)) {</span>
+<span class="nc" id="L1397">            _initDB();</span>
+        }
+<span class="nc" id="L1399">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.5.201910111838</span></div></body></html>

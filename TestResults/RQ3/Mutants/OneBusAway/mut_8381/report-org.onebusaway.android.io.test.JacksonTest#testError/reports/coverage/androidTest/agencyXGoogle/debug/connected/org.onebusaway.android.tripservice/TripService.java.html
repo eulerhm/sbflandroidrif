@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TripService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">agencyXGoogleDebug</a> &gt; <a href="index.source.html" class="el_package">org.onebusaway.android.tripservice</a> &gt; <span class="el_source">TripService.java</span></div><h1>TripService.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (C) 2016 Paul Watts (paulcwatts@gmail.com),
+ * University of South Florida (sjbarbeau@gmail.com)
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.tripservice;
+
+import android.app.AlarmManager;
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Binder;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.Parcel;
+import android.os.RemoteException;
+import android.util.Log;
+import androidx.core.app.NotificationCompat;
+import org.onebusaway.android.BuildConfig;
+import org.onebusaway.android.R;
+import org.onebusaway.android.app.Application;
+import org.onebusaway.android.provider.ObaContract;
+import org.onebusaway.android.util.UIUtils;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import br.ufmg.labsoft.mutvariants.listeners.ListenerUtil;
+
+/**
+ * A container Service for a thread pool that manages the scheduling, polling, and notifying the
+ * user of an upcoming bus while they are waiting at their stop. The thread pool can contain
+ * executing threads for various tasks related to the reminders feature - the SchedulerTask
+ * (executed when a new reminder is saved, or after boot (via BootstrapService) to register all
+ * reminders saved in the database with the Android platform), the PollerTask (triggered by the
+ * platform via AlarmReceiver to begin polling the server 30 min ahead of the scheduled time of the
+ * arrival for which the reminder is set), the NotifierTask (triggered by OBA Android when we should
+ * fire a notification for a reminder), or the CancelNotifyTask (for when a notification is
+ * canceled).
+ *
+ * This Service is not constructed to continously run - instead, it can shut down in between the
+ * execution of tasks.  For example, the PollerTask actually reschedules itself each time it polls
+ * (in PollerTask.poll1()), so the TripService service could shut down in between polling events.
+ *
+ * Following #290, mNotifications is only used as a semaphore to synchronize the multiple tasks and
+ * shutdown of the Service.  This is a complex implementation prone to multi-threading and
+ * synchronization issues.  We should examine a re-implementation of the reminder service - see
+ * #493
+ * for details.
+ */
+<span class="nc" id="L66">public class TripService extends Service {</span>
+
+    public static final String TAG = &quot;TripService&quot;;
+
+    /**
+     * Actions - should match intent-filter actions for AlarmReceiver in AndroidManifest.xml
+     *
+     * NOTE: The action names in this class should not be changed.  They need to stay under the
+     * BuildConfig.APPLICATION_ID (for the original OBA brand, &quot;com.joulespersecond.seattlebusbot&quot;)
+     * namespace to support backwards compatibility with existing installed apps
+     */
+    public static final String ACTION_SCHEDULE = BuildConfig.APPLICATION_ID + &quot;.action.SCHEDULE&quot;;
+
+    public static final String ACTION_POLL = BuildConfig.APPLICATION_ID + &quot;.action.POLL&quot;;
+
+    public static final String ACTION_NOTIFY = BuildConfig.APPLICATION_ID + &quot;.action.NOTIFY&quot;;
+
+    public static final String ACTION_CANCEL = BuildConfig.APPLICATION_ID + &quot;.action.CANCEL&quot;;
+
+    private static final String NOTIFY_TEXT = &quot;.notifyText&quot;;
+
+    private static final String NOTIFY_TITLE = &quot;.notifyTitle&quot;;
+
+    private static final String START_FOREGROUND = &quot;.startForeground&quot;;
+
+    public static final int FOREGROUND_NOTIFICATION_ID = 1800001;
+
+    private ExecutorService mThreadPool;
+
+    private NotificationManager mNM;
+
+    /**
+     * TODO - Remove mNotifications - it's now only used as a semaphore to synchronize the multiple
+     * tasks and shutdown of the Service.  However, this requires a new reminders impl (see #493).
+     */
+    private ConcurrentHashMap&lt;Integer, Notification&gt; mNotifications;
+
+    @Override
+    public void onCreate() {
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5114)) {</span>
+<span class="nc" id="L106">            mThreadPool = Executors.newSingleThreadExecutor();</span>
+        }
+<span class="nc bnc" id="L108" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5115)) {</span>
+<span class="nc" id="L109">            mNM = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);</span>
+        }
+<span class="nc bnc" id="L111" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5116)) {</span>
+<span class="nc" id="L112">            mNotifications = new ConcurrentHashMap&lt;Integer, Notification&gt;();</span>
+        }
+<span class="nc" id="L114">    }</span>
+
+    @Override
+    public void onDestroy() {
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5118)) {</span>
+            // Log.d(TAG, &quot;service destroyed&quot;);
+<span class="nc bnc" id="L120" title="All 2 branches missed.">            if (mThreadPool != null) {</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(5117)) {</span>
+<span class="nc" id="L122">                    mThreadPool.shutdownNow();</span>
+                }
+            }
+        }
+<span class="nc" id="L126">    }</span>
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        // Check if we should start the service in the foreground
+<span class="nc" id="L131">        boolean startInForeground = false;</span>
+<span class="nc" id="L132">        Bundle bundle = intent.getExtras();</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5120)) {</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">            if (bundle != null) {</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(5119)) {</span>
+<span class="nc" id="L136">                    startInForeground = bundle.getBoolean(START_FOREGROUND);</span>
+                }
+            }
+        }
+<span class="nc" id="L140">        String action = intent.getAction();</span>
+<span class="nc bnc" id="L141" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5138)) {</span>
+            // ACTION_NOTIFY should never run in the foreground to avoid multiple notifications (#946)
+<span class="nc bnc" id="L143" title="All 106 branches missed.">            if ((ListenerUtil.mutListener.listen(5127) ? ((ListenerUtil.mutListener.listen(5126) ? ((ListenerUtil.mutListener.listen(5125) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5124) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5123) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5122) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5121) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.O) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.O)))))) || startInForeground) : ((ListenerUtil.mutListener.listen(5125) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5124) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5123) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5122) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5121) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.O) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.O)))))) &amp;&amp; startInForeground)) || !ACTION_NOTIFY.equals(action)) : ((ListenerUtil.mutListener.listen(5126) ? ((ListenerUtil.mutListener.listen(5125) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5124) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5123) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5122) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5121) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.O) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.O)))))) || startInForeground) : ((ListenerUtil.mutListener.listen(5125) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5124) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5123) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5122) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5121) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.O) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.O)))))) &amp;&amp; startInForeground)) &amp;&amp; !ACTION_NOTIFY.equals(action)))) {</span>
+                // Create notification for running service in the foreground
+<span class="nc" id="L145">                Intent notificationIntent = new Intent(this, TripService.class);</span>
+                int piFlags;
+<span class="nc bnc" id="L147" title="All 22 branches missed.">                if ((ListenerUtil.mutListener.listen(5132) ? (android.os.Build.VERSION.SDK_INT &lt;= android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(5131) ? (android.os.Build.VERSION.SDK_INT &gt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(5130) ? (android.os.Build.VERSION.SDK_INT &lt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(5129) ? (android.os.Build.VERSION.SDK_INT != android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(5128) ? (android.os.Build.VERSION.SDK_INT == android.os.Build.VERSION_CODES.S) : (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.S))))))) {</span>
+<span class="nc" id="L148">                    piFlags = PendingIntent.FLAG_MUTABLE;</span>
+                } else {
+<span class="nc" id="L150">                    piFlags = 0;</span>
+                }
+<span class="nc" id="L152">                PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, piFlags);</span>
+<span class="nc" id="L153">                String foregroundNotifyTitle = Application.get().getResources().getString(R.string.foreground_all_intent_title);</span>
+<span class="nc" id="L154">                String foregroundNotifyText = &quot;&quot;;</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(5136)) {</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">                    if (ACTION_SCHEDULE.equals(action)) {</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(5135)) {</span>
+<span class="nc" id="L158">                            foregroundNotifyText = Application.get().getResources().getString(R.string.foreground_action_schedule_text);</span>
+                        }
+<span class="nc bnc" id="L160" title="All 2 branches missed.">                    } else if (ACTION_POLL.equals(action)) {</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(5134)) {</span>
+<span class="nc" id="L162">                            foregroundNotifyText = Application.get().getResources().getString(R.string.foreground_action_poll_text);</span>
+                        }
+<span class="nc bnc" id="L164" title="All 2 branches missed.">                    } else if (ACTION_CANCEL.equals(action)) {</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">                        if (!ListenerUtil.mutListener.listen(5133)) {</span>
+<span class="nc" id="L166">                            foregroundNotifyText = Application.get().getResources().getString(R.string.foreground_action_cancel_text);</span>
+                        }
+                    }
+                }
+<span class="nc" id="L170">                Notification notification = new NotificationCompat.Builder(getApplicationContext(), Application.CHANNEL_TRIP_PLAN_UPDATES_ID).setSmallIcon(R.drawable.ic_stat_notification).setContentTitle(foregroundNotifyTitle).setContentText(foregroundNotifyText).setContentIntent(pendingIntent).build();</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(5137)) {</span>
+<span class="nc" id="L172">                    startForeground(FOREGROUND_NOTIFICATION_ID, notification);</span>
+                }
+            }
+        }
+<span class="nc" id="L176">        return handleCommand(intent, startId);</span>
+    }
+
+    private final class TaskContextImpl implements TaskContext {
+
+        private final int mStartId;
+
+<span class="nc" id="L183">        public TaskContextImpl(int startId) {</span>
+<span class="nc" id="L184">            mStartId = startId;</span>
+<span class="nc" id="L185">        }</span>
+
+        @Override
+        public void taskComplete() {
+<span class="nc bnc" id="L189" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5140)) {</span>
+                // If we have notifications, then we can't stop ourselves.
+<span class="nc bnc" id="L191" title="All 2 branches missed.">                if (mNotifications.isEmpty()) {</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(5139)) {</span>
+<span class="nc" id="L193">                        stopSelfResult(mStartId);</span>
+                    }
+                }
+            }
+<span class="nc" id="L197">        }</span>
+
+        @Override
+        public void setNotification(int id, Notification notification) {
+<span class="nc bnc" id="L201" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5141)) {</span>
+<span class="nc" id="L202">                mNotifications.put(id, notification);</span>
+            }
+<span class="nc bnc" id="L204" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5142)) {</span>
+<span class="nc" id="L205">                mNM.notify(id, notification);</span>
+            }
+<span class="nc" id="L207">        }</span>
+
+        @Override
+        public void cancelNotification(int id) {
+<span class="nc bnc" id="L211" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5143)) {</span>
+<span class="nc" id="L212">                mNM.cancel(id);</span>
+            }
+<span class="nc bnc" id="L214" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5144)) {</span>
+<span class="nc" id="L215">                mNotifications.remove(id);</span>
+            }
+<span class="nc bnc" id="L217" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5146)) {</span>
+                // stop the service.
+<span class="nc bnc" id="L219" title="All 2 branches missed.">                if (mNotifications.isEmpty()) {</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">                    if (!ListenerUtil.mutListener.listen(5145)) {</span>
+                        // Log.d(TAG, &quot;Stopping service&quot;);
+<span class="nc" id="L222">                        stopSelf();</span>
+                    }
+                }
+            }
+<span class="nc" id="L226">        }</span>
+    }
+
+    private int handleCommand(Intent intent, int startId) {
+<span class="nc bnc" id="L230" title="All 2 branches missed.">        if (intent == null) {</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5147)) {</span>
+<span class="nc" id="L232">                Log.e(TAG, &quot;Null intent&quot;);</span>
+            }
+<span class="nc" id="L234">            return START_NOT_STICKY;</span>
+        }
+<span class="nc" id="L236">        final String action = intent.getAction();</span>
+<span class="nc" id="L237">        final TaskContextImpl taskContext = new TaskContextImpl(startId);</span>
+<span class="nc" id="L238">        final Uri uri = intent.getData();</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        if (ACTION_SCHEDULE.equals(action)) {</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5152)) {</span>
+<span class="nc" id="L241">                mThreadPool.submit(new SchedulerTask(this, taskContext, uri));</span>
+            }
+<span class="nc" id="L243">            return START_REDELIVER_INTENT;</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">        } else if (ACTION_POLL.equals(action)) {</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5151)) {</span>
+<span class="nc" id="L246">                mThreadPool.submit(new PollerTask(this, taskContext, uri));</span>
+            }
+<span class="nc" id="L248">            return START_NOT_STICKY;</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">        } else if (ACTION_NOTIFY.equals(action)) {</span>
+            // Create the notification
+<span class="nc" id="L251">            String notifyTitle = intent.getStringExtra(NOTIFY_TITLE);</span>
+<span class="nc" id="L252">            String notifyText = intent.getStringExtra(NOTIFY_TEXT);</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5150)) {</span>
+<span class="nc" id="L254">                mThreadPool.submit(new NotifierTask(this, taskContext, uri, notifyTitle, notifyText));</span>
+            }
+<span class="nc" id="L256">            return START_REDELIVER_INTENT;</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">        } else if (ACTION_CANCEL.equals(action)) {</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5149)) {</span>
+<span class="nc" id="L259">                mThreadPool.submit(new CancelNotifyTask(this, taskContext, uri));</span>
+            }
+<span class="nc" id="L261">            return START_NOT_STICKY;</span>
+        } else {
+<span class="nc bnc" id="L263" title="All 2 branches missed.">            if (!ListenerUtil.mutListener.listen(5148)) {</span>
+<span class="nc" id="L264">                Log.e(TAG, &quot;Unknown action: &quot; + action);</span>
+            }
+            // stopSelfResult(startId);
+<span class="nc" id="L267">            return START_NOT_STICKY;</span>
+        }
+    }
+
+    @Override
+    public IBinder onBind(Intent arg0) {
+<span class="nc" id="L273">        return mBinder;</span>
+    }
+
+<span class="nc" id="L276">    private final IBinder mBinder = new Binder() {</span>
+
+        @Override
+        protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
+<span class="nc" id="L280">            return super.onTransact(code, data, reply, flags);</span>
+        }
+    };
+
+    /**
+     * Starts the service to schedule all pending reminders
+     *
+     * @param context
+     * @param startForeground true if the service should be started in the foreground, false if it should not.  This parameter doesn't have any effect on Android versions less than 8.0.
+     */
+    public static void scheduleAll(Context context, boolean startForeground) {
+<span class="nc" id="L291">        final Intent intent = new Intent(context, TripService.class);</span>
+<span class="nc bnc" id="L292" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5153)) {</span>
+<span class="nc" id="L293">            intent.setAction(TripService.ACTION_SCHEDULE);</span>
+        }
+<span class="nc bnc" id="L295" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5154)) {</span>
+<span class="nc" id="L296">            intent.setData(ObaContract.Trips.CONTENT_URI);</span>
+        }
+<span class="nc bnc" id="L298" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5155)) {</span>
+<span class="nc" id="L299">            intent.putExtra(TripService.START_FOREGROUND, startForeground);</span>
+        }
+<span class="nc bnc" id="L301" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5164)) {</span>
+<span class="nc bnc" id="L302" title="All 50 branches missed.">            if ((ListenerUtil.mutListener.listen(5161) ? ((ListenerUtil.mutListener.listen(5160) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5159) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5158) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5157) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5156) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.O) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.O)))))) || startForeground) : ((ListenerUtil.mutListener.listen(5160) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5159) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5158) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5157) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.O) : (ListenerUtil.mutListener.listen(5156) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.O) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.O)))))) &amp;&amp; startForeground))) {</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(5163)) {</span>
+<span class="nc" id="L304">                    context.startForegroundService(intent);</span>
+                }
+            } else {
+<span class="nc bnc" id="L307" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(5162)) {</span>
+<span class="nc" id="L308">                    context.startService(intent);</span>
+                }
+            }
+        }
+<span class="nc" id="L312">    }</span>
+
+    public static void pollTrip(Context context, Uri alertUri, long triggerTime) {
+<span class="nc" id="L315">        Intent intent = new Intent(TripService.ACTION_POLL, alertUri, context, AlarmReceiver.class);</span>
+        int flags;
+<span class="nc bnc" id="L317" title="All 22 branches missed.">        if ((ListenerUtil.mutListener.listen(5169) ? (android.os.Build.VERSION.SDK_INT &lt;= android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(5168) ? (android.os.Build.VERSION.SDK_INT &gt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(5167) ? (android.os.Build.VERSION.SDK_INT &lt; android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(5166) ? (android.os.Build.VERSION.SDK_INT != android.os.Build.VERSION_CODES.S) : (ListenerUtil.mutListener.listen(5165) ? (android.os.Build.VERSION.SDK_INT == android.os.Build.VERSION_CODES.S) : (android.os.Build.VERSION.SDK_INT &gt;= android.os.Build.VERSION_CODES.S))))))) {</span>
+<span class="nc" id="L318">            flags = PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_MUTABLE;</span>
+        } else {
+<span class="nc" id="L320">            flags = PendingIntent.FLAG_ONE_SHOT;</span>
+        }
+<span class="nc" id="L322">        PendingIntent alarmIntent = PendingIntent.getBroadcast(context, 0, intent, flags);</span>
+<span class="nc" id="L323">        AlarmManager alarm = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5177)) {</span>
+<span class="nc bnc" id="L325" title="All 22 branches missed.">            if ((ListenerUtil.mutListener.listen(5174) ? (Build.VERSION.SDK_INT &lt;= Build.VERSION_CODES.M) : (ListenerUtil.mutListener.listen(5173) ? (Build.VERSION.SDK_INT &gt; Build.VERSION_CODES.M) : (ListenerUtil.mutListener.listen(5172) ? (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.M) : (ListenerUtil.mutListener.listen(5171) ? (Build.VERSION.SDK_INT != Build.VERSION_CODES.M) : (ListenerUtil.mutListener.listen(5170) ? (Build.VERSION.SDK_INT == Build.VERSION_CODES.M) : (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.M))))))) {</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(5176)) {</span>
+                    // https://stackoverflow.com/questions/34699662/how-does-alarmmanager-alarmclockinfos-pendingintent-work
+<span class="nc" id="L328">                    alarm.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, alarmIntent);</span>
+                }
+            } else {
+<span class="nc bnc" id="L331" title="All 2 branches missed.">                if (!ListenerUtil.mutListener.listen(5175)) {</span>
+<span class="nc" id="L332">                    alarm.set(AlarmManager.RTC_WAKEUP, triggerTime, alarmIntent);</span>
+                }
+            }
+        }
+<span class="nc" id="L336">    }</span>
+
+    public static void notifyTrip(Context context, Uri alertUri, String notifyTitle, String notifyText) {
+<span class="nc" id="L339">        final Intent intent = new Intent(context, TripService.class);</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5178)) {</span>
+<span class="nc" id="L341">            intent.setAction(ACTION_NOTIFY);</span>
+        }
+<span class="nc bnc" id="L343" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5179)) {</span>
+<span class="nc" id="L344">            intent.setData(alertUri);</span>
+        }
+<span class="nc bnc" id="L346" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5180)) {</span>
+<span class="nc" id="L347">            intent.putExtra(NOTIFY_TEXT, notifyText);</span>
+        }
+<span class="nc bnc" id="L349" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5181)) {</span>
+<span class="nc" id="L350">            intent.putExtra(NOTIFY_TITLE, notifyTitle);</span>
+        }
+<span class="nc bnc" id="L352" title="All 2 branches missed.">        if (!ListenerUtil.mutListener.listen(5182)) {</span>
+<span class="nc" id="L353">            context.startService(intent);</span>
+        }
+<span class="nc" id="L355">    }</span>
+
+    public static String getRouteShortName(Context context, String id) {
+<span class="nc" id="L358">        return UIUtils.stringForQuery(context, Uri.withAppendedPath(ObaContract.Routes.CONTENT_URI, id), ObaContract.Routes.SHORTNAME);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.2.0</div></body></html>
