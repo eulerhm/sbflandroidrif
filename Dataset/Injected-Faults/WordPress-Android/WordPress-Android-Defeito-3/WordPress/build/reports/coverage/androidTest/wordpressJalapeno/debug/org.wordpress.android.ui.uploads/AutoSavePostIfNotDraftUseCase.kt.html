@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AutoSavePostIfNotDraftUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.uploads</a> &gt; <span class="el_source">AutoSavePostIfNotDraftUseCase.kt</span></div><h1>AutoSavePostIfNotDraftUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.uploads
+
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode.BACKGROUND
+import org.greenrobot.eventbus.ThreadMode.MAIN
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.PostActionBuilder
+import org.wordpress.android.fluxc.model.CauseOfOnPostChanged.RemoteAutoSavePost
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.RemoteId
+import org.wordpress.android.fluxc.model.PostModel
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.fluxc.store.PostStore.OnPostChanged
+import org.wordpress.android.fluxc.store.PostStore.OnPostStatusFetched
+import org.wordpress.android.fluxc.store.PostStore.PostError
+import org.wordpress.android.fluxc.store.PostStore.RemotePostPayload
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.uploads.AutoSavePostIfNotDraftResult.FetchPostStatusFailed
+import org.wordpress.android.ui.uploads.AutoSavePostIfNotDraftResult.PostAutoSaveFailed
+import org.wordpress.android.ui.uploads.AutoSavePostIfNotDraftResult.PostAutoSaved
+import org.wordpress.android.ui.uploads.AutoSavePostIfNotDraftResult.PostIsDraftInRemote
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+
+private const val DRAFT_POST_STATUS = &quot;draft&quot;
+
+interface OnAutoSavePostIfNotDraftCallback {
+    fun handleAutoSavePostIfNotDraftResult(result: AutoSavePostIfNotDraftResult)
+}
+
+<span class="nc" id="L36">sealed class AutoSavePostIfNotDraftResult(open val post: PostModel) {</span>
+    // Initial fetch post status request failed
+<span class="nc" id="L38">    data class FetchPostStatusFailed(override val post: PostModel, val error: PostError) :</span>
+<span class="nc" id="L39">            AutoSavePostIfNotDraftResult(post)</span>
+
+    // Post status is `DRAFT` in remote which means we'll want to update the draft directly
+<span class="nc" id="L42">    data class PostIsDraftInRemote(override val post: PostModel) : AutoSavePostIfNotDraftResult(post)</span>
+
+    // Post status is not `DRAFT` in remote and the post was auto-saved successfully
+<span class="nc" id="L45">    data class PostAutoSaved(override val post: PostModel) : AutoSavePostIfNotDraftResult(post)</span>
+
+    // Post status is not `DRAFT` in remote but the post auto-save failed
+<span class="nc" id="L48">    data class PostAutoSaveFailed(override val post: PostModel, val error: PostError) :</span>
+<span class="nc" id="L49">            AutoSavePostIfNotDraftResult(post)</span>
+}
+
+/**
+ * This is a use case that auto-saves a post if it's not a DRAFT in remote and returns various results depending
+ * on the remote post status and whether network requests were successful.
+ *
+ * The reason auto-save is tied to post status is that the `/autosave` REST endpoint will override the changes to
+ * a `DRAFT` directly rather than auto-saving it. While doing so, it'll also disable comments for the post due to
+ * a bug. Both the fact that the endpoint does something we are not expecting and the bug that results from it is
+ * avoided by only calling the `/autosave` endpoint for posts that are not in DRAFT status. We update DRAFTs directly
+ * just as the endpoint would have, but that makes the logic more clear on the client side while avoiding the
+ * comments getting disabled bug.
+ *
+ * See p3hLNG-15Z-p2 for more info.
+ */
+<span class="nc" id="L65">class AutoSavePostIfNotDraftUseCase @Inject constructor(</span>
+<span class="nc" id="L66">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L67">    private val postStore: PostStore,</span>
+<span class="nc" id="L68">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+) {
+<span class="nc" id="L70">    private val coroutineScope = CoroutineScope(bgDispatcher)</span>
+<span class="nc" id="L71">    private val postStatusContinuations = HashMap&lt;RemoteId, Continuation&lt;OnPostStatusFetched&gt;&gt;()</span>
+<span class="nc" id="L72">    private val autoSaveContinuations = HashMap&lt;RemoteId, Continuation&lt;OnPostChanged&gt;&gt;()</span>
+
+<span class="nc" id="L74">    init {</span>
+<span class="nc" id="L75">        dispatcher.register(this)</span>
+<span class="nc" id="L76">    }</span>
+
+    fun autoSavePostOrUpdateDraft(
+        remotePostPayload: RemotePostPayload,
+        callback: OnAutoSavePostIfNotDraftCallback
+    ) {
+<span class="nc" id="L82">        val remotePostId = RemoteId(remotePostPayload.post.remotePostId)</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">        if (remotePostPayload.post.isLocalDraft) {</span>
+<span class="nc" id="L84">            throw IllegalArgumentException(&quot;Local drafts should not be auto-saved&quot;)</span>
+        }
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        if (postStatusContinuations.containsKey(remotePostId) ||</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">                autoSaveContinuations.containsKey(remotePostId)) {</span>
+<span class="nc" id="L88">            throw IllegalArgumentException(</span>
+<span class="nc" id="L89">                    &quot;This post is already being processed. Make sure not to start an autoSave &quot; +</span>
+                            &quot;or update draft action while another one is going on.&quot;
+            )
+        }
+<span class="nc" id="L93">        coroutineScope.launch {</span>
+<span class="nc" id="L94">            val onPostStatusFetched = fetchRemotePostStatus(remotePostPayload)</span>
+<span class="nc" id="L95">            val result = when {</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">                onPostStatusFetched.isError -&gt; {</span>
+<span class="nc" id="L97">                    FetchPostStatusFailed(</span>
+<span class="nc" id="L98">                            post = remotePostPayload.post,</span>
+<span class="nc" id="L99">                            error = onPostStatusFetched.error</span>
+                    )
+                }
+<span class="nc bnc" id="L102" title="All 2 branches missed.">                onPostStatusFetched.remotePostStatus == DRAFT_POST_STATUS -&gt; {</span>
+<span class="nc" id="L103">                    PostIsDraftInRemote(remotePostPayload.post)</span>
+                }
+                else -&gt; {
+<span class="nc" id="L106">                    autoSavePost(remotePostPayload)</span>
+                }
+            }
+<span class="nc" id="L109">            callback.handleAutoSavePostIfNotDraftResult(result)</span>
+<span class="nc" id="L110">        }</span>
+<span class="nc" id="L111">    }</span>
+
+    private suspend fun fetchRemotePostStatus(remotePostPayload: RemotePostPayload): OnPostStatusFetched {
+<span class="nc" id="L114">        val remotePostId = RemoteId(remotePostPayload.post.remotePostId)</span>
+<span class="nc" id="L115">        return suspendCancellableCoroutine { cont -&gt;</span>
+<span class="nc" id="L116">            postStatusContinuations[remotePostId] = cont</span>
+<span class="nc" id="L117">            dispatcher.dispatch(PostActionBuilder.newFetchPostStatusAction(remotePostPayload))</span>
+<span class="nc" id="L118">        }</span>
+    }
+
+    private suspend fun autoSavePost(remotePostPayload: RemotePostPayload): AutoSavePostIfNotDraftResult {
+<span class="nc" id="L122">        val remotePostId = RemoteId(remotePostPayload.post.remotePostId)</span>
+<span class="nc" id="L123">        val onPostChanged: OnPostChanged = suspendCancellableCoroutine { cont -&gt;</span>
+<span class="nc" id="L124">            autoSaveContinuations[remotePostId] = cont</span>
+<span class="nc" id="L125">            dispatcher.dispatch(PostActionBuilder.newRemoteAutoSavePostAction(remotePostPayload))</span>
+<span class="nc" id="L126">        }</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        return if (onPostChanged.isError) {</span>
+<span class="nc" id="L128">            PostAutoSaveFailed(remotePostPayload.post, onPostChanged.error)</span>
+        } else {
+<span class="nc" id="L130">            val updatedPost = postStore.getPostByRemotePostId(</span>
+<span class="nc" id="L131">                    remotePostId.value,</span>
+<span class="nc" id="L132">                    remotePostPayload.site</span>
+            )
+<span class="nc" id="L134">            PostAutoSaved(updatedPost)</span>
+        }
+    }
+
+    @Subscribe(threadMode = BACKGROUND)
+    @Suppress(&quot;unused&quot;)
+    fun onPostStatusFetched(event: OnPostStatusFetched) {
+<span class="nc" id="L141">        val remotePostId = RemoteId(event.post.remotePostId)</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">        postStatusContinuations[remotePostId]?.let { continuation -&gt;</span>
+<span class="nc" id="L143">            continuation.resume(event)</span>
+<span class="nc" id="L144">            postStatusContinuations.remove(remotePostId)</span>
+        }
+<span class="nc" id="L146">    }</span>
+
+    @Subscribe(threadMode = MAIN, priority = 9)
+    @Suppress(&quot;unused&quot;)
+    fun onPostChanged(event: OnPostChanged) {
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        if (event.causeOfChange is RemoteAutoSavePost) {</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">            val remotePostId = RemoteId((event.causeOfChange as RemoteAutoSavePost).remotePostId)</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">            autoSaveContinuations[remotePostId]?.let { continuation -&gt;</span>
+<span class="nc" id="L154">                continuation.resume(event)</span>
+<span class="nc" id="L155">                autoSaveContinuations.remove(remotePostId)</span>
+            }
+        }
+<span class="nc" id="L158">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

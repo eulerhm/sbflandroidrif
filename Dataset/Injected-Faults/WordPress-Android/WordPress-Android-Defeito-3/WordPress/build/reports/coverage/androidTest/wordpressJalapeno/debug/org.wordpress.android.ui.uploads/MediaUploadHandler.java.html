@@ -1,0 +1,468 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MediaUploadHandler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.uploads</a> &gt; <span class="el_source">MediaUploadHandler.java</span></div><h1>MediaUploadHandler.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.uploads;
+
+import androidx.annotation.NonNull;
+
+import org.greenrobot.eventbus.EventBus;
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.MediaActionBuilder;
+import org.wordpress.android.fluxc.model.MediaModel;
+import org.wordpress.android.fluxc.model.PostImmutableModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.MediaStore.CancelMediaPayload;
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaUploaded;
+import org.wordpress.android.fluxc.store.MediaStore.UploadMediaPayload;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.StringUtils;
+import org.wordpress.android.util.WPMediaUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+import org.wordpress.android.util.config.Mp4ComposerVideoOptimizationFeatureConfig;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import javax.inject.Inject;
+
+public class MediaUploadHandler implements UploadHandler&lt;MediaModel&gt;, VideoOptimizationListener {
+<span class="nc" id="L37">    private static List&lt;MediaModel&gt; sPendingUploads = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L38">    private static List&lt;MediaModel&gt; sInProgressUploads = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L39">    private static ConcurrentHashMap&lt;Integer, Float&gt; sOptimizationProgressByMediaId = new ConcurrentHashMap&lt;&gt;();</span>
+
+    @Inject Dispatcher mDispatcher;
+    @Inject SiteStore mSiteStore;
+    @Inject Mp4ComposerVideoOptimizationFeatureConfig mMp4ComposerVideoOptimizationFeatureConfig;
+
+<span class="nc" id="L45">    MediaUploadHandler() {</span>
+<span class="nc" id="L46">        ((WordPress) WordPress.getContext().getApplicationContext()).component().inject(this);</span>
+<span class="nc" id="L47">        AppLog.i(T.MEDIA, &quot;MediaUploadHandler &gt; Created&quot;);</span>
+<span class="nc" id="L48">        mDispatcher.register(this);</span>
+<span class="nc" id="L49">        EventBus.getDefault().register(this);</span>
+<span class="nc" id="L50">    }</span>
+
+    void unregister() {
+<span class="nc" id="L53">        sOptimizationProgressByMediaId.clear();</span>
+<span class="nc" id="L54">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L55">        EventBus.getDefault().unregister(this);</span>
+<span class="nc" id="L56">    }</span>
+
+    @Override
+    public boolean hasInProgressUploads() {
+<span class="nc bnc" id="L60" title="All 4 branches missed.">        return !sInProgressUploads.isEmpty() || !sPendingUploads.isEmpty();</span>
+    }
+
+    @Override
+    public void cancelInProgressUploads() {
+<span class="nc bnc" id="L65" title="All 2 branches missed.">        for (MediaModel oneUpload : sInProgressUploads) {</span>
+<span class="nc" id="L66">            cancelUpload(oneUpload, false);</span>
+<span class="nc" id="L67">        }</span>
+<span class="nc" id="L68">    }</span>
+
+    @Override
+    public void upload(@NonNull MediaModel media) {
+<span class="nc" id="L72">        addUniqueMediaToQueue(media);</span>
+<span class="nc" id="L73">        uploadNextInQueue();</span>
+<span class="nc" id="L74">    }</span>
+
+    static boolean hasInProgressMediaUploadsForPost(int postId) {
+<span class="nc" id="L77">        synchronized (sInProgressUploads) {</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">            for (MediaModel queuedMedia : sInProgressUploads) {</span>
+<span class="nc bnc" id="L79" title="All 2 branches missed.">                if (queuedMedia.getLocalPostId() == postId) {</span>
+<span class="nc" id="L80">                    return true;</span>
+                }
+<span class="nc" id="L82">            }</span>
+<span class="nc" id="L83">        }</span>
+
+<span class="nc" id="L85">        return false;</span>
+    }
+
+    static boolean hasPendingMediaUploadsForPost(int postId) {
+<span class="nc" id="L89">        synchronized (sPendingUploads) {</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">            for (MediaModel queuedMedia : sPendingUploads) {</span>
+<span class="nc bnc" id="L91" title="All 2 branches missed.">                if (queuedMedia.getLocalPostId() == postId) {</span>
+<span class="nc" id="L92">                    return true;</span>
+                }
+<span class="nc" id="L94">            }</span>
+<span class="nc" id="L95">        }</span>
+<span class="nc" id="L96">        return false;</span>
+    }
+
+    static boolean hasPendingOrInProgressMediaUploadsForPost(int postId) {
+        // Check if there are media in the in-progress or the pending queue attached to the given post
+<span class="nc bnc" id="L101" title="All 4 branches missed.">        return hasInProgressMediaUploadsForPost(postId) || hasPendingMediaUploadsForPost(postId);</span>
+    }
+
+    static MediaModel getPendingOrInProgressFeaturedImageUploadForPost(PostImmutableModel postModel) {
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (postModel == null) {</span>
+<span class="nc" id="L106">            return null;</span>
+        }
+<span class="nc" id="L108">        List&lt;MediaModel&gt; uploads = getPendingOrInProgressMediaUploadsForPost(postModel);</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">        for (MediaModel model : uploads) {</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">            if (model.getMarkedLocallyAsFeatured()) {</span>
+<span class="nc" id="L111">                return model;</span>
+            }
+<span class="nc" id="L113">        }</span>
+
+<span class="nc" id="L115">        return null;</span>
+    }
+
+    public static List&lt;MediaModel&gt; getPendingOrInProgressMediaUploadsForPost(PostImmutableModel postModel) {
+<span class="nc bnc" id="L119" title="All 2 branches missed.">        if (postModel == null) {</span>
+<span class="nc" id="L120">            return Collections.emptyList();</span>
+        }
+
+<span class="nc" id="L123">        List&lt;MediaModel&gt; mediaList = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L124">        synchronized (sInProgressUploads) {</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">            for (MediaModel queuedMedia : sInProgressUploads) {</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">                if (queuedMedia.getLocalPostId() == postModel.getId()) {</span>
+<span class="nc" id="L127">                    mediaList.add(queuedMedia);</span>
+                }
+<span class="nc" id="L129">            }</span>
+<span class="nc" id="L130">        }</span>
+
+<span class="nc" id="L132">        synchronized (sPendingUploads) {</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">            for (MediaModel queuedMedia : sPendingUploads) {</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">                if (queuedMedia.getLocalPostId() == postModel.getId()) {</span>
+<span class="nc" id="L135">                    mediaList.add(queuedMedia);</span>
+                }
+<span class="nc" id="L137">            }</span>
+<span class="nc" id="L138">        }</span>
+<span class="nc" id="L139">        return mediaList;</span>
+    }
+
+    static boolean isPendingOrInProgressMediaUpload(int mediaId) {
+<span class="nc" id="L143">        synchronized (sInProgressUploads) {</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">            for (MediaModel uploadingMedia : sInProgressUploads) {</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">                if (uploadingMedia.getId() == mediaId) {</span>
+<span class="nc" id="L146">                    return true;</span>
+                }
+<span class="nc" id="L148">            }</span>
+<span class="nc" id="L149">        }</span>
+
+<span class="nc" id="L151">        synchronized (sPendingUploads) {</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">            for (MediaModel queuedMedia : sPendingUploads) {</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">                if (queuedMedia.getId() == mediaId) {</span>
+<span class="nc" id="L154">                    return true;</span>
+                }
+<span class="nc" id="L156">            }</span>
+<span class="nc" id="L157">        }</span>
+<span class="nc" id="L158">        return false;</span>
+    }
+
+    /**
+     * Returns an overall progress for the given {@param video}, including the video optimization progress. If there is
+     * no record for that video, it's assumed to be a completed upload.
+     */
+    static float getOverallProgressForVideo(int videoId, float uploadProgress) {
+<span class="nc bnc" id="L166" title="All 2 branches missed.">        if (sOptimizationProgressByMediaId.containsKey(videoId)) {</span>
+<span class="nc" id="L167">            float optimizationProgress = sOptimizationProgressByMediaId.get(videoId);</span>
+<span class="nc" id="L168">            return optimizationProgress * 0.5F;</span>
+        }
+<span class="nc" id="L170">        return 0.5F + (uploadProgress * 0.5F);</span>
+    }
+
+    private void handleOnMediaUploadedSuccess(@NonNull OnMediaUploaded event) {
+<span class="nc bnc" id="L174" title="All 2 branches missed.">        if (event.canceled) {</span>
+<span class="nc" id="L175">            AppLog.i(T.MEDIA, &quot;MediaUploadHandler &gt; Upload successfully canceled&quot;);</span>
+<span class="nc" id="L176">            trackUploadMediaEvents(AnalyticsTracker.Stat.MEDIA_UPLOAD_CANCELED,</span>
+<span class="nc" id="L177">                                   getMediaFromInProgressQueueById(event.media.getId()), null);</span>
+<span class="nc" id="L178">            completeUploadWithId(event.media.getId());</span>
+<span class="nc" id="L179">            uploadNextInQueue();</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">        } else if (event.completed) {</span>
+<span class="nc" id="L181">            AppLog.i(T.MEDIA, &quot;MediaUploadHandler &gt; Upload completed - localId=&quot; + event.media.getId() + &quot; title=&quot;</span>
+<span class="nc" id="L182">                              + event.media.getTitle());</span>
+<span class="nc" id="L183">            trackUploadMediaEvents(AnalyticsTracker.Stat.MEDIA_UPLOAD_SUCCESS,</span>
+<span class="nc" id="L184">                                   getMediaFromInProgressQueueById(event.media.getId()), null);</span>
+<span class="nc" id="L185">            completeUploadWithId(event.media.getId());</span>
+<span class="nc" id="L186">            uploadNextInQueue();</span>
+        } else {
+<span class="nc" id="L188">            AppLog.i(T.MEDIA, &quot;MediaUploadHandler &gt; &quot; + event.media.getId() + &quot; - progress: &quot; + event.progress);</span>
+        }
+<span class="nc" id="L190">    }</span>
+
+    private void handleOnMediaUploadedError(@NonNull OnMediaUploaded event) {
+<span class="nc" id="L193">        AppLog.w(T.MEDIA, &quot;MediaUploadHandler &gt; Error uploading media: &quot; + event.error.message);</span>
+<span class="nc" id="L194">        MediaModel media = getMediaFromInProgressQueueById(event.media.getId());</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">        if (media != null) {</span>
+<span class="nc" id="L196">            mDispatcher.dispatch(MediaActionBuilder.newUpdateMediaAction(media));</span>
+        }
+
+<span class="nc" id="L199">        Map&lt;String, Object&gt; properties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L200">        properties.put(&quot;error_type&quot;, event.error.type.name());</span>
+<span class="nc" id="L201">        properties.put(&quot;error_message&quot;, event.error.message);</span>
+<span class="nc" id="L202">        properties.put(&quot;error_log&quot;, event.error.logMessage);</span>
+<span class="nc" id="L203">        properties.put(&quot;error_status_code&quot;, event.error.statusCode);</span>
+<span class="nc" id="L204">        trackUploadMediaEvents(AnalyticsTracker.Stat.MEDIA_UPLOAD_ERROR, media, properties);</span>
+
+<span class="nc" id="L206">        completeUploadWithId(event.media.getId());</span>
+<span class="nc" id="L207">        uploadNextInQueue();</span>
+<span class="nc" id="L208">    }</span>
+
+    private synchronized void uploadNextInQueue() {
+<span class="nc" id="L211">        MediaModel next = getNextMediaToUpload();</span>
+
+<span class="nc bnc" id="L213" title="All 2 branches missed.">        if (next == null) {</span>
+<span class="nc" id="L214">            AppLog.w(T.MEDIA, &quot;MediaUploadHandler &gt; No more media items to upload. Skipping this request.&quot;);</span>
+<span class="nc" id="L215">            checkIfUploadsComplete();</span>
+<span class="nc" id="L216">            return;</span>
+        }
+
+<span class="nc" id="L219">        prepareForUpload(next);</span>
+<span class="nc" id="L220">    }</span>
+
+    private synchronized void completeUploadWithId(int id) {
+<span class="nc" id="L223">        MediaModel media = getMediaFromInProgressQueueById(id);</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">        if (media != null) {</span>
+<span class="nc" id="L225">            sInProgressUploads.remove(media);</span>
+<span class="nc" id="L226">            trackUploadMediaEvents(AnalyticsTracker.Stat.MEDIA_UPLOAD_STARTED, media, null);</span>
+        }
+<span class="nc" id="L228">    }</span>
+
+    private MediaModel getMediaFromInProgressQueueById(int id) {
+<span class="nc bnc" id="L231" title="All 2 branches missed.">        for (MediaModel media : sInProgressUploads) {</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">            if (media.getId() == id) {</span>
+<span class="nc" id="L233">                return media;</span>
+            }
+<span class="nc" id="L235">        }</span>
+<span class="nc" id="L236">        return null;</span>
+    }
+
+    private MediaModel getNextMediaToUpload() {
+<span class="nc" id="L240">        synchronized (sPendingUploads) {</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">            if (!sPendingUploads.isEmpty()) {</span>
+<span class="nc" id="L242">                return sPendingUploads.remove(0);</span>
+            }
+<span class="nc" id="L244">        }</span>
+<span class="nc" id="L245">        return null;</span>
+    }
+
+    private void addUniqueMediaToQueue(MediaModel media) {
+<span class="nc bnc" id="L249" title="All 2 branches missed.">        if (media != null) {</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">            if (mediaAlreadyQueuedOrUploading(media)) {</span>
+<span class="nc" id="L251">                return;</span>
+            }
+
+<span class="nc" id="L254">            synchronized (sPendingUploads) {</span>
+                // no match found in queue
+<span class="nc" id="L256">                sPendingUploads.add(media);</span>
+<span class="nc" id="L257">            }</span>
+        }
+<span class="nc" id="L259">    }</span>
+
+    private void addUniqueMediaToInProgressUploads(@NonNull MediaModel mediaToAdd) {
+<span class="nc" id="L262">        synchronized (sInProgressUploads) {</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">            for (MediaModel media : sInProgressUploads) {</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">                if (media.getId() == mediaToAdd.getId()) {</span>
+<span class="nc" id="L265">                    return;</span>
+                }
+<span class="nc" id="L267">            }</span>
+<span class="nc" id="L268">            sInProgressUploads.add(mediaToAdd);</span>
+<span class="nc" id="L269">        }</span>
+<span class="nc" id="L270">    }</span>
+
+    private void cancelUpload(MediaModel oneUpload, boolean delete) {
+<span class="nc bnc" id="L273" title="All 2 branches missed.">        if (oneUpload != null) {</span>
+<span class="nc" id="L274">            SiteModel site = mSiteStore.getSiteByLocalId(oneUpload.getLocalSiteId());</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">            if (site != null) {</span>
+<span class="nc" id="L276">                dispatchCancelAction(oneUpload, site, delete);</span>
+            } else {
+<span class="nc" id="L278">                AppLog.w(T.MEDIA, &quot;MediaUploadHandler &gt; Unexpected state, site is null. &quot;</span>
+                                  + &quot;Skipping cancellation of this request.&quot;);
+            }
+        }
+<span class="nc" id="L282">    }</span>
+
+    private void prepareForUpload(@NonNull MediaModel media) {
+<span class="nc bnc" id="L285" title="All 4 branches missed.">        if (media.isVideo() &amp;&amp; WPMediaUtils.isVideoOptimizationEnabled()) {</span>
+<span class="nc" id="L286">            addUniqueMediaToInProgressUploads(media);</span>
+
+<span class="nc bnc" id="L288" title="All 2 branches missed.">            if (mMp4ComposerVideoOptimizationFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L289">                new Mp4ComposerVideoOptimizer(media, this).start();</span>
+            } else {
+<span class="nc" id="L291">                new VideoOptimizer(media, this).start();</span>
+            }
+        } else {
+<span class="nc" id="L294">            dispatchUploadAction(media);</span>
+        }
+<span class="nc" id="L296">    }</span>
+
+    private void dispatchUploadAction(@NonNull final MediaModel media) {
+<span class="nc" id="L299">        SiteModel site = mSiteStore.getSiteByLocalId(media.getLocalSiteId());</span>
+
+        // somehow lost our reference to the site, complete this action
+<span class="nc bnc" id="L302" title="All 2 branches missed.">        if (site == null) {</span>
+<span class="nc" id="L303">            AppLog.w(T.MEDIA, &quot;MediaUploadHandler &gt; Unexpected state, site is null. Skipping this request.&quot;);</span>
+<span class="nc" id="L304">            checkIfUploadsComplete();</span>
+<span class="nc" id="L305">            return;</span>
+        }
+
+<span class="nc" id="L308">        AppLog.i(T.MEDIA, &quot;MediaUploadHandler &gt; Dispatching upload action for media with local id: &quot;</span>
+<span class="nc" id="L309">                          + media.getId() + &quot; and path: &quot; + media.getFilePath());</span>
+<span class="nc" id="L310">        addUniqueMediaToInProgressUploads(media);</span>
+
+<span class="nc" id="L312">        mDispatcher.dispatch(MediaActionBuilder.newUpdateMediaAction(media));</span>
+<span class="nc" id="L313">        UploadMediaPayload payload = new UploadMediaPayload(site, media, AppPrefs.isStripImageLocation());</span>
+<span class="nc" id="L314">        mDispatcher.dispatch(MediaActionBuilder.newUploadMediaAction(payload));</span>
+<span class="nc" id="L315">    }</span>
+
+    private void dispatchCancelAction(@NonNull final MediaModel media, @NonNull final SiteModel site, boolean delete) {
+<span class="nc" id="L318">        AppLog.i(T.MEDIA, &quot;MediaUploadHandler &gt; Dispatching cancel upload action for media with local id: &quot;</span>
+<span class="nc" id="L319">                          + media.getId() + &quot; and path: &quot; + media.getFilePath());</span>
+<span class="nc" id="L320">        CancelMediaPayload payload = new CancelMediaPayload(site, media, delete);</span>
+<span class="nc" id="L321">        mDispatcher.dispatch(MediaActionBuilder.newCancelMediaUploadAction(payload));</span>
+<span class="nc" id="L322">    }</span>
+
+    private boolean checkIfUploadsComplete() {
+<span class="nc bnc" id="L325" title="All 4 branches missed.">        if (sPendingUploads.isEmpty() &amp;&amp; sInProgressUploads.isEmpty()) {</span>
+<span class="nc" id="L326">            AppLog.i(T.MEDIA, &quot;MediaUploadHandler &gt; Completed&quot;);</span>
+<span class="nc" id="L327">            return true;</span>
+        }
+<span class="nc" id="L329">        return false;</span>
+    }
+
+    // App events
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(PostEvents.PostMediaCanceled event) {
+<span class="nc bnc" id="L337" title="All 2 branches missed.">        if (event.post == null) {</span>
+<span class="nc" id="L338">            return;</span>
+        }
+<span class="nc" id="L340">        synchronized (sInProgressUploads) {</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">            for (MediaModel inProgressUpload : sInProgressUploads) {</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">                if (inProgressUpload.getLocalPostId() == event.post.getId()) {</span>
+<span class="nc" id="L343">                    cancelUpload(inProgressUpload, true);</span>
+                }
+<span class="nc" id="L345">            }</span>
+<span class="nc" id="L346">        }</span>
+<span class="nc" id="L347">        synchronized (sPendingUploads) {</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">            for (MediaModel pendingUpload : sPendingUploads) {</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">                if (pendingUpload.getLocalPostId() == event.post.getId()) {</span>
+<span class="nc" id="L350">                    cancelUpload(pendingUpload, true);</span>
+                }
+<span class="nc" id="L352">            }</span>
+<span class="nc" id="L353">        }</span>
+<span class="nc" id="L354">    }</span>
+
+    // FluxC events
+
+    /**
+     * Has priority 9 on OnMediaUploaded events, which ensures that MediaUploadHandler is the first to receive
+     * and process OnMediaUploaded events, before they trickle down to other subscribers.
+     */
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN, priority = 9)
+    public void onMediaUploaded(OnMediaUploaded event) {
+<span class="nc bnc" id="L365" title="All 2 branches missed.">        if (event.media == null) {</span>
+<span class="nc" id="L366">            AppLog.w(T.MEDIA, &quot;MediaUploadHandler &gt; Received media event for null media, ignoring&quot;);</span>
+<span class="nc" id="L367">            return;</span>
+        }
+
+<span class="nc bnc" id="L370" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L371">            handleOnMediaUploadedError(event);</span>
+        } else {
+<span class="nc" id="L373">            handleOnMediaUploadedSuccess(event);</span>
+        }
+<span class="nc" id="L375">    }</span>
+
+    /**
+     * Analytics about media being uploaded
+     *
+     * @param media The media being uploaded
+     */
+    private void trackUploadMediaEvents(AnalyticsTracker.Stat stat, MediaModel media, Map&lt;String, Object&gt; properties) {
+<span class="nc bnc" id="L383" title="All 2 branches missed.">        if (media == null) {</span>
+<span class="nc" id="L384">            AppLog.e(T.MEDIA, &quot;MediaUploadHandler &gt; Cannot track media upload handler events if the original media&quot;</span>
+                              + &quot;is null&quot;);
+<span class="nc" id="L386">            return;</span>
+        }
+<span class="nc" id="L388">        Map&lt;String, Object&gt; mediaProperties = AnalyticsUtils.getMediaProperties(WordPress.getContext(),</span>
+<span class="nc" id="L389">                                                                                media.isVideo(), null,</span>
+<span class="nc" id="L390">                                                                                media.getFilePath());</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">        if (properties != null) {</span>
+<span class="nc" id="L392">            mediaProperties.putAll(properties);</span>
+        }
+<span class="nc" id="L394">        AnalyticsTracker.track(stat, mediaProperties);</span>
+<span class="nc" id="L395">    }</span>
+
+    private boolean mediaAlreadyQueuedOrUploading(MediaModel mediaModel) {
+<span class="nc bnc" id="L398" title="All 2 branches missed.">        for (MediaModel queuedMedia : sInProgressUploads) {</span>
+<span class="nc" id="L399">            AppLog.i(T.MEDIA, &quot;MediaUploadHandler &gt; Attempting to add media with path &quot; + mediaModel.getFilePath()</span>
+<span class="nc" id="L400">                              + &quot; and site id &quot; + mediaModel.getLocalSiteId() + &quot;. Comparing with &quot; + queuedMedia</span>
+<span class="nc" id="L401">                                      .getFilePath()</span>
+<span class="nc" id="L402">                              + &quot;, &quot; + queuedMedia.getLocalSiteId());</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">            if (isSameMediaFileQueuedForThisPost(queuedMedia, mediaModel)) {</span>
+<span class="nc" id="L404">                return true;</span>
+            }
+<span class="nc" id="L406">        }</span>
+
+<span class="nc" id="L408">        synchronized (sPendingUploads) {</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">            for (MediaModel queuedMedia : sPendingUploads) {</span>
+<span class="nc" id="L410">                AppLog.i(T.MEDIA, &quot;MediaUploadHandler &gt; Attempting to add media with path &quot; + mediaModel.getFilePath()</span>
+<span class="nc" id="L411">                                  + &quot; and site id &quot; + mediaModel.getLocalSiteId() + &quot;. Comparing with &quot; + queuedMedia</span>
+<span class="nc" id="L412">                                          .getFilePath()</span>
+<span class="nc" id="L413">                                  + &quot;, &quot; + queuedMedia.getLocalSiteId());</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">                if (isSameMediaFileQueuedForThisPost(queuedMedia, mediaModel)) {</span>
+<span class="nc" id="L415">                    return true;</span>
+                }
+<span class="nc" id="L417">            }</span>
+<span class="nc" id="L418">        }</span>
+<span class="nc" id="L419">        return false;</span>
+    }
+
+    private boolean isSameMediaFileQueuedForThisPost(MediaModel media1, MediaModel media2) {
+        /*
+            This method used to be called &quot;compareBySiteAndFilePath&quot; and compared just siteId and filePath. It made
+            sense since a media file is tied to a site and can be referenced from multiple posts on that site. This
+            approach tried to prevent wasting users' data.
+
+            The issue was that when a same image was added to content of two posts only a single MediaModel was
+            enqueued. However, MediaModel references only a single post (`localPostId`). When the upload finished
+            only the first post got updated with the url. The second post got uploaded to the server with a path to
+            local image. We decided to check whether the image belongs to the same post so we can be sure the local
+            path gets replaced with the url.
+
+            More info can be found here - https://github.com/wordpress-mobile/WordPress-Android/pull/10204.
+
+            We also need to check the `markedLocallyAsFeatured` flag is equal as we might lose it otherwise. If the
+            user adds an image into the post content and they set the same image as featured image, we need to enqueue
+            both uploads. Otherwise, we could lose the information what we need to update - the featured image or post
+            content.
+
+            Issue with a proper fix - https://github.com/wordpress-mobile/WordPress-Android/issues/10210
+         */
+<span class="nc bnc" id="L443" title="All 2 branches missed.">        return (media1.getLocalSiteId() == media2.getLocalSiteId()</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">                &amp;&amp; media1.getLocalPostId() == media2.getLocalPostId()</span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">                &amp;&amp; StringUtils.equals(media1.getFilePath(), media2.getFilePath()))</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">                &amp;&amp; media1.getMarkedLocallyAsFeatured() == media2.getMarkedLocallyAsFeatured();</span>
+    }
+
+    @Override
+    public void onVideoOptimizationProgress(@NonNull MediaModel media, float progress) {
+<span class="nc" id="L451">        sOptimizationProgressByMediaId.put(media.getId(), progress);</span>
+        // fire an event so EditPostActivity and PostsListFragment can show progress
+<span class="nc" id="L453">        ProgressEvent event = new ProgressEvent(media, progress);</span>
+<span class="nc" id="L454">        EventBus.getDefault().post(event);</span>
+<span class="nc" id="L455">    }</span>
+
+    @Override
+    public void onVideoOptimizationCompleted(@NonNull MediaModel media) {
+<span class="nc" id="L459">        sOptimizationProgressByMediaId.remove(media.getId());</span>
+        // make sure this media should still be uploaded (may have been cancelled during optimization)
+<span class="nc bnc" id="L461" title="All 2 branches missed.">        if (sInProgressUploads.contains(media)) {</span>
+<span class="nc" id="L462">            dispatchUploadAction(media);</span>
+        } else {
+<span class="nc" id="L464">            AppLog.d(T.MEDIA, &quot;MediaUploadHandler &gt; skipping upload of optimized media&quot;);</span>
+        }
+<span class="nc" id="L466">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

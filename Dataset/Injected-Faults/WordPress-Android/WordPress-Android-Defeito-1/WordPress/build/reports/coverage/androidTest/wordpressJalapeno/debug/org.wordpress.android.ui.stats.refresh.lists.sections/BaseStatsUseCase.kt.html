@@ -1,0 +1,288 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>BaseStatsUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.stats.refresh.lists.sections</a> &gt; <span class="el_source">BaseStatsUseCase.kt</span></div><h1>BaseStatsUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.stats.refresh.lists.sections
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.store.StatsStore.StatsType
+import org.wordpress.android.ui.stats.refresh.NavigationTarget
+import org.wordpress.android.ui.stats.refresh.lists.StatsListViewModel.StatsSection
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.State.Data
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.State.Empty
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.State.Error
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.State.Loading
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.StatelessUseCase.NotUsedUiState
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.UseCaseModel.UseCaseState
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.UseCaseModel.UseCaseState.EMPTY
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.UseCaseModel.UseCaseState.ERROR
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.UseCaseModel.UseCaseState.LOADING
+import org.wordpress.android.ui.stats.refresh.lists.sections.BaseStatsUseCase.UseCaseModel.UseCaseState.SUCCESS
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.viewmodel.Event
+import kotlin.coroutines.CoroutineContext
+
+/**
+ * Do not override this class directly. Use StatefulUseCase or StatelessUseCase instead.
+ */
+<span class="nc" id="L32">abstract class BaseStatsUseCase&lt;DOMAIN_MODEL, UI_STATE&gt;(</span>
+<span class="nc" id="L33">    val type: StatsType,</span>
+<span class="nc" id="L34">    private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L35">    private val backgroundDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L36">    private val defaultUiState: UI_STATE,</span>
+<span class="nc" id="L37">    private val fetchParams: List&lt;UseCaseParam&gt; = listOf(),</span>
+<span class="nc" id="L38">    private val uiUpdateParams: List&lt;UseCaseParam&gt; = listOf()</span>
+) : CoroutineScope {
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L41">        get() = backgroundDispatcher</span>
+
+<span class="nc" id="L43">    private var domainState: UseCaseState = LOADING</span>
+    private var domainModel: DOMAIN_MODEL? = null
+<span class="nc" id="L45">    private var uiState: UI_STATE = defaultUiState</span>
+    private var updateJob: Job? = null
+
+<span class="nc" id="L48">    private val _liveData = MutableLiveData&lt;UseCaseModel&gt;()</span>
+<span class="nc" id="L49">    val liveData: LiveData&lt;UseCaseModel&gt; = _liveData</span>
+
+<span class="nc" id="L51">    private val mutableNavigationTarget = MutableLiveData&lt;Event&lt;NavigationTarget&gt;&gt;()</span>
+<span class="nc" id="L52">    val navigationTarget: LiveData&lt;Event&lt;NavigationTarget&gt;&gt; = mutableNavigationTarget</span>
+
+    /**
+     * Fetches data either from a local cache or from remote API
+     * @param refresh is true when we want to get the remote data
+     * @param forced is true when we want to get fresh data and skip the cache
+     */
+<span class="nc" id="L59">    suspend fun fetch(refresh: Boolean, forced: Boolean) {</span>
+<span class="nc bnc" id="L60" title="All 2 branches missed.">        val firstLoad = domainModel == null</span>
+<span class="nc" id="L61">        var emptyDb = false</span>
+<span class="nc bnc" id="L62" title="All 2 branches missed.">        if (firstLoad) {</span>
+<span class="nc" id="L63">            updateUseCaseState(LOADING)</span>
+        }
+<span class="nc bnc" id="L65" title="All 2 branches missed.">        if (domainState == LOADING) {</span>
+<span class="nc" id="L66">            val cachedData = loadCachedData()</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">            if (cachedData != null) {</span>
+<span class="nc" id="L68">                domainModel = cachedData</span>
+<span class="nc" id="L69">                updateState()</span>
+            } else {
+<span class="nc" id="L71">                emptyDb = true</span>
+            }
+        }
+<span class="nc bnc" id="L74" title="All 6 branches missed.">        if (refresh || domainState != SUCCESS || emptyDb) {</span>
+<span class="nc" id="L75">            updateUseCaseState(LOADING)</span>
+<span class="nc bnc" id="L76" title="All 2 branches missed.">            val state = fetchRemoteData(forced)</span>
+<span class="nc" id="L77">            evaluateState(state)</span>
+        }
+<span class="nc" id="L79">    }</span>
+
+    suspend fun onParamsChange(param: UseCaseParam) {
+<span class="nc bnc" id="L82" title="All 4 branches missed.">        if (uiUpdateParams.any { it == param }) {</span>
+<span class="nc" id="L83">            onUiState()</span>
+        }
+<span class="nc bnc" id="L85" title="All 4 branches missed.">        if (fetchParams.any { it == param }) {</span>
+<span class="nc" id="L86">            fetch(refresh = true, forced = false)</span>
+        }
+<span class="nc" id="L88">    }</span>
+
+<span class="nc" id="L90">    protected suspend fun evaluateState(state: State&lt;DOMAIN_MODEL&gt;) {</span>
+<span class="nc" id="L91">        val useCaseState = when (state) {</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">            is Error -&gt; ERROR</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">            is Data -&gt; {</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">                if (!state.cached) {</span>
+<span class="nc" id="L95">                    val updatedCachedData = loadCachedData()</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">                    if (domainModel != updatedCachedData) {</span>
+<span class="nc" id="L97">                        domainModel = updatedCachedData</span>
+<span class="nc" id="L98">                        updateState()</span>
+                    }
+                }
+<span class="nc" id="L101">                SUCCESS</span>
+            }
+<span class="nc bnc" id="L103" title="All 2 branches missed.">            is Empty -&gt; EMPTY</span>
+<span class="nc" id="L104">            is Loading -&gt; LOADING</span>
+        }
+<span class="nc" id="L106">        updateUseCaseState(useCaseState)</span>
+<span class="nc" id="L107">    }</span>
+
+    /**
+     * Trigger this method when the UI state has changed.
+     * @param newState
+     */
+<span class="nc" id="L113">    fun onUiState(newState: UI_STATE? = null) {</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">        uiState = newState ?: uiState</span>
+<span class="nc" id="L115">        updateState()</span>
+<span class="nc" id="L116">    }</span>
+
+    /**
+     * Trigger this method when updating only a part of UI state.
+     * @param update function
+     */
+    fun updateUiState(update: (UI_STATE) -&gt; UI_STATE) {
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        val previousState = uiState ?: defaultUiState</span>
+<span class="nc" id="L124">        val updatedState = update(previousState)</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">        if (previousState != updatedState) {</span>
+<span class="nc" id="L126">            onUiState(updatedState)</span>
+        }
+<span class="nc" id="L128">    }</span>
+
+    private fun updateUseCaseState(newState: UseCaseState) {
+<span class="nc bnc" id="L131" title="All 2 branches missed.">        if (domainState != newState) {</span>
+<span class="nc" id="L132">            domainState = newState</span>
+<span class="nc" id="L133">            updateState()</span>
+        }
+<span class="nc" id="L135">    }</span>
+
+    /**
+     * Clears the LiveData value when we switch the current Site so we don't show the old data for a new site
+     */
+    fun clear() {
+<span class="nc" id="L141">        domainModel = null</span>
+<span class="nc" id="L142">        domainState = LOADING</span>
+<span class="nc" id="L143">        uiState = defaultUiState</span>
+<span class="nc" id="L144">        updateState()</span>
+<span class="nc" id="L145">    }</span>
+
+    /**
+     * Passes a navigation target to the View layer which uses the context to open the correct activity.
+     */
+    fun navigateTo(target: NavigationTarget) {
+<span class="nc" id="L151">        mutableNavigationTarget.value = Event(target)</span>
+<span class="nc" id="L152">    }</span>
+
+    /**
+     * Loads data from a local cache. Returns a null value when the cache is empty.
+     */
+    protected abstract suspend fun loadCachedData(): DOMAIN_MODEL?
+
+    /**
+     * Fetches remote data from the endpoint.
+     * @param forced is true when we want to get the fresh data
+     */
+    protected abstract suspend fun fetchRemoteData(forced: Boolean): State&lt;DOMAIN_MODEL&gt;
+
+    /**
+     * Transforms given domain model and ui state into the UI model
+     * @param domainModel domain model coming from FluxC
+     * @param uiState contains UI specific data
+     * @return a list of block list data
+     */
+    protected abstract fun buildUiModel(domainModel: DOMAIN_MODEL, uiState: UI_STATE): List&lt;BlockListItem&gt;
+
+    protected abstract fun buildLoadingItem(): List&lt;BlockListItem&gt;
+
+    protected open fun buildErrorItem(): List&lt;BlockListItem&gt; {
+<span class="nc" id="L176">        return buildLoadingItem() + listOf(</span>
+<span class="nc" id="L177">                BlockListItem.Text(</span>
+<span class="nc" id="L178">                        textResource = R.string.stats_loading_block_error,</span>
+<span class="nc" id="L179">                        isLast = true</span>
+                )
+        )
+    }
+
+    protected open fun buildEmptyItem(): List&lt;BlockListItem&gt; {
+<span class="nc" id="L185">        return buildLoadingItem() + listOf(BlockListItem.Empty(textResource = R.string.stats_no_data_yet))</span>
+    }
+
+    private fun updateState() {
+<span class="nc bnc" id="L189" title="All 2 branches missed.">        updateJob?.let { job -&gt;</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">            if (job.isActive) {</span>
+<span class="nc" id="L191">                job.cancel()</span>
+            }
+<span class="nc" id="L193">        }</span>
+
+<span class="nc" id="L195">        updateJob = launch {</span>
+<span class="nc" id="L196">            delay(50)</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">            val currentData = domainModel?.let { buildUiModel(it, uiState) }</span>
+
+<span class="nc" id="L199">            val useCaseModel = try {</span>
+<span class="nc bnc" id="L200" title="All 4 branches missed.">                when (domainState) {</span>
+                    LOADING -&gt; {
+<span class="nc" id="L202">                        UseCaseModel(</span>
+<span class="nc" id="L203">                                type,</span>
+<span class="nc" id="L204">                                data = currentData,</span>
+<span class="nc" id="L205">                                stateData = buildLoadingItem(),</span>
+<span class="nc" id="L206">                                state = LOADING</span>
+                        )
+                    }
+                    ERROR -&gt; {
+<span class="nc" id="L210">                        UseCaseModel(type, data = currentData, stateData = buildErrorItem(), state = ERROR)</span>
+                    }
+                    SUCCESS -&gt; {
+<span class="nc" id="L213">                        UseCaseModel(type, data = currentData)</span>
+                    }
+<span class="nc" id="L215">                    EMPTY -&gt; UseCaseModel(type, state = EMPTY, stateData = buildEmptyItem())</span>
+                }
+<span class="nc" id="L217">            } catch (e: Exception) {</span>
+<span class="nc" id="L218">                AppLog.e(AppLog.T.STATS, e)</span>
+<span class="nc" id="L219">                UseCaseModel(type, state = ERROR, stateData = buildErrorItem())</span>
+            }
+<span class="nc bnc" id="L221" title="All 2 branches missed.">            withContext(mainDispatcher) {</span>
+<span class="nc" id="L222">                _liveData.value = useCaseModel</span>
+<span class="nc" id="L223">            }</span>
+<span class="nc" id="L224">        }</span>
+<span class="nc" id="L225">    }</span>
+
+    sealed class State&lt;DOMAIN_MODEL&gt; {
+<span class="nc" id="L228">        data class Error&lt;DOMAIN_MODEL&gt;(val error: String) : State&lt;DOMAIN_MODEL&gt;()</span>
+<span class="nc" id="L229">        data class Data&lt;DOMAIN_MODEL&gt;(val model: DOMAIN_MODEL, val cached: Boolean = false) : State&lt;DOMAIN_MODEL&gt;()</span>
+<span class="nc" id="L230">        class Empty&lt;DOMAIN_MODEL&gt; : State&lt;DOMAIN_MODEL&gt;()</span>
+<span class="nc" id="L231">        class Loading&lt;DOMAIN_MODEL&gt; : State&lt;DOMAIN_MODEL&gt;()</span>
+    }
+
+<span class="nc" id="L234">    data class UseCaseModel(</span>
+<span class="nc" id="L235">        val type: StatsType,</span>
+<span class="nc" id="L236">        val data: List&lt;BlockListItem&gt;? = null,</span>
+<span class="nc" id="L237">        val stateData: List&lt;BlockListItem&gt;? = null,</span>
+<span class="nc" id="L238">        val state: UseCaseState = SUCCESS</span>
+    ) {
+        enum class UseCaseState {
+<span class="nc" id="L241">            SUCCESS, ERROR, LOADING, EMPTY</span>
+        }
+<span class="nc" id="L243">    }</span>
+
+    /**
+     * Stateless use case should be used for the blocks that display just plain data.
+     * These blocks don't have only one UI state and it doesn't change.
+     */
+<span class="nc" id="L249">    abstract class StatelessUseCase&lt;DOMAIN_MODEL&gt;(</span>
+        type: StatsType,
+        mainDispatcher: CoroutineDispatcher,
+        backgroundDispatcher: CoroutineDispatcher,
+<span class="nc" id="L253">        inputParams: List&lt;UseCaseParam&gt; = listOf()</span>
+<span class="nc" id="L254">    ) : BaseStatsUseCase&lt;DOMAIN_MODEL, NotUsedUiState&gt;(</span>
+<span class="nc" id="L255">            type,</span>
+<span class="nc" id="L256">            mainDispatcher,</span>
+<span class="nc" id="L257">            backgroundDispatcher,</span>
+<span class="nc" id="L258">            NotUsedUiState,</span>
+<span class="nc" id="L259">            inputParams</span>
+    ) {
+        /**
+         * Transforms given domain model into the UI model
+         * @param domainModel domain model coming from FluxC
+         * @return a list of block list data
+         */
+        abstract fun buildUiModel(domainModel: DOMAIN_MODEL): List&lt;BlockListItem&gt;
+
+        final override fun buildUiModel(
+            domainModel: DOMAIN_MODEL,
+            uiState: NotUsedUiState
+        ): List&lt;BlockListItem&gt; {
+<span class="nc" id="L272">            return buildUiModel(domainModel)</span>
+        }
+
+        object NotUsedUiState
+<span class="nc" id="L276">    }</span>
+
+    enum class UseCaseMode {
+<span class="nc" id="L279">        BLOCK,</span>
+<span class="nc" id="L280">        BLOCK_DETAIL,</span>
+<span class="nc" id="L281">        VIEW_ALL</span>
+    }
+
+    sealed class UseCaseParam {
+<span class="nc" id="L285">        data class SelectedDateParam(val statsSection: StatsSection) : UseCaseParam()</span>
+    }
+<span class="nc" id="L287">}</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

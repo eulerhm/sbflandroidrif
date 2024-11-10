@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GravatarApi.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.networking</a> &gt; <span class="el_source">GravatarApi.java</span></div><h1>GravatarApi.java</h1><pre class="source lang-java linenums">package org.wordpress.android.networking;
+
+import android.os.Handler;
+import android.os.Looper;
+
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.util.AppLog;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.ConnectionPool;
+import okhttp3.Interceptor;
+import okhttp3.MultipartBody;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+
+<span class="nc" id="L24">public class GravatarApi {</span>
+    public static final String API_BASE_URL = &quot;https://api.gravatar.com/v1/&quot;;
+    private static final int DEFAULT_TIMEOUT = 15000;
+
+    public interface GravatarUploadListener {
+        void onSuccess();
+
+        void onError();
+    }
+
+    private static OkHttpClient createClient(final String accessToken) {
+<span class="nc" id="L35">        OkHttpClient.Builder httpClientBuilder = new OkHttpClient.Builder();</span>
+        // This should help with recovery from the SocketTimeoutException
+        // https://github.com/square/okhttp/issues/3146#issuecomment-311158567
+<span class="nc" id="L38">        httpClientBuilder.connectTimeout(DEFAULT_TIMEOUT, TimeUnit.MILLISECONDS)</span>
+<span class="nc" id="L39">                         .retryOnConnectionFailure(true)</span>
+<span class="nc" id="L40">                         .readTimeout(DEFAULT_TIMEOUT, TimeUnit.MILLISECONDS)</span>
+<span class="nc" id="L41">                         .connectionPool(</span>
+                                 new ConnectionPool(0, 1, TimeUnit.NANOSECONDS)
+                                        );
+        // // uncomment the following line to add logcat logging
+        // httpClientBuilder.addInterceptor(new HttpLoggingInterceptor().setLevel(HttpLoggingInterceptor.Level.BODY));
+
+        // add oAuth token usage
+<span class="nc" id="L48">        httpClientBuilder.addInterceptor(new Interceptor() {</span>
+            @Override
+            public Response intercept(Interceptor.Chain chain) throws IOException {
+<span class="nc" id="L51">                Request original = chain.request();</span>
+<span class="nc" id="L52">                Request.Builder requestBuilder = original.newBuilder()</span>
+<span class="nc" id="L53">                                                         .header(&quot;Authorization&quot;, &quot;Bearer &quot; + accessToken)</span>
+<span class="nc" id="L54">                                                         .method(original.method(), original.body());</span>
+<span class="nc" id="L55">                Request request = requestBuilder.build();</span>
+<span class="nc" id="L56">                return chain.proceed(request);</span>
+            }
+        });
+
+<span class="nc" id="L60">        return httpClientBuilder.build();</span>
+    }
+
+    public static Request prepareGravatarUpload(String email, File file) {
+<span class="nc" id="L64">        return new Request.Builder()</span>
+<span class="nc" id="L65">                .url(API_BASE_URL + &quot;upload-image&quot;)</span>
+<span class="nc" id="L66">                .post(new MultipartBody.Builder()</span>
+<span class="nc" id="L67">                              .setType(MultipartBody.FORM)</span>
+<span class="nc" id="L68">                              .addFormDataPart(&quot;account&quot;, email)</span>
+<span class="nc" id="L69">                              .addFormDataPart(&quot;filedata&quot;, file.getName(), new StreamingRequest(file))</span>
+<span class="nc" id="L70">                              .build())</span>
+<span class="nc" id="L71">                .build();</span>
+    }
+
+    public static void uploadGravatar(final File file, final String email, final String accessToken,
+                                      final GravatarUploadListener gravatarUploadListener) {
+<span class="nc" id="L76">        Request request = prepareGravatarUpload(email, file);</span>
+
+<span class="nc" id="L78">        createClient(accessToken).newCall(request).enqueue(</span>
+<span class="nc" id="L79">                new Callback() {</span>
+                    @Override
+                    public void onResponse(Call call, final Response response) throws IOException {
+<span class="nc bnc" id="L82" title="All 2 branches missed.">                        if (!response.isSuccessful()) {</span>
+<span class="nc" id="L83">                            Map&lt;String, Object&gt; properties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L84">                            properties.put(&quot;network_response_code&quot;, response.code());</span>
+
+                            // response's body can only be read once so, keep it in a local variable
+                            String responseBody;
+
+                            try {
+<span class="nc" id="L90">                                responseBody = response.body().string();</span>
+<span class="nc" id="L91">                            } catch (IOException e) {</span>
+<span class="nc" id="L92">                                responseBody = &quot;null&quot;;</span>
+<span class="nc" id="L93">                            }</span>
+<span class="nc" id="L94">                            properties.put(&quot;network_response_body&quot;, responseBody);</span>
+
+<span class="nc" id="L96">                            AnalyticsTracker.track(AnalyticsTracker.Stat.ME_GRAVATAR_UPLOAD_UNSUCCESSFUL,</span>
+                                                   properties);
+<span class="nc" id="L98">                            AppLog.w(AppLog.T.API, &quot;Network call unsuccessful trying to upload Gravatar: &quot;</span>
+                                                   + responseBody);
+                        }
+
+<span class="nc" id="L102">                        new Handler(Looper.getMainLooper()).post(new Runnable() {</span>
+                            @Override
+                            public void run() {
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                                if (response.isSuccessful()) {</span>
+<span class="nc" id="L106">                                    gravatarUploadListener.onSuccess();</span>
+                                } else {
+<span class="nc" id="L108">                                    gravatarUploadListener.onError();</span>
+                                }
+<span class="nc" id="L110">                            }</span>
+                        });
+<span class="nc" id="L112">                    }</span>
+
+                    @Override
+                    public void onFailure(okhttp3.Call call, final IOException e) {
+<span class="nc bnc" id="L116" title="All 2 branches missed.">                        String exceptionClass = e != null ? e.getClass().getCanonicalName() : &quot;null&quot;;</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">                        String exceptionMessage = e != null ? e.getMessage() : &quot;null&quot;;</span>
+
+<span class="nc" id="L119">                        AppLog.w(AppLog.T.API, &quot;Network call failure trying to upload Gravatar!&quot;</span>
+                                               + exceptionMessage);
+
+                        // Don't track exceptions caused by poor internet connectivity
+<span class="nc bnc" id="L123" title="All 2 branches missed.">                        if (!(e instanceof java.net.UnknownHostException)) {</span>
+<span class="nc" id="L124">                            Map&lt;String, Object&gt; properties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L125">                            properties.put(&quot;network_exception_class&quot;, exceptionClass);</span>
+<span class="nc" id="L126">                            properties.put(&quot;network_exception_message&quot;, exceptionMessage);</span>
+<span class="nc" id="L127">                            AnalyticsTracker.track(AnalyticsTracker.Stat.ME_GRAVATAR_UPLOAD_EXCEPTION, properties);</span>
+                        }
+
+<span class="nc" id="L130">                        new Handler(Looper.getMainLooper()).post(new Runnable() {</span>
+                            @Override
+                            public void run() {
+<span class="nc" id="L133">                                gravatarUploadListener.onError();</span>
+<span class="nc" id="L134">                            }</span>
+                        });
+<span class="nc" id="L136">                    }</span>
+                });
+<span class="nc" id="L138">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

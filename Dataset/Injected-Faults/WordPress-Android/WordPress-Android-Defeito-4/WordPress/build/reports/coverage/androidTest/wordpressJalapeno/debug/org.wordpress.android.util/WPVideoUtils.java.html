@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WPVideoUtils.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.util</a> &gt; <span class="el_source">WPVideoUtils.java</span></div><h1>WPVideoUtils.java</h1><pre class="source lang-java linenums">package org.wordpress.android.util;
+
+import android.content.Context;
+import android.media.MediaCodecInfo;
+import android.util.Size;
+
+import androidx.annotation.NonNull;
+
+import com.daasuu.mp4compose.FillMode;
+import com.daasuu.mp4compose.VideoFormatMimeType;
+import com.daasuu.mp4compose.composer.ComposerInterface;
+import com.daasuu.mp4compose.composer.ComposerProvider;
+import com.daasuu.mp4compose.composer.ComposerUseCase.CompressVideo;
+import com.daasuu.mp4compose.composer.Listener;
+import com.daasuu.mp4compose.composer.Mp4ComposerBasic;
+
+import org.m4m.AudioFormat;
+import org.m4m.MediaComposer;
+import org.m4m.MediaFileInfo;
+import org.m4m.Uri;
+import org.m4m.VideoFormat;
+import org.m4m.android.AndroidMediaObjectFactory;
+import org.m4m.android.AudioFormatAndroid;
+import org.m4m.android.VideoFormatAndroid;
+
+import java.io.IOException;
+
+
+/**
+ * This class implements functionality for simple video transcoding.
+ * &lt;p&gt;
+ * Input video is transcoded by using the H.264 Advanced Video Coding encoder.
+ * Audio track is encoded with Advanced Audio Coding (AAC). Not resampled. Output sample rate and channel
+ * count are the same as for input.
+ */
+<span class="nc" id="L36">public class WPVideoUtils {</span>
+    // Default parameters for the video encoder
+    private static final String VIDEO_MIME_TYPE = &quot;video/avc&quot;; // H.264 Advanced Video Coding
+    private static final int FRAME_RATE = 30; // 30fps
+    private static final int IFRAME_INTERVAL = 2; // 2 seconds between I-frames
+
+    // Default parameters for the audio encoder
+    private static final String AUDIO_MIME_TYPE = &quot;audio/mp4a-latm&quot;;
+    private static final int AUDIO_OUTPUT_BIT_RATE = 96 * 1024;
+
+    /**
+     * This method return the media composer object that is in charge of video optimization.
+     *
+     * @param ctx The context
+     * @param inputFile Input file path.
+     * @param outFile Output file path.
+     * @param listener The event listener
+     * @return The media composer that is in charge of video transcoding, ready to be started,
+     * or null in case the video cannot be transcoded.
+     */
+    public static MediaComposer getVideoOptimizationComposer(@NonNull Context ctx, @NonNull String inputFile,
+                                                             @NonNull String outFile,
+                                                             @NonNull org.m4m.IProgressListener listener,
+                                                             int width, int bitrate) {
+<span class="nc" id="L60">        AndroidMediaObjectFactory factory = new AndroidMediaObjectFactory(ctx);</span>
+
+<span class="nc" id="L62">        Uri m4mUri = new Uri(inputFile);</span>
+<span class="nc" id="L63">        MediaFileInfo mediaFileInfo = new MediaFileInfo(factory);</span>
+        try {
+<span class="nc" id="L65">            mediaFileInfo.setUri(m4mUri);</span>
+<span class="nc" id="L66">        } catch (IOException e) {</span>
+<span class="nc" id="L67">            AppLog.e(AppLog.T.MEDIA, &quot;Cannot access the input file at &quot; + inputFile, e);</span>
+<span class="nc" id="L68">            return null;</span>
+<span class="nc" id="L69">        }</span>
+
+        // Check the video resolution
+<span class="nc" id="L72">        VideoFormat videoFormat = (VideoFormat) mediaFileInfo.getVideoFormat();</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">        if (videoFormat == null) {</span>
+<span class="nc" id="L74">            AppLog.w(AppLog.T.MEDIA, &quot;Input file doesn't contain a video track?&quot;);</span>
+<span class="nc" id="L75">            return null;</span>
+        }
+<span class="nc bnc" id="L77" title="All 2 branches missed.">        if (videoFormat.getVideoFrameSize().width() &lt; width) {</span>
+<span class="nc" id="L78">            AppLog.w(AppLog.T.MEDIA, &quot;Input file width is lower than than &quot; + width + &quot;. Keeping the original file&quot;);</span>
+<span class="nc" id="L79">            return null;</span>
+        }
+<span class="nc bnc" id="L81" title="All 2 branches missed.">        if (videoFormat.getVideoFrameSize().height() == 0) {</span>
+<span class="nc" id="L82">            AppLog.w(AppLog.T.MEDIA, &quot;Input file height is unknown. Can't calculate the correct &quot;</span>
+                                     + &quot;ratio for resizing. Keeping the original file&quot;);
+<span class="nc" id="L84">            return null;</span>
+        }
+        // Calculate the height keeping the correct aspect ratio
+<span class="nc" id="L87">        float percentage = (float) width / videoFormat.getVideoFrameSize().width();</span>
+<span class="nc" id="L88">        float proportionateHeight = videoFormat.getVideoFrameSize().height() * percentage;</span>
+<span class="nc" id="L89">        int height = (int) Math.rint(proportionateHeight);</span>
+
+<span class="nc" id="L91">        AudioFormat audioFormat = (AudioFormat) mediaFileInfo.getAudioFormat();</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">        boolean isAudioAvailable = audioFormat != null;</span>
+
+<span class="nc" id="L94">        MediaComposer mediaComposer = new MediaComposer(factory, listener);</span>
+        try {
+<span class="nc" id="L96">            mediaComposer.addSourceFile(inputFile);</span>
+<span class="nc" id="L97">        } catch (IOException e) {</span>
+<span class="nc" id="L98">            AppLog.e(AppLog.T.MEDIA, &quot;Cannot access the input file at &quot; + inputFile, e);</span>
+<span class="nc" id="L99">            return null;</span>
+<span class="nc" id="L100">        }</span>
+
+        try {
+<span class="nc" id="L103">            mediaComposer.setTargetFile(outFile, mediaFileInfo.getRotation());</span>
+<span class="nc" id="L104">        } catch (IOException e) {</span>
+<span class="nc" id="L105">            AppLog.e(AppLog.T.MEDIA, &quot;Cannot access/write the output file at &quot; + outFile, e);</span>
+<span class="nc" id="L106">            return null;</span>
+<span class="nc" id="L107">        }</span>
+
+<span class="nc" id="L109">        configureVideoEncoderWithDefaults(mediaComposer, width, height, bitrate);</span>
+
+<span class="nc bnc" id="L111" title="All 2 branches missed.">        if (isAudioAvailable) {</span>
+<span class="nc" id="L112">            configureAudioEncoder(mediaComposer, audioFormat);</span>
+        }
+
+<span class="nc" id="L115">        return mediaComposer;</span>
+    }
+
+    // TODO: this should replace the equivalent function used for m4m lib once we fully introduce the Mp4Composer lib
+    public static ComposerInterface getVideoOptimizationComposer(@NonNull String inputFile,
+                                                                 @NonNull String outFile,
+                                                                 @NonNull Listener listener,
+                                                                 int width, int bitrate) {
+        // NOTE: the parameters here (namely the AVC format type, IFrameInterval, the audio bitrate
+        // and the CodecProfileLevel) have been selected based on what we had already as fixed parameters
+        // in the original implementation that was using the media for mobile lib.
+        // Two improvements could be:
+        // - Investigate if the parameters set is already optimal and can be improved
+        // - Expose them as parameters so that they can be eventually changed by some external logic
+<span class="nc" id="L129">        ComposerInterface composer = ComposerProvider.INSTANCE.getComposerForUseCase(new CompressVideo(</span>
+                inputFile,
+                outFile,
+                VideoFormatMimeType.AVC,
+                bitrate * 1024,
+                2,
+                96 * 1024,
+                MediaCodecInfo.CodecProfileLevel.AACObjectLC,
+                true
+        ));
+
+<span class="nc" id="L140">        Size srvVideoResolution = ((Mp4ComposerBasic) composer).getSrcVideoResolution();</span>
+
+<span class="nc bnc" id="L142" title="All 2 branches missed.">        if (srvVideoResolution == null) {</span>
+<span class="nc" id="L143">            AppLog.w(AppLog.T.MEDIA, &quot;Could not rescue source video resolution&quot;);</span>
+<span class="nc" id="L144">            return null;</span>
+        }
+
+<span class="nc bnc" id="L147" title="All 2 branches missed.">        if (srvVideoResolution.getWidth() &lt; width) {</span>
+<span class="nc" id="L148">            AppLog.w(AppLog.T.MEDIA, &quot;Input file width is lower than than &quot; + width + &quot;. Keeping the original file&quot;);</span>
+<span class="nc" id="L149">            return null;</span>
+        }
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        if (srvVideoResolution.getHeight() == 0) {</span>
+<span class="nc" id="L152">            AppLog.w(AppLog.T.MEDIA, &quot;Input file height is unknown. Can't calculate the correct &quot;</span>
+                                     + &quot;ratio for resizing. Keeping the original file&quot;);
+<span class="nc" id="L154">            return null;</span>
+        }
+
+        // Calculate the height keeping the correct aspect ratio
+<span class="nc" id="L158">        float percentage = (float) width / srvVideoResolution.getWidth();</span>
+<span class="nc" id="L159">        float proportionateHeight = srvVideoResolution.getHeight() * percentage;</span>
+<span class="nc" id="L160">        int height = (int) Math.rint(proportionateHeight);</span>
+
+<span class="nc" id="L162">        composer.size(new Size(width, height))</span>
+<span class="nc" id="L163">                .fillMode(FillMode.PRESERVE_ASPECT_FIT)</span>
+<span class="nc" id="L164">                .listener(listener);</span>
+
+<span class="nc" id="L166">        return composer;</span>
+    }
+
+    private static void configureVideoEncoderWithDefaults(MediaComposer mediaComposer, int width, int height,
+                                                          int bitrate) {
+<span class="nc" id="L171">        VideoFormatAndroid videoFormat = new VideoFormatAndroid(VIDEO_MIME_TYPE, width, height);</span>
+<span class="nc" id="L172">        videoFormat.setVideoBitRateInKBytes(bitrate);</span>
+<span class="nc" id="L173">        videoFormat.setVideoFrameRate(FRAME_RATE);</span>
+<span class="nc" id="L174">        videoFormat.setVideoIFrameInterval(IFRAME_INTERVAL);</span>
+<span class="nc" id="L175">        mediaComposer.setTargetVideoFormat(videoFormat);</span>
+<span class="nc" id="L176">    }</span>
+
+    private static void configureAudioEncoder(org.m4m.MediaComposer mediaComposer, AudioFormat audioFormat) {
+        /**
+         * TODO: Audio resampling is unsupported by current m4m release
+         * Output sample rate and channel count are the same as for input.
+         */
+<span class="nc" id="L183">        AudioFormatAndroid aFormat = new AudioFormatAndroid(AUDIO_MIME_TYPE, audioFormat.getAudioSampleRateInHz(),</span>
+<span class="nc" id="L184">                                                            audioFormat.getAudioChannelCount());</span>
+
+<span class="nc" id="L186">        aFormat.setAudioBitrateInBytes(AUDIO_OUTPUT_BIT_RATE);</span>
+<span class="nc" id="L187">        aFormat.setAudioProfile(MediaCodecInfo.CodecProfileLevel.AACObjectLC);</span>
+
+<span class="nc" id="L189">        mediaComposer.setTargetAudioFormat(aFormat);</span>
+<span class="nc" id="L190">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,544 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderPostCardActionsHandler.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.discover</a> &gt; <span class="el_source">ReaderPostCardActionsHandler.kt</span></div><h1>ReaderPostCardActionsHandler.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.discover
+
+import android.content.ActivityNotFoundException
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.datasets.ReaderBlogTableWrapper
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.store.AccountStore.AddOrDeleteSubscriptionPayload.SubscriptionAction.DELETE
+import org.wordpress.android.fluxc.store.AccountStore.AddOrDeleteSubscriptionPayload.SubscriptionAction.NEW
+import org.wordpress.android.models.ReaderPost
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.reader.comments.ThreadedCommentsActionSource
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderRecommendedBlogsCardUiState.ReaderRecommendedBlogUiState
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.OpenPost
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.SharePost
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowBlogPreview
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowBookmarkedSavedOnlyLocallyDialog
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowBookmarkedTab
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowPostDetail
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowReaderComments
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowReportPost
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowVideoViewer
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.BLOCK_SITE
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.BOOKMARK
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.COMMENTS
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.FOLLOW
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.LIKE
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.REBLOG
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.REPORT_POST
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.SHARE
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.SITE_NOTIFICATIONS
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.SPACER_NO_ACTION
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.TOGGLE_SEEN_STATUS
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.VISIT_SITE
+import org.wordpress.android.ui.reader.reblog.ReblogUseCase
+import org.wordpress.android.ui.reader.repository.usecases.BlockBlogUseCase
+import org.wordpress.android.ui.reader.repository.usecases.BlockSiteState
+import org.wordpress.android.ui.reader.repository.usecases.PostLikeUseCase
+import org.wordpress.android.ui.reader.repository.usecases.PostLikeUseCase.PostLikeState
+import org.wordpress.android.ui.reader.repository.usecases.UndoBlockBlogUseCase
+import org.wordpress.android.ui.reader.tracker.ReaderTracker
+import org.wordpress.android.ui.reader.usecases.BookmarkPostState.PreLoadPostContent
+import org.wordpress.android.ui.reader.usecases.BookmarkPostState.Success
+import org.wordpress.android.ui.reader.usecases.ReaderFetchSiteUseCase
+import org.wordpress.android.ui.reader.usecases.ReaderFetchSiteUseCase.FetchSiteState
+import org.wordpress.android.ui.reader.usecases.ReaderPostBookmarkUseCase
+import org.wordpress.android.ui.reader.usecases.ReaderSeenStatusToggleUseCase
+import org.wordpress.android.ui.reader.usecases.ReaderSeenStatusToggleUseCase.PostSeenState.Error
+import org.wordpress.android.ui.reader.usecases.ReaderSeenStatusToggleUseCase.PostSeenState.PostSeenStateChanged
+import org.wordpress.android.ui.reader.usecases.ReaderSeenStatusToggleUseCase.PostSeenState.UserNotAuthenticated
+import org.wordpress.android.ui.reader.usecases.ReaderSeenStatusToggleUseCase.ReaderPostSeenToggleSource.READER_POST_CARD
+import org.wordpress.android.ui.reader.usecases.ReaderSeenStatusToggleUseCase.ReaderPostSeenToggleSource.READER_POST_DETAILS
+import org.wordpress.android.ui.reader.usecases.ReaderSiteFollowUseCase
+import org.wordpress.android.ui.reader.usecases.ReaderSiteFollowUseCase.FollowSiteState
+import org.wordpress.android.ui.reader.usecases.ReaderSiteFollowUseCase.FollowSiteState.FollowStatusChanged
+import org.wordpress.android.ui.reader.usecases.ReaderSiteNotificationsUseCase
+import org.wordpress.android.ui.reader.usecases.ReaderSiteNotificationsUseCase.SiteNotificationState
+import org.wordpress.android.ui.utils.HtmlMessageUtils
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ResourceProvider
+import org.wordpress.android.widgets.AppRatingDialogWrapper
+import javax.inject.Inject
+import javax.inject.Named
+
+<span class="nc" id="L79">class ReaderPostCardActionsHandler @Inject constructor(</span>
+<span class="nc" id="L80">    private val readerTracker: ReaderTracker,</span>
+<span class="nc" id="L81">    private val reblogUseCase: ReblogUseCase,</span>
+<span class="nc" id="L82">    private val bookmarkUseCase: ReaderPostBookmarkUseCase,</span>
+<span class="nc" id="L83">    private val followUseCase: ReaderSiteFollowUseCase,</span>
+<span class="nc" id="L84">    private val blockBlogUseCase: BlockBlogUseCase,</span>
+<span class="nc" id="L85">    private val likeUseCase: PostLikeUseCase,</span>
+<span class="nc" id="L86">    private val siteNotificationsUseCase: ReaderSiteNotificationsUseCase,</span>
+<span class="nc" id="L87">    private val undoBlockBlogUseCase: UndoBlockBlogUseCase,</span>
+<span class="nc" id="L88">    private val fetchSiteUseCase: ReaderFetchSiteUseCase,</span>
+<span class="nc" id="L89">    private val appPrefsWrapper: AppPrefsWrapper,</span>
+<span class="nc" id="L90">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L91">    private val resourceProvider: ResourceProvider,</span>
+<span class="nc" id="L92">    private val htmlMessageUtils: HtmlMessageUtils,</span>
+<span class="nc" id="L93">    private val appRatingDialogWrapper: AppRatingDialogWrapper,</span>
+<span class="nc" id="L94">    private val seenStatusToggleUseCase: ReaderSeenStatusToggleUseCase,</span>
+<span class="nc" id="L95">    private val readerBlogTableWrapper: ReaderBlogTableWrapper,</span>
+<span class="nc" id="L96">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+) {
+    private lateinit var coroutineScope: CoroutineScope
+
+<span class="nc" id="L100">    private val _navigationEvents = MediatorLiveData&lt;Event&lt;ReaderNavigationEvents&gt;&gt;()</span>
+<span class="nc" id="L101">    val navigationEvents: LiveData&lt;Event&lt;ReaderNavigationEvents&gt;&gt; = _navigationEvents</span>
+
+<span class="nc" id="L103">    private val _snackbarEvents = MediatorLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L104">    val snackbarEvents: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _snackbarEvents</span>
+
+<span class="nc" id="L106">    private val _preloadPostEvents = MediatorLiveData&lt;Event&lt;PreLoadPostContent&gt;&gt;()</span>
+<span class="nc" id="L107">    val preloadPostEvents: LiveData&lt;Event&lt;PreLoadPostContent&gt;&gt; = _preloadPostEvents</span>
+
+<span class="nc" id="L109">    private val _followStatusUpdated = MediatorLiveData&lt;FollowStatusChanged&gt;()</span>
+<span class="nc" id="L110">    val followStatusUpdated: LiveData&lt;FollowStatusChanged&gt; = _followStatusUpdated</span>
+
+    // Used only in legacy ReaderPostListFragment and ReaderPostDetailFragment.
+    // The discover tab observes reactive ReaderDiscoverDataProvider.
+<span class="nc" id="L114">    private val _refreshPosts = MediatorLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L115">    val refreshPosts: LiveData&lt;Event&lt;Unit&gt;&gt; = _refreshPosts</span>
+
+<span class="nc" id="L117">    init {</span>
+<span class="nc" id="L118">        dispatcher.register(siteNotificationsUseCase)</span>
+<span class="nc" id="L119">    }</span>
+
+    fun initScope(coroutineScope: CoroutineScope) {
+<span class="nc" id="L122">        this.coroutineScope = coroutineScope</span>
+<span class="nc" id="L123">    }</span>
+
+    suspend fun onAction(
+        post: ReaderPost,
+        type: ReaderPostCardActionType,
+        isBookmarkList: Boolean,
+        source: String
+    ) {
+<span class="nc" id="L131">        withContext(bgDispatcher) {</span>
+<span class="nc bnc" id="L132" title="All 4 branches missed.">            if (type == FOLLOW || type == SITE_NOTIFICATIONS) {</span>
+<span class="nc" id="L133">                val readerBlog = readerBlogTableWrapper.getReaderBlog(post.blogId, post.feedId)</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">                if (readerBlog == null) {</span>
+<span class="nc" id="L135">                    val isSiteFetched = preFetchSite(post)</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">                    if (!isSiteFetched) {</span>
+<span class="nc" id="L137">                        return@withContext</span>
+                    }
+                }
+            }
+<span class="nc" id="L141">            handleAction(</span>
+<span class="nc" id="L142">                    post,</span>
+<span class="nc" id="L143">                    type,</span>
+<span class="nc" id="L144">                    isBookmarkList,</span>
+<span class="nc" id="L145">                    source</span>
+            )
+<span class="nc" id="L147">        }</span>
+<span class="nc" id="L148">    }</span>
+
+<span class="nc" id="L150">    private suspend fun preFetchSite(post: ReaderPost): Boolean {</span>
+<span class="nc" id="L151">        var isSiteFetched = false</span>
+<span class="nc" id="L152">        when (fetchSiteUseCase.fetchSite(post.blogId, post.feedId, null)) {</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">            FetchSiteState.AlreadyRunning -&gt; { // Do Nothing</span>
+            }
+<span class="nc bnc" id="L155" title="All 2 branches missed.">            FetchSiteState.Success -&gt; {</span>
+<span class="nc" id="L156">                isSiteFetched = true</span>
+            }
+<span class="nc bnc" id="L158" title="All 2 branches missed.">            FetchSiteState.Failed.NoNetwork -&gt; {</span>
+<span class="nc" id="L159">                _snackbarEvents.postValue(</span>
+<span class="nc" id="L160">                        Event(SnackbarMessageHolder((UiStringRes(R.string.error_network_connection))))</span>
+                )
+            }
+<span class="nc bnc" id="L163" title="All 2 branches missed.">            FetchSiteState.Failed.RequestFailed -&gt; {</span>
+<span class="nc" id="L164">                _snackbarEvents.postValue(</span>
+<span class="nc" id="L165">                        Event(SnackbarMessageHolder((UiStringRes(R.string.reader_error_request_failed_title))))</span>
+                )
+            }
+        }
+<span class="nc bnc" id="L169" title="All 2 branches missed.">        return isSiteFetched</span>
+    }
+
+    private suspend fun handleAction(
+        post: ReaderPost,
+        type: ReaderPostCardActionType,
+        isBookmarkList: Boolean,
+        source: String
+    ) {
+<span class="nc bnc" id="L178" title="All 12 branches missed.">        when (type) {</span>
+<span class="nc" id="L179">            FOLLOW -&gt; handleFollowClicked(post, source)</span>
+<span class="nc" id="L180">            SITE_NOTIFICATIONS -&gt; handleSiteNotificationsClicked(post.blogId, post.feedId)</span>
+<span class="nc" id="L181">            SHARE -&gt; handleShareClicked(post, source)</span>
+<span class="nc" id="L182">            VISIT_SITE -&gt; handleVisitSiteClicked(post)</span>
+<span class="nc" id="L183">            BLOCK_SITE -&gt; handleBlockSiteClicked(post.blogId, post.feedId, source)</span>
+<span class="nc" id="L184">            LIKE -&gt; handleLikeClicked(post, source)</span>
+<span class="nc" id="L185">            BOOKMARK -&gt; handleBookmarkClicked(post, isBookmarkList, source)</span>
+<span class="nc" id="L186">            REBLOG -&gt; handleReblogClicked(post)</span>
+<span class="nc" id="L187">            COMMENTS -&gt; handleCommentsClicked(post.postId, post.blogId, source)</span>
+<span class="nc" id="L188">            REPORT_POST -&gt; handleReportPostClicked(post)</span>
+<span class="nc" id="L189">            TOGGLE_SEEN_STATUS -&gt; handleToggleSeenStatusClicked(post, source)</span>
+            SPACER_NO_ACTION -&gt; Unit // Do nothing
+        }
+<span class="nc" id="L192">    }</span>
+
+    suspend fun handleOnItemClicked(
+        post: ReaderPost,
+        source: String
+    ) {
+<span class="nc bnc" id="L198" title="All 2 branches missed.">        withContext(bgDispatcher) {</span>
+<span class="nc" id="L199">            appRatingDialogWrapper.incrementInteractions(</span>
+<span class="nc" id="L200">                    AnalyticsTracker.Stat.APP_REVIEWS_EVENT_INCREMENTED_BY_OPENING_READER_POST</span>
+            )
+
+<span class="nc bnc" id="L203" title="All 2 branches missed.">            if (post.isBookmarked) {</span>
+<span class="nc" id="L204">                readerTracker.trackBlog(</span>
+<span class="nc" id="L205">                        AnalyticsTracker.Stat.READER_SAVED_POST_OPENED_FROM_OTHER_POST_LIST,</span>
+<span class="nc" id="L206">                        post.blogId,</span>
+<span class="nc" id="L207">                        post.feedId,</span>
+<span class="nc" id="L208">                        post.isFollowedByCurrentUser,</span>
+<span class="nc" id="L209">                        source</span>
+                )
+            }
+<span class="nc" id="L212">            _navigationEvents.postValue(Event(ShowPostDetail(post)))</span>
+<span class="nc" id="L213">        }</span>
+<span class="nc" id="L214">    }</span>
+
+    suspend fun handleVideoOverlayClicked(videoUrl: String) {
+<span class="nc bnc" id="L217" title="All 2 branches missed.">        withContext(bgDispatcher) {</span>
+<span class="nc" id="L218">            _navigationEvents.postValue(Event(ShowVideoViewer(videoUrl)))</span>
+<span class="nc" id="L219">        }</span>
+<span class="nc" id="L220">    }</span>
+
+    suspend fun handleHeaderClicked(siteId: Long, feedId: Long, isFollowed: Boolean) {
+<span class="nc bnc" id="L223" title="All 2 branches missed.">        withContext(bgDispatcher) {</span>
+<span class="nc" id="L224">            _navigationEvents.postValue(Event(ShowBlogPreview(siteId, feedId, isFollowed)))</span>
+<span class="nc" id="L225">        }</span>
+<span class="nc" id="L226">    }</span>
+
+    suspend fun handleReportPostClicked(post: ReaderPost) {
+<span class="nc bnc" id="L229" title="All 2 branches missed.">        withContext(bgDispatcher) {</span>
+<span class="nc" id="L230">            readerTracker.trackBlogPost(</span>
+<span class="nc" id="L231">                    AnalyticsTracker.Stat.READER_POST_REPORTED,</span>
+<span class="nc" id="L232">                    post.blogId,</span>
+<span class="nc" id="L233">                    post.postId,</span>
+<span class="nc" id="L234">                    post.isJetpack</span>
+            )
+<span class="nc" id="L236">            _navigationEvents.postValue(Event(ShowReportPost(post.blogUrl)))</span>
+<span class="nc" id="L237">        }</span>
+<span class="nc" id="L238">    }</span>
+
+    private suspend fun handleToggleSeenStatusClicked(post: ReaderPost, source: String) {
+<span class="nc bnc" id="L241" title="All 2 branches missed.">        val actionSource = if (source == ReaderTracker.SOURCE_POST_DETAIL) {</span>
+<span class="nc" id="L242">            READER_POST_DETAILS</span>
+        } else {
+<span class="nc" id="L244">            READER_POST_CARD</span>
+        }
+<span class="nc" id="L246">        seenStatusToggleUseCase.toggleSeenStatus(post, actionSource).flowOn(bgDispatcher).collect { state -&gt;</span>
+            when (state) {
+                is Error -&gt; {
+                    state.message?.let {
+                        _snackbarEvents.postValue(
+                                Event(SnackbarMessageHolder(it))
+                        )
+                    }
+                }
+                is PostSeenStateChanged -&gt; {
+                    state.userMessage?.let {
+                        _snackbarEvents.postValue(
+                                Event(SnackbarMessageHolder(it))
+                        )
+                    }
+                }
+                is UserNotAuthenticated -&gt; { // should not happen with current implementation
+                    AppLog.e(
+                            T.READER,
+                            &quot;User was not authenticated when attempting to toggle Seen/Unseen status of the post&quot;
+                    )
+                }
+            }
+        }
+<span class="nc" id="L270">    }</span>
+
+    suspend fun handleFollowRecommendedSiteClicked(
+        recommendedBlogUiState: ReaderRecommendedBlogUiState,
+        source: String
+    ) {
+<span class="nc" id="L276">        val param = ReaderSiteFollowUseCase.Param(</span>
+<span class="nc" id="L277">                blogId = recommendedBlogUiState.blogId,</span>
+<span class="nc" id="L278">                blogName = recommendedBlogUiState.name,</span>
+<span class="nc" id="L279">                feedId = recommendedBlogUiState.feedId</span>
+        )
+<span class="nc" id="L281">        followSite(param, source)</span>
+<span class="nc" id="L282">    }</span>
+
+    private suspend fun handleFollowClicked(
+        post: ReaderPost,
+        source: String
+    ) {
+<span class="nc" id="L288">        followSite(</span>
+<span class="nc" id="L289">                ReaderSiteFollowUseCase.Param(</span>
+<span class="nc" id="L290">                        post.blogId,</span>
+<span class="nc" id="L291">                        post.feedId,</span>
+<span class="nc" id="L292">                        post.blogName</span>
+<span class="nc" id="L293">                ), source</span>
+        )
+<span class="nc" id="L295">    }</span>
+
+<span class="nc" id="L297">    private suspend fun followSite(</span>
+        followSiteParam: ReaderSiteFollowUseCase.Param,
+        source: String
+    ) {
+<span class="nc" id="L301">        followUseCase.toggleFollow(followSiteParam, source).collect {</span>
+            when (it) {
+                is FollowSiteState.Failed.NoNetwork -&gt; {
+                    _snackbarEvents.postValue(
+                            Event(SnackbarMessageHolder((UiStringRes(R.string.error_network_connection))))
+                    )
+                }
+                is FollowSiteState.Failed.RequestFailed -&gt; {
+                    _snackbarEvents.postValue(
+                            Event(SnackbarMessageHolder((UiStringRes(R.string.reader_error_request_failed_title))))
+                    )
+                }
+                is FollowSiteState.AlreadyRunning, FollowSiteState.Success -&gt; Unit // Do nothing
+                is FollowStatusChanged -&gt; {
+                    _followStatusUpdated.postValue(it)
+                    siteNotificationsUseCase.fetchSubscriptions()
+
+                    if (it.showEnableNotification) {
+                        val action = prepareEnableNotificationSnackbarAction(
+                                followSiteParam.blogName,
+                                it.blogId,
+                                it.feedId
+                        )
+                        action.invoke()
+                    } else if (it.deleteNotificationSubscription) {
+                        siteNotificationsUseCase.updateSubscription(it.blogId, DELETE)
+                        siteNotificationsUseCase.updateNotificationEnabledForBlogInDb(it.blogId, false)
+                    }
+                }
+            }
+        }
+<span class="nc" id="L332">    }</span>
+
+<span class="nc" id="L334">    private suspend fun handleSiteNotificationsClicked(blogId: Long, feedId: Long) {</span>
+<span class="nc" id="L335">        when (siteNotificationsUseCase.toggleNotification(blogId, feedId)) {</span>
+<span class="nc bnc" id="L336" title="All 4 branches missed.">            is SiteNotificationState.Success, SiteNotificationState.Failed.AlreadyRunning -&gt; { // Do Nothing</span>
+            }
+<span class="nc bnc" id="L338" title="All 2 branches missed.">            is SiteNotificationState.Failed.NoNetwork -&gt; {</span>
+<span class="nc" id="L339">                _snackbarEvents.postValue(</span>
+<span class="nc" id="L340">                        Event(SnackbarMessageHolder((UiStringRes(R.string.error_network_connection))))</span>
+                )
+            }
+<span class="nc bnc" id="L343" title="All 2 branches missed.">            is SiteNotificationState.Failed.RequestFailed -&gt; {</span>
+<span class="nc" id="L344">                _snackbarEvents.postValue(</span>
+<span class="nc" id="L345">                        Event(SnackbarMessageHolder((UiStringRes(R.string.reader_error_request_failed_title))))</span>
+                )
+            }
+        }
+<span class="nc" id="L349">    }</span>
+
+    private fun handleShareClicked(
+        post: ReaderPost,
+        source: String
+    ) {
+<span class="nc" id="L355">        readerTracker.trackBlog(</span>
+<span class="nc" id="L356">                AnalyticsTracker.Stat.SHARED_ITEM_READER,</span>
+<span class="nc" id="L357">                post.blogId,</span>
+<span class="nc" id="L358">                post.feedId,</span>
+<span class="nc" id="L359">                post.isFollowedByCurrentUser,</span>
+<span class="nc" id="L360">                source</span>
+        )
+<span class="nc" id="L362">        try {</span>
+<span class="nc" id="L363">            _navigationEvents.postValue(Event(SharePost(post)))</span>
+<span class="nc" id="L364">        } catch (ex: ActivityNotFoundException) {</span>
+<span class="nc" id="L365">            _snackbarEvents.postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.reader_toast_err_share_intent))))</span>
+        }
+<span class="nc" id="L367">    }</span>
+
+    private fun handleVisitSiteClicked(post: ReaderPost) {
+<span class="nc" id="L370">        readerTracker.track(AnalyticsTracker.Stat.READER_ARTICLE_VISITED)</span>
+<span class="nc" id="L371">        _navigationEvents.postValue(Event(OpenPost(post)))</span>
+<span class="nc" id="L372">    }</span>
+
+<span class="nc" id="L374">    private suspend fun handleBlockSiteClicked(</span>
+        blogId: Long,
+        feedId: Long,
+        source: String
+    ) {
+<span class="nc" id="L379">        blockBlogUseCase.blockBlog(blogId, feedId).collect {</span>
+            when (it) {
+                is BlockSiteState.SiteBlockedInLocalDb -&gt; {
+                    _refreshPosts.postValue(Event(Unit))
+                    _snackbarEvents.postValue(
+                            Event(
+                                    SnackbarMessageHolder(
+                                            UiStringRes(R.string.reader_toast_blog_blocked),
+                                            UiStringRes(R.string.undo),
+                                            {
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                                                coroutineScope.launch {</span>
+<span class="nc" id="L390">                                                    undoBlockBlogUseCase.undoBlockBlog(it.blockedBlogData, source)</span>
+<span class="nc" id="L391">                                                    _refreshPosts.postValue(Event(Unit))</span>
+<span class="nc" id="L392">                                                }</span>
+<span class="nc" id="L393">                                            })</span>
+                            )
+                    )
+                }
+                BlockSiteState.Success, BlockSiteState.Failed.AlreadyRunning -&gt; Unit // do nothing
+                BlockSiteState.Failed.NoNetwork -&gt; {
+                    _snackbarEvents.postValue(
+                            Event(SnackbarMessageHolder(UiStringRes(R.string.reader_toast_err_block_blog)))
+                    )
+                }
+                BlockSiteState.Failed.RequestFailed -&gt; {
+                    _refreshPosts.postValue(Event(Unit))
+                    _snackbarEvents.postValue(
+                            Event(SnackbarMessageHolder(UiStringRes(R.string.reader_toast_err_block_blog)))
+                    )
+                }
+            }
+        }
+<span class="nc" id="L411">    }</span>
+
+<span class="nc" id="L413">    private suspend fun handleLikeClicked(post: ReaderPost, source: String) {</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">        likeUseCase.perform(post, !post.isLikedByCurrentUser, source).collect {</span>
+            when (it) {
+                is PostLikeState.PostLikedInLocalDb -&gt; {
+                    _refreshPosts.postValue(Event(Unit))
+                }
+                is PostLikeState.Success, is PostLikeState.Unchanged, is PostLikeState.AlreadyRunning -&gt; {
+                }
+                is PostLikeState.Failed.NoNetwork -&gt; {
+                    _snackbarEvents.postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.no_network_message))))
+                }
+                is PostLikeState.Failed.RequestFailed -&gt; {
+                    _refreshPosts.postValue(Event(Unit))
+                    _snackbarEvents.postValue(
+                            Event(SnackbarMessageHolder(UiStringRes(R.string.reader_error_request_failed_title)))
+                    )
+                }
+            }
+        }
+<span class="nc" id="L432">    }</span>
+
+<span class="nc" id="L434">    private suspend fun handleBookmarkClicked(</span>
+        post: ReaderPost,
+        isBookmarkList: Boolean,
+        source: String
+    ) {
+<span class="nc bnc" id="L439" title="All 2 branches missed.">        bookmarkUseCase.toggleBookmark(post, isBookmarkList, source).collect {</span>
+            when (it) {
+                is PreLoadPostContent -&gt; _preloadPostEvents.postValue(
+                        Event(PreLoadPostContent(post.blogId, post.postId))
+                )
+                is Success -&gt; {
+                    // Content needs to be manually refreshed in the legacy ReaderPostListAdapter and
+                    // ReaderPostDetailFragment
+                    _refreshPosts.postValue(Event(Unit))
+
+                    val showSnackbarAction = {
+<span class="nc" id="L450">                        _snackbarEvents.postValue(</span>
+<span class="nc" id="L451">                                Event(</span>
+<span class="nc" id="L452">                                        SnackbarMessageHolder(</span>
+<span class="nc" id="L453">                                                UiStringRes(R.string.reader_bookmark_snack_title),</span>
+<span class="nc" id="L454">                                                UiStringRes(R.string.reader_bookmark_snack_btn),</span>
+                                                buttonAction = {
+<span class="nc" id="L456">                                                    readerTracker.track(</span>
+<span class="nc" id="L457">                                                            AnalyticsTracker.Stat.READER_SAVED_LIST_SHOWN,</span>
+<span class="nc" id="L458">                                                            ReaderTracker.SOURCE_POST_LIST_SAVED_POST_NOTICE</span>
+                                                    )
+<span class="nc" id="L460">                                                    _navigationEvents.postValue(Event(ShowBookmarkedTab))</span>
+<span class="nc" id="L461">                                                })</span>
+                                )
+                        )
+<span class="nc" id="L464">                    }</span>
+                    if (it.bookmarked &amp;&amp; !isBookmarkList) {
+                        if (appPrefsWrapper.shouldShowBookmarksSavedLocallyDialog()) {
+                            _navigationEvents.postValue(
+                                    Event(
+                                            ShowBookmarkedSavedOnlyLocallyDialog(
+                                                    okButtonAction = {
+<span class="nc" id="L471">                                                        appPrefsWrapper.setBookmarksSavedLocallyDialogShown()</span>
+<span class="nc" id="L472">                                                        showSnackbarAction.invoke()</span>
+<span class="nc" id="L473">                                                    })</span>
+                                    )
+                            )
+                        } else {
+                            showSnackbarAction.invoke()
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L483">    }</span>
+
+<span class="nc" id="L485">    private suspend fun handleReblogClicked(post: ReaderPost) {</span>
+<span class="nc" id="L486">        val state = reblogUseCase.onReblogButtonClicked(post)</span>
+<span class="nc" id="L487">        val navigationTarget = reblogUseCase.convertReblogStateToNavigationEvent(state)</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">        if (navigationTarget != null) {</span>
+<span class="nc" id="L489">            _navigationEvents.postValue(Event(navigationTarget))</span>
+        } else {
+<span class="nc" id="L491">            _snackbarEvents.postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.reader_reblog_error))))</span>
+        }
+<span class="nc" id="L493">    }</span>
+
+    private fun handleCommentsClicked(postId: Long, blogId: Long, source: String) {
+<span class="nc" id="L496">        _navigationEvents.postValue(Event(ShowReaderComments(</span>
+<span class="nc" id="L497">                blogId,</span>
+<span class="nc" id="L498">                postId,</span>
+<span class="nc" id="L499">                ThreadedCommentsActionSource.mapReaderPostSource(source)</span>
+        )))
+<span class="nc" id="L501">    }</span>
+
+    private fun prepareEnableNotificationSnackbarAction(
+        blogName: String?,
+        blogId: Long,
+        feedId: Long
+    ): () -&gt; Unit {
+<span class="nc" id="L508">        return {</span>
+<span class="nc" id="L509">            val thisSite = resourceProvider.getString(R.string.reader_followed_blog_notifications_this)</span>
+<span class="nc bnc" id="L510" title="All 8 branches missed.">            val blog = if (blogName?.isEmpty() == true) thisSite else blogName</span>
+<span class="nc" id="L511">            val notificationMessage = htmlMessageUtils</span>
+<span class="nc" id="L512">                    .getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L513">                            R.string.reader_followed_blog_notifications,</span>
+<span class="nc" id="L514">                            &quot;&lt;b&gt;&quot;,</span>
+<span class="nc" id="L515">                            blog,</span>
+<span class="nc" id="L516">                            &quot;&lt;/b&gt;&quot;</span>
+                    )
+<span class="nc" id="L518">            _snackbarEvents.postValue(</span>
+<span class="nc" id="L519">                    Event(</span>
+<span class="nc" id="L520">                            SnackbarMessageHolder(</span>
+<span class="nc" id="L521">                                    UiStringText(notificationMessage),</span>
+<span class="nc" id="L522">                                    UiStringRes(R.string.reader_followed_blog_notifications_action),</span>
+                                    buttonAction = {
+<span class="nc bnc" id="L524" title="All 4 branches missed.">                                        coroutineScope.launch(bgDispatcher) {</span>
+<span class="nc" id="L525">                                            readerTracker.trackBlog(</span>
+<span class="nc" id="L526">                                                    AnalyticsTracker.Stat.FOLLOWED_BLOG_NOTIFICATIONS_READER_ENABLED,</span>
+<span class="nc" id="L527">                                                    blogId,</span>
+<span class="nc" id="L528">                                                    feedId</span>
+                                            )
+<span class="nc" id="L530">                                            siteNotificationsUseCase.updateSubscription(blogId, NEW)</span>
+<span class="nc" id="L531">                                            siteNotificationsUseCase.updateNotificationEnabledForBlogInDb(blogId, true)</span>
+<span class="nc" id="L532">                                        }</span>
+<span class="nc" id="L533">                                    }</span>
+                            )
+                    )
+            )
+<span class="nc" id="L537">        }</span>
+    }
+
+    fun onCleared() {
+<span class="nc" id="L541">        dispatcher.unregister(siteNotificationsUseCase)</span>
+<span class="nc" id="L542">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

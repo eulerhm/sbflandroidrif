@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CsrfTokenClient.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.auth.csrf</a> &gt; <span class="el_source">CsrfTokenClient.kt</span></div><h1>CsrfTokenClient.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.auth.csrf
+
+import androidx.annotation.VisibleForTesting
+import fr.free.nrw.commons.auth.SessionManager
+import org.wikipedia.dataclient.mwapi.MwQueryResponse
+import fr.free.nrw.commons.auth.login.LoginClient
+import fr.free.nrw.commons.auth.login.LoginCallback
+import fr.free.nrw.commons.auth.login.LoginFailedException
+import fr.free.nrw.commons.auth.login.LoginResult
+import retrofit2.Call
+import retrofit2.Response
+import timber.log.Timber
+import java.io.IOException
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors.newSingleThreadExecutor
+
+<span class="nc" id="L17">class CsrfTokenClient(</span>
+<span class="nc" id="L18">    private val sessionManager: SessionManager,</span>
+<span class="nc" id="L19">    private val csrfTokenInterface: CsrfTokenInterface,</span>
+<span class="nc" id="L20">    private val loginClient: LoginClient,</span>
+<span class="nc" id="L21">    private val logoutClient: LogoutClient</span>
+) {
+    private var retries = 0
+    private var csrfTokenCall: Call&lt;MwQueryResponse?&gt;? = null
+
+    @Throws(Throwable::class)
+    fun getTokenBlocking(): String {
+<span class="nc" id="L28">        var token = &quot;&quot;</span>
+<span class="nc bnc" id="L29" title="All 2 branches missed.">        val userName = sessionManager.userName ?: &quot;&quot;</span>
+<span class="nc bnc" id="L30" title="All 2 branches missed.">        val password = sessionManager.password ?: &quot;&quot;</span>
+
+<span class="nc bnc" id="L32" title="All 2 branches missed.">        for (retry in 0 until MAX_RETRIES_OF_LOGIN_BLOCKING) {</span>
+<span class="nc" id="L33">            try {</span>
+<span class="nc bnc" id="L34" title="All 2 branches missed.">                if (retry &gt; 0) {</span>
+                    // Log in explicitly
+<span class="nc" id="L36">                    loginClient.loginBlocking(userName, password, &quot;&quot;)</span>
+                }
+
+                // Get CSRFToken response off the main thread.
+<span class="nc" id="L40">                val response = newSingleThreadExecutor().submit(Callable {</span>
+<span class="nc" id="L41">                    csrfTokenInterface.getCsrfTokenCall().execute()</span>
+<span class="nc" id="L42">                }).get()</span>
+
+<span class="nc bnc" id="L44" title="All 10 branches missed.">                if (response.body()?.query()?.csrfToken().isNullOrEmpty()) {</span>
+<span class="nc" id="L45">                    continue</span>
+                }
+
+<span class="nc" id="L48">                token = response.body()!!.query()!!.csrfToken()!!</span>
+<span class="nc bnc" id="L49" title="All 4 branches missed.">                if (sessionManager.isUserLoggedIn &amp;&amp; token == ANON_TOKEN) {</span>
+<span class="nc" id="L50">                    throw RuntimeException(&quot;App believes we're logged in, but got anonymous token.&quot;)</span>
+                }
+<span class="nc" id="L52">                break</span>
+<span class="nc" id="L53">            } catch (t: Throwable) {</span>
+<span class="nc" id="L54">                Timber.w(t)</span>
+            }
+        }
+
+<span class="nc bnc" id="L58" title="All 6 branches missed.">        if (token.isEmpty() || token == ANON_TOKEN) {</span>
+<span class="nc" id="L59">            throw IOException(&quot;Invalid token, or login failure.&quot;)</span>
+        }
+<span class="nc" id="L61">        return token</span>
+    }
+
+    @VisibleForTesting
+    fun request(service: CsrfTokenInterface, cb: Callback): Call&lt;MwQueryResponse?&gt; =
+<span class="nc" id="L66">        requestToken(service, object : Callback {</span>
+            override fun success(token: String?) {
+<span class="nc bnc" id="L68" title="All 4 branches missed.">                if (sessionManager.isUserLoggedIn &amp;&amp; token == ANON_TOKEN) {</span>
+<span class="nc" id="L69">                    retryWithLogin(cb) {</span>
+<span class="nc" id="L70">                        RuntimeException(&quot;App believes we're logged in, but got anonymous token.&quot;)</span>
+                    }
+                } else {
+<span class="nc" id="L73">                    cb.success(token)</span>
+                }
+<span class="nc" id="L75">            }</span>
+
+<span class="nc" id="L77">            override fun failure(caught: Throwable?) = retryWithLogin(cb) { caught }</span>
+
+<span class="nc" id="L79">            override fun twoFactorPrompt() = cb.twoFactorPrompt()</span>
+<span class="nc" id="L80">        })</span>
+
+    @VisibleForTesting
+    fun requestToken(service: CsrfTokenInterface, cb: Callback): Call&lt;MwQueryResponse?&gt; {
+<span class="nc" id="L84">        val call = service.getCsrfTokenCall()</span>
+<span class="nc" id="L85">        call.enqueue(object : retrofit2.Callback&lt;MwQueryResponse?&gt; {</span>
+            override fun onResponse(call: Call&lt;MwQueryResponse?&gt;, response: Response&lt;MwQueryResponse?&gt;) {
+<span class="nc bnc" id="L87" title="All 2 branches missed.">                if (call.isCanceled) {</span>
+<span class="nc" id="L88">                    return</span>
+                }
+<span class="nc" id="L90">                cb.success(response.body()!!.query()!!.csrfToken())</span>
+<span class="nc" id="L91">            }</span>
+
+            override fun onFailure(call: Call&lt;MwQueryResponse?&gt;, t: Throwable) {
+<span class="nc bnc" id="L94" title="All 2 branches missed.">                if (call.isCanceled) {</span>
+<span class="nc" id="L95">                    return</span>
+                }
+<span class="nc" id="L97">                cb.failure(t)</span>
+<span class="nc" id="L98">            }</span>
+        })
+<span class="nc" id="L100">        return call</span>
+    }
+
+    private fun retryWithLogin(callback: Callback, caught: () -&gt; Throwable?) {
+<span class="nc" id="L104">        val userName = sessionManager.userName</span>
+<span class="nc" id="L105">        val password = sessionManager.password</span>
+<span class="nc bnc" id="L106" title="All 14 branches missed.">        if (retries &lt; MAX_RETRIES &amp;&amp; !userName.isNullOrEmpty() &amp;&amp; !password.isNullOrEmpty()) {</span>
+<span class="nc" id="L107">            retries++</span>
+<span class="nc" id="L108">            logoutClient.logout()</span>
+<span class="nc" id="L109">            login(userName, password, callback) {</span>
+<span class="nc" id="L110">                Timber.i(&quot;retrying...&quot;)</span>
+<span class="nc" id="L111">                cancel()</span>
+<span class="nc" id="L112">                csrfTokenCall = request(csrfTokenInterface, callback)</span>
+<span class="nc" id="L113">            }</span>
+        } else {
+<span class="nc" id="L115">            callback.failure(caught())</span>
+        }
+<span class="nc" id="L117">    }</span>
+
+    private fun login(
+        username: String,
+        password: String,
+        callback: Callback,
+        retryCallback: () -&gt; Unit
+<span class="nc" id="L124">    ) = loginClient.request(username, password, object : LoginCallback {</span>
+        override fun success(loginResult: LoginResult) {
+<span class="nc bnc" id="L126" title="All 2 branches missed.">            if (loginResult.pass) {</span>
+<span class="nc" id="L127">                sessionManager.updateAccount(loginResult)</span>
+<span class="nc" id="L128">                retryCallback()</span>
+            } else {
+<span class="nc" id="L130">                callback.failure(LoginFailedException(loginResult.message))</span>
+            }
+<span class="nc" id="L132">        }</span>
+
+        override fun twoFactorPrompt(caught: Throwable, token: String?) =
+<span class="nc" id="L135">            callback.twoFactorPrompt()</span>
+
+        // Should not happen here, but call the callback just in case.
+        override fun passwordResetPrompt(token: String?) =
+<span class="nc" id="L139">            callback.failure(LoginFailedException(&quot;Logged in with temporary password.&quot;))</span>
+
+<span class="nc" id="L141">        override fun error(caught: Throwable) = callback.failure(caught)</span>
+<span class="nc" id="L142">    })</span>
+
+    private fun cancel() {
+<span class="nc" id="L145">        loginClient.cancel()</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">        if (csrfTokenCall != null) {</span>
+<span class="nc" id="L147">            csrfTokenCall!!.cancel()</span>
+<span class="nc" id="L148">            csrfTokenCall = null</span>
+        }
+<span class="nc" id="L150">    }</span>
+
+    interface Callback {
+        fun success(token: String?)
+        fun failure(caught: Throwable?)
+        fun twoFactorPrompt()
+    }
+
+    companion object {
+        private const val ANON_TOKEN = &quot;+\\&quot;
+        private const val MAX_RETRIES = 1
+        private const val MAX_RETRIES_OF_LOGIN_BLOCKING = 2
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

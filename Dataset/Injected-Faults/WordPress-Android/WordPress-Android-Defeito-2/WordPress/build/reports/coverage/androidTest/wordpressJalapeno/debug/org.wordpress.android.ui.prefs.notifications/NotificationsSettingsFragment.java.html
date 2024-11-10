@@ -1,0 +1,975 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>NotificationsSettingsFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.prefs.notifications</a> &gt; <span class="el_source">NotificationsSettingsFragment.java</span></div><h1>NotificationsSettingsFragment.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.prefs.notifications;
+
+import android.app.Activity;
+import android.app.Dialog;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.graphics.PorterDuff.Mode;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.preference.Preference;
+import android.preference.PreferenceCategory;
+import android.preference.PreferenceFragment;
+import android.preference.PreferenceManager;
+import android.preference.PreferenceScreen;
+import android.provider.Settings;
+import android.text.TextUtils;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.ListView;
+
+import androidx.annotation.DrawableRes;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.SearchView;
+import androidx.core.view.ViewCompat;
+import androidx.lifecycle.ViewModelProvider;
+
+import com.android.volley.VolleyError;
+import com.wordpress.rest.RestRequest;
+
+import org.greenrobot.eventbus.EventBus;
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.datasets.ReaderBlogTable;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.AccountActionBuilder;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.fluxc.store.AccountStore.AddOrDeleteSubscriptionPayload;
+import org.wordpress.android.fluxc.store.AccountStore.AddOrDeleteSubscriptionPayload.SubscriptionAction;
+import org.wordpress.android.fluxc.store.AccountStore.OnSubscriptionUpdated;
+import org.wordpress.android.fluxc.store.AccountStore.OnSubscriptionsChanged;
+import org.wordpress.android.fluxc.store.AccountStore.SubscriptionType;
+import org.wordpress.android.fluxc.store.AccountStore.UpdateSubscriptionPayload;
+import org.wordpress.android.fluxc.store.AccountStore.UpdateSubscriptionPayload.SubscriptionFrequency;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.models.NotificationsSettings;
+import org.wordpress.android.models.NotificationsSettings.Channel;
+import org.wordpress.android.models.NotificationsSettings.Type;
+import org.wordpress.android.ui.WPLaunchActivity;
+import org.wordpress.android.ui.bloggingreminders.BloggingReminderUtils;
+import org.wordpress.android.ui.bloggingreminders.BloggingRemindersViewModel;
+import org.wordpress.android.ui.notifications.NotificationEvents;
+import org.wordpress.android.ui.notifications.utils.NotificationsUtils;
+import org.wordpress.android.ui.prefs.notifications.FollowedBlogsProvider.PreferenceModel;
+import org.wordpress.android.ui.prefs.notifications.FollowedBlogsProvider.PreferenceModel.ClickHandler;
+import org.wordpress.android.ui.prefs.notifications.NotificationsSettingsDialogPreference.BloggingRemindersProvider;
+import org.wordpress.android.ui.utils.UiHelpers;
+import org.wordpress.android.ui.utils.UiString;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.BuildConfigWrapper;
+import org.wordpress.android.util.extensions.ContextExtensionsKt;
+import org.wordpress.android.util.SiteUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.ToastUtils.Duration;
+import org.wordpress.android.util.WPActivityUtils;
+import org.wordpress.android.util.config.BloggingRemindersFeatureConfig;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+import javax.inject.Inject;
+
+import static org.wordpress.android.fluxc.generated.AccountActionBuilder.newUpdateSubscriptionEmailCommentAction;
+import static org.wordpress.android.fluxc.generated.AccountActionBuilder.newUpdateSubscriptionEmailPostAction;
+import static org.wordpress.android.fluxc.generated.AccountActionBuilder.newUpdateSubscriptionEmailPostFrequencyAction;
+import static org.wordpress.android.fluxc.generated.AccountActionBuilder.newUpdateSubscriptionNotificationPostAction;
+import static org.wordpress.android.ui.RequestCodes.NOTIFICATION_SETTINGS;
+
+<span class="nc" id="L98">public class NotificationsSettingsFragment extends PreferenceFragment</span>
+        implements SharedPreferences.OnSharedPreferenceChangeListener {
+    private static final String KEY_SEARCH_QUERY = &quot;search_query&quot;;
+    private static final int SITE_SEARCH_VISIBILITY_COUNT = 15;
+    // The number of notification types we support (e.g. timeline, email, mobile)
+    private static final int TYPE_COUNT = 3;
+    private static final int NO_MAXIMUM = -1;
+    private static final int MAX_SITES_TO_SHOW_ON_FIRST_SCREEN = 3;
+
+    private NotificationsSettings mNotificationsSettings;
+    private SearchView mSearchView;
+    private MenuItem mSearchMenuItem;
+<span class="nc" id="L110">    private boolean mSearchMenuItemCollapsed = true;</span>
+
+    private String mDeviceId;
+    private String mNotificationUpdatedSite;
+    private String mPreviousEmailPostsFrequency;
+    private String mRestoredQuery;
+    private UpdateSubscriptionPayload mUpdateSubscriptionFrequencyPayload;
+    private boolean mNotificationsEnabled;
+    private boolean mPreviousEmailComments;
+    private boolean mPreviousEmailPosts;
+    private boolean mPreviousNotifyPosts;
+    private boolean mUpdateEmailPostsFirst;
+    private int mSiteCount;
+    private int mSubscriptionCount;
+
+<span class="nc" id="L125">    private final List&lt;PreferenceCategory&gt; mTypePreferenceCategories = new ArrayList&lt;&gt;();</span>
+    private PreferenceCategory mBlogsCategory;
+    @Nullable private PreferenceCategory mFollowedBlogsCategory;
+
+    @Inject AccountStore mAccountStore;
+    @Inject SiteStore mSiteStore;
+    @Inject Dispatcher mDispatcher;
+    @Inject FollowedBlogsProvider mFollowedBlogsProvider;
+    @Inject BuildConfigWrapper mBuildConfigWrapper;
+    @Inject ViewModelProvider.Factory mViewModelFactory;
+    @Inject BloggingRemindersFeatureConfig mBloggingRemindersFeatureConfig;
+    @Inject UiHelpers mUiHelpers;
+
+    private BloggingRemindersViewModel mBloggingRemindersViewModel;
+<span class="nc" id="L139">    private final Map&lt;Long, UiString&gt; mBloggingRemindersSummariesBySiteId = new HashMap&lt;&gt;();</span>
+
+    private static final String BLOGGING_REMINDERS_BOTTOM_SHEET_TAG = &quot;blogging-reminders-dialog-tag&quot;;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L145">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L146">        ((WordPress) getActivity().getApplication()).component().inject(this);</span>
+
+<span class="nc" id="L148">        addPreferencesFromResource(R.xml.notifications_settings);</span>
+<span class="nc" id="L149">        setHasOptionsMenu(true);</span>
+<span class="nc" id="L150">        removeSightAndSoundsForAPI26();</span>
+<span class="nc" id="L151">        removeFollowedBlogsPreferenceForIfDisabled();</span>
+
+        // Bump Analytics
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L155">            AnalyticsTracker.track(AnalyticsTracker.Stat.NOTIFICATION_SETTINGS_LIST_OPENED);</span>
+        }
+<span class="nc" id="L157">    }</span>
+
+    private void removeSightAndSoundsForAPI26() {
+        // on API26 we removed the Sight &amp; Sounds category altogether, as it can always be
+        // overriden by the user in the Device settings, and the settings here
+        // wouldn't either reflect nor have any effect anyway.
+<span class="nc bnc" id="L163" title="All 2 branches missed.">        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.O) {</span>
+<span class="nc" id="L164">            PreferenceScreen preferenceScreen =</span>
+<span class="nc" id="L165">                    (PreferenceScreen) findPreference(getActivity().getString(R.string.wp_pref_notifications_root));</span>
+
+<span class="nc" id="L167">            PreferenceCategory categorySightsAndSounds = (PreferenceCategory) preferenceScreen</span>
+<span class="nc" id="L168">                    .findPreference(getActivity().getString(R.string.pref_notification_sights_sounds));</span>
+<span class="nc" id="L169">            preferenceScreen.removePreference(categorySightsAndSounds);</span>
+        }
+<span class="nc" id="L171">    }</span>
+
+    private void removeFollowedBlogsPreferenceForIfDisabled() {
+<span class="nc bnc" id="L174" title="All 2 branches missed.">        if (!mBuildConfigWrapper.isFollowedSitesSettingsEnabled()) {</span>
+<span class="nc" id="L175">            PreferenceScreen preferenceScreen =</span>
+<span class="nc" id="L176">                (PreferenceScreen) findPreference(getActivity().getString(R.string.wp_pref_notifications_root));</span>
+
+<span class="nc" id="L178">            PreferenceCategory categoryFollowedBlogs = (PreferenceCategory) preferenceScreen</span>
+<span class="nc" id="L179">                    .findPreference(getActivity().getString(R.string.pref_notification_blogs_followed));</span>
+<span class="nc" id="L180">            preferenceScreen.removePreference(categoryFollowedBlogs);</span>
+        }
+<span class="nc" id="L182">    }</span>
+
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState) {
+<span class="nc" id="L186">        super.onActivityCreated(savedInstanceState);</span>
+
+<span class="nc" id="L188">        boolean isLoggedIn = mAccountStore.hasAccessToken();</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">        if (!isLoggedIn) {</span>
+            // Not logged in users can start Notification Settings from App info &gt; Notifications menu.
+            // If there isn't a logged in user, just show the entry screen.
+<span class="nc" id="L192">            Intent intent = new Intent(getContext(), WPLaunchActivity.class);</span>
+<span class="nc" id="L193">            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);</span>
+<span class="nc" id="L194">            startActivity(intent);</span>
+<span class="nc" id="L195">            getActivity().finish();</span>
+<span class="nc" id="L196">            return;</span>
+        }
+
+<span class="nc" id="L199">        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(getActivity());</span>
+<span class="nc" id="L200">        mDeviceId = settings.getString(NotificationsUtils.WPCOM_PUSH_DEVICE_SERVER_ID, &quot;&quot;);</span>
+
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        if (hasNotificationsSettings()) {</span>
+<span class="nc" id="L203">            loadNotificationsAndUpdateUI(true);</span>
+        }
+
+<span class="nc bnc" id="L206" title="All 4 branches missed.">        if (savedInstanceState != null &amp;&amp; savedInstanceState.containsKey(KEY_SEARCH_QUERY)) {</span>
+<span class="nc" id="L207">            mRestoredQuery = savedInstanceState.getString(KEY_SEARCH_QUERY);</span>
+        }
+<span class="nc" id="L209">    }</span>
+
+    @Override
+    public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
+<span class="nc" id="L213">        super.onViewCreated(view, savedInstanceState);</span>
+<span class="nc" id="L214">        final ListView lv = (ListView) view.findViewById(android.R.id.list);</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">        if (lv != null) {</span>
+<span class="nc" id="L216">            ViewCompat.setNestedScrollingEnabled(lv, true);</span>
+        }
+<span class="nc" id="L218">        initBloggingReminders();</span>
+<span class="nc" id="L219">    }</span>
+
+
+    @Override
+    public void onStart() {
+<span class="nc" id="L224">        super.onStart();</span>
+<span class="nc" id="L225">        mDispatcher.register(this);</span>
+<span class="nc" id="L226">        getPreferenceManager().getSharedPreferences().registerOnSharedPreferenceChangeListener(this);</span>
+<span class="nc" id="L227">    }</span>
+
+    @Override
+    public void onResume() {
+<span class="nc" id="L231">        super.onResume();</span>
+
+<span class="nc" id="L233">        mNotificationsEnabled = NotificationsUtils.isNotificationsEnabled(getActivity());</span>
+<span class="nc" id="L234">        refreshSettings();</span>
+<span class="nc" id="L235">    }</span>
+
+    @Override
+    public void onStop() {
+<span class="nc" id="L239">        super.onStop();</span>
+<span class="nc" id="L240">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L241">        getPreferenceManager().getSharedPreferences().unregisterOnSharedPreferenceChangeListener(this);</span>
+<span class="nc" id="L242">    }</span>
+
+    @Override
+    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
+<span class="nc" id="L246">        inflater.inflate(R.menu.notifications_settings, menu);</span>
+
+<span class="nc" id="L248">        mSearchMenuItem = menu.findItem(R.id.menu_notifications_settings_search);</span>
+<span class="nc" id="L249">        mSearchView = (SearchView) mSearchMenuItem.getActionView();</span>
+<span class="nc" id="L250">        mSearchView.setQueryHint(getString(R.string.search_sites));</span>
+<span class="nc" id="L251">        mBlogsCategory = (PreferenceCategory) findPreference(</span>
+<span class="nc" id="L252">                getString(R.string.pref_notification_blogs));</span>
+<span class="nc" id="L253">        mFollowedBlogsCategory = (PreferenceCategory) findPreference(</span>
+<span class="nc" id="L254">                getString(R.string.pref_notification_blogs_followed));</span>
+
+<span class="nc" id="L256">        mSearchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {</span>
+            @Override
+            public boolean onQueryTextSubmit(String query) {
+<span class="nc" id="L259">                configureBlogsSettings(mBlogsCategory, true);</span>
+<span class="nc" id="L260">                configureFollowedBlogsSettings(mFollowedBlogsCategory, true);</span>
+<span class="nc" id="L261">                return true;</span>
+            }
+
+            @Override
+            public boolean onQueryTextChange(String newText) {
+                // we need to perform this check because when the search menu item is collapsed
+                // a new queryTExtChange event is triggered with an empty value &quot;&quot;, and we only
+                // would want to take care of it when the user actively opened/cleared the search term
+<span class="nc bnc" id="L269" title="All 2 branches missed.">                configureBlogsSettings(mBlogsCategory, !mSearchMenuItemCollapsed);</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">                configureFollowedBlogsSettings(mFollowedBlogsCategory, !mSearchMenuItemCollapsed);</span>
+<span class="nc" id="L271">                return true;</span>
+            }
+        });
+
+<span class="nc" id="L275">        mSearchMenuItem.setOnActionExpandListener(new MenuItem.OnActionExpandListener() {</span>
+            @Override
+            public boolean onMenuItemActionExpand(MenuItem item) {
+<span class="nc" id="L278">                mSearchMenuItemCollapsed = false;</span>
+<span class="nc" id="L279">                configureBlogsSettings(mBlogsCategory, true);</span>
+<span class="nc" id="L280">                configureFollowedBlogsSettings(mFollowedBlogsCategory, true);</span>
+<span class="nc" id="L281">                return true;</span>
+            }
+
+            @Override
+            public boolean onMenuItemActionCollapse(MenuItem item) {
+<span class="nc" id="L286">                mSearchMenuItemCollapsed = true;</span>
+<span class="nc" id="L287">                configureBlogsSettings(mBlogsCategory, false);</span>
+<span class="nc" id="L288">                configureFollowedBlogsSettings(mFollowedBlogsCategory, false);</span>
+<span class="nc" id="L289">                return true;</span>
+            }
+        });
+
+<span class="nc" id="L293">        updateSearchMenuVisibility();</span>
+
+        // Check for a restored search query (if device was rotated, etc)
+<span class="nc bnc" id="L296" title="All 2 branches missed.">        if (!TextUtils.isEmpty(mRestoredQuery)) {</span>
+<span class="nc" id="L297">            mSearchMenuItem.expandActionView();</span>
+<span class="nc" id="L298">            mSearchView.setQuery(mRestoredQuery, true);</span>
+        }
+<span class="nc" id="L300">    }</span>
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+<span class="nc bnc" id="L304" title="All 4 branches missed.">        if (mSearchView != null &amp;&amp; !TextUtils.isEmpty(mSearchView.getQuery())) {</span>
+<span class="nc" id="L305">            outState.putString(KEY_SEARCH_QUERY, mSearchView.getQuery().toString());</span>
+        }
+
+<span class="nc" id="L308">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L309">    }</span>
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+<span class="nc" id="L313">        super.onActivityResult(requestCode, resultCode, data);</span>
+
+<span class="nc bnc" id="L315" title="All 4 branches missed.">        if (data != null &amp;&amp; requestCode == NOTIFICATION_SETTINGS) {</span>
+<span class="nc" id="L316">            boolean notifyPosts =</span>
+<span class="nc" id="L317">                    data.getBooleanExtra(NotificationSettingsFollowedDialog.KEY_NOTIFICATION_POSTS, false);</span>
+<span class="nc" id="L318">            boolean emailPosts =</span>
+<span class="nc" id="L319">                    data.getBooleanExtra(NotificationSettingsFollowedDialog.KEY_EMAIL_POSTS, false);</span>
+<span class="nc" id="L320">            String emailPostsFrequency =</span>
+<span class="nc" id="L321">                    data.getStringExtra(NotificationSettingsFollowedDialog.KEY_EMAIL_POSTS_FREQUENCY);</span>
+<span class="nc" id="L322">            boolean emailComments =</span>
+<span class="nc" id="L323">                    data.getBooleanExtra(NotificationSettingsFollowedDialog.KEY_EMAIL_COMMENTS, false);</span>
+
+<span class="nc bnc" id="L325" title="All 2 branches missed.">            if (notifyPosts != mPreviousNotifyPosts) {</span>
+<span class="nc" id="L326">                ReaderBlogTable.setNotificationsEnabledByBlogId(Long.parseLong(mNotificationUpdatedSite), notifyPosts);</span>
+                AddOrDeleteSubscriptionPayload payload;
+
+<span class="nc bnc" id="L329" title="All 2 branches missed.">                if (notifyPosts) {</span>
+<span class="nc" id="L330">                    AnalyticsTracker.track(Stat.FOLLOWED_BLOG_NOTIFICATIONS_SETTINGS_ON);</span>
+<span class="nc" id="L331">                    payload = new AddOrDeleteSubscriptionPayload(mNotificationUpdatedSite, SubscriptionAction.NEW);</span>
+                } else {
+<span class="nc" id="L333">                    AnalyticsTracker.track(Stat.FOLLOWED_BLOG_NOTIFICATIONS_SETTINGS_OFF);</span>
+<span class="nc" id="L334">                    payload = new AddOrDeleteSubscriptionPayload(mNotificationUpdatedSite, SubscriptionAction.DELETE);</span>
+                }
+
+<span class="nc" id="L337">                mDispatcher.dispatch(newUpdateSubscriptionNotificationPostAction(payload));</span>
+            }
+
+<span class="nc bnc" id="L340" title="All 2 branches missed.">            if (emailPosts != mPreviousEmailPosts) {</span>
+                AddOrDeleteSubscriptionPayload payload;
+
+<span class="nc bnc" id="L343" title="All 2 branches missed.">                if (emailPosts) {</span>
+<span class="nc" id="L344">                    AnalyticsTracker.track(Stat.FOLLOWED_BLOG_NOTIFICATIONS_SETTINGS_EMAIL_ON);</span>
+<span class="nc" id="L345">                    payload = new AddOrDeleteSubscriptionPayload(mNotificationUpdatedSite, SubscriptionAction.NEW);</span>
+                } else {
+<span class="nc" id="L347">                    AnalyticsTracker.track(Stat.FOLLOWED_BLOG_NOTIFICATIONS_SETTINGS_EMAIL_OFF);</span>
+<span class="nc" id="L348">                    payload = new AddOrDeleteSubscriptionPayload(mNotificationUpdatedSite, SubscriptionAction.DELETE);</span>
+                }
+
+<span class="nc" id="L351">                mDispatcher.dispatch(newUpdateSubscriptionEmailPostAction(payload));</span>
+            }
+
+<span class="nc bnc" id="L354" title="All 4 branches missed.">            if (emailPostsFrequency != null &amp;&amp; !emailPostsFrequency.equalsIgnoreCase(mPreviousEmailPostsFrequency)) {</span>
+<span class="nc" id="L355">                SubscriptionFrequency subscriptionFrequency = getSubscriptionFrequencyFromString(emailPostsFrequency);</span>
+<span class="nc" id="L356">                mUpdateSubscriptionFrequencyPayload = new UpdateSubscriptionPayload(mNotificationUpdatedSite,</span>
+                        subscriptionFrequency);
+                /*
+                 * The email post frequency update will be overridden by the email post update if the email post
+                 * frequency callback returns first.  Thus, the updates must be dispatched sequentially when the
+                 * email post update is switched from disabled to enabled.
+                 */
+<span class="nc bnc" id="L363" title="All 4 branches missed.">                if (emailPosts != mPreviousEmailPosts &amp;&amp; emailPosts) {</span>
+<span class="nc" id="L364">                    mUpdateEmailPostsFirst = true;</span>
+                } else {
+<span class="nc" id="L366">                    mDispatcher.dispatch(newUpdateSubscriptionEmailPostFrequencyAction(</span>
+                            mUpdateSubscriptionFrequencyPayload));
+                }
+            }
+
+<span class="nc bnc" id="L371" title="All 2 branches missed.">            if (emailComments != mPreviousEmailComments) {</span>
+                AddOrDeleteSubscriptionPayload payload;
+
+<span class="nc bnc" id="L374" title="All 2 branches missed.">                if (emailComments) {</span>
+<span class="nc" id="L375">                    AnalyticsTracker.track(Stat.FOLLOWED_BLOG_NOTIFICATIONS_SETTINGS_COMMENTS_ON);</span>
+<span class="nc" id="L376">                    payload = new AddOrDeleteSubscriptionPayload(mNotificationUpdatedSite, SubscriptionAction.NEW);</span>
+                } else {
+<span class="nc" id="L378">                    AnalyticsTracker.track(Stat.FOLLOWED_BLOG_NOTIFICATIONS_SETTINGS_COMMENTS_OFF);</span>
+<span class="nc" id="L379">                    payload = new AddOrDeleteSubscriptionPayload(mNotificationUpdatedSite, SubscriptionAction.DELETE);</span>
+                }
+
+<span class="nc" id="L382">                mDispatcher.dispatch(newUpdateSubscriptionEmailCommentAction(payload));</span>
+            }
+        }
+<span class="nc" id="L385">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onSubscriptionsChanged(OnSubscriptionsChanged event) {
+<span class="nc bnc" id="L390" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L391">            AppLog.e(T.API, &quot;NotificationsSettingsFragment.onSubscriptionsChanged: &quot; + event.error.message);</span>
+        } else {
+<span class="nc bnc" id="L393" title="All 2 branches missed.">            configureFollowedBlogsSettings(mFollowedBlogsCategory, !mSearchMenuItemCollapsed);</span>
+        }
+<span class="nc" id="L395">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onSubscriptionUpdated(OnSubscriptionUpdated event) {
+<span class="nc bnc" id="L400" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L401">            AppLog.e(T.API, &quot;NotificationsSettingsFragment.onSubscriptionUpdated: &quot; + event.error.message);</span>
+<span class="nc bnc" id="L402" title="All 4 branches missed.">        } else if (event.type == SubscriptionType.EMAIL_POST &amp;&amp; mUpdateEmailPostsFirst) {</span>
+<span class="nc" id="L403">            mUpdateEmailPostsFirst = false;</span>
+<span class="nc" id="L404">            mDispatcher.dispatch(newUpdateSubscriptionEmailPostFrequencyAction(mUpdateSubscriptionFrequencyPayload));</span>
+        } else {
+<span class="nc" id="L406">            mDispatcher.dispatch(AccountActionBuilder.newFetchSubscriptionsAction());</span>
+        }
+<span class="nc" id="L408">    }</span>
+
+    private SubscriptionFrequency getSubscriptionFrequencyFromString(String s) {
+<span class="nc bnc" id="L411" title="All 2 branches missed.">        if (s.equalsIgnoreCase(SubscriptionFrequency.DAILY.toString())) {</span>
+<span class="nc" id="L412">            AnalyticsTracker.track(Stat.FOLLOWED_BLOG_NOTIFICATIONS_SETTINGS_EMAIL_DAILY);</span>
+<span class="nc" id="L413">            return SubscriptionFrequency.DAILY;</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">        } else if (s.equalsIgnoreCase(SubscriptionFrequency.WEEKLY.toString())) {</span>
+<span class="nc" id="L415">            AnalyticsTracker.track(Stat.FOLLOWED_BLOG_NOTIFICATIONS_SETTINGS_EMAIL_WEEKLY);</span>
+<span class="nc" id="L416">            return SubscriptionFrequency.WEEKLY;</span>
+        } else {
+<span class="nc" id="L418">            AnalyticsTracker.track(Stat.FOLLOWED_BLOG_NOTIFICATIONS_SETTINGS_EMAIL_INSTANTLY);</span>
+<span class="nc" id="L419">            return SubscriptionFrequency.INSTANTLY;</span>
+        }
+    }
+
+    private void refreshSettings() {
+<span class="nc bnc" id="L424" title="All 2 branches missed.">        if (!hasNotificationsSettings()) {</span>
+<span class="nc" id="L425">            EventBus.getDefault()</span>
+<span class="nc" id="L426">                    .post(new NotificationEvents.NotificationsSettingsStatusChanged(getString(R.string.loading)));</span>
+        }
+
+<span class="nc bnc" id="L429" title="All 2 branches missed.">        if (hasNotificationsSettings()) {</span>
+<span class="nc" id="L430">            updateUIForNotificationsEnabledState();</span>
+        }
+
+<span class="nc bnc" id="L433" title="All 2 branches missed.">        if (!mAccountStore.hasAccessToken()) {</span>
+<span class="nc" id="L434">            return;</span>
+        }
+
+<span class="nc" id="L437">        NotificationsUtils.getPushNotificationSettings(getActivity(), new RestRequest.Listener() {</span>
+            @Override
+            public void onResponse(JSONObject response) {
+<span class="nc" id="L440">                AppLog.d(T.NOTIFS, &quot;Get settings action succeeded&quot;);</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">                if (!isAdded()) {</span>
+<span class="nc" id="L442">                    return;</span>
+                }
+
+<span class="nc" id="L445">                boolean settingsExisted = hasNotificationsSettings();</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">                if (!settingsExisted) {</span>
+<span class="nc" id="L447">                    EventBus.getDefault().post(new NotificationEvents.NotificationsSettingsStatusChanged(null));</span>
+                }
+
+<span class="nc" id="L450">                SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(getActivity());</span>
+<span class="nc" id="L451">                SharedPreferences.Editor editor = settings.edit();</span>
+<span class="nc" id="L452">                editor.putString(NotificationsUtils.WPCOM_PUSH_DEVICE_NOTIFICATION_SETTINGS, response.toString());</span>
+<span class="nc" id="L453">                editor.apply();</span>
+
+<span class="nc bnc" id="L455" title="All 2 branches missed.">                loadNotificationsAndUpdateUI(!settingsExisted);</span>
+<span class="nc" id="L456">                updateUIForNotificationsEnabledState();</span>
+<span class="nc" id="L457">            }</span>
+<span class="nc" id="L458">        }, new RestRequest.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError error) {
+<span class="nc bnc" id="L461" title="All 2 branches missed.">                if (!isAdded()) {</span>
+<span class="nc" id="L462">                    return;</span>
+                }
+<span class="nc" id="L464">                AppLog.e(T.NOTIFS, &quot;Get settings action failed&quot;, error);</span>
+
+<span class="nc bnc" id="L466" title="All 2 branches missed.">                if (!hasNotificationsSettings()) {</span>
+<span class="nc" id="L467">                    EventBus.getDefault().post(new NotificationEvents.NotificationsSettingsStatusChanged(</span>
+<span class="nc" id="L468">                            getString(R.string.error_loading_notifications)));</span>
+                }
+<span class="nc" id="L470">            }</span>
+        });
+<span class="nc" id="L472">    }</span>
+
+    private void loadNotificationsAndUpdateUI(boolean shouldUpdateUI) {
+        JSONObject settingsJson;
+        try {
+<span class="nc" id="L477">            SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getActivity());</span>
+<span class="nc" id="L478">            settingsJson = new JSONObject(</span>
+<span class="nc" id="L479">                    sharedPreferences.getString(NotificationsUtils.WPCOM_PUSH_DEVICE_NOTIFICATION_SETTINGS, &quot;&quot;)</span>
+            );
+<span class="nc" id="L481">        } catch (JSONException e) {</span>
+<span class="nc" id="L482">            AppLog.e(T.NOTIFS, &quot;Could not parse notifications settings JSON&quot;);</span>
+<span class="nc" id="L483">            return;</span>
+<span class="nc" id="L484">        }</span>
+
+<span class="nc bnc" id="L486" title="All 2 branches missed.">        if (mNotificationsSettings == null) {</span>
+<span class="nc" id="L487">            mNotificationsSettings = new NotificationsSettings(settingsJson);</span>
+        } else {
+<span class="nc" id="L489">            mNotificationsSettings.updateJson(settingsJson);</span>
+        }
+
+<span class="nc bnc" id="L492" title="All 2 branches missed.">        if (shouldUpdateUI) {</span>
+<span class="nc bnc" id="L493" title="All 2 branches missed.">            if (mBlogsCategory == null) {</span>
+<span class="nc" id="L494">                mBlogsCategory = (PreferenceCategory) findPreference(</span>
+<span class="nc" id="L495">                        getString(R.string.pref_notification_blogs));</span>
+            }
+
+<span class="nc bnc" id="L498" title="All 2 branches missed.">            if (mFollowedBlogsCategory == null) {</span>
+<span class="nc" id="L499">                mFollowedBlogsCategory = (PreferenceCategory) findPreference(</span>
+<span class="nc" id="L500">                        getString(R.string.pref_notification_blogs_followed));</span>
+            }
+
+<span class="nc" id="L503">            configureBlogsSettings(mBlogsCategory, false);</span>
+<span class="nc" id="L504">            configureFollowedBlogsSettings(mFollowedBlogsCategory, false);</span>
+<span class="nc" id="L505">            configureOtherSettings();</span>
+<span class="nc" id="L506">            configureWPComSettings();</span>
+        }
+<span class="nc" id="L508">    }</span>
+
+    private boolean hasNotificationsSettings() {
+<span class="nc" id="L511">        SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getActivity());</span>
+
+<span class="nc" id="L513">        return sharedPreferences.contains(NotificationsUtils.WPCOM_PUSH_DEVICE_NOTIFICATION_SETTINGS);</span>
+    }
+
+    // Updates the UI for preference screens based on if notifications are enabled or not
+    private void updateUIForNotificationsEnabledState() {
+<span class="nc bnc" id="L518" title="All 4 branches missed.">        if (mTypePreferenceCategories == null || mTypePreferenceCategories.size() == 0) {</span>
+<span class="nc" id="L519">            return;</span>
+        }
+
+<span class="nc bnc" id="L522" title="All 2 branches missed.">        for (final PreferenceCategory category : mTypePreferenceCategories) {</span>
+<span class="nc bnc" id="L523" title="All 4 branches missed.">            if (mNotificationsEnabled &amp;&amp; category.getPreferenceCount() &gt; TYPE_COUNT) {</span>
+<span class="nc" id="L524">                category.removePreference(category.getPreference(TYPE_COUNT));</span>
+<span class="nc bnc" id="L525" title="All 4 branches missed.">            } else if (!mNotificationsEnabled &amp;&amp; category.getPreferenceCount() == TYPE_COUNT) {</span>
+<span class="nc" id="L526">                Preference disabledMessage = new Preference(getActivity());</span>
+<span class="nc" id="L527">                disabledMessage.setSummary(R.string.notifications_disabled);</span>
+<span class="nc" id="L528">                disabledMessage.setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {</span>
+                    @Override
+                    public boolean onPreferenceClick(Preference preference) {
+<span class="nc" id="L531">                        Intent intent = new Intent();</span>
+<span class="nc" id="L532">                        intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);</span>
+<span class="nc" id="L533">                        Uri uri =</span>
+<span class="nc" id="L534">                                Uri.fromParts(&quot;package&quot;, getActivity().getApplicationContext().getPackageName(), null);</span>
+<span class="nc" id="L535">                        intent.setData(uri);</span>
+
+<span class="nc" id="L537">                        startActivity(intent);</span>
+<span class="nc" id="L538">                        return true;</span>
+                    }
+                });
+
+<span class="nc" id="L542">                category.addPreference(disabledMessage);</span>
+            }
+
+<span class="nc bnc" id="L545" title="All 2 branches missed.">            if (category.getPreferenceCount() &gt;= TYPE_COUNT</span>
+<span class="nc bnc" id="L546" title="All 2 branches missed.">                &amp;&amp; category.getPreference(TYPE_COUNT - 1) != null) {</span>
+<span class="nc" id="L547">                category.getPreference(TYPE_COUNT - 1).setEnabled(mNotificationsEnabled);</span>
+            }
+<span class="nc" id="L549">        }</span>
+<span class="nc" id="L550">    }</span>
+
+    private void configureBlogsSettings(PreferenceCategory blogsCategory, boolean showAll) {
+<span class="nc bnc" id="L553" title="All 2 branches missed.">        if (!isAdded()) {</span>
+<span class="nc" id="L554">            return;</span>
+        }
+
+        List&lt;SiteModel&gt; sites;
+<span class="nc" id="L558">        String trimmedQuery = &quot;&quot;;</span>
+<span class="nc bnc" id="L559" title="All 4 branches missed.">        if (mSearchView != null &amp;&amp; !TextUtils.isEmpty(mSearchView.getQuery())) {</span>
+<span class="nc" id="L560">            trimmedQuery = mSearchView.getQuery().toString().trim();</span>
+<span class="nc" id="L561">            sites = mSiteStore.getSitesAccessedViaWPComRestByNameOrUrlMatching(trimmedQuery);</span>
+        } else {
+<span class="nc" id="L563">            sites = mSiteStore.getSitesAccessedViaWPComRest();</span>
+        }
+<span class="nc" id="L565">        mSiteCount = sites.size();</span>
+
+<span class="nc bnc" id="L567" title="All 2 branches missed.">        if (mSiteCount &gt; 0) {</span>
+<span class="nc" id="L568">            Collections.sort(sites, new Comparator&lt;SiteModel&gt;() {</span>
+                @Override public int compare(SiteModel o1, SiteModel o2) {
+<span class="nc" id="L570">                    return SiteUtils.getSiteNameOrHomeURL(o1).compareToIgnoreCase(SiteUtils.getSiteNameOrHomeURL(o2));</span>
+                }
+            });
+        }
+
+<span class="nc" id="L575">        Context context = getActivity();</span>
+
+<span class="nc" id="L577">        blogsCategory.removeAll();</span>
+
+<span class="nc bnc" id="L579" title="All 2 branches missed.">        int maxSitesToShow = showAll ? NO_MAXIMUM : MAX_SITES_TO_SHOW_ON_FIRST_SCREEN;</span>
+<span class="nc" id="L580">        int count = 0;</span>
+<span class="nc bnc" id="L581" title="All 2 branches missed.">        for (SiteModel site : sites) {</span>
+<span class="nc bnc" id="L582" title="All 2 branches missed.">            if (context == null) {</span>
+<span class="nc" id="L583">                return;</span>
+            }
+
+<span class="nc" id="L586">            count++;</span>
+<span class="nc bnc" id="L587" title="All 4 branches missed.">            if (maxSitesToShow != NO_MAXIMUM &amp;&amp; count &gt; maxSitesToShow) {</span>
+<span class="nc" id="L588">                break;</span>
+            }
+
+<span class="nc" id="L591">            PreferenceScreen prefScreen = getPreferenceManager().createPreferenceScreen(context);</span>
+<span class="nc" id="L592">            prefScreen.setTitle(SiteUtils.getSiteNameOrHomeURL(site));</span>
+<span class="nc" id="L593">            prefScreen.setSummary(SiteUtils.getHomeURLOrHostName(site));</span>
+<span class="nc" id="L594">            addPreferencesForPreferenceScreen(prefScreen, Channel.BLOGS, site.getSiteId());</span>
+<span class="nc" id="L595">            blogsCategory.addPreference(prefScreen);</span>
+<span class="nc" id="L596">        }</span>
+
+        // Add a message in a preference if there are no matching search results
+<span class="nc bnc" id="L599" title="All 4 branches missed.">        if (mSiteCount == 0 &amp;&amp; !TextUtils.isEmpty(trimmedQuery)) {</span>
+<span class="nc" id="L600">            Preference searchResultsPref = new Preference(context);</span>
+<span class="nc" id="L601">            searchResultsPref</span>
+<span class="nc" id="L602">                    .setSummary(String.format(getString(R.string.notifications_no_search_results), trimmedQuery));</span>
+<span class="nc" id="L603">            blogsCategory.addPreference(searchResultsPref);</span>
+        }
+
+<span class="nc bnc" id="L606" title="All 4 branches missed.">        if (mSiteCount &gt; maxSitesToShow &amp;&amp; !showAll) {</span>
+            // append a &quot;view all&quot; option
+<span class="nc" id="L608">            appendViewAllSitesOption(context, getString(R.string.pref_notification_blogs), false);</span>
+        }
+
+<span class="nc" id="L611">        updateSearchMenuVisibility();</span>
+<span class="nc" id="L612">    }</span>
+
+    private void configureFollowedBlogsSettings(@Nullable PreferenceCategory blogsCategory, final boolean showAll) {
+<span class="nc bnc" id="L615" title="All 4 branches missed.">        if (!isAdded() || blogsCategory == null) {</span>
+<span class="nc" id="L616">            return;</span>
+        }
+
+        List&lt;PreferenceModel&gt; models;
+<span class="nc" id="L620">        String query = &quot;&quot;;</span>
+
+<span class="nc bnc" id="L622" title="All 4 branches missed.">        if (mSearchView != null &amp;&amp; !TextUtils.isEmpty(mSearchView.getQuery())) {</span>
+<span class="nc" id="L623">            query = mSearchView.getQuery().toString().trim();</span>
+<span class="nc" id="L624">            models = mFollowedBlogsProvider.getAllFollowedBlogs(query);</span>
+        } else {
+<span class="nc" id="L626">            models = mFollowedBlogsProvider.getAllFollowedBlogs(null);</span>
+        }
+
+<span class="nc" id="L629">        Context context = getActivity();</span>
+<span class="nc" id="L630">        blogsCategory.removeAll();</span>
+
+<span class="nc bnc" id="L632" title="All 2 branches missed.">        int maxSitesToShow = showAll ? NO_MAXIMUM : MAX_SITES_TO_SHOW_ON_FIRST_SCREEN;</span>
+<span class="nc" id="L633">        mSubscriptionCount = 0;</span>
+
+<span class="nc bnc" id="L635" title="All 2 branches missed.">        if (models.size() &gt; 0) {</span>
+<span class="nc" id="L636">            Collections.sort(models, (o1, o2) -&gt; o1.getTitle().compareToIgnoreCase(o2.getTitle()));</span>
+        }
+
+<span class="nc bnc" id="L639" title="All 2 branches missed.">        for (final PreferenceModel preferenceModel : models) {</span>
+<span class="nc bnc" id="L640" title="All 2 branches missed.">            if (context == null) {</span>
+<span class="nc" id="L641">                return;</span>
+            }
+
+<span class="nc" id="L644">            mSubscriptionCount++;</span>
+
+<span class="nc bnc" id="L646" title="All 4 branches missed.">            if (!showAll &amp;&amp; mSubscriptionCount &gt; maxSitesToShow) {</span>
+<span class="nc" id="L647">                break;</span>
+            }
+
+<span class="nc" id="L650">            PreferenceScreen prefScreen = getPreferenceManager().createPreferenceScreen(context);</span>
+<span class="nc" id="L651">            prefScreen.setTitle(preferenceModel.getTitle());</span>
+<span class="nc" id="L652">            prefScreen.setSummary(preferenceModel.getSummary());</span>
+
+<span class="nc" id="L654">            ClickHandler clickHandler = preferenceModel.getClickHandler();</span>
+<span class="nc bnc" id="L655" title="All 2 branches missed.">            if (clickHandler != null) {</span>
+<span class="nc" id="L656">                prefScreen.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc" id="L657">                    mNotificationUpdatedSite = preferenceModel.getBlogId();</span>
+<span class="nc" id="L658">                    mPreviousNotifyPosts = clickHandler.getShouldNotifyPosts();</span>
+<span class="nc" id="L659">                    mPreviousEmailPosts = clickHandler.getShouldEmailPosts();</span>
+<span class="nc" id="L660">                    mPreviousEmailPostsFrequency = clickHandler.getEmailPostFrequency();</span>
+<span class="nc" id="L661">                    mPreviousEmailComments = clickHandler.getShouldEmailComments();</span>
+<span class="nc" id="L662">                    NotificationSettingsFollowedDialog dialog = new NotificationSettingsFollowedDialog();</span>
+<span class="nc" id="L663">                    Bundle args = new Bundle();</span>
+<span class="nc" id="L664">                    args.putBoolean(NotificationSettingsFollowedDialog.ARG_NOTIFICATION_POSTS,</span>
+                            mPreviousNotifyPosts);
+<span class="nc" id="L666">                    args.putBoolean(NotificationSettingsFollowedDialog.ARG_EMAIL_POSTS,</span>
+                            mPreviousEmailPosts);
+<span class="nc" id="L668">                    args.putString(NotificationSettingsFollowedDialog.ARG_EMAIL_POSTS_FREQUENCY,</span>
+                            mPreviousEmailPostsFrequency);
+<span class="nc" id="L670">                    args.putBoolean(NotificationSettingsFollowedDialog.ARG_EMAIL_COMMENTS,</span>
+                            mPreviousEmailComments);
+<span class="nc" id="L672">                    dialog.setArguments(args);</span>
+<span class="nc" id="L673">                    dialog.setTargetFragment(NotificationsSettingsFragment.this, NOTIFICATION_SETTINGS);</span>
+<span class="nc" id="L674">                    dialog.show(getFragmentManager(), NotificationSettingsFollowedDialog.TAG);</span>
+<span class="nc" id="L675">                    return true;</span>
+                });
+            } else {
+<span class="nc" id="L678">                prefScreen.setEnabled(false);</span>
+            }
+
+<span class="nc" id="L681">            blogsCategory.addPreference(prefScreen);</span>
+<span class="nc" id="L682">        }</span>
+
+        // Add message if there are no matching search results.
+<span class="nc bnc" id="L685" title="All 4 branches missed.">        if (mSubscriptionCount == 0 &amp;&amp; !TextUtils.isEmpty(query)) {</span>
+<span class="nc" id="L686">            Preference searchResultsPref = new Preference(context);</span>
+<span class="nc" id="L687">            searchResultsPref.setSummary(String.format(getString(R.string.notifications_no_search_results), query));</span>
+<span class="nc" id="L688">            blogsCategory.addPreference(searchResultsPref);</span>
+        }
+
+        // Add view all entry when more sites than maximum to show.
+<span class="nc bnc" id="L692" title="All 4 branches missed.">        if (!showAll &amp;&amp; mSubscriptionCount &gt; maxSitesToShow) {</span>
+<span class="nc" id="L693">            appendViewAllSitesOption(context, getString(R.string.pref_notification_blogs_followed), true);</span>
+        }
+
+<span class="nc" id="L696">        updateSearchMenuVisibility();</span>
+<span class="nc" id="L697">    }</span>
+
+    private void appendViewAllSitesOption(Context context, String preference, boolean isFollowed) {
+<span class="nc" id="L700">        PreferenceCategory blogsCategory = (PreferenceCategory) findPreference(preference);</span>
+
+<span class="nc" id="L702">        PreferenceScreen prefScreen = getPreferenceManager().createPreferenceScreen(context);</span>
+<span class="nc bnc" id="L703" title="All 2 branches missed.">        prefScreen.setTitle(isFollowed ? R.string.notification_settings_item_your_sites_all_followed_sites</span>
+<span class="nc" id="L704">                : R.string.notification_settings_item_your_sites_all_your_sites);</span>
+<span class="nc" id="L705">        addSitesForViewAllSitesScreen(prefScreen, isFollowed);</span>
+<span class="nc" id="L706">        blogsCategory.addPreference(prefScreen);</span>
+<span class="nc" id="L707">    }</span>
+
+    private void updateSearchMenuVisibility() {
+        // Show the search menu item in the toolbar if we have enough sites
+<span class="nc bnc" id="L711" title="All 2 branches missed.">        if (mSearchMenuItem != null) {</span>
+<span class="nc bnc" id="L712" title="All 4 branches missed.">            mSearchMenuItem.setVisible(mSiteCount &gt; SITE_SEARCH_VISIBILITY_COUNT</span>
+                                       || mSubscriptionCount &gt; SITE_SEARCH_VISIBILITY_COUNT);
+        }
+<span class="nc" id="L715">    }</span>
+
+    private void configureOtherSettings() {
+<span class="nc" id="L718">        PreferenceScreen otherBlogsScreen = (PreferenceScreen) findPreference(</span>
+<span class="nc" id="L719">                getString(R.string.pref_notification_other_blogs));</span>
+<span class="nc" id="L720">        addPreferencesForPreferenceScreen(otherBlogsScreen, Channel.OTHER, 0);</span>
+<span class="nc" id="L721">    }</span>
+
+    private void configureWPComSettings() {
+<span class="nc" id="L724">        PreferenceCategory otherPreferenceCategory = (PreferenceCategory) findPreference(</span>
+<span class="nc" id="L725">                getString(R.string.pref_notification_other_category));</span>
+<span class="nc" id="L726">        NotificationsSettingsDialogPreference devicePreference = new NotificationsSettingsDialogPreference(</span>
+<span class="nc" id="L727">                getActivity(), null, Channel.WPCOM, NotificationsSettings.Type.DEVICE, 0, mNotificationsSettings,</span>
+                mOnSettingsChangedListener
+        );
+<span class="nc" id="L730">        devicePreference.setTitle(R.string.notification_settings_item_other_account_emails);</span>
+<span class="nc" id="L731">        devicePreference.setDialogTitle(R.string.notification_settings_item_other_account_emails);</span>
+<span class="nc" id="L732">        devicePreference.setSummary(R.string.notification_settings_item_other_account_emails_summary);</span>
+<span class="nc" id="L733">        otherPreferenceCategory.addPreference(devicePreference);</span>
+<span class="nc" id="L734">    }</span>
+
+    private void addPreferencesForPreferenceScreen(PreferenceScreen preferenceScreen, Channel channel, long blogId) {
+<span class="nc" id="L737">        Context context = getActivity();</span>
+<span class="nc bnc" id="L738" title="All 2 branches missed.">        if (context == null) {</span>
+<span class="nc" id="L739">            return;</span>
+        }
+
+<span class="nc" id="L742">        PreferenceCategory rootCategory = new PreferenceCategory(context);</span>
+<span class="nc" id="L743">        rootCategory.setTitle(R.string.notification_types);</span>
+<span class="nc" id="L744">        preferenceScreen.addPreference(rootCategory);</span>
+
+<span class="nc" id="L746">        NotificationsSettingsDialogPreference timelinePreference = new NotificationsSettingsDialogPreference(</span>
+                context, null, channel, NotificationsSettings.Type.TIMELINE, blogId, mNotificationsSettings,
+                mOnSettingsChangedListener
+        );
+
+<span class="nc" id="L751">        setPreferenceIcon(timelinePreference, R.drawable.ic_bell_white_24dp);</span>
+<span class="nc" id="L752">        timelinePreference.setTitle(R.string.notifications_tab);</span>
+<span class="nc" id="L753">        timelinePreference.setDialogTitle(R.string.notifications_tab);</span>
+<span class="nc" id="L754">        timelinePreference.setSummary(R.string.notifications_tab_summary);</span>
+<span class="nc" id="L755">        rootCategory.addPreference(timelinePreference);</span>
+
+<span class="nc" id="L757">        NotificationsSettingsDialogPreference emailPreference = new NotificationsSettingsDialogPreference(</span>
+                context, null, channel, NotificationsSettings.Type.EMAIL, blogId, mNotificationsSettings,
+                mOnSettingsChangedListener
+        );
+
+<span class="nc" id="L762">        setPreferenceIcon(emailPreference, R.drawable.ic_mail_white_24dp);</span>
+<span class="nc" id="L763">        emailPreference.setTitle(R.string.email);</span>
+<span class="nc" id="L764">        emailPreference.setDialogTitle(R.string.email);</span>
+<span class="nc" id="L765">        emailPreference.setSummary(R.string.notifications_email_summary);</span>
+<span class="nc" id="L766">        rootCategory.addPreference(emailPreference);</span>
+
+<span class="nc" id="L768">        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(context);</span>
+<span class="nc" id="L769">        String deviceID = settings.getString(NotificationsUtils.WPCOM_PUSH_DEVICE_SERVER_ID, null);</span>
+<span class="nc bnc" id="L770" title="All 2 branches missed.">        if (!TextUtils.isEmpty(deviceID)) {</span>
+<span class="nc" id="L771">            NotificationsSettingsDialogPreference devicePreference = new NotificationsSettingsDialogPreference(</span>
+                    context, null, channel, NotificationsSettings.Type.DEVICE, blogId, mNotificationsSettings,
+                    mOnSettingsChangedListener, mBloggingRemindersProvider
+            );
+<span class="nc" id="L775">            setPreferenceIcon(devicePreference, R.drawable.ic_phone_white_24dp);</span>
+<span class="nc" id="L776">            devicePreference.setTitle(R.string.app_notifications);</span>
+<span class="nc" id="L777">            devicePreference.setDialogTitle(R.string.app_notifications);</span>
+<span class="nc" id="L778">            devicePreference.setSummary(R.string.notifications_push_summary);</span>
+<span class="nc" id="L779">            devicePreference.setEnabled(mNotificationsEnabled);</span>
+<span class="nc" id="L780">            rootCategory.addPreference(devicePreference);</span>
+        }
+
+<span class="nc" id="L783">        mTypePreferenceCategories.add(rootCategory);</span>
+<span class="nc" id="L784">    }</span>
+
+    private void setPreferenceIcon(NotificationsSettingsDialogPreference preference, @DrawableRes int drawableRes) {
+<span class="nc" id="L787">        preference.setIcon(drawableRes);</span>
+<span class="nc" id="L788">        preference.getIcon().setTintMode(Mode.SRC_IN);</span>
+<span class="nc" id="L789">        preference.getIcon().setTintList(ContextExtensionsKt</span>
+<span class="nc" id="L790">                .getColorStateListFromAttribute(preference.getContext(), R.attr.wpColorOnSurfaceMedium));</span>
+<span class="nc" id="L791">    }</span>
+
+    private void addSitesForViewAllSitesScreen(PreferenceScreen preferenceScreen, boolean isFollowed) {
+<span class="nc" id="L794">        Context context = getActivity();</span>
+<span class="nc bnc" id="L795" title="All 2 branches missed.">        if (context == null) {</span>
+<span class="nc" id="L796">            return;</span>
+        }
+
+<span class="nc" id="L799">        PreferenceCategory rootCategory = new PreferenceCategory(context);</span>
+<span class="nc bnc" id="L800" title="All 2 branches missed.">        rootCategory.setTitle(isFollowed ? R.string.notification_settings_category_followed_sites</span>
+<span class="nc" id="L801">                : R.string.notification_settings_category_your_sites);</span>
+<span class="nc" id="L802">        preferenceScreen.addPreference(rootCategory);</span>
+
+<span class="nc bnc" id="L804" title="All 2 branches missed.">        if (isFollowed) {</span>
+<span class="nc" id="L805">            configureFollowedBlogsSettings(rootCategory, true);</span>
+        } else {
+<span class="nc" id="L807">            configureBlogsSettings(rootCategory, true);</span>
+        }
+<span class="nc" id="L809">    }</span>
+
+<span class="nc" id="L811">    private final NotificationsSettingsDialogPreference.OnNotificationsSettingsChangedListener</span>
+            mOnSettingsChangedListener =
+<span class="nc" id="L813">            new NotificationsSettingsDialogPreference.OnNotificationsSettingsChangedListener() {</span>
+                @SuppressWarnings(&quot;unchecked&quot;)
+                @Override
+                public void onSettingsChanged(Channel channel, NotificationsSettings.Type type, long blogId,
+                                              JSONObject newValues) {
+<span class="nc bnc" id="L818" title="All 2 branches missed.">                    if (!isAdded()) {</span>
+<span class="nc" id="L819">                        return;</span>
+                    }
+
+                    // Construct a new settings JSONObject to send back to WP.com
+<span class="nc" id="L823">                    JSONObject settingsObject = new JSONObject();</span>
+<span class="nc bnc" id="L824" title="All 4 branches missed.">                    switch (channel) {</span>
+                        case BLOGS:
+                            try {
+<span class="nc" id="L827">                                JSONObject blogObject = new JSONObject();</span>
+<span class="nc" id="L828">                                blogObject.put(NotificationsSettings.KEY_BLOG_ID, blogId);</span>
+
+<span class="nc" id="L830">                                JSONArray blogsArray = new JSONArray();</span>
+<span class="nc bnc" id="L831" title="All 2 branches missed.">                                if (type == Type.DEVICE) {</span>
+<span class="nc" id="L832">                                    newValues.put(NotificationsSettings.KEY_DEVICE_ID, Long.parseLong(mDeviceId));</span>
+<span class="nc" id="L833">                                    JSONArray devicesArray = new JSONArray();</span>
+<span class="nc" id="L834">                                    devicesArray.put(newValues);</span>
+<span class="nc" id="L835">                                    blogObject.put(NotificationsSettings.KEY_DEVICES, devicesArray);</span>
+<span class="nc" id="L836">                                    blogsArray.put(blogObject);</span>
+<span class="nc" id="L837">                                } else {</span>
+<span class="nc" id="L838">                                    blogObject.put(type.toString(), newValues);</span>
+<span class="nc" id="L839">                                    blogsArray.put(blogObject);</span>
+                                }
+
+<span class="nc" id="L842">                                settingsObject.put(NotificationsSettings.KEY_BLOGS, blogsArray);</span>
+<span class="nc" id="L843">                            } catch (JSONException e) {</span>
+<span class="nc" id="L844">                                AppLog.e(T.NOTIFS, &quot;Could not build notification settings object&quot;);</span>
+<span class="nc" id="L845">                            }</span>
+<span class="nc" id="L846">                            break;</span>
+                        case OTHER:
+                            try {
+<span class="nc" id="L849">                                JSONObject otherObject = new JSONObject();</span>
+<span class="nc bnc" id="L850" title="All 2 branches missed.">                                if (type == Type.DEVICE) {</span>
+<span class="nc" id="L851">                                    newValues.put(NotificationsSettings.KEY_DEVICE_ID, Long.parseLong(mDeviceId));</span>
+<span class="nc" id="L852">                                    JSONArray devicesArray = new JSONArray();</span>
+<span class="nc" id="L853">                                    devicesArray.put(newValues);</span>
+<span class="nc" id="L854">                                    otherObject.put(NotificationsSettings.KEY_DEVICES, devicesArray);</span>
+<span class="nc" id="L855">                                } else {</span>
+<span class="nc" id="L856">                                    otherObject.put(type.toString(), newValues);</span>
+                                }
+
+<span class="nc" id="L859">                                settingsObject.put(NotificationsSettings.KEY_OTHER, otherObject);</span>
+<span class="nc" id="L860">                            } catch (JSONException e) {</span>
+<span class="nc" id="L861">                                AppLog.e(T.NOTIFS, &quot;Could not build notification settings object&quot;);</span>
+<span class="nc" id="L862">                            }</span>
+<span class="nc" id="L863">                            break;</span>
+                        case WPCOM:
+                            try {
+<span class="nc" id="L866">                                settingsObject.put(NotificationsSettings.KEY_WPCOM, newValues);</span>
+<span class="nc" id="L867">                            } catch (JSONException e) {</span>
+<span class="nc" id="L868">                                AppLog.e(T.NOTIFS, &quot;Could not build notification settings object&quot;);</span>
+<span class="nc" id="L869">                            }</span>
+                            break;
+                    }
+
+<span class="nc bnc" id="L873" title="All 2 branches missed.">                    if (settingsObject.length() &gt; 0) {</span>
+<span class="nc" id="L874">                        WordPress.getRestClientUtilsV1_1()</span>
+<span class="nc" id="L875">                                 .post(&quot;/me/notifications/settings&quot;, settingsObject, null, null, null);</span>
+                    }
+<span class="nc" id="L877">                }</span>
+            };
+
+    @Override
+    public boolean onPreferenceTreeClick(PreferenceScreen preferenceScreen, @NonNull Preference preference) {
+<span class="nc" id="L882">        super.onPreferenceTreeClick(preferenceScreen, preference);</span>
+
+<span class="nc bnc" id="L884" title="All 2 branches missed.">        if (preference instanceof PreferenceScreen) {</span>
+<span class="nc" id="L885">            Dialog prefDialog = ((PreferenceScreen) preference).getDialog();</span>
+<span class="nc bnc" id="L886" title="All 2 branches missed.">            if (prefDialog != null) {</span>
+<span class="nc" id="L887">                String title = String.valueOf(preference.getTitle());</span>
+<span class="nc" id="L888">                WPActivityUtils.addToolbarToDialog(this, prefDialog, title);</span>
+            }
+<span class="nc" id="L890">            AnalyticsTracker.track(AnalyticsTracker.Stat.NOTIFICATION_SETTINGS_STREAMS_OPENED);</span>
+<span class="nc" id="L891">        } else {</span>
+<span class="nc" id="L892">            AnalyticsTracker.track(AnalyticsTracker.Stat.NOTIFICATION_SETTINGS_DETAILS_OPENED);</span>
+        }
+
+<span class="nc" id="L895">        return false;</span>
+    }
+
+    @Override
+    public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
+<span class="nc bnc" id="L900" title="All 2 branches missed.">        if (key.equals(getString(R.string.pref_key_notification_pending_drafts))) {</span>
+<span class="nc bnc" id="L901" title="All 2 branches missed.">            if (getActivity() != null) {</span>
+<span class="nc" id="L902">                SharedPreferences prefs =</span>
+<span class="nc" id="L903">                        androidx.preference.PreferenceManager.getDefaultSharedPreferences(getActivity());</span>
+<span class="nc" id="L904">                boolean shouldNotifyOfPendingDrafts = prefs.getBoolean(&quot;wp_pref_notification_pending_drafts&quot;, true);</span>
+<span class="nc bnc" id="L905" title="All 2 branches missed.">                if (shouldNotifyOfPendingDrafts) {</span>
+<span class="nc" id="L906">                    AnalyticsTracker.track(AnalyticsTracker.Stat.NOTIFICATION_PENDING_DRAFTS_SETTINGS_ENABLED);</span>
+                } else {
+<span class="nc" id="L908">                    AnalyticsTracker.track(AnalyticsTracker.Stat.NOTIFICATION_PENDING_DRAFTS_SETTINGS_DISABLED);</span>
+                }
+<span class="nc" id="L910">            }</span>
+<span class="nc bnc" id="L911" title="All 2 branches missed.">        } else if (key.equals(getString(R.string.wp_pref_custom_notification_sound))) {</span>
+<span class="nc" id="L912">            final String defaultPath =</span>
+<span class="nc" id="L913">                    getString(R.string.notification_settings_item_sights_and_sounds_choose_sound_default);</span>
+<span class="nc" id="L914">            final String value = sharedPreferences.getString(key, defaultPath);</span>
+
+<span class="nc bnc" id="L916" title="All 2 branches missed.">            if (value.trim().toLowerCase(Locale.ROOT).startsWith(&quot;file://&quot;)) {</span>
+                // sound path begins with 'file://` which will lead to FileUriExposedException when used. Revert to
+                //  default and let the user know.
+<span class="nc" id="L919">                AppLog.w(T.NOTIFS, &quot;Notification sound starts with unacceptable scheme: &quot; + value);</span>
+
+<span class="nc" id="L921">                Context context = WordPress.getContext();</span>
+<span class="nc bnc" id="L922" title="All 2 branches missed.">                if (context != null) {</span>
+                    // let the user know we won't be using the selected sound
+<span class="nc" id="L924">                    ToastUtils.showToast(context, R.string.notification_sound_has_invalid_path, Duration.LONG);</span>
+                }
+            }
+        }
+<span class="nc" id="L928">    }</span>
+
+    @Nullable
+    private AppCompatActivity getAppCompatActivity() {
+<span class="nc" id="L932">        final Activity activity = getActivity();</span>
+<span class="nc bnc" id="L933" title="All 2 branches missed.">        if (activity instanceof AppCompatActivity) {</span>
+<span class="nc" id="L934">            return (AppCompatActivity) activity;</span>
+        }
+<span class="nc" id="L936">        return null;</span>
+    }
+
+<span class="nc" id="L939">    private final BloggingRemindersProvider mBloggingRemindersProvider = new BloggingRemindersProvider() {</span>
+        @Override public boolean isEnabled() {
+<span class="nc" id="L941">            return mBloggingRemindersFeatureConfig.isEnabled();</span>
+        }
+
+        @Override public String getSummary(long blogId) {
+<span class="nc" id="L945">            UiString uiString = mBloggingRemindersSummariesBySiteId.get(blogId);</span>
+<span class="nc bnc" id="L946" title="All 2 branches missed.">            return uiString != null ? mUiHelpers.getTextOfUiString(getContext(), uiString).toString() : null;</span>
+        }
+
+        @Override public void onClick(long blogId) {
+<span class="nc" id="L950">            mBloggingRemindersViewModel.onNotificationSettingsItemClicked(blogId);</span>
+<span class="nc" id="L951">        }</span>
+    };
+
+    private void initBloggingReminders() {
+<span class="nc bnc" id="L955" title="All 2 branches missed.">        if (!isAdded()) {</span>
+<span class="nc" id="L956">            return;</span>
+        }
+
+<span class="nc" id="L959">        final AppCompatActivity appCompatActivity = getAppCompatActivity();</span>
+<span class="nc bnc" id="L960" title="All 2 branches missed.">        if (appCompatActivity != null) {</span>
+<span class="nc" id="L961">            mBloggingRemindersViewModel = new ViewModelProvider(appCompatActivity, mViewModelFactory)</span>
+<span class="nc" id="L962">                    .get(BloggingRemindersViewModel.class);</span>
+<span class="nc" id="L963">            BloggingReminderUtils.observeBottomSheet(</span>
+<span class="nc" id="L964">                    mBloggingRemindersViewModel.isBottomSheetShowing(),</span>
+                    appCompatActivity,
+                    BLOGGING_REMINDERS_BOTTOM_SHEET_TAG,
+<span class="nc" id="L967">                    appCompatActivity::getSupportFragmentManager</span>
+            );
+
+<span class="nc" id="L970">            mBloggingRemindersViewModel.getNotificationsSettingsUiState()</span>
+<span class="nc" id="L971">                                       .observe(appCompatActivity, mBloggingRemindersSummariesBySiteId::putAll);</span>
+        }
+<span class="nc" id="L973">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

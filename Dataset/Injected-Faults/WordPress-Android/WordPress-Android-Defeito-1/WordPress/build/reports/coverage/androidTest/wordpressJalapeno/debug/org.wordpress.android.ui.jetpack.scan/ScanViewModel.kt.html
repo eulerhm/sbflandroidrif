@@ -1,0 +1,413 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ScanViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.jetpack.scan</a> &gt; <span class="el_source">ScanViewModel.kt</span></div><h1>ScanViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.jetpack.scan
+
+import androidx.annotation.ColorRes
+import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import org.wordpress.android.Constants
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.scan.ScanStateModel
+import org.wordpress.android.fluxc.model.scan.ScanStateModel.State
+import org.wordpress.android.fluxc.store.ScanStore
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.jetpack.common.JetpackListItemState
+import org.wordpress.android.ui.jetpack.scan.ScanNavigationEvents.OpenFixThreatsConfirmationDialog
+import org.wordpress.android.ui.jetpack.scan.ScanNavigationEvents.ShowContactSupport
+import org.wordpress.android.ui.jetpack.scan.ScanNavigationEvents.ShowJetpackSettings
+import org.wordpress.android.ui.jetpack.scan.ScanNavigationEvents.ShowThreatDetails
+import org.wordpress.android.ui.jetpack.scan.ScanNavigationEvents.VisitVaultPressDashboard
+import org.wordpress.android.ui.jetpack.scan.ScanViewModel.UiState.ContentUiState
+import org.wordpress.android.ui.jetpack.scan.ScanViewModel.UiState.ErrorUiState
+import org.wordpress.android.ui.jetpack.scan.ScanViewModel.UiState.FullScreenLoadingUiState
+import org.wordpress.android.ui.jetpack.scan.builders.ScanStateListItemsBuilder
+import org.wordpress.android.ui.jetpack.scan.usecases.FetchFixThreatsStatusUseCase
+import org.wordpress.android.ui.jetpack.scan.usecases.FetchFixThreatsStatusUseCase.FetchFixThreatsState
+import org.wordpress.android.ui.jetpack.scan.usecases.FetchScanStateUseCase
+import org.wordpress.android.ui.jetpack.scan.usecases.FetchScanStateUseCase.FetchScanState
+import org.wordpress.android.ui.jetpack.scan.usecases.FixThreatsUseCase
+import org.wordpress.android.ui.jetpack.scan.usecases.FixThreatsUseCase.FixThreatsState
+import org.wordpress.android.ui.jetpack.scan.usecases.StartScanUseCase
+import org.wordpress.android.ui.jetpack.scan.usecases.StartScanUseCase.StartScanState
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.utils.HtmlMessageUtils
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringResWithParams
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.analytics.ScanTracker
+import org.wordpress.android.util.analytics.ScanTracker.ErrorAction
+import org.wordpress.android.util.analytics.ScanTracker.ErrorCause
+import org.wordpress.android.util.analytics.ScanTracker.OnThreatItemClickSource
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+const val RETRY_DELAY = 300L
+
+<span class="nc" id="L54">class ScanViewModel @Inject constructor(</span>
+<span class="nc" id="L55">    private val scanStateListItemsBuilder: ScanStateListItemsBuilder,</span>
+<span class="nc" id="L56">    private val fetchScanStateUseCase: FetchScanStateUseCase,</span>
+<span class="nc" id="L57">    private val startScanUseCase: StartScanUseCase,</span>
+<span class="nc" id="L58">    private val fixThreatsUseCase: FixThreatsUseCase,</span>
+<span class="nc" id="L59">    private val fetchFixThreatsStatusUseCase: FetchFixThreatsStatusUseCase,</span>
+<span class="nc" id="L60">    private val scanStore: ScanStore,</span>
+<span class="nc" id="L61">    private val scanTracker: ScanTracker,</span>
+<span class="nc" id="L62">    private val htmlMessageUtils: HtmlMessageUtils,</span>
+<span class="nc" id="L63">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L64">) : ScopedViewModel(mainDispatcher) {</span>
+    private var isStarted = false
+
+<span class="nc" id="L67">    private val _uiState: MutableLiveData&lt;UiState&gt; = MutableLiveData()</span>
+<span class="nc" id="L68">    val uiState: LiveData&lt;UiState&gt; = _uiState</span>
+
+<span class="nc" id="L70">    private val _snackbarEvents = MediatorLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L71">    val snackbarEvents: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _snackbarEvents</span>
+
+<span class="nc" id="L73">    private val _navigationEvents = MediatorLiveData&lt;Event&lt;ScanNavigationEvents&gt;&gt;()</span>
+<span class="nc" id="L74">    val navigationEvents: LiveData&lt;Event&lt;ScanNavigationEvents&gt;&gt; = _navigationEvents</span>
+
+    private val fixableThreatIds
+<span class="nc bnc" id="L77" title="All 6 branches missed.">        get() = scanStateModel?.threats</span>
+<span class="nc bnc" id="L78" title="All 4 branches missed.">                ?.filter { it.baseThreatModel.fixable != null }</span>
+<span class="nc" id="L79">                ?.map { it.baseThreatModel.id }</span>
+<span class="nc" id="L80">                ?: emptyList()</span>
+
+    private var scanStateModel: ScanStateModel? = null
+<span class="nc bnc" id="L83" title="All 2 branches missed.">    lateinit var site: SiteModel</span>
+
+    fun start(site: SiteModel) {
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L87">            return</span>
+        }
+<span class="nc" id="L89">        isStarted = true</span>
+<span class="nc" id="L90">        this.site = site</span>
+<span class="nc" id="L91">        init()</span>
+<span class="nc" id="L92">    }</span>
+
+    private fun init() {
+<span class="nc" id="L95">        updateUiState(FullScreenLoadingUiState)</span>
+<span class="nc" id="L96">        launch {</span>
+<span class="nc" id="L97">            scanStateModel = scanStore.getScanStateForSite(this@ScanViewModel.site)</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">            scanStateModel?.let {</span>
+<span class="nc bnc" id="L99" title="All 4 branches missed.">                if (fixableThreatIds.isNotEmpty()) fetchFixThreatsStatus(fixableThreatIds, isInvokedByUser = false)</span>
+<span class="nc" id="L100">            }</span>
+<span class="nc" id="L101">            fetchScanState(isInvokedFromInit = true)</span>
+<span class="nc" id="L102">        }</span>
+<span class="nc" id="L103">    }</span>
+
+<span class="nc" id="L105">    private suspend fun fetchScanState(</span>
+<span class="nc" id="L106">        invokedByUser: Boolean = false,</span>
+<span class="nc" id="L107">        isRetry: Boolean = false,</span>
+<span class="nc" id="L108">        isInvokedFromInit: Boolean = false</span>
+    ) {
+<span class="nc bnc" id="L110" title="All 2 branches missed.">        if (isRetry) delay(RETRY_DELAY)</span>
+
+<span class="nc bnc" id="L112" title="All 2 branches missed.">        fetchScanStateUseCase.fetchScanState(site = site, startWithDelay = invokedByUser)</span>
+<span class="nc" id="L113">                .collect { state -&gt;</span>
+                    when (state) {
+                        is FetchScanState.Success -&gt; {
+                            scanStateModel = state.scanStateModel
+                            updateUiState(buildContentUiState(state.scanStateModel))
+                            if (state.scanStateModel.state in listOf(State.UNAVAILABLE, State.UNKNOWN)) {
+                                scanTracker.trackOnError(ErrorAction.FETCH_SCAN_STATE, ErrorCause.OTHER)
+                                updateUiState(ErrorUiState.ScanRequestFailed(::onContactSupportClicked))
+                            } else if (invokedByUser &amp;&amp; state.scanStateModel.state == State.IDLE) {
+                                showScanFinishedMessage(state.scanStateModel)
+                            }
+                        }
+
+                        is FetchScanState.Failure.NetworkUnavailable -&gt; {
+                            scanTracker.trackOnError(ErrorAction.FETCH_SCAN_STATE, ErrorCause.OFFLINE)
+                            scanStateModel?.takeIf { !isInvokedFromInit }
+                                    ?.let {
+                                        updateSnackbarMessageEvent(UiStringRes(R.string.error_generic_network))
+                                    }
+                                    ?: updateUiState(ErrorUiState.NoConnection(::onRetryClicked))
+                        }
+
+                        is FetchScanState.Failure.MultisiteNotSupported -&gt;
+                            updateUiState(ErrorUiState.MultisiteNotSupported)
+
+                        is FetchScanState.Failure.VaultPressActiveOnSite -&gt;
+                            updateUiState(ErrorUiState.VaultPressActiveOnSite(::onVisitVaultPressDashboardClicked))
+
+                        is FetchScanState.Failure.RemoteRequestFailure -&gt; {
+                            scanTracker.trackOnError(ErrorAction.FETCH_SCAN_STATE, ErrorCause.REMOTE)
+                            scanStateModel?.takeIf { !isInvokedFromInit }
+                                    ?.let {
+                                        updateSnackbarMessageEvent(UiStringRes(R.string.request_failed_message))
+                                    }
+                                    ?: updateUiState(ErrorUiState.GenericRequestFailed(::onContactSupportClicked))
+                        }
+                    }
+                }
+<span class="nc" id="L151">    }</span>
+
+    private fun showScanFinishedMessage(scanStateModel: ScanStateModel) {
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        val threatsCount = scanStateModel.threats?.size ?: 0</span>
+<span class="nc" id="L155">        val message = UiStringText(</span>
+<span class="nc bnc" id="L156" title="All 3 branches missed.">                when (threatsCount) {</span>
+<span class="nc" id="L157">                    0 -&gt; htmlMessageUtils.getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L158">                            R.string.scan_finished_no_threats_found_message</span>
+                    )
+
+<span class="nc" id="L161">                    1 -&gt; htmlMessageUtils.getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L162">                            R.string.scan_finished_potential_threats_found_message_singular</span>
+                    )
+
+<span class="nc" id="L165">                    else -&gt; htmlMessageUtils.getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L166">                            R.string.scan_finished_potential_threats_found_message_plural,</span>
+<span class="nc" id="L167">                            &quot;$threatsCount&quot;</span>
+                    )
+                }
+        )
+<span class="nc" id="L171">        updateSnackbarMessageEvent(message)</span>
+<span class="nc" id="L172">    }</span>
+
+    private fun startScan() {
+<span class="nc" id="L175">        launch {</span>
+<span class="nc" id="L176">            startScanUseCase.startScan(site)</span>
+<span class="nc" id="L177">                    .collect { state -&gt;</span>
+                        when (state) {
+                            is StartScanState.ScanningStateUpdatedInDb -&gt;
+                                updateUiState(buildContentUiState(state.model))
+
+                            is StartScanState.Success -&gt; fetchScanState(invokedByUser = true)
+
+                            is StartScanState.Failure.NetworkUnavailable -&gt; {
+                                scanTracker.trackOnError(ErrorAction.SCAN, ErrorCause.OFFLINE)
+                                updateSnackbarMessageEvent(UiStringRes(R.string.error_generic_network))
+                            }
+                            is StartScanState.Failure.RemoteRequestFailure -&gt; {
+                                scanTracker.trackOnError(ErrorAction.SCAN, ErrorCause.REMOTE)
+                                updateUiState(ContentUiState(emptyList()))
+                                updateUiState(ErrorUiState.ScanRequestFailed(::onContactSupportClicked))
+                            }
+                        }
+                    }
+<span class="nc" id="L195">        }</span>
+<span class="nc" id="L196">    }</span>
+
+    private fun fixAllThreats() {
+<span class="nc" id="L199">        scanTracker.trackOnFixAllThreatsConfirmed()</span>
+<span class="nc" id="L200">        launch {</span>
+<span class="nc" id="L201">            when (fixThreatsUseCase.fixThreats(remoteSiteId = site.siteId, fixableThreatIds = fixableThreatIds)) {</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">                is FixThreatsState.Success -&gt; {</span>
+<span class="nc" id="L203">                    val someOrAllThreatFixed = fetchFixThreatsStatus(fixableThreatIds, isInvokedByUser = true)</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">                    if (someOrAllThreatFixed) fetchScanState()</span>
+                }
+<span class="nc bnc" id="L206" title="All 2 branches missed.">                is FixThreatsState.Failure.NetworkUnavailable -&gt; {</span>
+<span class="nc" id="L207">                    scanTracker.trackOnError(ErrorAction.FIX_ALL, ErrorCause.OFFLINE)</span>
+<span class="nc" id="L208">                    updateSnackbarMessageEvent(UiStringRes(R.string.error_generic_network))</span>
+                }
+<span class="nc bnc" id="L210" title="All 2 branches missed.">                is FixThreatsState.Failure.RemoteRequestFailure -&gt; {</span>
+<span class="nc" id="L211">                    scanTracker.trackOnError(ErrorAction.FIX_ALL, ErrorCause.REMOTE)</span>
+<span class="nc" id="L212">                    updateSnackbarMessageEvent(UiStringRes(R.string.threat_fix_all_error_message))</span>
+                }
+            }
+<span class="nc" id="L215">        }</span>
+<span class="nc" id="L216">    }</span>
+
+<span class="nc" id="L218">    private suspend fun fetchFixThreatsStatus(fixableThreatIds: List&lt;Long&gt;, isInvokedByUser: Boolean): Boolean {</span>
+<span class="nc" id="L219">        var someOrAllThreatFixed = false</span>
+
+<span class="nc" id="L221">        @StringRes var messageRes: Int? = null</span>
+<span class="nc" id="L222">        fetchFixThreatsStatusUseCase.fetchFixThreatsStatus(</span>
+<span class="nc" id="L223">                remoteSiteId = site.siteId,</span>
+<span class="nc" id="L224">                fixableThreatIds = fixableThreatIds</span>
+<span class="nc" id="L225">        ).collect { status -&gt;</span>
+            var fixingThreatIds = emptyList&lt;Long&gt;()
+            when (status) {
+                is FetchFixThreatsState.NotStarted -&gt; { // Do nothing
+                }
+                is FetchFixThreatsState.InProgress -&gt; {
+                    fixingThreatIds = status.threatIds
+                }
+                is FetchFixThreatsState.Complete -&gt; {
+                    someOrAllThreatFixed = true
+                    messageRes = if (status.fixedThreatsCount == 1) {
+                        R.string.threat_fix_all_status_success_message_singular
+                    } else R.string.threat_fix_all_status_success_message_plural
+                }
+                is FetchFixThreatsState.Failure.NetworkUnavailable -&gt; {
+                    scanTracker.trackOnError(ErrorAction.FETCH_FIX_THREAT_STATUS, ErrorCause.OFFLINE)
+                    messageRes = R.string.error_generic_network
+                }
+                is FetchFixThreatsState.Failure.RemoteRequestFailure -&gt; {
+                    scanTracker.trackOnError(ErrorAction.FETCH_FIX_THREAT_STATUS, ErrorCause.REMOTE)
+                    messageRes = R.string.threat_fix_all_status_error_message
+                }
+                is FetchFixThreatsState.Failure.FixFailure -&gt; {
+                    if (status.mightBeMissingCredentials) {
+                        scanTracker.trackOnError(ErrorAction.FETCH_FIX_THREAT_STATUS, ErrorCause.ALL_THREATS_NOT_FIXED)
+                    } else {
+                        scanTracker.trackOnError(ErrorAction.FETCH_FIX_THREAT_STATUS, ErrorCause.OTHER)
+                    }
+                    if (!status.containsOnlyErrors) {
+                        someOrAllThreatFixed = true
+                    } else {
+                        messageRes = R.string.threat_fix_all_status_error_message
+                    }
+                }
+            }
+
+            val shouldUpdateUi = status is FetchFixThreatsState.InProgress || status is FetchFixThreatsState.Complete
+            if (shouldUpdateUi) {
+                updateUiState(
+                        buildContentUiState(model = requireNotNull(scanStateModel), fixingThreatIds = fixingThreatIds)
+                )
+            }
+
+            if (isInvokedByUser) messageRes?.let { updateSnackbarMessageEvent(UiStringRes(it)) }
+        }
+
+<span class="nc" id="L271">        return someOrAllThreatFixed</span>
+    }
+
+    private fun onRetryClicked() {
+<span class="nc" id="L275">        launch { fetchScanState(isRetry = true) }</span>
+<span class="nc" id="L276">    }</span>
+
+    private fun onVisitVaultPressDashboardClicked() {
+<span class="nc" id="L279">        updateNavigationEvent(VisitVaultPressDashboard(Constants.URL_VISIT_VAULTPRESS_DASHBOARD))</span>
+<span class="nc" id="L280">    }</span>
+
+    private fun onContactSupportClicked() {
+<span class="nc" id="L283">        updateNavigationEvent(ShowContactSupport(site))</span>
+<span class="nc" id="L284">    }</span>
+
+    private fun onScanButtonClicked() {
+<span class="nc" id="L287">        scanTracker.trackOnScanButtonClicked()</span>
+<span class="nc" id="L288">        startScan()</span>
+<span class="nc" id="L289">    }</span>
+
+    private fun onFixAllButtonClicked() {
+<span class="nc" id="L292">        scanTracker.trackOnFixAllThreatsButtonClicked()</span>
+<span class="nc" id="L293">        updateNavigationEvent(</span>
+<span class="nc" id="L294">                OpenFixThreatsConfirmationDialog(</span>
+<span class="nc" id="L295">                        title = UiStringRes(R.string.threat_fix_all_warning_title),</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">                        message = if (fixableThreatIds.size &gt; 1) {</span>
+<span class="nc" id="L297">                            UiStringResWithParams(</span>
+<span class="nc" id="L298">                                    R.string.threat_fix_all_confirmation_message_plural,</span>
+<span class="nc" id="L299">                                    listOf(UiStringText(&quot;${fixableThreatIds.size}&quot;))</span>
+                            )
+<span class="nc" id="L301">                        } else UiStringRes(R.string.threat_fix_all_confirmation_message_singular),</span>
+<span class="nc" id="L302">                        okButtonAction = this@ScanViewModel::fixAllThreats</span>
+                )
+        )
+<span class="nc" id="L305">    }</span>
+
+    private fun onThreatItemClicked(threatId: Long) {
+<span class="nc" id="L308">        launch {</span>
+<span class="nc" id="L309">            scanTracker.trackOnThreatItemClicked(threatId, OnThreatItemClickSource.SCANNER)</span>
+<span class="nc" id="L310">            _navigationEvents.value = Event(ShowThreatDetails(site, threatId))</span>
+<span class="nc" id="L311">        }</span>
+<span class="nc" id="L312">    }</span>
+
+    private fun onEnterServerCredsIconClicked() {
+<span class="nc" id="L315">        updateNavigationEvent(ShowJetpackSettings(&quot;${Constants.URL_JETPACK_SETTINGS}/${site.siteId}&quot;))</span>
+<span class="nc" id="L316">    }</span>
+
+    fun onScanStateRequestedWithMessage(@StringRes messageRes: Int) {
+<span class="nc" id="L319">        updateSnackbarMessageEvent(UiStringRes(messageRes))</span>
+<span class="nc" id="L320">        launch { fetchScanState() }</span>
+<span class="nc" id="L321">    }</span>
+
+    fun onFixStateRequested(threatId: Long) {
+<span class="nc" id="L324">        launch {</span>
+<span class="nc" id="L325">            val isThreatFixed = fetchFixThreatsStatus(listOf(threatId), isInvokedByUser = true)</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">            if (isThreatFixed) fetchScanState()</span>
+<span class="nc" id="L327">        }</span>
+<span class="nc" id="L328">    }</span>
+
+    private fun updateSnackbarMessageEvent(message: UiString) {
+<span class="nc" id="L331">        _snackbarEvents.value = Event(SnackbarMessageHolder(message))</span>
+<span class="nc" id="L332">    }</span>
+
+    private fun updateNavigationEvent(navigationEvent: ScanNavigationEvents) {
+<span class="nc" id="L335">        _navigationEvents.value = Event(navigationEvent)</span>
+<span class="nc" id="L336">    }</span>
+
+    private fun updateUiState(state: UiState) {
+<span class="nc" id="L339">        _uiState.value = state</span>
+<span class="nc" id="L340">    }</span>
+
+<span class="nc" id="L342">    private suspend fun buildContentUiState(</span>
+        model: ScanStateModel,
+<span class="nc" id="L344">        fixingThreatIds: List&lt;Long&gt; = emptyList()</span>
+<span class="nc" id="L345">    ) = ContentUiState(</span>
+<span class="nc" id="L346">            scanStateListItemsBuilder.buildScanStateListItems(</span>
+<span class="nc" id="L347">                    model = model,</span>
+<span class="nc" id="L348">                    site = site,</span>
+<span class="nc" id="L349">                    fixingThreatIds = fixingThreatIds,</span>
+<span class="nc" id="L350">                    onScanButtonClicked = this@ScanViewModel::onScanButtonClicked,</span>
+<span class="nc" id="L351">                    onFixAllButtonClicked = this@ScanViewModel::onFixAllButtonClicked,</span>
+<span class="nc" id="L352">                    onThreatItemClicked = this@ScanViewModel::onThreatItemClicked,</span>
+<span class="nc" id="L353">                    onHelpClicked = this@ScanViewModel::onContactSupportClicked,</span>
+<span class="nc" id="L354">                    onEnterServerCredsIconClicked = this@ScanViewModel::onEnterServerCredsIconClicked</span>
+            )
+<span class="nc" id="L356">    )</span>
+
+<span class="nc" id="L358">    sealed class UiState(</span>
+<span class="nc" id="L359">        val loadingVisible: Boolean = false,</span>
+<span class="nc" id="L360">        val contentVisible: Boolean = false,</span>
+<span class="nc" id="L361">        val errorVisible: Boolean = false</span>
+    ) {
+<span class="nc" id="L363">        object FullScreenLoadingUiState : UiState(loadingVisible = true)</span>
+
+<span class="nc" id="L365">        data class ContentUiState(val items: List&lt;JetpackListItemState&gt;) : UiState(contentVisible = true)</span>
+
+<span class="nc" id="L367">        sealed class ErrorUiState : UiState(errorVisible = true) {</span>
+            abstract val image: Int
+<span class="nc" id="L369">            open val imageColorResId: Int? = null</span>
+            abstract val title: UiString
+            abstract val subtitle: UiString
+<span class="nc" id="L372">            open val buttonText: UiString? = null</span>
+<span class="nc" id="L373">            open val action: (() -&gt; Unit)? = null</span>
+
+<span class="nc" id="L375">            data class NoConnection(override val action: () -&gt; Unit) : ErrorUiState() {</span>
+<span class="nc" id="L376">                @DrawableRes override val image = R.drawable.img_illustration_cloud_off_152dp</span>
+<span class="nc" id="L377">                override val title = UiStringRes(R.string.scan_no_network_title)</span>
+<span class="nc" id="L378">                override val subtitle = UiStringRes(R.string.scan_no_network_subtitle)</span>
+<span class="nc" id="L379">                override val buttonText = UiStringRes(R.string.retry)</span>
+            }
+
+<span class="nc" id="L382">            data class GenericRequestFailed(override val action: () -&gt; Unit) : ErrorUiState() {</span>
+<span class="nc" id="L383">                @DrawableRes override val image = R.drawable.img_illustration_cloud_off_152dp</span>
+<span class="nc" id="L384">                override val title = UiStringRes(R.string.scan_request_failed_title)</span>
+<span class="nc" id="L385">                override val subtitle = UiStringRes(R.string.scan_request_failed_subtitle)</span>
+<span class="nc" id="L386">                override val buttonText = UiStringRes(R.string.contact_support)</span>
+            }
+
+<span class="nc" id="L389">            data class ScanRequestFailed(override val action: () -&gt; Unit) : ErrorUiState() {</span>
+<span class="nc" id="L390">                @DrawableRes override val image = R.drawable.img_illustration_empty_results_216dp</span>
+<span class="nc" id="L391">                override val title = UiStringRes(R.string.scan_start_request_failed_title)</span>
+<span class="nc" id="L392">                override val subtitle = UiStringRes(R.string.scan_start_request_failed_subtitle)</span>
+<span class="nc" id="L393">                override val buttonText = UiStringRes(R.string.contact_support)</span>
+            }
+
+<span class="nc" id="L396">            object MultisiteNotSupported : ErrorUiState() {</span>
+<span class="nc" id="L397">                @DrawableRes override val image = R.drawable.ic_baseline_security_white_24dp</span>
+<span class="nc" id="L398">                @ColorRes override val imageColorResId = R.color.gray</span>
+<span class="nc" id="L399">                override val title = UiStringRes(R.string.scan_multisite_not_supported_title)</span>
+<span class="nc" id="L400">                override val subtitle = UiStringRes(R.string.scan_multisite_not_supported_subtitle)</span>
+            }
+
+<span class="nc" id="L403">            data class VaultPressActiveOnSite(override val action: () -&gt; Unit) : ErrorUiState() {</span>
+<span class="nc" id="L404">                @DrawableRes override val image = R.drawable.ic_shield_warning_white</span>
+<span class="nc" id="L405">                @ColorRes override val imageColorResId = R.color.error_60</span>
+<span class="nc" id="L406">                override val title = UiStringRes(R.string.scan_vault_press_active_on_site_title)</span>
+<span class="nc" id="L407">                override val subtitle = UiStringRes(R.string.scan_vault_press_active_on_site_subtitle)</span>
+<span class="nc" id="L408">                override val buttonText = UiStringRes(R.string.scan_vault_press_active_on_site_button_text)</span>
+            }
+        }
+<span class="nc" id="L411">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

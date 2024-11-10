@@ -1,0 +1,378 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UnifiedCommentListViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.comments.unified</a> &gt; <span class="el_source">UnifiedCommentListViewModel.kt</span></div><h1>UnifiedCommentListViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.comments.unified
+
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import org.wordpress.android.R.string
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.COMMENT_BATCH_APPROVED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.COMMENT_BATCH_DELETED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.COMMENT_BATCH_SPAMMED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.COMMENT_BATCH_TRASHED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.COMMENT_BATCH_UNAPPROVED
+import org.wordpress.android.fluxc.model.CommentStatus
+import org.wordpress.android.fluxc.model.CommentStatus.APPROVED
+import org.wordpress.android.fluxc.model.CommentStatus.DELETED
+import org.wordpress.android.fluxc.model.CommentStatus.SPAM
+import org.wordpress.android.fluxc.model.CommentStatus.TRASH
+import org.wordpress.android.fluxc.model.CommentStatus.UNAPPROVED
+import org.wordpress.android.fluxc.persistence.comments.CommentsDao.CommentEntity
+import org.wordpress.android.fluxc.store.CommentStore.CommentError
+import org.wordpress.android.fluxc.store.CommentsStore.CommentsData.PagingData
+import org.wordpress.android.models.usecases.BatchModerateCommentsUseCase.Parameters.ModerateCommentsParameters
+import org.wordpress.android.models.usecases.CommentsUseCaseType
+import org.wordpress.android.models.usecases.CommentsUseCaseType.BATCH_MODERATE_USE_CASE
+import org.wordpress.android.models.usecases.CommentsUseCaseType.MODERATE_USE_CASE
+import org.wordpress.android.models.usecases.CommentsUseCaseType.PAGINATE_USE_CASE
+import org.wordpress.android.models.usecases.LocalCommentCacheUpdateHandler
+import org.wordpress.android.models.usecases.ModerateCommentWithUndoUseCase.Parameters.ModerateCommentParameters
+import org.wordpress.android.models.usecases.ModerateCommentWithUndoUseCase.Parameters.ModerateWithFallbackParameters
+import org.wordpress.android.models.usecases.ModerateCommentWithUndoUseCase.SingleCommentModerationResult
+import org.wordpress.android.models.usecases.PaginateCommentsUseCase.Parameters.GetPageParameters
+import org.wordpress.android.models.usecases.PaginateCommentsUseCase.Parameters.ReloadFromCacheParameters
+import org.wordpress.android.models.usecases.UnifiedCommentsListHandler
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.comments.unified.CommentFilter.UNREPLIED
+import org.wordpress.android.ui.comments.unified.CommentListUiModelHelper.BatchModerationStatus
+import org.wordpress.android.ui.comments.unified.CommentListUiModelHelper.CommentsUiModel
+import org.wordpress.android.ui.mysite.SelectedSiteRepository
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.usecase.UseCaseResult
+import org.wordpress.android.usecase.UseCaseResult.Failure
+import org.wordpress.android.usecase.UseCaseResult.Success
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+typealias CommentsPagingResult = UseCaseResult&lt;CommentsUseCaseType, CommentError, PagingData&gt;
+
+@Suppress(&quot;TooManyFunctions&quot;)
+<span class="nc" id="L64">class UnifiedCommentListViewModel @Inject constructor(</span>
+<span class="nc" id="L65">    private val commentListUiModelHelper: CommentListUiModelHelper,</span>
+<span class="nc" id="L66">    private val selectedSiteRepository: SelectedSiteRepository,</span>
+<span class="nc" id="L67">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L68">    private val analyticsTrackerWrapper: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L69">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L70">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L71">    private val unifiedCommentsListHandler: UnifiedCommentsListHandler,</span>
+    localCommentCacheUpdateHandler: LocalCommentCacheUpdateHandler
+<span class="nc" id="L73">) : ScopedViewModel(mainDispatcher) {</span>
+    private var isStarted = false
+    private lateinit var commentFilter: CommentFilter
+
+<span class="nc" id="L77">    private val _commentsUpdateListener = localCommentCacheUpdateHandler.subscribe()</span>
+
+<span class="nc" id="L79">    private val _onSnackbarMessage = MutableSharedFlow&lt;SnackbarMessageHolder&gt;()</span>
+<span class="nc" id="L80">    private val _selectedComments = MutableStateFlow(emptyList&lt;SelectedComment&gt;())</span>
+
+<span class="nc" id="L82">    private val _batchModerationStatus = MutableStateFlow&lt;BatchModerationStatus&gt;(BatchModerationStatus.Idle)</span>
+
+<span class="nc" id="L84">    val onSnackbarMessage: SharedFlow&lt;SnackbarMessageHolder&gt; = _onSnackbarMessage</span>
+
+<span class="nc" id="L86">    private var commentInModeration = ArrayList&lt;Long&gt;()</span>
+
+    // TODO maybe we can change to some generic Action pattern
+<span class="nc" id="L89">    private val _onCommentDetailsRequested = MutableSharedFlow&lt;SelectedComment&gt;()</span>
+<span class="nc" id="L90">    val onCommentDetailsRequested: SharedFlow&lt;SelectedComment&gt; = _onCommentDetailsRequested</span>
+
+<span class="nc" id="L92">    private val _commentsProvider = unifiedCommentsListHandler.subscribe()</span>
+
+<span class="nc" id="L94">    val uiState: StateFlow&lt;CommentsUiModel&gt; by lazy {</span>
+<span class="nc" id="L95">        combine(</span>
+<span class="nc" id="L96">                _commentsProvider.filter { it.type == PAGINATE_USE_CASE }.filterIsInstance&lt;CommentsPagingResult&gt;(),</span>
+<span class="nc" id="L97">                _selectedComments,</span>
+<span class="nc" id="L98">                _batchModerationStatus</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        ) { commentData, selectedCommentIds, batchModerationStatus -&gt;</span>
+<span class="nc" id="L100">            commentListUiModelHelper.buildUiModel(</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">                    commentFilter,</span>
+<span class="nc" id="L102">                    commentData,</span>
+<span class="nc" id="L103">                    selectedCommentIds,</span>
+<span class="nc" id="L104">                    batchModerationStatus,</span>
+<span class="nc" id="L105">                    uiState.replayCache.firstOrNull(),</span>
+<span class="nc" id="L106">                    this::toggleItem,</span>
+<span class="nc" id="L107">                    this::clickItem,</span>
+<span class="nc" id="L108">                    this::requestNextPage,</span>
+<span class="nc" id="L109">                    this::moderateSelectedComments,</span>
+<span class="nc" id="L110">                    this::onBatchModerationConfirmationCanceled</span>
+            )
+<span class="nc" id="L112">        }.stateIn(</span>
+<span class="nc" id="L113">                scope = viewModelScope,</span>
+<span class="nc" id="L114">                started = SharingStarted.Companion.WhileSubscribed(UI_STATE_FLOW_TIMEOUT_MS),</span>
+<span class="nc" id="L115">                initialValue = CommentsUiModel.buildInitialState()</span>
+        )
+    }
+
+    fun start(commentListFilter: CommentFilter) {
+<span class="nc bnc" id="L120" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc" id="L121">        isStarted = true</span>
+
+<span class="nc" id="L123">        commentFilter = commentListFilter</span>
+
+<span class="nc" id="L125">        listenToLocalCacheUpdateRequests()</span>
+<span class="nc" id="L126">        listenToSnackBarRequests()</span>
+<span class="nc" id="L127">        requestsFirstPage()</span>
+<span class="nc" id="L128">    }</span>
+
+    private fun requestsFirstPage() {
+<span class="nc" id="L131">        launch(bgDispatcher) {</span>
+<span class="nc" id="L132">            unifiedCommentsListHandler.requestPage(</span>
+<span class="nc" id="L133">                    GetPageParameters(</span>
+<span class="nc" id="L134">                            site = selectedSiteRepository.getSelectedSite()!!,</span>
+<span class="nc bnc" id="L135" title="All 4 branches missed.">                            number = if (commentFilter == UNREPLIED) UNREPLIED_COMMENT_PAGE_SIZE else COMMENT_PAGE_SIZE,</span>
+<span class="nc" id="L136">                            offset = 0,</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">                            commentFilter = commentFilter</span>
+                    )
+            )
+<span class="nc" id="L140">        }</span>
+<span class="nc" id="L141">    }</span>
+
+    private fun requestNextPage(offset: Int) {
+<span class="nc" id="L144">        launch(bgDispatcher) {</span>
+<span class="nc" id="L145">            unifiedCommentsListHandler.requestPage(</span>
+<span class="nc" id="L146">                    GetPageParameters(</span>
+<span class="nc" id="L147">                            site = selectedSiteRepository.getSelectedSite()!!,</span>
+<span class="nc bnc" id="L148" title="All 4 branches missed.">                            number = if (commentFilter == UNREPLIED) {</span>
+<span class="nc" id="L149">                                UNREPLIED_COMMENT_PAGE_SIZE</span>
+                            } else {
+<span class="nc" id="L151">                                COMMENT_PAGE_SIZE</span>
+                            },
+<span class="nc" id="L153">                            offset = offset,</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">                            commentFilter = commentFilter</span>
+                    )
+            )
+<span class="nc" id="L157">        }</span>
+<span class="nc" id="L158">    }</span>
+
+    private fun listenToLocalCacheUpdateRequests() {
+<span class="nc" id="L161">        launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L162" title="All 2 branches missed.">            _commentsUpdateListener.collectLatest {</span>
+<span class="nc" id="L163">                launch(bgDispatcher) {</span>
+<span class="nc" id="L164">                    unifiedCommentsListHandler.refreshFromCache(</span>
+<span class="nc" id="L165">                            ReloadFromCacheParameters(</span>
+<span class="nc" id="L166">                                    pagingParameters = GetPageParameters(</span>
+<span class="nc" id="L167">                                            site = selectedSiteRepository.getSelectedSite()!!,</span>
+<span class="nc bnc" id="L168" title="All 4 branches missed.">                                            number = if (commentFilter == UNREPLIED) {</span>
+<span class="nc" id="L169">                                                UNREPLIED_COMMENT_PAGE_SIZE</span>
+                                            } else {
+<span class="nc" id="L171">                                                COMMENT_PAGE_SIZE</span>
+                                            },
+<span class="nc" id="L173">                                            offset = 0,</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">                                            commentFilter = commentFilter</span>
+                                    ),
+<span class="nc" id="L176">                                    hasMore = uiState.value.commentData.hasMore</span>
+                            )
+                    )
+<span class="nc" id="L179">                }</span>
+<span class="nc" id="L180">            }</span>
+<span class="nc" id="L181">        }</span>
+<span class="nc" id="L182">    }</span>
+
+    private fun listenToSnackBarRequests() {
+<span class="nc" id="L185">        launch(bgDispatcher) {</span>
+<span class="nc" id="L186">            _commentsProvider.filter { it is Failure }.collectLatest {</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">                val errorMessage = if (it.type == BATCH_MODERATE_USE_CASE) {</span>
+<span class="nc" id="L188">                    UiStringRes(string.comment_batch_moderation_error)</span>
+                } else {
+<span class="nc bnc" id="L190" title="All 6 branches missed.">                    if ((it as Failure).error.message.isNullOrEmpty()) {</span>
+<span class="nc" id="L191">                        null</span>
+                    } else {
+<span class="nc" id="L193">                        UiStringText(it.error.message)</span>
+                    }
+                }
+
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                if (errorMessage != null) {</span>
+<span class="nc" id="L198">                    _onSnackbarMessage.emit(SnackbarMessageHolder(errorMessage))</span>
+                }
+<span class="nc" id="L200">            }</span>
+<span class="nc" id="L201">        }</span>
+<span class="nc" id="L202">        listenToModerateWithUndoSnackbarRequets()</span>
+<span class="nc" id="L203">    }</span>
+
+    fun listenToModerateWithUndoSnackbarRequets() {
+<span class="nc" id="L206">        launch(bgDispatcher) {</span>
+<span class="nc" id="L207">            _commentsProvider.filter { it is Success &amp;&amp; it.type == MODERATE_USE_CASE }.collectLatest {</span>
+<span class="nc bnc" id="L208" title="All 4 branches missed.">                if (it is Success &amp;&amp; it.data is SingleCommentModerationResult) {</span>
+<span class="nc bnc" id="L209" title="All 3 branches missed.">                    val message = when (it.data.newStatus) {</span>
+<span class="nc" id="L210">                        TRASH -&gt; UiStringRes(string.comment_trashed)</span>
+<span class="nc" id="L211">                        SPAM -&gt; UiStringRes(string.comment_spammed)</span>
+<span class="nc" id="L212">                        else -&gt; UiStringRes(string.comment_deleted_permanently)</span>
+                    }
+<span class="nc" id="L214">                    commentInModeration.add(it.data.remoteCommentId)</span>
+<span class="nc" id="L215">                    _onSnackbarMessage.emit(</span>
+<span class="nc" id="L216">                            SnackbarMessageHolder(</span>
+<span class="nc" id="L217">                                    message = message,</span>
+<span class="nc" id="L218">                                    buttonTitle = UiStringRes(string.undo),</span>
+                                    buttonAction = {
+<span class="nc" id="L220">                                        launch(bgDispatcher) {</span>
+<span class="nc" id="L221">                                            commentInModeration.remove(it.data.remoteCommentId)</span>
+<span class="nc" id="L222">                                            unifiedCommentsListHandler.undoCommentModeration(</span>
+<span class="nc" id="L223">                                                    ModerateWithFallbackParameters(</span>
+<span class="nc" id="L224">                                                            selectedSiteRepository.getSelectedSite()!!,</span>
+<span class="nc" id="L225">                                                            it.data.remoteCommentId,</span>
+<span class="nc" id="L226">                                                            it.data.newStatus,</span>
+<span class="nc" id="L227">                                                            it.data.oldStatus</span>
+                                                    )
+                                            )
+<span class="nc" id="L230">                                        }</span>
+<span class="nc" id="L231">                                    },</span>
+                                    onDismissAction = { _ -&gt;
+<span class="nc" id="L233">                                        launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">                                            if (commentInModeration.contains(it.data.remoteCommentId)) {</span>
+<span class="nc" id="L235">                                                commentInModeration.remove(it.data.remoteCommentId)</span>
+<span class="nc" id="L236">                                                unifiedCommentsListHandler.moderateAfterUndo(</span>
+<span class="nc" id="L237">                                                        ModerateWithFallbackParameters(</span>
+<span class="nc" id="L238">                                                                selectedSiteRepository.getSelectedSite()!!,</span>
+<span class="nc" id="L239">                                                                it.data.remoteCommentId,</span>
+<span class="nc" id="L240">                                                                it.data.newStatus,</span>
+<span class="nc" id="L241">                                                                it.data.oldStatus</span>
+                                                        )
+                                                )
+                                            }
+<span class="nc" id="L245">                                        }</span>
+<span class="nc" id="L246">                                    }</span>
+                            )
+                    )
+                }
+<span class="nc" id="L250">            }</span>
+<span class="nc" id="L251">        }</span>
+<span class="nc" id="L252">    }</span>
+
+    fun reload() {
+<span class="nc bnc" id="L255" title="All 2 branches missed.">        if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L256">            launch(bgDispatcher) {</span>
+<span class="nc" id="L257">                _onSnackbarMessage.emit(SnackbarMessageHolder(UiStringRes(string.no_network_message)))</span>
+<span class="nc" id="L258">            }</span>
+        } else {
+<span class="nc" id="L260">            requestsFirstPage()</span>
+        }
+<span class="nc" id="L262">    }</span>
+
+    private fun toggleItem(remoteCommentId: Long, commentStatus: CommentStatus) {
+<span class="nc" id="L265">        viewModelScope.launch {</span>
+<span class="nc" id="L266">            val selectedComment = SelectedComment(remoteCommentId, commentStatus)</span>
+<span class="nc" id="L267">            val selectedComments = _selectedComments.value.toMutableList()</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">            if (selectedComments.contains(selectedComment)) {</span>
+<span class="nc" id="L269">                selectedComments.remove(selectedComment)</span>
+            } else {
+<span class="nc" id="L271">                selectedComments.add(selectedComment)</span>
+            }
+<span class="nc" id="L273">            _selectedComments.emit(selectedComments)</span>
+<span class="nc" id="L274">        }</span>
+<span class="nc" id="L275">    }</span>
+
+    private fun clickItem(comment: CommentEntity) {
+<span class="nc bnc" id="L278" title="All 4 branches missed.">        if (_selectedComments.value.isNotEmpty()) {</span>
+<span class="nc" id="L279">            toggleItem(comment.remoteCommentId, CommentStatus.fromString(comment.status))</span>
+        } else {
+<span class="nc" id="L281">            launch {</span>
+<span class="nc" id="L282">                _onCommentDetailsRequested.emit(</span>
+<span class="nc" id="L283">                        SelectedComment(</span>
+<span class="nc" id="L284">                                comment.remoteCommentId,</span>
+<span class="nc" id="L285">                                CommentStatus.fromString(comment.status)</span>
+                        )
+                )
+<span class="nc" id="L288">            }</span>
+        }
+<span class="nc" id="L290">    }</span>
+
+    fun clearActionModeSelection() {
+<span class="nc" id="L293">        viewModelScope.launch {</span>
+<span class="nc bnc" id="L294" title="All 6 branches missed.">            if (!_selectedComments.value.isNullOrEmpty()) {</span>
+<span class="nc" id="L295">                _selectedComments.emit(listOf())</span>
+            }
+<span class="nc" id="L297">        }</span>
+<span class="nc" id="L298">    }</span>
+
+    fun performSingleCommentModeration(commentId: Long, newStatus: CommentStatus) {
+<span class="nc" id="L301">        launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L302" title="All 6 branches missed.">            if (newStatus == SPAM || newStatus == TRASH || newStatus == DELETED) {</span>
+<span class="nc" id="L303">                unifiedCommentsListHandler.preModerateWithUndo(</span>
+<span class="nc" id="L304">                        ModerateCommentParameters(</span>
+<span class="nc" id="L305">                                selectedSiteRepository.getSelectedSite()!!,</span>
+<span class="nc" id="L306">                                commentId,</span>
+<span class="nc" id="L307">                                newStatus</span>
+                        )
+                )
+            } else {
+<span class="nc" id="L311">                launch(bgDispatcher) {</span>
+<span class="nc" id="L312">                    unifiedCommentsListHandler.moderateComments(</span>
+<span class="nc" id="L313">                            ModerateCommentsParameters(</span>
+<span class="nc" id="L314">                                    selectedSiteRepository.getSelectedSite()!!,</span>
+<span class="nc" id="L315">                                    listOf(commentId),</span>
+<span class="nc" id="L316">                                    newStatus</span>
+                            )
+                    )
+<span class="nc" id="L319">                }</span>
+            }
+<span class="nc" id="L321">        }</span>
+<span class="nc" id="L322">    }</span>
+
+    fun onBatchModerationConfirmationCanceled() {
+<span class="nc" id="L325">        launch(bgDispatcher) {</span>
+<span class="nc" id="L326">            _batchModerationStatus.emit(BatchModerationStatus.Idle)</span>
+<span class="nc" id="L327">        }</span>
+<span class="nc" id="L328">    }</span>
+
+    fun performBatchModeration(newStatus: CommentStatus) {
+<span class="nc" id="L331">        launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">            if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L333">                launch(bgDispatcher) {</span>
+<span class="nc" id="L334">                    _onSnackbarMessage.emit(SnackbarMessageHolder(UiStringRes(string.no_network_message)))</span>
+<span class="nc" id="L335">                }</span>
+<span class="nc" id="L336">                return@launch</span>
+            }
+<span class="nc bnc" id="L338" title="All 4 branches missed.">            if (newStatus == DELETED || newStatus == TRASH) {</span>
+<span class="nc" id="L339">                _batchModerationStatus.emit(BatchModerationStatus.AskingToModerate(newStatus))</span>
+            } else {
+<span class="nc" id="L341">                moderateSelectedComments(newStatus)</span>
+            }
+<span class="nc" id="L343">        }</span>
+<span class="nc" id="L344">    }</span>
+
+    private fun moderateSelectedComments(newStatus: CommentStatus) {
+<span class="nc" id="L347">        launch(bgDispatcher) {</span>
+<span class="nc" id="L348">            _batchModerationStatus.emit(BatchModerationStatus.Idle)</span>
+<span class="nc" id="L349">            val commentsToModerate = _selectedComments.value.map { it.remoteCommentId }</span>
+<span class="nc" id="L350">            _selectedComments.emit(emptyList())</span>
+<span class="nc" id="L351">            unifiedCommentsListHandler.moderateComments(</span>
+<span class="nc" id="L352">                    ModerateCommentsParameters(</span>
+<span class="nc" id="L353">                            selectedSiteRepository.getSelectedSite()!!,</span>
+<span class="nc" id="L354">                            commentsToModerate,</span>
+<span class="nc" id="L355">                            newStatus</span>
+                    )
+            )
+<span class="nc bnc" id="L358" title="All 6 branches missed.">            when (newStatus) {</span>
+<span class="nc" id="L359">                APPROVED -&gt; analyticsTrackerWrapper.track(COMMENT_BATCH_APPROVED)</span>
+<span class="nc" id="L360">                UNAPPROVED -&gt; analyticsTrackerWrapper.track(COMMENT_BATCH_UNAPPROVED)</span>
+<span class="nc" id="L361">                SPAM -&gt; analyticsTrackerWrapper.track(COMMENT_BATCH_SPAMMED)</span>
+<span class="nc" id="L362">                TRASH -&gt; analyticsTrackerWrapper.track(COMMENT_BATCH_TRASHED)</span>
+<span class="nc" id="L363">                DELETED -&gt; analyticsTrackerWrapper.track(COMMENT_BATCH_DELETED)</span>
+                else -&gt; { // noop
+                }
+            }
+<span class="nc" id="L367">        }</span>
+<span class="nc" id="L368">    }</span>
+
+<span class="nc" id="L370">    data class SelectedComment(val remoteCommentId: Long, val status: CommentStatus)</span>
+
+    companion object {
+        private const val UI_STATE_FLOW_TIMEOUT_MS = 5000L
+        private const val COMMENT_PAGE_SIZE = 30
+        private const val UNREPLIED_COMMENT_PAGE_SIZE = 100
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WPCrashLoggingDataProvider.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.util.crashlogging</a> &gt; <span class="el_source">WPCrashLoggingDataProvider.kt</span></div><h1>WPCrashLoggingDataProvider.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.util.crashlogging
+
+import android.content.SharedPreferences
+import com.automattic.android.tracks.crashlogging.CrashLoggingDataProvider
+import com.automattic.android.tracks.crashlogging.CrashLoggingUser
+import com.automattic.android.tracks.crashlogging.EventLevel
+import com.automattic.android.tracks.crashlogging.ExtraKnownKey
+import org.wordpress.android.BuildConfig
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.util.BuildConfigWrapper
+import org.wordpress.android.util.EncryptedLogging
+import org.wordpress.android.util.LocaleManagerWrapper
+import org.wordpress.android.util.LogFileProviderWrapper
+import org.wordpress.android.viewmodel.ResourceProvider
+import java.util.Locale
+import javax.inject.Inject
+
+<span class="fc" id="L19">class WPCrashLoggingDataProvider @Inject constructor(</span>
+<span class="fc" id="L20">    private val sharedPreferences: SharedPreferences,</span>
+<span class="fc" id="L21">    private val resourceProvider: ResourceProvider,</span>
+<span class="fc" id="L22">    private val accountStore: AccountStore,</span>
+<span class="fc" id="L23">    private val localeManager: LocaleManagerWrapper,</span>
+<span class="fc" id="L24">    private val encryptedLogging: EncryptedLogging,</span>
+<span class="fc" id="L25">    private val logFileProvider: LogFileProviderWrapper,</span>
+<span class="fc" id="L26">    private val buildConfig: BuildConfigWrapper</span>
+) : CrashLoggingDataProvider {
+<span class="fc" id="L28">    override val buildType: String = BuildConfig.BUILD_TYPE</span>
+<span class="fc" id="L29">    override val enableCrashLoggingLogs: Boolean = BuildConfig.DEBUG</span>
+    override val locale: Locale
+<span class="fc" id="L31">        get() = localeManager.getLocale()</span>
+<span class="fc" id="L32">    override val releaseName: String = BuildConfig.VERSION_NAME</span>
+<span class="fc" id="L33">    override val sentryDSN: String = BuildConfig.SENTRY_DSN</span>
+
+    override fun applicationContextProvider(): Map&lt;String, String&gt; {
+<span class="nc" id="L36">        return emptyMap()</span>
+    }
+
+    override fun crashLoggingEnabled(): Boolean {
+<span class="nc bnc" id="L40" title="All 2 branches missed.">        if (buildConfig.isDebug()) {</span>
+<span class="nc" id="L41">            return false</span>
+        }
+
+<span class="nc" id="L44">        val hasUserAllowedReporting = sharedPreferences.getBoolean(</span>
+<span class="nc" id="L45">                resourceProvider.getString(R.string.pref_key_send_crash),</span>
+<span class="nc" id="L46">                true</span>
+        )
+<span class="nc" id="L48">        return hasUserAllowedReporting</span>
+    }
+
+    override fun extraKnownKeys(): List&lt;ExtraKnownKey&gt; {
+<span class="nc" id="L52">        return listOf(EXTRA_UUID)</span>
+    }
+
+    /**
+     * If Sentry is unable to upload the event in its first attempt, it'll call the `setBeforeSend` callback
+     * before trying to send it again. This can be easily reproduced by turning off network connectivity
+     * and re-launching the app over and over again which will hit this callback each time.
+     *
+     * The problem with that is it'll keep queuing more and more logs to be uploaded to MC and more
+     * importantly, it'll set the `uuid` of the Sentry event to the log file at the time of the successful
+     * Sentry request. Since we are interested in the logs for when the crash happened, this would not be
+     * correct for us.
+     *
+     * We can simply fix this issue by checking if the [EXTRA_UUID] field is already set.
+     */
+    override fun provideExtrasForEvent(
+        currentExtras: Map&lt;ExtraKnownKey, String&gt;,
+        eventLevel: EventLevel
+    ): Map&lt;ExtraKnownKey, String&gt; {
+<span class="nc bnc" id="L71" title="All 2 branches missed.">        return currentExtras + if (currentExtras[EXTRA_UUID] == null) {</span>
+<span class="nc" id="L72">            appendEncryptedLogsUuid(eventLevel)</span>
+        } else {
+<span class="nc" id="L74">            emptyMap()</span>
+        }
+    }
+
+    private fun appendEncryptedLogsUuid(eventLevel: EventLevel): Map&lt;ExtraKnownKey, String&gt; {
+<span class="nc" id="L79">        val encryptedLogsUuid = mutableMapOf&lt;ExtraKnownKey, String&gt;()</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">        logFileProvider.getLogFiles().lastOrNull()?.let { logFile -&gt;</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">            if (logFile.exists()) {</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">                encryptedLogging.encryptAndUploadLogFile(</span>
+<span class="nc" id="L83">                        logFile = logFile,</span>
+<span class="nc bnc" id="L84" title="All 2 branches missed.">                        shouldStartUploadImmediately = eventLevel != EventLevel.FATAL</span>
+<span class="nc" id="L85">                )?.let { uuid -&gt;</span>
+<span class="nc" id="L86">                    encryptedLogsUuid.put(EXTRA_UUID, uuid)</span>
+                }
+            }
+<span class="nc" id="L89">        }</span>
+<span class="nc" id="L90">        return encryptedLogsUuid</span>
+    }
+
+    override fun shouldDropWrappingException(module: String, type: String, value: String): Boolean {
+<span class="nc bnc" id="L94" title="All 2 branches missed.">        return module == EVENT_BUS_MODULE &amp;&amp;</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">                type == EVENT_BUS_EXCEPTION &amp;&amp;</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">                value == EVENT_BUS_INVOKING_SUBSCRIBER_FAILED_ERROR</span>
+    }
+
+    override fun userProvider(): CrashLoggingUser? {
+<span class="nc bnc" id="L100" title="All 2 branches missed.">        return accountStore.account?.let { accountModel -&gt;</span>
+<span class="nc" id="L101">            CrashLoggingUser(</span>
+<span class="nc" id="L102">                    userID = accountModel.userId.toString(),</span>
+<span class="nc" id="L103">                    email = accountModel.email,</span>
+<span class="nc" id="L104">                    username = accountModel.userName</span>
+            )
+        }
+    }
+
+    companion object {
+        const val EXTRA_UUID = &quot;uuid&quot;
+        const val EVENT_BUS_MODULE = &quot;org.greenrobot.eventbus&quot;
+        const val EVENT_BUS_EXCEPTION = &quot;EventBusException&quot;
+        const val EVENT_BUS_INVOKING_SUBSCRIBER_FAILED_ERROR = &quot;Invoking subscriber failed&quot;
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

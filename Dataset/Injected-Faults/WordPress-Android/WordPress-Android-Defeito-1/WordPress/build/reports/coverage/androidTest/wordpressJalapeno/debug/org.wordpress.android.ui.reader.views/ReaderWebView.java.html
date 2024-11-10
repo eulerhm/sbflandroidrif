@@ -1,0 +1,427 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderWebView.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.views</a> &gt; <span class="el_source">ReaderWebView.java</span></div><h1>ReaderWebView.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.views;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.graphics.Color;
+import android.os.Handler;
+import android.os.Message;
+import android.text.TextUtils;
+import android.util.AttributeSet;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.webkit.CookieManager;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.ui.WPWebView;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.UrlUtils;
+import org.wordpress.android.util.WPUrlUtils;
+import org.wordpress.android.util.helpers.WebChromeClientWithVideoPoster;
+
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
+
+import javax.inject.Inject;
+
+/*
+ * WebView descendant used by ReaderPostDetailFragment - handles
+ * displaying fullscreen video and detecting url/image clicks
+ */
+public class ReaderWebView extends WPWebView {
+    public interface ReaderWebViewUrlClickListener {
+        @SuppressWarnings(&quot;SameReturnValue&quot;)
+        boolean onUrlClick(String url);
+
+        boolean onPageJumpClick(String pageJump);
+
+        boolean onImageUrlClick(String imageUrl, View view, int x, int y);
+
+        boolean onFileDownloadClick(String fileUrl);
+    }
+
+    public interface ReaderCustomViewListener {
+        void onCustomViewShown();
+
+        void onCustomViewHidden();
+
+        ViewGroup onRequestCustomView();
+
+        ViewGroup onRequestContentView();
+    }
+
+    public interface ReaderWebViewPageFinishedListener {
+        void onPageFinished(WebView view, String url);
+    }
+
+    /**
+     * Timeout in milliseconds for read / connect timeouts
+     */
+    private static final int TIMEOUT_MS = 30000;
+
+    private ReaderWebChromeClient mReaderChromeClient;
+    private ReaderCustomViewListener mCustomViewListener;
+    private ReaderWebViewUrlClickListener mUrlClickListener;
+    private ReaderWebViewPageFinishedListener mPageFinishedListener;
+
+    private static String mToken;
+    private static boolean mIsPrivatePost;
+    private static boolean mBlogSchemeIsHttps;
+
+    private boolean mIsDestroyed;
+    @Inject AccountStore mAccountStore;
+
+    public ReaderWebView(Context context) {
+<span class="nc" id="L82">        super(context);</span>
+<span class="nc" id="L83">        init(context);</span>
+<span class="nc" id="L84">    }</span>
+
+    public ReaderWebView(Context context, AttributeSet attrs) {
+<span class="nc" id="L87">        super(context, attrs);</span>
+<span class="nc" id="L88">        init(context);</span>
+<span class="nc" id="L89">    }</span>
+
+    public ReaderWebView(Context context, AttributeSet attrs, int defStyle) {
+<span class="nc" id="L92">        super(context, attrs, defStyle);</span>
+<span class="nc" id="L93">        init(context);</span>
+<span class="nc" id="L94">    }</span>
+
+    @SuppressLint(&quot;NewApi&quot;)
+    private void init(Context context) {
+<span class="nc" id="L98">        ((WordPress) context.getApplicationContext()).component().inject(this);</span>
+<span class="nc" id="L99">        setBackgroundColor(Color.TRANSPARENT);</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">        if (!isInEditMode()) {</span>
+<span class="nc" id="L101">            mToken = mAccountStore.getAccessToken();</span>
+
+<span class="nc" id="L103">            mReaderChromeClient = new ReaderWebChromeClient(this);</span>
+<span class="nc" id="L104">            this.setWebChromeClient(mReaderChromeClient);</span>
+<span class="nc" id="L105">            this.setWebViewClient(new ReaderWebViewClient(this));</span>
+<span class="nc" id="L106">            this.getSettings().setUserAgentString(WordPress.getUserAgent());</span>
+<span class="nc" id="L107">            this.getSettings().setMediaPlaybackRequiresUserGesture(false);</span>
+
+            // Enable third-party cookies since they are disabled by default;
+            // we need third-party cookies to support authenticated images
+<span class="nc" id="L111">            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true);</span>
+<span class="nc" id="L112">            this.setDownloadListener(</span>
+                    (url, userAgent, contentDisposition, mimetype, contentLength) -&gt; {
+<span class="nc bnc" id="L114" title="All 2 branches missed.">                        if (hasUrlClickListener()) {</span>
+<span class="nc" id="L115">                            mUrlClickListener.onFileDownloadClick(url);</span>
+                        }
+<span class="nc" id="L117">                    });</span>
+        }
+<span class="nc" id="L119">    }</span>
+
+    @Override
+    public void destroy() {
+<span class="nc" id="L123">        mIsDestroyed = true;</span>
+<span class="nc" id="L124">        super.destroy();</span>
+<span class="nc" id="L125">    }</span>
+
+    public boolean isDestroyed() {
+<span class="nc" id="L128">        return mIsDestroyed;</span>
+    }
+
+
+    public void clearContent() {
+<span class="nc" id="L133">        loadUrl(&quot;about:blank&quot;);</span>
+<span class="nc" id="L134">    }</span>
+
+    private ReaderWebViewUrlClickListener getUrlClickListener() {
+<span class="nc" id="L137">        return mUrlClickListener;</span>
+    }
+
+    public void setUrlClickListener(ReaderWebViewUrlClickListener listener) {
+<span class="nc" id="L141">        mUrlClickListener = listener;</span>
+<span class="nc" id="L142">    }</span>
+
+    private boolean hasUrlClickListener() {
+<span class="nc bnc" id="L145" title="All 2 branches missed.">        return (mUrlClickListener != null);</span>
+    }
+
+    private ReaderWebViewPageFinishedListener getPageFinishedListener() {
+<span class="nc" id="L149">        return mPageFinishedListener;</span>
+    }
+
+    public void setPageFinishedListener(ReaderWebViewPageFinishedListener listener) {
+<span class="nc" id="L153">        mPageFinishedListener = listener;</span>
+<span class="nc" id="L154">    }</span>
+
+    private boolean hasPageFinishedListener() {
+<span class="nc bnc" id="L157" title="All 2 branches missed.">        return (mPageFinishedListener != null);</span>
+    }
+
+    public void setCustomViewListener(ReaderCustomViewListener listener) {
+<span class="nc" id="L161">        mCustomViewListener = listener;</span>
+<span class="nc" id="L162">    }</span>
+
+    private boolean hasCustomViewListener() {
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        return (mCustomViewListener != null);</span>
+    }
+
+    private ReaderCustomViewListener getCustomViewListener() {
+<span class="nc" id="L169">        return mCustomViewListener;</span>
+    }
+
+    public void setIsPrivatePost(boolean isPrivatePost) {
+<span class="nc" id="L173">        mIsPrivatePost = isPrivatePost;</span>
+<span class="nc" id="L174">    }</span>
+
+    public void setBlogSchemeIsHttps(boolean blogSchemeIsHttps) {
+<span class="nc" id="L177">        mBlogSchemeIsHttps = blogSchemeIsHttps;</span>
+<span class="nc" id="L178">    }</span>
+
+    private static boolean isValidClickedUrl(String url) {
+        // only return true for http(s) urls so we avoid file: and data: clicks
+<span class="nc bnc" id="L182" title="All 6 branches missed.">        return (url != null &amp;&amp; (url.startsWith(&quot;http&quot;) || url.startsWith(&quot;wordpress:&quot;)));</span>
+    }
+
+    public boolean isCustomViewShowing() {
+<span class="nc" id="L186">        return mReaderChromeClient.isCustomViewShowing();</span>
+    }
+
+    public void hideCustomView() {
+<span class="nc bnc" id="L190" title="All 2 branches missed.">        if (isCustomViewShowing()) {</span>
+<span class="nc" id="L191">            mReaderChromeClient.onHideCustomView();</span>
+        }
+<span class="nc" id="L193">    }</span>
+
+    /***
+     * Checks if the tapped image is a child of an anchor tag we want to respect.
+     * If so, we want to ignore the image click so that the wrapping src gets handled.
+     * The additional URL grab is an additional check for the appropriate host or URL structure.
+     *
+     * Cases:
+     * 1. Instagram
+     * 2. The Story block
+     *
+     * @param hr - the HitTestResult
+     * @return true if the image click should be ignored and deferred to the parent anchor tag
+     */
+    private boolean isValidEmbeddedImageClick(HitTestResult hr) {
+        // Referenced https://pacheco.dev/posts/android/webview-image-anchor/
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        if (hr.getType() == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {</span>
+<span class="nc" id="L210">            Handler handler = new Handler();</span>
+<span class="nc" id="L211">            Message message = handler.obtainMessage();</span>
+
+<span class="nc" id="L213">            this.requestFocusNodeHref(message);</span>
+<span class="nc" id="L214">            String url = message.getData().getString(&quot;url&quot;);</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">            if (url == null) {</span>
+<span class="nc" id="L216">                return false;</span>
+            }
+
+<span class="nc bnc" id="L219" title="All 4 branches missed.">            return url.contains(&quot;ig_embed&quot;) || url.contains(&quot;wp-story&quot;);</span>
+        } else {
+<span class="nc" id="L221">            return false;</span>
+        }
+    }
+
+    /*
+     * detect when a link is tapped
+     */
+    @SuppressLint(&quot;ClickableViewAccessibility&quot;) // works as is
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+<span class="nc bnc" id="L231" title="All 4 branches missed.">        if (event.getAction() == MotionEvent.ACTION_UP &amp;&amp; mUrlClickListener != null) {</span>
+<span class="nc" id="L232">            HitTestResult hr = getHitTestResult();</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">            if (hr != null) {</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">                if (isValidClickedUrl(hr.getExtra())) {</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">                    if (UrlUtils.isImageUrl(hr.getExtra())) {</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">                        if (isValidEmbeddedImageClick(hr)) {</span>
+<span class="nc" id="L237">                            return super.onTouchEvent(event);</span>
+                        } else {
+<span class="nc" id="L239">                            return mUrlClickListener.onImageUrlClick(</span>
+<span class="nc" id="L240">                                    hr.getExtra(),</span>
+                                    this,
+<span class="nc" id="L242">                                    (int) event.getX(),</span>
+<span class="nc" id="L243">                                    (int) event.getY());</span>
+                        }
+                    } else {
+<span class="nc" id="L246">                        return mUrlClickListener.onUrlClick(hr.getExtra());</span>
+                    }
+                } else {
+<span class="nc" id="L249">                    String pageJump = UrlUtils.getPageJumpOrNull(hr.getExtra());</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">                    if (null != pageJump) {</span>
+<span class="nc" id="L251">                        return mUrlClickListener.onPageJumpClick(pageJump);</span>
+                    }
+                }
+            }
+        }
+<span class="nc" id="L256">        return super.onTouchEvent(event);</span>
+    }
+
+    private static class ReaderWebViewClient extends WebViewClient {
+        private final ReaderWebView mReaderWebView;
+
+<span class="nc" id="L262">        ReaderWebViewClient(ReaderWebView readerWebView) {</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">            if (readerWebView == null) {</span>
+<span class="nc" id="L264">                throw new IllegalArgumentException(&quot;ReaderWebViewClient requires readerWebView&quot;);</span>
+            }
+<span class="nc" id="L266">            mReaderWebView = readerWebView;</span>
+<span class="nc" id="L267">        }</span>
+
+
+
+        @Override
+        public void onPageFinished(WebView view, String url) {
+<span class="nc bnc" id="L273" title="All 2 branches missed.">            if (mReaderWebView.hasPageFinishedListener()) {</span>
+<span class="nc" id="L274">                mReaderWebView.getPageFinishedListener().onPageFinished(view, url);</span>
+            }
+<span class="nc" id="L276">        }</span>
+
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            // fire the url click listener, but only do this when webView has
+            // loaded (is visible) - have seen some posts containing iframes
+            // automatically try to open urls (without being clicked)
+            // before the page has loaded
+<span class="nc bnc" id="L284" title="All 2 branches missed.">            return view.getVisibility() == View.VISIBLE</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">                   &amp;&amp; mReaderWebView.hasUrlClickListener()</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">                   &amp;&amp; isValidClickedUrl(url)</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">                   &amp;&amp; mReaderWebView.getUrlClickListener().onUrlClick(url);</span>
+        }
+
+        @SuppressWarnings(&quot;deprecation&quot;)
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
+<span class="nc" id="L293">            URL imageUrl = null;</span>
+<span class="nc bnc" id="L294" title="All 6 branches missed.">            if (mIsPrivatePost &amp;&amp; mBlogSchemeIsHttps &amp;&amp; UrlUtils.isImageUrl(url)) {</span>
+                try {
+<span class="nc" id="L296">                    imageUrl = new URL(UrlUtils.makeHttps(url));</span>
+<span class="nc" id="L297">                } catch (MalformedURLException e) {</span>
+<span class="nc" id="L298">                    AppLog.e(AppLog.T.READER, e);</span>
+<span class="nc" id="L299">                }</span>
+            }
+            // Intercept requests for private images and add the WP.com authorization header
+<span class="nc bnc" id="L302" title="All 4 branches missed.">            if (imageUrl != null &amp;&amp; WPUrlUtils.safeToAddWordPressComAuthToken(imageUrl)</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                &amp;&amp; !TextUtils.isEmpty(mToken)) {</span>
+                try {
+<span class="nc" id="L305">                    HttpURLConnection conn = (HttpURLConnection) imageUrl.openConnection();</span>
+<span class="nc" id="L306">                    conn.setRequestProperty(&quot;Authorization&quot;, &quot;Bearer &quot; + mToken);</span>
+<span class="nc" id="L307">                    conn.setReadTimeout(TIMEOUT_MS);</span>
+<span class="nc" id="L308">                    conn.setConnectTimeout(TIMEOUT_MS);</span>
+<span class="nc" id="L309">                    conn.setRequestProperty(&quot;User-Agent&quot;, WordPress.getUserAgent());</span>
+<span class="nc" id="L310">                    conn.setRequestProperty(&quot;Connection&quot;, &quot;Keep-Alive&quot;);</span>
+<span class="nc" id="L311">                    return new WebResourceResponse(conn.getContentType(),</span>
+<span class="nc" id="L312">                            conn.getContentEncoding(),</span>
+<span class="nc" id="L313">                            conn.getInputStream());</span>
+<span class="nc" id="L314">                } catch (IOException e) {</span>
+<span class="nc" id="L315">                    AppLog.e(AppLog.T.READER, e);</span>
+                }
+            }
+
+<span class="nc" id="L319">            return super.shouldInterceptRequest(view, url);</span>
+        }
+    }
+
+    private static class ReaderWebChromeClient extends WebChromeClientWithVideoPoster {
+        private final ReaderWebView mReaderWebView;
+        private View mCustomView;
+        private CustomViewCallback mCustomViewCallback;
+
+        ReaderWebChromeClient(ReaderWebView readerWebView) {
+<span class="nc" id="L329">            super(readerWebView, R.drawable.media_movieclip);</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">            if (readerWebView == null) {</span>
+<span class="nc" id="L331">                throw new IllegalArgumentException(&quot;ReaderWebChromeClient requires readerWebView&quot;);</span>
+            }
+<span class="nc" id="L333">            mReaderWebView = readerWebView;</span>
+<span class="nc" id="L334">        }</span>
+
+        /*
+         * request the view that will host the fullscreen video
+         */
+        private ViewGroup getTargetView() {
+<span class="nc bnc" id="L340" title="All 2 branches missed.">            if (mReaderWebView.hasCustomViewListener()) {</span>
+<span class="nc" id="L341">                return mReaderWebView.getCustomViewListener().onRequestCustomView();</span>
+            } else {
+<span class="nc" id="L343">                return null;</span>
+            }
+        }
+
+        /*
+         * request the view that should be hidden when showing fullscreen video
+         */
+        private ViewGroup getContentView() {
+<span class="nc bnc" id="L351" title="All 2 branches missed.">            if (mReaderWebView.hasCustomViewListener()) {</span>
+<span class="nc" id="L352">                return mReaderWebView.getCustomViewListener().onRequestContentView();</span>
+            } else {
+<span class="nc" id="L354">                return null;</span>
+            }
+        }
+
+        @Override
+        public void onShowCustomView(View view, CustomViewCallback callback) {
+<span class="nc" id="L360">            AppLog.i(AppLog.T.READER, &quot;onShowCustomView&quot;);</span>
+
+<span class="nc bnc" id="L362" title="All 2 branches missed.">            if (mCustomView != null) {</span>
+<span class="nc" id="L363">                AppLog.w(AppLog.T.READER, &quot;customView already showing&quot;);</span>
+<span class="nc" id="L364">                onHideCustomView();</span>
+<span class="nc" id="L365">                return;</span>
+            }
+
+            // hide the post detail content
+<span class="nc" id="L369">            ViewGroup contentView = getContentView();</span>
+<span class="nc bnc" id="L370" title="All 2 branches missed.">            if (contentView != null) {</span>
+<span class="nc" id="L371">                contentView.setVisibility(View.INVISIBLE);</span>
+            }
+
+            // show the full screen view
+<span class="nc" id="L375">            ViewGroup targetView = getTargetView();</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">            if (targetView != null) {</span>
+<span class="nc" id="L377">                targetView.addView(view);</span>
+<span class="nc" id="L378">                targetView.setVisibility(View.VISIBLE);</span>
+            }
+
+<span class="nc bnc" id="L381" title="All 2 branches missed.">            if (mReaderWebView.hasCustomViewListener()) {</span>
+<span class="nc" id="L382">                mReaderWebView.getCustomViewListener().onCustomViewShown();</span>
+            }
+
+<span class="nc" id="L385">            mCustomView = view;</span>
+<span class="nc" id="L386">            mCustomViewCallback = callback;</span>
+<span class="nc" id="L387">        }</span>
+
+        @Override
+        public void onHideCustomView() {
+<span class="nc" id="L391">            AppLog.i(AppLog.T.READER, &quot;onHideCustomView&quot;);</span>
+
+<span class="nc bnc" id="L393" title="All 2 branches missed.">            if (mCustomView == null) {</span>
+<span class="nc" id="L394">                AppLog.w(AppLog.T.READER, &quot;customView does not exist&quot;);</span>
+<span class="nc" id="L395">                return;</span>
+            }
+
+            // hide the target view
+<span class="nc" id="L399">            ViewGroup targetView = getTargetView();</span>
+<span class="nc bnc" id="L400" title="All 2 branches missed.">            if (targetView != null) {</span>
+<span class="nc" id="L401">                targetView.removeView(mCustomView);</span>
+<span class="nc" id="L402">                targetView.setVisibility(View.GONE);</span>
+            }
+
+            // redisplay the post detail content
+<span class="nc" id="L406">            ViewGroup contentView = getContentView();</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">            if (contentView != null) {</span>
+<span class="nc" id="L408">                contentView.setVisibility(View.VISIBLE);</span>
+            }
+
+<span class="nc bnc" id="L411" title="All 2 branches missed.">            if (mCustomViewCallback != null) {</span>
+<span class="nc" id="L412">                mCustomViewCallback.onCustomViewHidden();</span>
+            }
+<span class="nc bnc" id="L414" title="All 2 branches missed.">            if (mReaderWebView.hasCustomViewListener()) {</span>
+<span class="nc" id="L415">                mReaderWebView.getCustomViewListener().onCustomViewHidden();</span>
+            }
+
+<span class="nc" id="L418">            mCustomView = null;</span>
+<span class="nc" id="L419">            mCustomViewCallback = null;</span>
+<span class="nc" id="L420">        }</span>
+
+        boolean isCustomViewShowing() {
+<span class="nc bnc" id="L423" title="All 2 branches missed.">            return (mCustomView != null);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

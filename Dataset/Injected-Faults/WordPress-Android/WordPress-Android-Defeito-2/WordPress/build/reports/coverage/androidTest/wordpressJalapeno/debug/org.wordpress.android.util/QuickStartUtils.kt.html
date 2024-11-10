@@ -1,0 +1,366 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>QuickStartUtils.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.util</a> &gt; <span class="el_source">QuickStartUtils.kt</span></div><h1>QuickStartUtils.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.util
+
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.res.Resources
+import android.graphics.drawable.Drawable
+import android.os.Bundle
+import android.text.Spannable
+import android.text.SpannableStringBuilder
+import android.text.style.ForegroundColorSpan
+import android.text.style.ImageSpan
+import android.util.LayoutDirection
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.view.ViewGroup.MarginLayoutParams
+import androidx.core.graphics.drawable.DrawableCompat
+import androidx.core.text.HtmlCompat
+import androidx.core.text.layoutDirection
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.QuickStartStore
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartTask
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartTaskType
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartTaskType.UNKNOWN
+import org.wordpress.android.ui.RequestCodes
+import org.wordpress.android.ui.prefs.AppPrefs
+import org.wordpress.android.ui.quickstart.QuickStartReminderReceiver
+import org.wordpress.android.ui.quickstart.QuickStartTaskDetails
+import org.wordpress.android.ui.quickstart.QuickStartType
+import org.wordpress.android.ui.themes.ThemeBrowserUtils
+import org.wordpress.android.util.extensions.getColorFromAttribute
+import java.util.Locale
+
+@Suppress(&quot;TooManyFunctions&quot;)
+object QuickStartUtils {
+<span class="nc" id="L40">    private val themeBrowserUtils = ThemeBrowserUtils()</span>
+    private const val QUICK_START_REMINDER_INTERVAL = (24 * 60 * 60 * 1000 * 2).toLong() // two days
+    const val ICON_NOT_SET = -1
+
+    /**
+     * Formats the string, to highlight text between %1$s and %2$s with specified color, and add an icon
+     * in front of it if necessary
+     *
+     * @param context Context used to access resources
+     * @param messageId resources id of the message to display. If string contains basic HTML tags inside
+     * &lt;![CDATA[ ]]&gt;, they will be converted to Spans.
+     * @param iconId resource if of the icon that goes before the highlighted area
+     */
+    @JvmStatic
+    @JvmOverloads
+<span class="nc" id="L55">    fun stylizeQuickStartPrompt(</span>
+        activityContext: Context,
+        messageId: Int,
+<span class="nc" id="L58">        iconId: Int = ICON_NOT_SET</span>
+    ): Spannable {
+<span class="nc" id="L60">        val spanTagOpen = activityContext.getString(R.string.quick_start_span_start)</span>
+<span class="nc" id="L61">        val spanTagEnd = activityContext.getString(R.string.quick_start_span_end)</span>
+<span class="nc" id="L62">        var formattedMessage = activityContext.getString(messageId, spanTagOpen, spanTagEnd)</span>
+
+<span class="nc" id="L64">        val startOfHighlight = formattedMessage.indexOf(spanTagOpen)</span>
+
+        // remove the &lt;span&gt; tag
+<span class="nc" id="L67">        formattedMessage = formattedMessage.replaceFirst(spanTagOpen, &quot;&quot;)</span>
+        /**
+         * Some string resources contain whitespaces before and after the placeholder tags.
+         * For example: `Tap %1$s Customize %2$s to start` becomes `Tap &lt;span&gt; Customize &lt;/span&gt; to start`.
+         * However, when we remove &quot;&lt;span&gt;&quot; the string ends up having two whitespaces.
+         */
+<span class="nc" id="L73">        formattedMessage = formattedMessage.replaceFirst(&quot;  &quot;, &quot; &quot;)</span>
+
+<span class="nc" id="L75">        val endOfHighlight = formattedMessage.indexOf(spanTagEnd)</span>
+
+        // remove the &lt;/span&gt; tag
+<span class="nc" id="L78">        formattedMessage = formattedMessage.replaceFirst(spanTagEnd, &quot;&quot;)</span>
+<span class="nc" id="L79">        formattedMessage = formattedMessage.replaceFirst(&quot;  &quot;, &quot; &quot;)</span>
+
+<span class="nc" id="L81">        val mutableSpannedMessage = SpannableStringBuilder(</span>
+<span class="nc" id="L82">                HtmlCompat.fromHtml(formattedMessage, HtmlCompat.FROM_HTML_MODE_COMPACT)</span>
+        )
+        // nothing to highlight
+<span class="nc bnc" id="L85" title="All 4 branches missed.">        if (startOfHighlight != -1 &amp;&amp; endOfHighlight != -1) {</span>
+<span class="nc" id="L86">            val highlightColor = activityContext.getColorFromAttribute(R.attr.colorSurface)</span>
+<span class="nc" id="L87">            mutableSpannedMessage.setSpan(</span>
+<span class="nc" id="L88">                    ForegroundColorSpan(highlightColor),</span>
+<span class="nc" id="L89">                    startOfHighlight, endOfHighlight, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE</span>
+            )
+
+<span class="nc" id="L92">            val icon: Drawable? = try {</span>
+                // .mutate() allows us to avoid sharing the state of drawables
+<span class="nc bnc" id="L94" title="All 2 branches missed.">                activityContext.getDrawable(iconId)?.mutate()</span>
+<span class="nc" id="L95">            } catch (e: Resources.NotFoundException) {</span>
+<span class="nc" id="L96">                null</span>
+            }
+
+<span class="nc bnc" id="L99" title="All 2 branches missed.">            if (icon != null) {</span>
+<span class="nc" id="L100">                val iconSize = activityContext.resources</span>
+<span class="nc" id="L101">                        .getDimensionPixelOffset(R.dimen.dialog_snackbar_max_icons_size)</span>
+<span class="nc" id="L102">                icon.setBounds(0, 0, iconSize, iconSize)</span>
+
+<span class="nc" id="L104">                DrawableCompat.setTint(icon, highlightColor)</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                if (startOfHighlight &gt; 0) {</span>
+<span class="nc" id="L106">                    mutableSpannedMessage.insert(startOfHighlight - 1, &quot;  &quot;)</span>
+                } else {
+<span class="nc" id="L108">                    mutableSpannedMessage.insert(startOfHighlight, &quot;  &quot;)</span>
+                }
+
+<span class="nc" id="L111">                mutableSpannedMessage.setSpan(</span>
+<span class="nc" id="L112">                        ImageSpan(icon), startOfHighlight, startOfHighlight + 1,</span>
+<span class="nc" id="L113">                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE</span>
+                )
+            }
+        }
+
+<span class="nc" id="L118">        return mutableSpannedMessage</span>
+    }
+
+    /**
+     * Adds animated quick start focus point targetedView to the top level parent,
+     * and places it in the top-right corner of the specified targetedView.
+     *
+     * @param topLevelParent Parent where quick start focus targetedView will be added.
+     * Usually Relative or Frame layout
+     * @param targetedView View in top-right corner of which the quick start focus view will be placed. Child of
+     * topLevelParent
+     * @param rightOffset specifies in px how much should we move view to the left from the right
+     * @param topOffset specifies in px how much should we move view to the bottom from the top
+     */
+    @JvmStatic
+    fun addQuickStartFocusPointAboveTheView(
+        topLevelParent: ViewGroup,
+        targetedView: View,
+        rightOffset: Int,
+        topOffset: Int
+    ) {
+<span class="nc" id="L139">        topLevelParent.post {</span>
+<span class="nc" id="L140">            val quickStartFocusPointView = LayoutInflater.from(topLevelParent.context)</span>
+<span class="nc" id="L141">                    .inflate(R.layout.quick_start_focus_point_view, topLevelParent, false)</span>
+<span class="nc" id="L142">            val focusPointSize =</span>
+<span class="nc" id="L143">                    topLevelParent.context.resources.getDimensionPixelOffset(R.dimen.quick_start_focus_point_size)</span>
+
+<span class="nc" id="L145">            val topLevelParentViewLocation = IntArray(2)</span>
+<span class="nc" id="L146">            topLevelParent.getLocationOnScreen(topLevelParentViewLocation)</span>
+
+<span class="nc" id="L148">            val topLevelParentsHorizontalOffset = topLevelParentViewLocation[0]</span>
+<span class="nc" id="L149">            val topLevelParentsVerticalOffset = topLevelParentViewLocation[1]</span>
+
+<span class="nc" id="L151">            val focusPointTargetViewLocation = IntArray(2)</span>
+<span class="nc" id="L152">            targetedView.getLocationOnScreen(focusPointTargetViewLocation)</span>
+
+<span class="nc bnc" id="L154" title="All 2 branches missed.">            val realFocusPointContainerX = if (Locale.getDefault().layoutDirection == LayoutDirection.RTL) {</span>
+<span class="nc" id="L155">                (topLevelParentsHorizontalOffset + topLevelParent.width) -</span>
+<span class="nc" id="L156">                        (focusPointTargetViewLocation[0] + targetedView.width)</span>
+            } else {
+<span class="nc" id="L158">                focusPointTargetViewLocation[0] - topLevelParentsHorizontalOffset</span>
+            }
+<span class="nc" id="L160">            val realFocusPointOffsetFromTheLeft = targetedView.width - focusPointSize - rightOffset</span>
+
+<span class="nc" id="L162">            val focusPointContainerY = focusPointTargetViewLocation[1] - topLevelParentsVerticalOffset</span>
+
+<span class="nc" id="L164">            val x = realFocusPointContainerX + realFocusPointOffsetFromTheLeft</span>
+<span class="nc" id="L165">            val y = focusPointContainerY + topOffset</span>
+
+<span class="nc bnc" id="L167" title="All 2 branches missed.">            val params = quickStartFocusPointView.layoutParams as MarginLayoutParams</span>
+<span class="nc" id="L168">            params.marginStart = x</span>
+<span class="nc" id="L169">            params.topMargin = y</span>
+<span class="nc" id="L170">            topLevelParent.addView(quickStartFocusPointView)</span>
+
+<span class="nc" id="L172">            quickStartFocusPointView.post {</span>
+<span class="nc" id="L173">                quickStartFocusPointView.layoutParams = params</span>
+<span class="nc" id="L174">            }</span>
+<span class="nc" id="L175">        }</span>
+<span class="nc" id="L176">    }</span>
+
+    @JvmStatic
+    fun removeQuickStartFocusPoint(topLevelParent: ViewGroup) {
+<span class="nc" id="L180">        val focusPointView = topLevelParent.findViewById&lt;View&gt;(R.id.quick_start_focus_point)</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">        if (focusPointView != null) {</span>
+<span class="nc" id="L182">            val directParent = focusPointView.parent</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">            if (directParent is ViewGroup) {</span>
+<span class="nc" id="L184">                directParent.removeView(focusPointView)</span>
+            }
+        }
+<span class="nc" id="L187">    }</span>
+
+    @JvmStatic
+    fun isQuickStartAvailableForTheSite(siteModel: SiteModel): Boolean {
+<span class="nc bnc" id="L191" title="All 2 branches missed.">        return (siteModel.hasCapabilityManageOptions &amp;&amp;</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">                themeBrowserUtils.isAccessible(siteModel) &amp;&amp;</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">                SiteUtils.isAccessedViaWPComRest(siteModel))</span>
+    }
+
+    @Suppress(&quot;ComplexMethod&quot;)
+    @JvmStatic
+    fun getQuickStartListTappedTracker(task: QuickStartTask): Stat {
+<span class="nc bnc" id="L199" title="All 12 branches missed.">        return when (task.string) {</span>
+<span class="nc" id="L200">            QuickStartStore.QUICK_START_CREATE_SITE_LABEL -&gt; Stat.QUICK_START_LIST_CREATE_SITE_TAPPED</span>
+<span class="nc" id="L201">            QuickStartStore.QUICK_START_UPDATE_SITE_TITLE_LABEL -&gt; Stat.QUICK_START_LIST_CREATE_SITE_TAPPED</span>
+<span class="nc" id="L202">            QuickStartStore.QUICK_START_VIEW_SITE_LABEL -&gt; Stat.QUICK_START_LIST_VIEW_SITE_TAPPED</span>
+<span class="nc" id="L203">            QuickStartStore.QUICK_START_ENABLE_POST_SHARING_LABEL -&gt; Stat.QUICK_START_LIST_ADD_SOCIAL_TAPPED</span>
+<span class="nc" id="L204">            QuickStartStore.QUICK_START_PUBLISH_POST_LABEL -&gt; Stat.QUICK_START_LIST_PUBLISH_POST_TAPPED</span>
+<span class="nc" id="L205">            QuickStartStore.QUICK_START_FOLLOW_SITE_LABEL -&gt; Stat.QUICK_START_LIST_FOLLOW_SITE_TAPPED</span>
+<span class="nc" id="L206">            QuickStartStore.QUICK_START_UPLOAD_SITE_ICON_LABEL -&gt; Stat.QUICK_START_LIST_UPLOAD_ICON_TAPPED</span>
+            QuickStartStore.QUICK_START_CHECK_STATS_LABEL -&gt;
+<span class="nc" id="L208">                Stat.QUICK_START_LIST_CHECK_STATS_TAPPED</span>
+<span class="nc" id="L209">            QuickStartStore.QUICK_START_REVIEW_PAGES_LABEL -&gt; Stat.QUICK_START_LIST_REVIEW_PAGES_TAPPED</span>
+<span class="nc" id="L210">            QuickStartStore.QUICK_START_CHECK_NOTIFIATIONS_LABEL -&gt; Stat.QUICK_START_LIST_CHECK_NOTIFICATIONS_TAPPED</span>
+<span class="nc" id="L211">            QuickStartStore.QUICK_START_UPLOAD_MEDIA_LABEL -&gt; Stat.QUICK_START_LIST_UPLOAD_MEDIA_TAPPED</span>
+<span class="nc" id="L212">            else -&gt; throw IllegalStateException(&quot;The task '$task' is not valid&quot;)</span>
+        }
+    }
+
+    @Suppress(&quot;ComplexMethod&quot;)
+    @JvmStatic
+    fun getQuickStartListSkippedTracker(task: QuickStartTask): Stat {
+<span class="nc bnc" id="L219" title="All 12 branches missed.">        return when (task.string) {</span>
+            // Skipping create site task should never happen as of Quick Start v2.  The task is automatically set as
+            // completed when Quick Start v2 begins since it is initiated when a new site is created.  The task case
+            // is included here for completeness.
+<span class="nc" id="L223">            QuickStartStore.QUICK_START_CREATE_SITE_LABEL -&gt; Stat.QUICK_START_LIST_CREATE_SITE_SKIPPED</span>
+<span class="nc" id="L224">            QuickStartStore.QUICK_START_UPDATE_SITE_TITLE_LABEL -&gt; Stat.QUICK_START_LIST_CREATE_SITE_SKIPPED</span>
+<span class="nc" id="L225">            QuickStartStore.QUICK_START_VIEW_SITE_LABEL -&gt; Stat.QUICK_START_LIST_VIEW_SITE_SKIPPED</span>
+<span class="nc" id="L226">            QuickStartStore.QUICK_START_ENABLE_POST_SHARING_LABEL -&gt; Stat.QUICK_START_LIST_ADD_SOCIAL_SKIPPED</span>
+<span class="nc" id="L227">            QuickStartStore.QUICK_START_PUBLISH_POST_LABEL -&gt; Stat.QUICK_START_LIST_PUBLISH_POST_SKIPPED</span>
+<span class="nc" id="L228">            QuickStartStore.QUICK_START_FOLLOW_SITE_LABEL -&gt; Stat.QUICK_START_LIST_FOLLOW_SITE_SKIPPED</span>
+<span class="nc" id="L229">            QuickStartStore.QUICK_START_UPLOAD_SITE_ICON_LABEL -&gt; Stat.QUICK_START_LIST_UPLOAD_ICON_SKIPPED</span>
+<span class="nc" id="L230">            QuickStartStore.QUICK_START_CHECK_STATS_LABEL -&gt; Stat.QUICK_START_LIST_CHECK_STATS_SKIPPED</span>
+<span class="nc" id="L231">            QuickStartStore.QUICK_START_REVIEW_PAGES_LABEL -&gt; Stat.QUICK_START_LIST_REVIEW_PAGES_SKIPPED</span>
+<span class="nc" id="L232">            QuickStartStore.QUICK_START_CHECK_NOTIFIATIONS_LABEL -&gt; Stat.QUICK_START_LIST_CHECK_NOTIFICATIONS_SKIPPED</span>
+<span class="nc" id="L233">            QuickStartStore.QUICK_START_UPLOAD_MEDIA_LABEL -&gt; Stat.QUICK_START_LIST_UPLOAD_MEDIA_SKIPPED</span>
+<span class="nc" id="L234">            else -&gt; throw IllegalStateException(&quot;The task '$task' is not valid&quot;)</span>
+        }
+    }
+
+    @Suppress(&quot;ComplexMethod&quot;)
+    fun getTaskCompletedTracker(task: QuickStartTask): Stat {
+<span class="nc bnc" id="L240" title="All 12 branches missed.">        return when (task.string) {</span>
+<span class="nc" id="L241">            QuickStartStore.QUICK_START_CREATE_SITE_LABEL -&gt; Stat.QUICK_START_CREATE_SITE_TASK_COMPLETED</span>
+<span class="nc" id="L242">            QuickStartStore.QUICK_START_UPDATE_SITE_TITLE_LABEL -&gt; Stat.QUICK_START_UPDATE_SITE_TITLE_COMPLETED</span>
+<span class="nc" id="L243">            QuickStartStore.QUICK_START_VIEW_SITE_LABEL -&gt; Stat.QUICK_START_VIEW_SITE_TASK_COMPLETED</span>
+<span class="nc" id="L244">            QuickStartStore.QUICK_START_ENABLE_POST_SHARING_LABEL -&gt; Stat.QUICK_START_SHARE_SITE_TASK_COMPLETED</span>
+<span class="nc" id="L245">            QuickStartStore.QUICK_START_PUBLISH_POST_LABEL -&gt; Stat.QUICK_START_PUBLISH_POST_TASK_COMPLETED</span>
+<span class="nc" id="L246">            QuickStartStore.QUICK_START_FOLLOW_SITE_LABEL -&gt; Stat.QUICK_START_FOLLOW_SITE_TASK_COMPLETED</span>
+<span class="nc" id="L247">            QuickStartStore.QUICK_START_UPLOAD_SITE_ICON_LABEL -&gt; Stat.QUICK_START_UPLOAD_ICON_COMPLETED</span>
+<span class="nc" id="L248">            QuickStartStore.QUICK_START_CHECK_STATS_LABEL -&gt; Stat.QUICK_START_CHECK_STATS_COMPLETED</span>
+<span class="nc" id="L249">            QuickStartStore.QUICK_START_REVIEW_PAGES_LABEL -&gt; Stat.QUICK_START_REVIEW_PAGES_TASK_COMPLETED</span>
+            QuickStartStore.QUICK_START_CHECK_NOTIFIATIONS_LABEL -&gt;
+<span class="nc" id="L251">                Stat.QUICK_START_CHECK_NOTIFICATIONS_TASK_COMPLETED</span>
+<span class="nc" id="L252">            QuickStartStore.QUICK_START_UPLOAD_MEDIA_LABEL -&gt; Stat.QUICK_START_UPLOAD_MEDIA_TASK_COMPLETED</span>
+<span class="nc" id="L253">            else -&gt; throw IllegalStateException(&quot;The task '$task' is not valid&quot;)</span>
+        }
+    }
+
+    fun startQuickStartReminderTimer(context: Context, quickStartTask: QuickStartTask) {
+<span class="nc" id="L258">        val intent = Intent(context, QuickStartReminderReceiver::class.java)</span>
+
+        // for some reason we have to use a bundle to pass serializable to broadcast receiver
+<span class="nc" id="L261">        val bundle = Bundle()</span>
+<span class="nc" id="L262">        bundle.putSerializable(QuickStartTaskDetails.KEY, QuickStartTaskDetails.getDetailsForTask(quickStartTask))</span>
+<span class="nc" id="L263">        intent.putExtra(QuickStartReminderReceiver.ARG_QUICK_START_TASK_BATCH, bundle)</span>
+
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager</span>
+<span class="nc" id="L266">        val pendingIntent = PendingIntent.getBroadcast(</span>
+<span class="nc" id="L267">                context,</span>
+<span class="nc" id="L268">                RequestCodes.QUICK_START_REMINDER_RECEIVER,</span>
+<span class="nc" id="L269">                intent,</span>
+<span class="nc" id="L270">                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE</span>
+        )
+<span class="nc" id="L272">        alarmManager.set(</span>
+<span class="nc" id="L273">                AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + QUICK_START_REMINDER_INTERVAL,</span>
+<span class="nc" id="L274">                pendingIntent</span>
+        )
+<span class="nc" id="L276">    }</span>
+
+    @JvmStatic
+    fun cancelQuickStartReminder(context: Context) {
+<span class="nc" id="L280">        val intent = Intent(context, QuickStartReminderReceiver::class.java)</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager</span>
+<span class="nc" id="L282">        val pendingIntent = PendingIntent.getBroadcast(</span>
+<span class="nc" id="L283">                context,</span>
+<span class="nc" id="L284">                RequestCodes.QUICK_START_REMINDER_RECEIVER,</span>
+<span class="nc" id="L285">                intent,</span>
+<span class="nc" id="L286">                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE</span>
+        )
+<span class="nc" id="L288">        alarmManager.cancel(pendingIntent)</span>
+<span class="nc" id="L289">    }</span>
+
+    /**
+     * This method tries to return the next uncompleted task of taskType
+     * if no uncompleted task of taskType remain it tries to find and return uncompleted task of other task type
+     */
+    @JvmStatic
+    fun getNextUncompletedQuickStartTaskForReminderNotification(
+        quickStartStore: QuickStartStore,
+        siteLocalId: Long,
+        taskType: QuickStartTaskType,
+        quickStartType: QuickStartType
+    ): QuickStartTask? {
+<span class="nc" id="L302">        val uncompletedTasksOfPreferredType = quickStartStore.getUncompletedTasksByType(siteLocalId, taskType)</span>
+
+<span class="nc" id="L304">        var nextTask: QuickStartTask? = null</span>
+
+<span class="nc bnc" id="L306" title="All 2 branches missed.">        if (uncompletedTasksOfPreferredType.isEmpty()) {</span>
+<span class="nc" id="L307">            val otherQuickStartTaskTypes = quickStartType.taskTypes</span>
+<span class="nc bnc" id="L308" title="All 6 branches missed.">                    .filter { it != taskType &amp;&amp; it != UNKNOWN }</span>
+
+<span class="nc" id="L310">            otherQuickStartTaskTypes.forEach {</span>
+<span class="nc" id="L311">                val otherUncompletedTasks = quickStartStore.getUncompletedTasksByType(siteLocalId, it)</span>
+<span class="nc bnc" id="L312" title="All 4 branches missed.">                if (otherUncompletedTasks.isNotEmpty()) {</span>
+<span class="nc" id="L313">                    nextTask = quickStartStore.getUncompletedTasksByType(siteLocalId, it).first()</span>
+<span class="nc" id="L314">                    return@forEach</span>
+                }
+<span class="nc" id="L316">            }</span>
+        } else {
+<span class="nc" id="L318">            nextTask = uncompletedTasksOfPreferredType.first()</span>
+        }
+
+<span class="nc" id="L321">        return nextTask</span>
+    }
+
+    /**
+     * This method tries to return the next uncompleted task from complete tasks pool
+     */
+    @JvmStatic
+    @Suppress(&quot;ReturnCount&quot;)
+    fun getNextUncompletedQuickStartTask(
+        quickStartStore: QuickStartStore,
+        quickStartType: QuickStartType,
+        siteLocalId: Long
+    ): QuickStartTask? {
+        // get all the uncompleted tasks for all task types
+<span class="nc" id="L335">        val uncompletedTasks = ArrayList&lt;QuickStartTask&gt;()</span>
+<span class="nc" id="L336">        quickStartType.taskTypes.forEach { type -&gt;</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">            if (type != UNKNOWN) {</span>
+<span class="nc" id="L338">                uncompletedTasks.addAll(quickStartStore.getUncompletedTasksByType(siteLocalId, type))</span>
+            }
+<span class="nc" id="L340">        }</span>
+<span class="nc" id="L341">        uncompletedTasks.sortBy { it.order }</span>
+
+        // Looks like we completed all the tasks. Nothing in the pipeline!
+<span class="nc bnc" id="L344" title="All 2 branches missed.">        if (uncompletedTasks.isEmpty()) {</span>
+<span class="nc" id="L345">            return null</span>
+        }
+
+        // Only one task remaining, no need for extra logic.
+<span class="nc bnc" id="L349" title="All 2 branches missed.">        if (uncompletedTasks.size == 1) {</span>
+<span class="nc" id="L350">            return uncompletedTasks.first()</span>
+        }
+
+        // if we have not skipped a task yet, return the first available task from the list
+<span class="nc bnc" id="L354" title="All 2 branches missed.">        val lastSkippedTask = AppPrefs.getLastSkippedQuickStartTask(quickStartType)</span>
+<span class="nc" id="L355">                ?: return uncompletedTasks.first()</span>
+
+        // look for a task that follows the one we skipped
+<span class="nc" id="L358">        val taskThatFollowsSkippedOne = uncompletedTasks.firstOrNull {</span>
+<span class="nc bnc" id="L359" title="All 4 branches missed.">            it.order &gt; lastSkippedTask.order</span>
+        }
+
+        // if we reached the end of the list (no tasks after skipped one) return task from the top of the list
+<span class="nc bnc" id="L363" title="All 2 branches missed.">        return taskThatFollowsSkippedOne ?: uncompletedTasks.first()</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

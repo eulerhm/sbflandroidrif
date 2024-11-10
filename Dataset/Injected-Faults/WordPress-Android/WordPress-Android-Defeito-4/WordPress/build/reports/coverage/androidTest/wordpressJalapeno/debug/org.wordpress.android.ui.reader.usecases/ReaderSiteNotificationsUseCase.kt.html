@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderSiteNotificationsUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.usecases</a> &gt; <span class="el_source">ReaderSiteNotificationsUseCase.kt</span></div><h1>ReaderSiteNotificationsUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.usecases
+
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.datasets.ReaderBlogTableWrapper
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.AccountActionBuilder
+import org.wordpress.android.fluxc.store.AccountStore.AddOrDeleteSubscriptionPayload
+import org.wordpress.android.fluxc.store.AccountStore.AddOrDeleteSubscriptionPayload.SubscriptionAction
+import org.wordpress.android.fluxc.store.AccountStore.AddOrDeleteSubscriptionPayload.SubscriptionAction.DELETE
+import org.wordpress.android.fluxc.store.AccountStore.AddOrDeleteSubscriptionPayload.SubscriptionAction.NEW
+import org.wordpress.android.fluxc.store.AccountStore.OnSubscriptionUpdated
+import org.wordpress.android.ui.reader.tracker.ReaderTracker
+import org.wordpress.android.ui.reader.usecases.ReaderSiteNotificationsUseCase.SiteNotificationState.Failed.AlreadyRunning
+import org.wordpress.android.ui.reader.usecases.ReaderSiteNotificationsUseCase.SiteNotificationState.Failed.NoNetwork
+import org.wordpress.android.ui.reader.usecases.ReaderSiteNotificationsUseCase.SiteNotificationState.Failed.RequestFailed
+import org.wordpress.android.ui.reader.usecases.ReaderSiteNotificationsUseCase.SiteNotificationState.Success
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T.API
+import org.wordpress.android.util.NetworkUtilsWrapper
+import javax.inject.Inject
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+
+/**
+ * This class handles reader notification events.
+ */
+<span class="nc" id="L30">class ReaderSiteNotificationsUseCase @Inject constructor(</span>
+<span class="nc" id="L31">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L32">    private val readerTracker: ReaderTracker,</span>
+<span class="nc" id="L33">    private val readerBlogTableWrapper: ReaderBlogTableWrapper,</span>
+<span class="nc" id="L34">    private val networkUtilsWrapper: NetworkUtilsWrapper</span>
+) {
+    private var continuation: Continuation&lt;Boolean&gt;? = null
+
+    suspend fun toggleNotification(
+        blogId: Long,
+        feedId: Long
+    ): SiteNotificationState {
+<span class="nc bnc" id="L42" title="All 2 branches missed.">        if (continuation != null) {</span>
+<span class="nc" id="L43">            return AlreadyRunning</span>
+        }
+<span class="nc bnc" id="L45" title="All 2 branches missed.">        if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L46">            return NoNetwork</span>
+        }
+
+        // We want to track the action no matter the result
+<span class="nc" id="L50">        trackEvent(blogId, feedId)</span>
+
+<span class="nc bnc" id="L52" title="All 2 branches missed.">        val succeeded = suspendCoroutine&lt;Boolean&gt; { cont -&gt;</span>
+<span class="nc" id="L53">            continuation = cont</span>
+
+<span class="nc bnc" id="L55" title="All 2 branches missed.">            val action = if (readerBlogTableWrapper.isNotificationsEnabled(blogId)) {</span>
+<span class="nc" id="L56">                DELETE</span>
+            } else {
+<span class="nc" id="L58">                NEW</span>
+            }
+<span class="nc" id="L60">            updateSubscription(blogId, action)</span>
+<span class="nc" id="L61">        }</span>
+
+<span class="nc bnc" id="L63" title="All 2 branches missed.">        return if (succeeded) {</span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">            updateNotificationEnabledForBlogInDb(blogId, !readerBlogTableWrapper.isNotificationsEnabled(blogId))</span>
+<span class="nc" id="L65">            fetchSubscriptions()</span>
+<span class="nc" id="L66">            Success</span>
+        } else {
+<span class="nc" id="L68">            RequestFailed</span>
+        }
+    }
+
+    private fun trackEvent(blogId: Long, feedId: Long) {
+<span class="nc bnc" id="L73" title="All 2 branches missed.">        val trackingEvent = if (readerBlogTableWrapper.isNotificationsEnabled(blogId)) {</span>
+<span class="nc" id="L74">            AnalyticsTracker.Stat.FOLLOWED_BLOG_NOTIFICATIONS_READER_MENU_OFF</span>
+        } else {
+<span class="nc" id="L76">            AnalyticsTracker.Stat.FOLLOWED_BLOG_NOTIFICATIONS_READER_MENU_ON</span>
+        }
+
+<span class="nc" id="L79">        readerTracker.trackBlog(trackingEvent, blogId, feedId)</span>
+<span class="nc" id="L80">    }</span>
+
+    fun updateNotificationEnabledForBlogInDb(blogId: Long, isNotificationEnabledForBlog: Boolean) {
+<span class="nc" id="L83">        readerBlogTableWrapper.setNotificationsEnabledByBlogId(blogId, isNotificationEnabledForBlog)</span>
+<span class="nc" id="L84">    }</span>
+
+    fun fetchSubscriptions() {
+<span class="nc" id="L87">        dispatcher.dispatch(AccountActionBuilder.newFetchSubscriptionsAction())</span>
+<span class="nc" id="L88">    }</span>
+
+    fun updateSubscription(blogId: Long, action: SubscriptionAction) {
+<span class="nc" id="L91">        val payload = AddOrDeleteSubscriptionPayload(blogId.toString(), action)</span>
+<span class="nc" id="L92">        dispatcher.dispatch(AccountActionBuilder.newUpdateSubscriptionNotificationPostAction(payload))</span>
+<span class="nc" id="L93">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.BACKGROUND)
+    @SuppressWarnings(&quot;unused&quot;)
+    fun onSubscriptionUpdated(event: OnSubscriptionUpdated) {
+<span class="nc bnc" id="L98" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">            continuation?.resume(false)</span>
+<span class="nc" id="L100">            AppLog.e(</span>
+<span class="nc" id="L101">                    API,</span>
+<span class="nc" id="L102">                    ReaderSiteNotificationsUseCase::class.java.simpleName + &quot;.onSubscriptionUpdated: &quot; +</span>
+<span class="nc" id="L103">                            event.error.type + &quot; - &quot; + event.error.message</span>
+            )
+        } else {
+<span class="nc bnc" id="L106" title="All 2 branches missed.">            continuation?.resume(true)</span>
+        }
+<span class="nc" id="L108">        continuation = null</span>
+<span class="nc" id="L109">    }</span>
+
+    sealed class SiteNotificationState {
+<span class="nc" id="L112">        object Success : SiteNotificationState()</span>
+<span class="nc" id="L113">        sealed class Failed : SiteNotificationState() {</span>
+<span class="nc" id="L114">            object NoNetwork : Failed()</span>
+<span class="nc" id="L115">            object RequestFailed : Failed()</span>
+<span class="nc" id="L116">            object AlreadyRunning : Failed()</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

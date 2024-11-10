@@ -1,0 +1,448 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SitePreviewViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.sitecreation.previews</a> &gt; <span class="el_source">SitePreviewViewModel.kt</span></div><h1>SitePreviewViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.sitecreation.previews
+
+import android.annotation.SuppressLint
+import android.os.Bundle
+import android.os.Parcelable
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.ViewModel
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.parcelize.Parcelize
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.store.QuickStartStore
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.sitecreation.SiteCreationState
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationErrorType.INTERNET_UNAVAILABLE_ERROR
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationErrorType.UNKNOWN
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationTracker
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.CreateSiteState.SiteCreationCompleted
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.CreateSiteState.SiteNotCreated
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.CreateSiteState.SiteNotInLocalDb
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.SitePreviewUiState.SitePreviewContentUiState
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.SitePreviewUiState.SitePreviewFullscreenErrorUiState.SitePreviewConnectionErrorUiState
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.SitePreviewUiState.SitePreviewFullscreenErrorUiState.SitePreviewGenericErrorUiState
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.SitePreviewUiState.SitePreviewFullscreenProgressUiState
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.SitePreviewUiState.SitePreviewLoadingShimmerState
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.SitePreviewUiState.SitePreviewWebErrorUiState
+import org.wordpress.android.ui.sitecreation.services.FetchWpComSiteUseCase
+import org.wordpress.android.ui.sitecreation.services.SiteCreationServiceData
+import org.wordpress.android.ui.sitecreation.services.SiteCreationServiceState
+import org.wordpress.android.ui.sitecreation.services.SiteCreationServiceState.SiteCreationStep.CREATE_SITE
+import org.wordpress.android.ui.sitecreation.services.SiteCreationServiceState.SiteCreationStep.FAILURE
+import org.wordpress.android.ui.sitecreation.services.SiteCreationServiceState.SiteCreationStep.IDLE
+import org.wordpress.android.ui.sitecreation.services.SiteCreationServiceState.SiteCreationStep.SUCCESS
+import org.wordpress.android.ui.sitecreation.usecases.isWordPressComSubDomain
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.UrlUtilsWrapper
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.CoroutineContext
+
+const val KEY_CREATE_SITE_STATE = &quot;CREATE_SITE_STATE&quot;
+private const val CONNECTION_ERROR_DELAY_TO_SHOW_LOADING_STATE = 1000L
+private const val DELAY_TO_SHOW_WEB_VIEW_LOADING_SHIMMER = 1000L
+const val LOADING_STATE_TEXT_ANIMATION_DELAY = 2000L
+private const val ERROR_CONTEXT = &quot;site_preview&quot;
+
+<span class="nc" id="L64">private val loadingTexts = listOf(</span>
+<span class="nc" id="L65">        UiStringRes(R.string.new_site_creation_creating_site_loading_1),</span>
+<span class="nc" id="L66">        UiStringRes(R.string.new_site_creation_creating_site_loading_2),</span>
+<span class="nc" id="L67">        UiStringRes(R.string.new_site_creation_creating_site_loading_3),</span>
+<span class="nc" id="L68">        UiStringRes(R.string.new_site_creation_creating_site_loading_4)</span>
+)
+
+@HiltViewModel
+<span class="nc" id="L72">class SitePreviewViewModel @Inject constructor(</span>
+<span class="nc" id="L73">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L74">    private val siteStore: SiteStore,</span>
+<span class="nc" id="L75">    private val quickStartStore: QuickStartStore,</span>
+<span class="nc" id="L76">    private val fetchWpComSiteUseCase: FetchWpComSiteUseCase,</span>
+<span class="nc" id="L77">    private val networkUtils: NetworkUtilsWrapper,</span>
+<span class="nc" id="L78">    private val urlUtils: UrlUtilsWrapper,</span>
+<span class="nc" id="L79">    private val tracker: SiteCreationTracker,</span>
+<span class="nc" id="L80">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L81">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L82">) : ViewModel(), CoroutineScope {</span>
+<span class="nc" id="L83">    private val job = Job()</span>
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L85">        get() = bgDispatcher + job</span>
+    private var isStarted = false
+    private var webviewFullyLoadedTracked = false
+    private var loadingAnimationJob: Job? = null
+
+    private lateinit var siteCreationState: SiteCreationState
+    private var urlWithoutScheme: String? = null
+    private var siteTitle: String? = null
+    private var lastReceivedServiceState: SiteCreationServiceState? = null
+    private var serviceStateForRetry: SiteCreationServiceState? = null
+<span class="nc" id="L95">    private var createSiteState: CreateSiteState = SiteNotCreated</span>
+
+<span class="nc" id="L97">    private val _uiState: MutableLiveData&lt;SitePreviewUiState&gt; = MutableLiveData()</span>
+<span class="nc" id="L98">    val uiState: LiveData&lt;SitePreviewUiState&gt; = _uiState</span>
+
+<span class="nc" id="L100">    private val _preloadPreview: MutableLiveData&lt;String&gt; = MutableLiveData()</span>
+<span class="nc" id="L101">    val preloadPreview: LiveData&lt;String&gt; = _preloadPreview</span>
+
+<span class="nc" id="L103">    private val _startCreateSiteService: SingleLiveEvent&lt;SitePreviewStartServiceData&gt; = SingleLiveEvent()</span>
+<span class="nc" id="L104">    val startCreateSiteService: LiveData&lt;SitePreviewStartServiceData&gt; = _startCreateSiteService</span>
+
+<span class="nc" id="L106">    private val _onHelpClicked = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L107">    val onHelpClicked: LiveData&lt;Unit&gt; = _onHelpClicked</span>
+
+<span class="nc" id="L109">    private val _onCancelWizardClicked = SingleLiveEvent&lt;CreateSiteState&gt;()</span>
+<span class="nc" id="L110">    val onCancelWizardClicked: LiveData&lt;CreateSiteState&gt; = _onCancelWizardClicked</span>
+
+<span class="nc" id="L112">    private val _onOkButtonClicked = SingleLiveEvent&lt;CreateSiteState&gt;()</span>
+<span class="nc" id="L113">    val onOkButtonClicked: LiveData&lt;CreateSiteState&gt; = _onOkButtonClicked</span>
+
+<span class="nc" id="L115">    private val _onSiteCreationCompleted = SingleLiveEvent&lt;CreateSiteState&gt;()</span>
+<span class="nc" id="L116">    val onSiteCreationCompleted: LiveData&lt;CreateSiteState&gt; = _onSiteCreationCompleted</span>
+
+<span class="nc" id="L118">    init {</span>
+<span class="nc" id="L119">        dispatcher.register(fetchWpComSiteUseCase)</span>
+<span class="nc" id="L120">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L123">        super.onCleared()</span>
+<span class="nc" id="L124">        dispatcher.unregister(fetchWpComSiteUseCase)</span>
+<span class="nc" id="L125">        job.cancel()</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">        loadingAnimationJob?.cancel()</span>
+<span class="nc" id="L127">    }</span>
+
+    fun writeToBundle(outState: Bundle) {
+<span class="nc" id="L130">        outState.putParcelable(KEY_CREATE_SITE_STATE, createSiteState)</span>
+<span class="nc" id="L131">    }</span>
+
+    fun start(siteCreationState: SiteCreationState, savedState: Bundle?) {
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L135">            return</span>
+        }
+<span class="nc" id="L137">        isStarted = true</span>
+<span class="nc" id="L138">        this.siteCreationState = siteCreationState</span>
+<span class="nc" id="L139">        urlWithoutScheme = siteCreationState.domain</span>
+<span class="nc" id="L140">        siteTitle = siteCreationState.siteName</span>
+
+<span class="nc bnc" id="L142" title="All 2 branches missed.">        val restoredState = savedState?.getParcelable&lt;CreateSiteState&gt;(KEY_CREATE_SITE_STATE)</span>
+
+<span class="nc bnc" id="L144" title="All 2 branches missed.">        init(restoredState ?: SiteNotCreated)</span>
+<span class="nc" id="L145">    }</span>
+
+    private fun init(state: CreateSiteState) {
+<span class="nc" id="L148">        createSiteState = state</span>
+<span class="nc" id="L149">        when (state) {</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">            SiteNotCreated -&gt; {</span>
+<span class="nc" id="L151">                showFullscreenProgress()</span>
+<span class="nc" id="L152">                startCreateSiteService()</span>
+            }
+<span class="nc bnc" id="L154" title="All 2 branches missed.">            is SiteNotInLocalDb -&gt; {</span>
+<span class="nc" id="L155">                showFullscreenProgress()</span>
+<span class="nc" id="L156">                startPreLoadingWebView()</span>
+<span class="nc" id="L157">                fetchNewlyCreatedSiteModel(state.remoteSiteId)</span>
+            }
+<span class="nc bnc" id="L159" title="All 2 branches missed.">            is SiteCreationCompleted -&gt; {</span>
+<span class="nc" id="L160">                startPreLoadingWebView(skipDelay = true)</span>
+            }
+        }
+<span class="nc" id="L163">    }</span>
+
+<span class="nc" id="L165">    private fun startCreateSiteService(previousState: SiteCreationServiceState? = null) {</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">        if (networkUtils.isNetworkAvailable()) {</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">            siteCreationState.apply {</span>
+                // A non-null [segmentId] may invalidate the [siteDesign] selection
+                // https://github.com/wordpress-mobile/WordPress-Android/issues/13749
+<span class="nc bnc" id="L170" title="All 2 branches missed.">                val segmentIdentifier = if (siteDesign != null) null else segmentId</span>
+<span class="nc" id="L171">                val serviceData = SiteCreationServiceData(</span>
+<span class="nc" id="L172">                        segmentIdentifier,</span>
+<span class="nc" id="L173">                        siteDesign,</span>
+<span class="nc" id="L174">                        urlWithoutScheme,</span>
+<span class="nc" id="L175">                        siteTitle</span>
+                )
+<span class="nc" id="L177">                _startCreateSiteService.value = SitePreviewStartServiceData(serviceData, previousState)</span>
+<span class="nc" id="L178">            }</span>
+        } else {
+<span class="nc" id="L180">            showFullscreenErrorWithDelay()</span>
+        }
+<span class="nc" id="L182">    }</span>
+
+    fun retry() {
+<span class="nc" id="L185">        showFullscreenProgress()</span>
+<span class="nc" id="L186">        startCreateSiteService(serviceStateForRetry)</span>
+<span class="nc" id="L187">    }</span>
+
+    fun onHelpClicked() {
+<span class="nc" id="L190">        _onHelpClicked.call()</span>
+<span class="nc" id="L191">    }</span>
+
+    fun onCancelWizardClicked() {
+<span class="nc" id="L194">        _onCancelWizardClicked.value = createSiteState</span>
+<span class="nc" id="L195">    }</span>
+
+    fun onOkButtonClicked() {
+<span class="nc" id="L198">        tracker.trackPreviewOkButtonTapped()</span>
+<span class="nc" id="L199">        _onOkButtonClicked.value = createSiteState</span>
+<span class="nc" id="L200">    }</span>
+
+    private fun showFullscreenErrorWithDelay() {
+<span class="nc" id="L203">        showFullscreenProgress()</span>
+<span class="nc" id="L204">        launch(mainDispatcher) {</span>
+            // We show the loading indicator for a bit so the user has some feedback when they press retry
+<span class="nc" id="L206">            delay(CONNECTION_ERROR_DELAY_TO_SHOW_LOADING_STATE)</span>
+<span class="nc" id="L207">            tracker.trackErrorShown(ERROR_CONTEXT, INTERNET_UNAVAILABLE_ERROR)</span>
+<span class="nc" id="L208">            updateUiState(SitePreviewConnectionErrorUiState)</span>
+<span class="nc" id="L209">        }</span>
+<span class="nc" id="L210">    }</span>
+
+    /**
+     * The service automatically shows system notifications when site creation is in progress and the app is in
+     * the background. We need to connect to the `AutoForeground` service from the View(Fragment), as only the View
+     * knows when the app is in the background. Required parameter for `ServiceEventConnection` is also
+     * the observer/listener of the `SiteCreationServiceState` (VM in our case), therefore we can't simply register
+     * to the EventBus from the ViewModel and we have to use `sticky` events instead.
+     */
+    @Subscribe(threadMode = ThreadMode.BACKGROUND, sticky = true)
+    @Suppress(&quot;unused&quot;)
+    fun onSiteCreationServiceStateUpdated(event: SiteCreationServiceState) {
+<span class="nc bnc" id="L222" title="All 2 branches missed.">        if (lastReceivedServiceState == event) return // filter out events which we've already received</span>
+<span class="nc" id="L223">        lastReceivedServiceState = event</span>
+<span class="nc bnc" id="L224" title="All 4 branches missed.">        when (event.step) {</span>
+            IDLE, CREATE_SITE -&gt; {
+            } // do nothing
+            SUCCESS -&gt; {
+<span class="nc bnc" id="L228" title="All 4 branches missed.">                val remoteSiteId = (event.payload as Pair&lt;*, *&gt;).first as Long</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">                urlWithoutScheme = urlUtils.removeScheme(event.payload.second as String).trimEnd('/')</span>
+<span class="nc bnc" id="L230" title="All 6 branches missed.">                createSiteState = SiteNotInLocalDb(remoteSiteId, !siteTitle.isNullOrBlank())</span>
+<span class="nc" id="L231">                startPreLoadingWebView()</span>
+<span class="nc" id="L232">                fetchNewlyCreatedSiteModel(remoteSiteId)</span>
+<span class="nc" id="L233">                _onSiteCreationCompleted.asyncCall()</span>
+            }
+            FAILURE -&gt; {
+<span class="nc bnc" id="L236" title="All 2 branches missed.">                serviceStateForRetry = event.payload as SiteCreationServiceState</span>
+<span class="nc" id="L237">                tracker.trackErrorShown(</span>
+<span class="nc" id="L238">                        ERROR_CONTEXT,</span>
+<span class="nc" id="L239">                        UNKNOWN,</span>
+<span class="nc" id="L240">                        &quot;SiteCreation service failed&quot;</span>
+                )
+<span class="nc" id="L242">                updateUiStateAsync(SitePreviewGenericErrorUiState)</span>
+            }
+        }
+<span class="nc" id="L245">    }</span>
+
+    /**
+     * Fetch newly created site model - supports retry with linear backoff.
+     */
+    private fun fetchNewlyCreatedSiteModel(remoteSiteId: Long) {
+<span class="nc" id="L251">        launch {</span>
+<span class="nc" id="L252">            val onSiteFetched = fetchWpComSiteUseCase.fetchSiteWithRetry(remoteSiteId)</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">            createSiteState = if (!onSiteFetched.isError) {</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">                val siteBySiteId = requireNotNull(siteStore.getSiteBySiteId(remoteSiteId)) {</span>
+<span class="nc" id="L255">                    &quot;Site successfully fetched but has not been found in the local db.&quot;</span>
+                }
+<span class="nc bnc" id="L257" title="All 6 branches missed.">                CreateSiteState.SiteCreationCompleted(siteBySiteId.id, !siteTitle.isNullOrBlank())</span>
+            } else {
+<span class="nc bnc" id="L259" title="All 6 branches missed.">                SiteNotInLocalDb(remoteSiteId, !siteTitle.isNullOrBlank())</span>
+            }
+<span class="nc" id="L261">        }</span>
+<span class="nc" id="L262">    }</span>
+
+<span class="nc" id="L264">    private fun startPreLoadingWebView(skipDelay: Boolean = false) {</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        tracker.trackPreviewLoading(siteCreationState.siteDesign)</span>
+<span class="nc" id="L266">        launch {</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">            if (!skipDelay) {</span>
+                /**
+                 * Keep showing the full screen loading screen for 1 more second or until the webview is loaded
+                 * whichever happens first. This will give us some more time to fetch the newly created site.
+                 */
+<span class="nc" id="L272">                delay(DELAY_TO_SHOW_WEB_VIEW_LOADING_SHIMMER)</span>
+            }
+            /**
+             * If the webview is still not loaded after some delay, we'll show the loading shimmer animation instead
+             * of the full screen progress, so the user is not blocked for taking actions.
+             */
+<span class="nc bnc" id="L278" title="All 2 branches missed.">            withContext(mainDispatcher) {</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">                if (uiState.value !is SitePreviewContentUiState) {</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">                    tracker.trackPreviewWebviewShown(siteCreationState.siteDesign)</span>
+<span class="nc" id="L281">                    updateUiState(SitePreviewLoadingShimmerState(createSitePreviewData()))</span>
+                }
+<span class="nc" id="L283">            }</span>
+<span class="nc" id="L284">        }</span>
+        // Load the newly created site in the webview
+<span class="nc bnc" id="L286" title="All 2 branches missed.">        urlWithoutScheme?.let { url -&gt;</span>
+<span class="nc" id="L287">            val urlToLoad = urlUtils.addUrlSchemeIfNeeded(</span>
+<span class="nc" id="L288">                    url = url,</span>
+<span class="nc" id="L289">                    addHttps = isWordPressComSubDomain(url)</span>
+            )
+<span class="nc" id="L291">            AppLog.v(T.SITE_CREATION, &quot;Site preview will load for url: $urlToLoad&quot;)</span>
+<span class="nc" id="L292">            _preloadPreview.postValue(urlToLoad)</span>
+<span class="nc" id="L293">        }</span>
+<span class="nc" id="L294">    }</span>
+
+    fun onUrlLoaded() {
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        if (!webviewFullyLoadedTracked) {</span>
+<span class="nc" id="L298">            webviewFullyLoadedTracked = true</span>
+<span class="nc bnc" id="L299" title="All 2 branches missed.">            tracker.trackPreviewWebviewFullyLoaded(siteCreationState.siteDesign)</span>
+        }
+        /**
+         * Update the ui state if the loading or error screen is being shown.
+         * In other words don't update it after a configuration change.
+         */
+<span class="nc bnc" id="L305" title="All 2 branches missed.">        if (uiState.value !is SitePreviewContentUiState) {</span>
+<span class="nc" id="L306">            updateUiState(SitePreviewContentUiState(createSitePreviewData()))</span>
+        }
+<span class="nc" id="L308">    }</span>
+
+    fun onWebViewError() {
+<span class="nc bnc" id="L311" title="All 2 branches missed.">        if (uiState.value !is SitePreviewWebErrorUiState) {</span>
+<span class="nc" id="L312">            updateUiState(SitePreviewWebErrorUiState(createSitePreviewData()))</span>
+        }
+<span class="nc" id="L314">    }</span>
+
+    private fun createSitePreviewData(): SitePreviewData {
+<span class="nc bnc" id="L317" title="All 2 branches missed.">        val url = urlWithoutScheme ?: &quot;&quot;</span>
+<span class="nc" id="L318">        val subDomain = urlUtils.extractSubDomain(url)</span>
+<span class="nc" id="L319">        val fullUrl = urlUtils.addUrlSchemeIfNeeded(url, true)</span>
+<span class="nc" id="L320">        val subDomainIndices: Pair&lt;Int, Int&gt; = Pair(0, subDomain.length)</span>
+<span class="nc" id="L321">        val domainIndices: Pair&lt;Int, Int&gt; = Pair(</span>
+<span class="nc" id="L322">                Math.min(subDomainIndices.second, url.length),</span>
+<span class="nc" id="L323">                url.length</span>
+        )
+<span class="nc" id="L325">        return SitePreviewData(</span>
+<span class="nc" id="L326">                fullUrl,</span>
+<span class="nc" id="L327">                url,</span>
+<span class="nc" id="L328">                subDomainIndices,</span>
+<span class="nc" id="L329">                domainIndices</span>
+        )
+    }
+
+    private fun showFullscreenProgress() {
+<span class="nc bnc" id="L334" title="All 2 branches missed.">        loadingAnimationJob?.cancel()</span>
+<span class="nc" id="L335">        loadingAnimationJob = launch(mainDispatcher) {</span>
+<span class="nc" id="L336">            var i = 0</span>
+<span class="nc" id="L337">            val listSize = loadingTexts.size</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">            while (isActive) {</span>
+<span class="nc" id="L339">                updateUiState(</span>
+<span class="nc" id="L340">                        SitePreviewFullscreenProgressUiState(</span>
+<span class="nc bnc" id="L341" title="All 4 branches missed.">                                animate = i != 0, // the first text should appear without an animation</span>
+<span class="nc" id="L342">                                loadingTextResId = loadingTexts[i++ % listSize]</span>
+                        )
+                )
+<span class="nc" id="L345">                delay(LOADING_STATE_TEXT_ANIMATION_DELAY)</span>
+            }
+<span class="nc" id="L347">        }</span>
+<span class="nc" id="L348">    }</span>
+
+    private fun updateUiState(uiState: SitePreviewUiState) {
+<span class="nc bnc" id="L351" title="All 2 branches missed.">        if (uiState !is SitePreviewFullscreenProgressUiState) {</span>
+<span class="nc bnc" id="L352" title="All 2 branches missed.">            loadingAnimationJob?.cancel()</span>
+        }
+<span class="nc" id="L354">        _uiState.value = uiState</span>
+<span class="nc" id="L355">    }</span>
+
+    private fun updateUiStateAsync(uiState: SitePreviewUiState) {
+<span class="nc bnc" id="L358" title="All 2 branches missed.">        if (uiState !is SitePreviewFullscreenProgressUiState) {</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">            loadingAnimationJob?.cancel()</span>
+        }
+<span class="nc" id="L361">        _uiState.postValue(uiState)</span>
+<span class="nc" id="L362">    }</span>
+
+<span class="nc" id="L364">    sealed class SitePreviewUiState(</span>
+<span class="nc" id="L365">        val fullscreenProgressLayoutVisibility: Boolean = false,</span>
+<span class="nc" id="L366">        val contentLayoutVisibility: Boolean = false,</span>
+<span class="nc" id="L367">        val webViewVisibility: Boolean = false,</span>
+<span class="nc" id="L368">        val webViewErrorVisibility: Boolean = false,</span>
+<span class="nc" id="L369">        val shimmerVisibility: Boolean = false,</span>
+<span class="nc" id="L370">        val fullscreenErrorLayoutVisibility: Boolean = false</span>
+    ) {
+<span class="nc" id="L372">        data class SitePreviewContentUiState(val data: SitePreviewData) : SitePreviewUiState(</span>
+<span class="nc" id="L373">                contentLayoutVisibility = true,</span>
+<span class="nc" id="L374">                webViewVisibility = true,</span>
+<span class="nc" id="L375">                webViewErrorVisibility = false</span>
+        )
+
+<span class="nc" id="L378">        data class SitePreviewWebErrorUiState(val data: SitePreviewData) : SitePreviewUiState(</span>
+<span class="nc" id="L379">                contentLayoutVisibility = true,</span>
+<span class="nc" id="L380">                webViewVisibility = false,</span>
+<span class="nc" id="L381">                webViewErrorVisibility = true</span>
+        )
+
+<span class="nc" id="L384">        data class SitePreviewLoadingShimmerState(val data: SitePreviewData) : SitePreviewUiState(</span>
+<span class="nc" id="L385">                contentLayoutVisibility = true,</span>
+<span class="nc" id="L386">                shimmerVisibility = true</span>
+        )
+
+<span class="nc" id="L389">        data class SitePreviewFullscreenProgressUiState(val loadingTextResId: UiString, val animate: Boolean) :</span>
+<span class="nc" id="L390">                SitePreviewUiState(fullscreenProgressLayoutVisibility = true)</span>
+
+<span class="nc" id="L392">        sealed class SitePreviewFullscreenErrorUiState constructor(</span>
+<span class="nc" id="L393">            val titleResId: Int,</span>
+<span class="nc" id="L394">            val subtitleResId: Int? = null,</span>
+<span class="nc" id="L395">            val showContactSupport: Boolean = false,</span>
+<span class="nc" id="L396">            val showCancelWizardButton: Boolean = true</span>
+<span class="nc" id="L397">        ) : SitePreviewUiState(</span>
+<span class="nc" id="L398">                fullscreenErrorLayoutVisibility = true</span>
+        ) {
+<span class="nc" id="L400">            object SitePreviewGenericErrorUiState :</span>
+<span class="nc" id="L401">                    SitePreviewFullscreenErrorUiState(</span>
+<span class="nc" id="L402">                            R.string.site_creation_error_generic_title,</span>
+<span class="nc" id="L403">                            R.string.site_creation_error_generic_subtitle,</span>
+<span class="nc" id="L404">                            showContactSupport = true</span>
+                    )
+
+<span class="nc" id="L407">            object SitePreviewConnectionErrorUiState : SitePreviewFullscreenErrorUiState(</span>
+<span class="nc" id="L408">                    R.string.no_network_message</span>
+            )
+<span class="nc" id="L410">        }</span>
+<span class="nc" id="L411">    }</span>
+
+<span class="nc" id="L413">    data class SitePreviewData(</span>
+<span class="nc" id="L414">        val fullUrl: String,</span>
+<span class="nc" id="L415">        val shortUrl: String,</span>
+<span class="nc" id="L416">        val domainIndices: Pair&lt;Int, Int&gt;,</span>
+<span class="nc" id="L417">        val subDomainIndices: Pair&lt;Int, Int&gt;</span>
+    )
+
+<span class="nc" id="L420">    data class SitePreviewStartServiceData(</span>
+<span class="nc" id="L421">        val serviceData: SiteCreationServiceData,</span>
+<span class="nc" id="L422">        val previousState: SiteCreationServiceState?</span>
+    )
+
+    @SuppressLint(&quot;ParcelCreator&quot;)
+    sealed class CreateSiteState : Parcelable {
+        /**
+         * CreateSite request haven't finished yet or failed.
+         */
+<span class="nc" id="L430">        @Parcelize</span>
+<span class="nc" id="L431">        object SiteNotCreated : CreateSiteState()</span>
+
+        /**
+         * FetchSite request haven't finished yet or failed.
+         * Since we fetch the site without user awareness in background, the user may potentially leave the screen
+         * before the request is finished.
+         */
+        @Parcelize
+<span class="nc" id="L439">        data class SiteNotInLocalDb(val remoteSiteId: Long, val isSiteTitleTaskComplete: Boolean) : CreateSiteState()</span>
+
+        /**
+         * The site has been successfully created and stored into local db.
+         */
+        @Parcelize
+<span class="nc" id="L445">        data class SiteCreationCompleted(val localSiteId: Int, val isSiteTitleTaskComplete: Boolean) : CreateSiteState()</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

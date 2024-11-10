@@ -1,0 +1,55 @@
+package org.wordpress.android.ui.photopicker;
+
+import java.lang.System;
+
+@kotlin.Metadata(mv = {1, 6, 0}, k = 1, d1 = {"\u0000R\n\u0002\u0018\u0002\n\u0002\u0018\u0002\n\u0002\u0018\u0002\n\u0000\n\u0002\u0018\u0002\n\u0000\n\u0002\u0018\u0002\n\u0002\b\u0002\n\u0002\u0010 \n\u0002\u0018\u0002\n\u0000\n\u0002\u0018\u0002\n\u0000\n\u0002\u0010\b\n\u0000\n\u0002\u0010\t\n\u0002\b\u0003\n\u0002\u0010\u0002\n\u0002\b\u0004\n\u0002\u0010\u0000\n\u0002\b\u0002\n\u0002\u0018\u0002\n\u0002\b\u0002\b\u0007\u0018\u00002\b\u0012\u0004\u0012\u00020\u00020\u0001B\u0017\b\u0000\u0012\u0006\u0010\u0003\u001a\u00020\u0004\u0012\u0006\u0010\u0005\u001a\u00020\u0006\u00a2\u0006\u0002\u0010\u0007J\b\u0010\r\u001a\u00020\u000eH\u0016J\u0010\u0010\u000f\u001a\u00020\u00102\u0006\u0010\u0011\u001a\u00020\u000eH\u0016J\u0010\u0010\u0012\u001a\u00020\u000e2\u0006\u0010\u0011\u001a\u00020\u000eH\u0016J\u0014\u0010\u0013\u001a\u00020\u00142\f\u0010\u0015\u001a\b\u0012\u0004\u0012\u00020\n0\tJ\u0018\u0010\u0016\u001a\u00020\u00142\u0006\u0010\u0017\u001a\u00020\u00022\u0006\u0010\u0011\u001a\u00020\u000eH\u0016J&\u0010\u0016\u001a\u00020\u00142\u0006\u0010\u0017\u001a\u00020\u00022\u0006\u0010\u0011\u001a\u00020\u000e2\f\u0010\u0018\u001a\b\u0012\u0004\u0012\u00020\u00190\tH\u0016J\u0018\u0010\u001a\u001a\u00020\u00022\u0006\u0010\u001b\u001a\u00020\u001c2\u0006\u0010\u001d\u001a\u00020\u000eH\u0016R\u000e\u0010\u0005\u001a\u00020\u0006X\u0082\u0004\u00a2\u0006\u0002\n\u0000R\u000e\u0010\u0003\u001a\u00020\u0004X\u0082\u0004\u00a2\u0006\u0002\n\u0000R\u0014\u0010\b\u001a\b\u0012\u0004\u0012\u00020\n0\tX\u0082\u000e\u00a2\u0006\u0002\n\u0000R\u000e\u0010\u000b\u001a\u00020\fX\u0082\u0004\u00a2\u0006\u0002\n\u0000\u00a8\u0006\u001e"}, d2 = {"Lorg/wordpress/android/ui/photopicker/PhotoPickerAdapter;", "Landroidx/recyclerview/widget/RecyclerView$Adapter;", "Lorg/wordpress/android/ui/photopicker/ThumbnailViewHolder;", "imageManager", "Lorg/wordpress/android/util/image/ImageManager;", "coroutineScope", "Lkotlinx/coroutines/CoroutineScope;", "(Lorg/wordpress/android/util/image/ImageManager;Lkotlinx/coroutines/CoroutineScope;)V", "mediaList", "", "Lorg/wordpress/android/ui/photopicker/PhotoPickerUiItem;", "thumbnailViewUtils", "Lorg/wordpress/android/ui/photopicker/ThumbnailViewUtils;", "getItemCount", "", "getItemId", "", "position", "getItemViewType", "loadData", "", "result", "onBindViewHolder", "holder", "payloads", "", "onCreateViewHolder", "parent", "Landroid/view/ViewGroup;", "viewType", "org.wordpress.android_wordpressJalapenoDebug"})
+@java.lang.Deprecated()
+public final class PhotoPickerAdapter extends androidx.recyclerview.widget.RecyclerView.Adapter<org.wordpress.android.ui.photopicker.ThumbnailViewHolder> {
+    private final org.wordpress.android.util.image.ImageManager imageManager = null;
+    private final kotlinx.coroutines.CoroutineScope coroutineScope = null;
+    private final org.wordpress.android.ui.photopicker.ThumbnailViewUtils thumbnailViewUtils = null;
+    private java.util.List<? extends org.wordpress.android.ui.photopicker.PhotoPickerUiItem> mediaList;
+    
+    public PhotoPickerAdapter(@org.jetbrains.annotations.NotNull()
+    org.wordpress.android.util.image.ImageManager imageManager, @org.jetbrains.annotations.NotNull()
+    kotlinx.coroutines.CoroutineScope coroutineScope) {
+        super();
+    }
+    
+    public final void loadData(@org.jetbrains.annotations.NotNull()
+    java.util.List<? extends org.wordpress.android.ui.photopicker.PhotoPickerUiItem> result) {
+    }
+    
+    @java.lang.Override()
+    public int getItemCount() {
+        return 0;
+    }
+    
+    @java.lang.Override()
+    public long getItemId(int position) {
+        return 0L;
+    }
+    
+    @org.jetbrains.annotations.NotNull()
+    @java.lang.Override()
+    public org.wordpress.android.ui.photopicker.ThumbnailViewHolder onCreateViewHolder(@org.jetbrains.annotations.NotNull()
+    android.view.ViewGroup parent, int viewType) {
+        return null;
+    }
+    
+    @java.lang.Override()
+    public int getItemViewType(int position) {
+        return 0;
+    }
+    
+    @java.lang.Override()
+    public void onBindViewHolder(@org.jetbrains.annotations.NotNull()
+    org.wordpress.android.ui.photopicker.ThumbnailViewHolder holder, int position, @org.jetbrains.annotations.NotNull()
+    java.util.List<? extends java.lang.Object> payloads) {
+    }
+    
+    @java.lang.Override()
+    public void onBindViewHolder(@org.jetbrains.annotations.NotNull()
+    org.wordpress.android.ui.photopicker.ThumbnailViewHolder holder, int position) {
+    }
+}

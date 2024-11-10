@@ -1,0 +1,412 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SiteCreationDomainsViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.sitecreation.domains</a> &gt; <span class="el_source">SiteCreationDomainsViewModel.kt</span></div><h1>SiteCreationDomainsViewModel.kt</h1><pre class="source lang-java linenums"><span class="nc" id="L1">package org.wordpress.android.ui.sitecreation.domains</span>
+
+import androidx.annotation.StringRes
+import androidx.annotation.VisibleForTesting
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.ViewModel
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.store.SiteStore.OnSuggestedDomains
+import org.wordpress.android.fluxc.store.SiteStore.SuggestDomainErrorType
+import org.wordpress.android.models.networkresource.ListState
+import org.wordpress.android.models.networkresource.ListState.Error
+import org.wordpress.android.models.networkresource.ListState.Loading
+import org.wordpress.android.models.networkresource.ListState.Ready
+import org.wordpress.android.models.networkresource.ListState.Success
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.sitecreation.domains.SiteCreationDomainsViewModel.DomainSuggestionsQuery.UserQuery
+import org.wordpress.android.ui.sitecreation.domains.SiteCreationDomainsViewModel.DomainsListItemUiState.DomainsFetchSuggestionsErrorUiState
+import org.wordpress.android.ui.sitecreation.domains.SiteCreationDomainsViewModel.DomainsListItemUiState.DomainsModelUiState
+import org.wordpress.android.ui.sitecreation.domains.SiteCreationDomainsViewModel.DomainsListItemUiState.DomainsModelUiState.DomainsModelAvailableUiState
+import org.wordpress.android.ui.sitecreation.domains.SiteCreationDomainsViewModel.DomainsListItemUiState.DomainsModelUiState.DomainsModelUnavailabilityUiState
+import org.wordpress.android.ui.sitecreation.domains.SiteCreationDomainsViewModel.DomainsUiState.DomainsUiContentState
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationErrorType
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationHeaderUiState
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationSearchInputUiState
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationTracker
+import org.wordpress.android.ui.sitecreation.usecases.FetchDomainsUseCase
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.CoroutineContext
+import kotlin.properties.Delegates
+
+private const val THROTTLE_DELAY = 500L
+private const val ERROR_CONTEXT = &quot;domains&quot;
+
+@HiltViewModel
+<span class="nc" id="L50">class SiteCreationDomainsViewModel @Inject constructor(</span>
+<span class="nc" id="L51">    private val networkUtils: NetworkUtilsWrapper,</span>
+<span class="nc" id="L52">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L53">    private val domainSanitizer: SiteCreationDomainSanitizer,</span>
+<span class="nc" id="L54">    private val fetchDomainsUseCase: FetchDomainsUseCase,</span>
+<span class="nc" id="L55">    private val tracker: SiteCreationTracker,</span>
+<span class="nc" id="L56">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L57">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L58">) : ViewModel(), CoroutineScope {</span>
+<span class="nc" id="L59">    private val job = Job()</span>
+    private var fetchDomainsJob: Job? = null
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L62">        get() = bgDispatcher + job</span>
+    private var isStarted = false
+
+<span class="nc" id="L65">    private val _uiState: MutableLiveData&lt;DomainsUiState&gt; = MutableLiveData()</span>
+<span class="nc" id="L66">    val uiState: LiveData&lt;DomainsUiState&gt; = _uiState</span>
+
+    private var currentQuery: DomainSuggestionsQuery? = null
+<span class="nc" id="L69">    private var listState: ListState&lt;String&gt; = ListState.Init()</span>
+<span class="nc" id="L70">    private var selectedDomain by Delegates.observable&lt;String?&gt;(null) { _, old, new -&gt;</span>
+        if (old != new) {
+            updateUiStateToContent(currentQuery, listState)
+        }
+    }
+
+<span class="nc" id="L76">    private val _createSiteBtnClicked = SingleLiveEvent&lt;String&gt;()</span>
+<span class="nc" id="L77">    val createSiteBtnClicked: LiveData&lt;String&gt; = _createSiteBtnClicked</span>
+
+<span class="nc" id="L79">    private val _clearBtnClicked = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L80">    val clearBtnClicked = _clearBtnClicked</span>
+
+<span class="nc" id="L82">    private val _onHelpClicked = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L83">    val onHelpClicked: LiveData&lt;Unit&gt; = _onHelpClicked</span>
+
+<span class="nc" id="L85">    init {</span>
+<span class="nc" id="L86">        dispatcher.register(fetchDomainsUseCase)</span>
+<span class="nc" id="L87">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L90">        super.onCleared()</span>
+<span class="nc" id="L91">        dispatcher.unregister(fetchDomainsUseCase)</span>
+<span class="nc" id="L92">    }</span>
+
+    fun start() {
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L96">            return</span>
+        }
+<span class="nc" id="L98">        isStarted = true</span>
+<span class="nc" id="L99">        tracker.trackDomainsAccessed()</span>
+<span class="nc" id="L100">        resetUiState()</span>
+<span class="nc" id="L101">    }</span>
+
+    fun createSiteBtnClicked() {
+<span class="nc bnc" id="L104" title="All 2 branches missed.">        val domain = requireNotNull(selectedDomain) {</span>
+<span class="nc" id="L105">            &quot;Create site button should not be visible if a domain is not selected&quot;</span>
+        }
+<span class="nc bnc" id="L107" title="All 4 branches missed.">        tracker.trackDomainSelected(domain, currentQuery?.value ?: &quot;&quot;)</span>
+<span class="nc" id="L108">        _createSiteBtnClicked.value = domain</span>
+<span class="nc" id="L109">    }</span>
+
+    fun onClearTextBtnClicked() {
+<span class="nc" id="L112">        _clearBtnClicked.call()</span>
+<span class="nc" id="L113">    }</span>
+
+    fun onHelpClicked() {
+<span class="nc" id="L116">        _onHelpClicked.call()</span>
+<span class="nc" id="L117">    }</span>
+
+    fun updateQuery(query: String) {
+<span class="nc" id="L120">        updateQueryInternal(UserQuery(query))</span>
+<span class="nc" id="L121">    }</span>
+
+    private fun updateQueryInternal(query: DomainSuggestionsQuery?) {
+<span class="nc" id="L124">        currentQuery = query</span>
+<span class="nc" id="L125">        selectedDomain = null</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">        fetchDomainsJob?.cancel() // cancel any previous requests</span>
+<span class="nc bnc" id="L127" title="All 4 branches missed.">        if (query != null &amp;&amp; !query.value.isBlank()) {</span>
+<span class="nc" id="L128">            fetchDomains(query)</span>
+        } else {
+<span class="nc" id="L130">            resetUiState()</span>
+        }
+<span class="nc" id="L132">    }</span>
+
+    private fun resetUiState() {
+<span class="nc" id="L135">        updateUiStateToContent(null, Ready(emptyList()))</span>
+<span class="nc" id="L136">    }</span>
+
+    private fun fetchDomains(query: DomainSuggestionsQuery) {
+<span class="nc bnc" id="L139" title="All 2 branches missed.">        if (networkUtils.isNetworkAvailable()) {</span>
+<span class="nc" id="L140">            updateUiStateToContent(query, Loading(Ready(emptyList()), false))</span>
+<span class="nc" id="L141">            fetchDomainsJob = launch {</span>
+<span class="nc" id="L142">                delay(THROTTLE_DELAY)</span>
+<span class="nc" id="L143">                val onSuggestedDomains: OnSuggestedDomains = fetchDomainsUseCase.fetchDomains(query.value,</span>
+<span class="nc" id="L144">                            includeVendorDot = true,</span>
+<span class="nc" id="L145">                            includeDotBlog = true)</span>
+
+<span class="nc bnc" id="L147" title="All 2 branches missed.">                withContext(mainDispatcher) {</span>
+<span class="nc" id="L148">                    onDomainsFetched(query, onSuggestedDomains)</span>
+<span class="nc" id="L149">                }</span>
+<span class="nc" id="L150">            }</span>
+        } else {
+<span class="nc" id="L152">            tracker.trackErrorShown(ERROR_CONTEXT, SiteCreationErrorType.INTERNET_UNAVAILABLE_ERROR)</span>
+<span class="nc" id="L153">            updateUiStateToContent(</span>
+<span class="nc" id="L154">                    query,</span>
+<span class="nc" id="L155">                    Error(listState, errorMessageResId = R.string.no_network_message)</span>
+            )
+        }
+<span class="nc" id="L158">    }</span>
+
+    private fun onDomainsFetched(query: DomainSuggestionsQuery, event: OnSuggestedDomains) {
+        // We want to treat `INVALID_QUERY` as if it's an empty result, so we'll ignore it
+<span class="nc bnc" id="L162" title="All 4 branches missed.">        if (event.isError &amp;&amp; event.error.type != SuggestDomainErrorType.INVALID_QUERY) {</span>
+<span class="nc" id="L163">            tracker.trackErrorShown(</span>
+<span class="nc" id="L164">                    ERROR_CONTEXT,</span>
+<span class="nc bnc" id="L165" title="All 4 branches missed.">                    event.error.type?.toString() ?: SiteCreationErrorType.UNKNOWN.toString(),</span>
+<span class="nc" id="L166">                    event.error.message</span>
+            )
+<span class="nc" id="L168">            updateUiStateToContent(</span>
+<span class="nc" id="L169">                    query,</span>
+<span class="nc" id="L170">                    Error(</span>
+<span class="nc" id="L171">                            listState,</span>
+<span class="nc" id="L172">                            errorMessageResId = R.string.site_creation_fetch_suggestions_error_unknown</span>
+                    )
+            )
+        } else {
+            /**
+             * We would like to show the domains that matches the current query at the top. For this, we split the
+             * domain names into two, one part for the domain names that start with the current query plus `.` and the
+             * other part for the others. We then combine them back again into a single list.
+             */
+<span class="nc" id="L181">            val domainNames = event.suggestions.map { it.domain_name }</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">                    .partition { it.startsWith(&quot;${query.value}.&quot;) }</span>
+<span class="nc" id="L183">                    .toList().flatten()</span>
+
+            // We inform the user when the search query contains non-alphanumeric characters
+<span class="nc bnc" id="L186" title="All 4 branches missed.">            val emptyListMessage = if (event.isError &amp;&amp; event.error.type == SuggestDomainErrorType.INVALID_QUERY) {</span>
+<span class="nc" id="L187">                UiStringRes(R.string.new_site_creation_empty_domain_list_message_invalid_query)</span>
+            } else {
+<span class="nc" id="L189">                UiStringRes(R.string.new_site_creation_empty_domain_list_message)</span>
+            }
+
+<span class="nc" id="L192">            updateUiStateToContent(query, Success(domainNames), emptyListMessage)</span>
+        }
+<span class="nc" id="L194">    }</span>
+
+<span class="nc" id="L196">    private fun updateUiStateToContent(</span>
+        query: DomainSuggestionsQuery?,
+        state: ListState&lt;String&gt;,
+<span class="nc" id="L199">        emptyListMessage: UiString? = null</span>
+    ) {
+<span class="nc" id="L201">        listState = state</span>
+<span class="nc" id="L202">        val isNonEmptyUserQuery = isNonEmptyUserQuery(query)</span>
+<span class="nc" id="L203">        updateUiState(</span>
+<span class="nc" id="L204">                DomainsUiState(</span>
+<span class="nc" id="L205">                        headerUiState = createHeaderUiState(</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">                                !isNonEmptyUserQuery</span>
+                        ),
+<span class="nc" id="L208">                        searchInputUiState = createSearchInputUiState(</span>
+<span class="nc" id="L209">                                showProgress = state is Loading,</span>
+<span class="nc" id="L210">                                showClearButton = isNonEmptyUserQuery,</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">                                showDivider = state.data.isNotEmpty(),</span>
+<span class="nc" id="L212">                                showKeyboard = true</span>
+                        ),
+<span class="nc" id="L214">                        contentState = createDomainsUiContentState(query, state, emptyListMessage),</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">                        createSiteButtonContainerVisibility = selectedDomain != null</span>
+                )
+        )
+<span class="nc" id="L218">    }</span>
+
+    private fun updateUiState(uiState: DomainsUiState) {
+<span class="nc" id="L221">        _uiState.value = uiState</span>
+<span class="nc" id="L222">    }</span>
+
+    private fun createDomainsUiContentState(
+        query: DomainSuggestionsQuery?,
+        state: ListState&lt;String&gt;,
+        emptyListMessage: UiString?
+    ): DomainsUiContentState {
+        // Only treat it as an error if the search is user initiated
+<span class="nc bnc" id="L230" title="All 4 branches missed.">        val isError = isNonEmptyUserQuery(query) &amp;&amp; state is Error</span>
+
+<span class="nc" id="L232">        val items = createSuggestionsUiStates(</span>
+<span class="nc" id="L233">                onRetry = { updateQueryInternal(query) },</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">                query = query?.value,</span>
+<span class="nc" id="L235">                data = state.data,</span>
+<span class="nc" id="L236">                errorFetchingSuggestions = isError,</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">                errorResId = if (isError) (state as Error).errorMessageResId else null</span>
+        )
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        return if (items.isEmpty()) {</span>
+<span class="nc bnc" id="L240" title="All 6 branches missed.">            if (isNonEmptyUserQuery(query) &amp;&amp; (state is Success || state is Ready)) {</span>
+<span class="nc" id="L241">                DomainsUiContentState.Empty(emptyListMessage)</span>
+<span class="nc" id="L242">            } else DomainsUiContentState.Initial</span>
+        } else {
+<span class="nc" id="L244">            DomainsUiContentState.VisibleItems(items)</span>
+        }
+    }
+
+    private fun createSuggestionsUiStates(
+        onRetry: () -&gt; Unit,
+        query: String?,
+        data: List&lt;String&gt;,
+        errorFetchingSuggestions: Boolean,
+        @StringRes errorResId: Int?
+    ): List&lt;DomainsListItemUiState&gt; {
+<span class="nc" id="L255">        val items: ArrayList&lt;DomainsListItemUiState&gt; = ArrayList()</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">        if (errorFetchingSuggestions) {</span>
+<span class="nc" id="L257">            val errorUiState = DomainsFetchSuggestionsErrorUiState(</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">                    messageResId = errorResId ?: R.string.site_creation_fetch_suggestions_error_unknown,</span>
+<span class="nc" id="L259">                    retryButtonResId = R.string.button_retry</span>
+            )
+<span class="nc" id="L261">            errorUiState.onItemTapped = onRetry</span>
+<span class="nc" id="L262">            items.add(errorUiState)</span>
+        } else {
+<span class="nc bnc" id="L264" title="All 2 branches missed.">            query?.let { value -&gt;</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">                getDomainUnavailableUiState(value, data)?.let {</span>
+<span class="nc" id="L266">                    items.add(it)</span>
+                }
+            }
+
+<span class="nc" id="L270">            data.forEach { domainName -&gt;</span>
+<span class="nc" id="L271">                val itemUiState = DomainsModelAvailableUiState(</span>
+<span class="nc" id="L272">                        domainSanitizer.getName(domainName),</span>
+<span class="nc" id="L273">                        domainSanitizer.getDomain(domainName),</span>
+<span class="nc" id="L274">                        checked = domainName == selectedDomain</span>
+                )
+<span class="nc" id="L276">                itemUiState.onItemTapped = { setSelectedDomainName(domainName) }</span>
+<span class="nc" id="L277">                items.add(itemUiState)</span>
+<span class="nc" id="L278">            }</span>
+        }
+<span class="nc" id="L280">        return items</span>
+    }
+
+    private fun getDomainUnavailableUiState(
+        query: String,
+        domains: List&lt;String&gt;
+    ): DomainsModelUiState? {
+<span class="nc bnc" id="L287" title="All 2 branches missed.">        if (domains.isEmpty()) {</span>
+<span class="nc" id="L288">            return null</span>
+        }
+
+<span class="nc" id="L291">        val sanitizedQuery = domainSanitizer.sanitizeDomainQuery(query)</span>
+
+<span class="nc bnc" id="L293" title="All 4 branches missed.">        val isDomainUnavailable = (domains.find { domain -&gt;</span>
+<span class="nc" id="L294">            domain.startsWith(&quot;$sanitizedQuery.&quot;)</span>
+<span class="nc bnc" id="L295" title="All 4 branches missed.">        }).isNullOrEmpty()</span>
+
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        return if (isDomainUnavailable) {</span>
+<span class="nc" id="L298">            DomainsModelUnavailabilityUiState(</span>
+<span class="nc" id="L299">                    sanitizedQuery,</span>
+<span class="nc" id="L300">                    &quot;.wordpress.com&quot;,</span>
+<span class="nc" id="L301">                    UiStringRes(R.string.new_site_creation_unavailable_domain)</span>
+            )
+        } else {
+<span class="nc" id="L304">            null</span>
+        }
+    }
+
+    private fun createHeaderUiState(
+        isVisible: Boolean
+    ): SiteCreationHeaderUiState? {
+<span class="nc bnc" id="L311" title="All 2 branches missed.">        return if (isVisible) SiteCreationHeaderUiState(</span>
+<span class="nc" id="L312">                UiStringRes(R.string.new_site_creation_domain_header_title),</span>
+<span class="nc" id="L313">                UiStringRes(R.string.new_site_creation_domain_header_subtitle)</span>
+<span class="nc" id="L314">        ) else null</span>
+    }
+
+    private fun createSearchInputUiState(
+        showProgress: Boolean,
+        showClearButton: Boolean,
+        showDivider: Boolean,
+        showKeyboard: Boolean
+    ): SiteCreationSearchInputUiState {
+<span class="nc" id="L323">        return SiteCreationSearchInputUiState(</span>
+<span class="nc" id="L324">                hint = UiStringRes(R.string.new_site_creation_search_domain_input_hint),</span>
+<span class="nc" id="L325">                showProgress = showProgress,</span>
+<span class="nc" id="L326">                showClearButton = showClearButton,</span>
+<span class="nc" id="L327">                showDivider = showDivider,</span>
+<span class="nc" id="L328">                showKeyboard = showKeyboard</span>
+        )
+    }
+
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun setSelectedDomainName(domainName: String) {
+<span class="nc" id="L334">        selectedDomain = domainName</span>
+<span class="nc" id="L335">    }</span>
+
+    private fun isNonEmptyUserQuery(query: DomainSuggestionsQuery?): Boolean =
+<span class="nc bnc" id="L338" title="All 4 branches missed.">            query is UserQuery &amp;&amp; !query.value.isBlank()</span>
+
+<span class="nc" id="L340">    data class DomainsUiState(</span>
+<span class="nc" id="L341">        val headerUiState: SiteCreationHeaderUiState?,</span>
+<span class="nc" id="L342">        val searchInputUiState: SiteCreationSearchInputUiState,</span>
+<span class="nc" id="L343">        val contentState: DomainsUiContentState = DomainsUiContentState.Initial,</span>
+<span class="nc" id="L344">        val createSiteButtonContainerVisibility: Boolean</span>
+    ) {
+<span class="nc" id="L346">        sealed class DomainsUiContentState(</span>
+<span class="nc" id="L347">            val emptyViewVisibility: Boolean,</span>
+<span class="nc" id="L348">            val exampleViewVisibility: Boolean,</span>
+<span class="nc" id="L349">            val items: List&lt;DomainsListItemUiState&gt;</span>
+        ) {
+<span class="nc" id="L351">            object Initial : DomainsUiContentState(</span>
+<span class="nc" id="L352">                    emptyViewVisibility = false,</span>
+<span class="nc" id="L353">                    exampleViewVisibility = true,</span>
+<span class="nc" id="L354">                    items = emptyList()</span>
+            )
+
+<span class="nc" id="L357">            class Empty(val message: UiString?) : DomainsUiContentState(</span>
+<span class="nc" id="L358">                    emptyViewVisibility = true,</span>
+<span class="nc" id="L359">                    exampleViewVisibility = false,</span>
+<span class="nc" id="L360">                    items = emptyList()</span>
+            )
+
+<span class="nc" id="L363">            class VisibleItems(items: List&lt;DomainsListItemUiState&gt;) : DomainsUiContentState(</span>
+<span class="nc" id="L364">                    emptyViewVisibility = false,</span>
+<span class="nc" id="L365">                    exampleViewVisibility = false,</span>
+<span class="nc" id="L366">                    items = items</span>
+            )
+        }
+<span class="nc" id="L369">    }</span>
+
+    sealed class DomainsListItemUiState {
+<span class="nc" id="L372">        var onItemTapped: (() -&gt; Unit)? = null</span>
+<span class="nc" id="L373">        open val clickable: Boolean = false</span>
+
+<span class="nc" id="L375">        sealed class DomainsModelUiState(</span>
+<span class="nc" id="L376">            open val name: String,</span>
+<span class="nc" id="L377">            open val domain: String,</span>
+<span class="nc" id="L378">            open val checked: Boolean,</span>
+<span class="nc" id="L379">            val radioButtonVisibility: Boolean,</span>
+<span class="nc" id="L380">            open val subTitle: UiString? = null,</span>
+<span class="nc" id="L381">            override val clickable: Boolean</span>
+<span class="nc" id="L382">        ) : DomainsListItemUiState() {</span>
+<span class="nc" id="L383">            data class DomainsModelAvailableUiState(</span>
+<span class="nc" id="L384">                override val name: String,</span>
+<span class="nc" id="L385">                override val domain: String,</span>
+<span class="nc" id="L386">                override val checked: Boolean</span>
+<span class="nc" id="L387">            ) : DomainsModelUiState(name, domain, checked, true, clickable = true)</span>
+
+<span class="nc" id="L389">            data class DomainsModelUnavailabilityUiState(</span>
+<span class="nc" id="L390">                override val name: String,</span>
+<span class="nc" id="L391">                override val domain: String,</span>
+<span class="nc" id="L392">                override val subTitle: UiString</span>
+<span class="nc" id="L393">            ) : DomainsModelUiState(name, domain, false, false, subTitle, false)</span>
+<span class="nc" id="L394">        }</span>
+
+<span class="nc" id="L396">        data class DomainsFetchSuggestionsErrorUiState(</span>
+<span class="nc" id="L397">            @StringRes val messageResId: Int,</span>
+<span class="nc" id="L398">            @StringRes val retryButtonResId: Int</span>
+<span class="nc" id="L399">        ) : DomainsListItemUiState()</span>
+    }
+
+    /**
+     * An organized way to separate user initiated searches from automatic searches so we can handle them differently.
+     */
+<span class="nc" id="L405">    private sealed class DomainSuggestionsQuery(val value: String) {</span>
+        /**
+         * User initiated search.
+         */
+<span class="nc" id="L409">        class UserQuery(value: String) : DomainSuggestionsQuery(value)</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

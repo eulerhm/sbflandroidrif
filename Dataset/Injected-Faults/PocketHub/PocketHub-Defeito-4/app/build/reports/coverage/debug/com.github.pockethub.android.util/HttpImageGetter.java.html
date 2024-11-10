@@ -1,0 +1,366 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>HttpImageGetter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">debugAndroidTest</a> &gt; <a href="index.source.html" class="el_package">com.github.pockethub.android.util</a> &gt; <span class="el_source">HttpImageGetter.java</span></div><h1>HttpImageGetter.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (c) 2015 PocketHub
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.github.pockethub.android.util;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.net.Uri;
+import androidx.annotation.DimenRes;
+import android.text.Html.ImageGetter;
+import android.text.TextUtils;
+import android.util.Base64;
+import android.util.Log;
+import android.widget.TextView;
+
+import com.bugsnag.android.Bugsnag;
+import com.github.pockethub.android.R;
+import com.meisolsson.githubsdk.core.ServiceGenerator;
+import com.meisolsson.githubsdk.model.Content;
+import com.meisolsson.githubsdk.model.request.RequestMarkdown;
+import com.meisolsson.githubsdk.service.misc.MarkdownService;
+import com.meisolsson.githubsdk.service.repositories.RepositoryContentService;
+import javax.inject.Inject;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import io.reactivex.Single;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.schedulers.Schedulers;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+
+import static android.util.Base64.DEFAULT;
+import static android.view.View.GONE;
+import static android.view.View.VISIBLE;
+import static java.lang.Integer.MAX_VALUE;
+
+/**
+ * Getter for an image
+ */
+public class HttpImageGetter implements ImageGetter {
+
+    private static class LoadingImageGetter implements ImageGetter {
+
+        private final Drawable image;
+
+<span class="nc" id="L67">        private LoadingImageGetter(final Context context, @DimenRes final int size) {</span>
+<span class="nc" id="L68">            int imageSize = context.getResources().getDimensionPixelSize(size);</span>
+<span class="nc" id="L69">            image = context.getResources().getDrawable(</span>
+                    R.drawable.image_loading_icon);
+<span class="nc" id="L71">            image.setBounds(0, 0, imageSize, imageSize);</span>
+<span class="nc" id="L72">        }</span>
+
+        @Override
+        public Drawable getDrawable(String source) {
+<span class="nc" id="L76">            return image;</span>
+        }
+    }
+
+    private static boolean containsImages(final String html) {
+<span class="nc" id="L81">        return html.contains(&quot;&lt;img&quot;);</span>
+    }
+
+    private static final String HOST_DEFAULT = &quot;github.com&quot;;
+
+    private final LoadingImageGetter loading;
+
+    private final Context context;
+
+    private final File dir;
+
+    private final int width;
+
+<span class="nc" id="L94">    private final Map&lt;Object, CharSequence&gt; rawHtmlCache = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L96">    private final Map&lt;Object, CharSequence&gt; fullHtmlCache = new HashMap&lt;&gt;();</span>
+
+    private final OkHttpClient okHttpClient;
+
+    /**
+     * Create image getter for context
+     *
+     * @param context
+     */
+    @Inject
+<span class="nc" id="L106">    public HttpImageGetter(Context context) {</span>
+<span class="nc" id="L107">        this.context = context;</span>
+<span class="nc" id="L108">        dir = context.getCacheDir();</span>
+<span class="nc" id="L109">        width = ServiceUtils.getDisplayWidth(context);</span>
+<span class="nc" id="L110">        loading = new LoadingImageGetter(context, R.dimen.image_loading_size);</span>
+<span class="nc" id="L111">        okHttpClient = new OkHttpClient();</span>
+<span class="nc" id="L112">    }</span>
+
+    private HttpImageGetter show(final TextView view, final CharSequence html) {
+<span class="nc bnc" id="L115" title="All 2 branches missed.">        if (TextUtils.isEmpty(html)) {</span>
+<span class="nc" id="L116">            return hide(view);</span>
+        }
+
+<span class="nc" id="L119">        view.setText(trim(html));</span>
+<span class="nc" id="L120">        view.setVisibility(VISIBLE);</span>
+<span class="nc" id="L121">        view.setTag(null);</span>
+<span class="nc" id="L122">        return this;</span>
+    }
+
+    private HttpImageGetter hide(final TextView view) {
+<span class="nc" id="L126">        view.setText(null);</span>
+<span class="nc" id="L127">        view.setVisibility(GONE);</span>
+<span class="nc" id="L128">        view.setTag(null);</span>
+<span class="nc" id="L129">        return this;</span>
+    }
+
+    //All comments end with &quot;\n\n&quot; removing 2 chars
+    private CharSequence trim(CharSequence val){
+<span class="nc bnc" id="L134" title="All 4 branches missed.">        if(val.charAt(val.length()-1) == '\n' &amp;&amp; val.charAt(val.length()-2) == '\n') {</span>
+<span class="nc" id="L135">            val = val.subSequence(0, val.length() - 2);</span>
+        }
+<span class="nc" id="L137">        return val;</span>
+    }
+
+    /**
+     * Encode given HTML string and map it to the given id
+     *
+     * @param id
+     * @param html
+     * @return this image getter
+     */
+    public HttpImageGetter encode(final Object id, final String html) {
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (TextUtils.isEmpty(html)) {</span>
+<span class="nc" id="L149">            return this;</span>
+        }
+
+<span class="nc" id="L152">        CharSequence encoded = HtmlUtils.encode(html, loading);</span>
+        // Use default encoding if no img tags
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        if (containsImages(html)) {</span>
+<span class="nc" id="L155">            CharSequence currentEncoded = rawHtmlCache.put(id, encoded);</span>
+            // Remove full html if raw html has changed
+<span class="nc bnc" id="L157" title="All 2 branches missed.">            if (currentEncoded == null</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">                    || !currentEncoded.toString().equals(encoded.toString())) {</span>
+<span class="nc" id="L159">                fullHtmlCache.remove(id);</span>
+            }
+<span class="nc" id="L161">        } else {</span>
+<span class="nc" id="L162">            rawHtmlCache.remove(id);</span>
+<span class="nc" id="L163">            fullHtmlCache.put(id, encoded);</span>
+        }
+<span class="nc" id="L165">        return this;</span>
+    }
+
+    /**
+     * Bind text view to HTML string
+     *
+     * @param view
+     * @param html
+     * @param id
+     * @return this image getter
+     */
+    public HttpImageGetter bind(final TextView view, final String html,
+            final Object id) {
+<span class="nc bnc" id="L178" title="All 2 branches missed.">        if (TextUtils.isEmpty(html)) {</span>
+<span class="nc" id="L179">            return hide(view);</span>
+        }
+
+<span class="nc" id="L182">        CharSequence encoded = fullHtmlCache.get(id);</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        if (encoded != null) {</span>
+<span class="nc" id="L184">            return show(view, encoded);</span>
+        }
+
+<span class="nc" id="L187">        encoded = rawHtmlCache.get(id);</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">        if (encoded == null) {</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">            if (!html.matches(&quot;&lt;[a-z][\\s\\S]*&gt;&quot;)) {</span>
+<span class="nc" id="L190">                RequestMarkdown requestMarkdown = RequestMarkdown.builder()</span>
+<span class="nc" id="L191">                        .text(html)</span>
+<span class="nc" id="L192">                        .build();</span>
+
+<span class="nc" id="L194">                ServiceGenerator.createService(context, MarkdownService.class)</span>
+<span class="nc" id="L195">                        .renderMarkdown(requestMarkdown)</span>
+<span class="nc" id="L196">                        .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L197">                        .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L198">                        .subscribe(data -&gt; continueBind(view, data.body(), id),</span>
+<span class="nc" id="L199">                                e -&gt; continueBind(view, html, id));</span>
+<span class="nc" id="L200">            } else {</span>
+<span class="nc" id="L201">                return continueBind(view, html, id);</span>
+            }
+        }
+<span class="nc" id="L204">        return continueBind(view, html, id);</span>
+    }
+
+    private HttpImageGetter continueBind(final TextView view, final String html, final Object id) {
+<span class="nc" id="L208">        CharSequence encoded = HtmlUtils.encode(html, loading);</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        if (containsImages(html)) {</span>
+<span class="nc" id="L210">            rawHtmlCache.put(id, encoded);</span>
+        } else {
+<span class="nc" id="L212">            rawHtmlCache.remove(id);</span>
+<span class="nc" id="L213">            fullHtmlCache.put(id, encoded);</span>
+<span class="nc" id="L214">            return show(view, encoded);</span>
+        }
+
+<span class="nc bnc" id="L217" title="All 2 branches missed.">        if (TextUtils.isEmpty(encoded)) {</span>
+<span class="nc" id="L218">            return hide(view);</span>
+        }
+
+<span class="nc" id="L221">        show(view, encoded);</span>
+<span class="nc" id="L222">        view.setTag(id);</span>
+<span class="nc" id="L223">        Single.just(html)</span>
+<span class="nc" id="L224">                .subscribeOn(Schedulers.computation())</span>
+<span class="nc" id="L225">                .map(htmlString -&gt; HtmlUtils.encode(htmlString, this))</span>
+<span class="nc" id="L226">                .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L227">                .subscribe(htmlCharSequence -&gt; {</span>
+<span class="nc" id="L228">                    fullHtmlCache.put(id, htmlCharSequence);</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">                    if (id.equals(view.getTag())) {</span>
+<span class="nc" id="L230">                        show(view, htmlCharSequence);</span>
+                    }
+<span class="nc" id="L232">                });</span>
+<span class="nc" id="L233">        return this;</span>
+    }
+
+    /**
+     * Request an image using the contents API if the source URI is a path to a
+     * file already in the repository
+     *
+     * @param source
+     * @return
+     * @throws IOException
+     */
+    private Drawable requestRepositoryImage(final String source)
+            throws IOException {
+<span class="nc bnc" id="L246" title="All 2 branches missed.">        if (TextUtils.isEmpty(source)) {</span>
+<span class="nc" id="L247">            return null;</span>
+        }
+
+<span class="nc" id="L250">        Uri uri = Uri.parse(source);</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">        if (!HOST_DEFAULT.equals(uri.getHost())) {</span>
+<span class="nc" id="L252">            return null;</span>
+        }
+
+<span class="nc" id="L255">        List&lt;String&gt; segments = uri.getPathSegments();</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">        if (segments.size() &lt; 5) {</span>
+<span class="nc" id="L257">            return null;</span>
+        }
+
+<span class="nc" id="L260">        String prefix = segments.get(2);</span>
+        // Two types of urls supported:
+        // github.com/github/android/raw/master/app/res/drawable-xhdpi/app_icon.png
+        // github.com/github/android/blob/master/app/res/drawable-xhdpi/app_icon.png?raw=true
+<span class="nc bnc" id="L264" title="All 4 branches missed.">        if (!(&quot;raw&quot;.equals(prefix) || (&quot;blob&quot;.equals(prefix) &amp;&amp; !TextUtils</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">                .isEmpty(uri.getQueryParameter(&quot;raw&quot;))))) {</span>
+<span class="nc" id="L266">            return null;</span>
+        }
+
+<span class="nc" id="L269">        String owner = segments.get(0);</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        if (TextUtils.isEmpty(owner)) {</span>
+<span class="nc" id="L271">            return null;</span>
+        }
+<span class="nc" id="L273">        String name = segments.get(1);</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        if (TextUtils.isEmpty(name)) {</span>
+<span class="nc" id="L275">            return null;</span>
+        }
+<span class="nc" id="L277">        String branch = segments.get(3);</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">        if (TextUtils.isEmpty(branch)) {</span>
+<span class="nc" id="L279">            return null;</span>
+        }
+
+<span class="nc" id="L282">        StringBuilder path = new StringBuilder(segments.get(4));</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">        for (int i = 5; i &lt; segments.size(); i++) {</span>
+<span class="nc" id="L284">            String segment = segments.get(i);</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">            if (!TextUtils.isEmpty(segment)) {</span>
+<span class="nc" id="L286">                path.append('/').append(segment);</span>
+            }
+        }
+
+<span class="nc bnc" id="L290" title="All 2 branches missed.">        if (TextUtils.isEmpty(path)) {</span>
+<span class="nc" id="L291">            return null;</span>
+        }
+
+<span class="nc" id="L294">        Content contents = ServiceGenerator.createService(context, RepositoryContentService.class)</span>
+<span class="nc" id="L295">                .getContents(owner, name, path.toString(), branch)</span>
+<span class="nc" id="L296">                .blockingGet()</span>
+<span class="nc" id="L297">                .body();</span>
+
+<span class="nc bnc" id="L299" title="All 2 branches missed.">        if (contents.content() != null) {</span>
+<span class="nc" id="L300">            byte[] content = Base64.decode(contents.content(), DEFAULT);</span>
+<span class="nc" id="L301">            Bitmap bitmap = ImageUtils.getBitmap(content, width, MAX_VALUE);</span>
+<span class="nc bnc" id="L302" title="All 2 branches missed.">            if (bitmap == null) {</span>
+<span class="nc" id="L303">                return loading.getDrawable(source);</span>
+            }
+<span class="nc" id="L305">            BitmapDrawable drawable = new BitmapDrawable(</span>
+<span class="nc" id="L306">                    context.getResources(), bitmap);</span>
+<span class="nc" id="L307">            drawable.setBounds(0, 0, bitmap.getWidth(), bitmap.getHeight());</span>
+<span class="nc" id="L308">            return drawable;</span>
+        } else {
+<span class="nc" id="L310">            return null;</span>
+        }
+    }
+
+    @Override
+    public Drawable getDrawable(final String source) {
+        try {
+<span class="nc" id="L317">            Drawable repositoryImage = requestRepositoryImage(source);</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">            if (repositoryImage != null) {</span>
+<span class="nc" id="L319">                return repositoryImage;</span>
+            }
+<span class="nc" id="L321">        } catch (Exception e) {</span>
+            // Ignore and attempt request over regular HTTP request
+<span class="nc" id="L323">        }</span>
+
+        try {
+<span class="nc" id="L326">            String logMessage = &quot;Loading image: &quot; + source;</span>
+<span class="nc" id="L327">            Log.d(getClass().getSimpleName(), logMessage);</span>
+<span class="nc" id="L328">            Bugsnag.leaveBreadcrumb(logMessage);</span>
+
+<span class="nc" id="L330">            Request request = new Request.Builder()</span>
+<span class="nc" id="L331">                    .get()</span>
+<span class="nc" id="L332">                    .url(source)</span>
+<span class="nc" id="L333">                    .build();</span>
+
+<span class="nc" id="L335">            Response response = okHttpClient.newCall(request).execute();</span>
+
+<span class="nc bnc" id="L337" title="All 2 branches missed.">            if (!response.isSuccessful()) {</span>
+<span class="nc" id="L338">                throw new IOException(&quot;Unexpected response code: &quot; + response.code());</span>
+            }
+
+<span class="nc" id="L341">            Bitmap bitmap = BitmapFactory.decodeStream(response.body().byteStream());</span>
+
+<span class="nc bnc" id="L343" title="All 2 branches missed.">            if (bitmap == null) {</span>
+<span class="nc" id="L344">                return loading.getDrawable(source);</span>
+            }
+
+<span class="nc" id="L347">            BitmapDrawable drawable = new BitmapDrawable( context.getResources(), bitmap);</span>
+<span class="nc" id="L348">            drawable.setBounds(0, 0, bitmap.getWidth(), bitmap.getHeight());</span>
+<span class="nc" id="L349">            return drawable;</span>
+<span class="nc" id="L350">        } catch (IOException e) {</span>
+<span class="nc" id="L351">            Log.e(getClass().getSimpleName(), &quot;Error loading image&quot;, e);</span>
+<span class="nc" id="L352">            Bugsnag.notify(e);</span>
+<span class="nc" id="L353">            return loading.getDrawable(source);</span>
+        }
+    }
+
+    /**
+     * Remove Object from cache store.
+     * @param id
+     */
+    public void removeFromCache(final Object id) {
+<span class="nc" id="L362">        rawHtmlCache.remove(id);</span>
+<span class="nc" id="L363">        fullHtmlCache.remove(id);</span>
+<span class="nc" id="L364">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.7.9.201702052155</span>Generated by the Android Gradle plugin 3.6.1</div></body></html>

@@ -1,0 +1,472 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderPostUiStateBuilder.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.discover</a> &gt; <span class="el_source">ReaderPostUiStateBuilder.kt</span></div><h1>ReaderPostUiStateBuilder.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.discover
+
+import dagger.Reusable
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.models.ReaderBlog
+import org.wordpress.android.models.ReaderCardType.DEFAULT
+import org.wordpress.android.models.ReaderCardType.GALLERY
+import org.wordpress.android.models.ReaderCardType.PHOTO
+import org.wordpress.android.models.ReaderCardType.VIDEO
+import org.wordpress.android.models.ReaderPost
+import org.wordpress.android.models.ReaderPostDiscoverData
+import org.wordpress.android.models.ReaderPostDiscoverData.DiscoverType.EDITOR_PICK
+import org.wordpress.android.models.ReaderPostDiscoverData.DiscoverType.OTHER
+import org.wordpress.android.models.ReaderPostDiscoverData.DiscoverType.SITE_PICK
+import org.wordpress.android.models.ReaderTag
+import org.wordpress.android.models.ReaderTagList
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.reader.ReaderConstants
+import org.wordpress.android.ui.reader.ReaderTypes.ReaderPostListType
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderInterestChipStyleColor
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderInterestsCardUiState
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderInterestsCardUiState.ChipStyle
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderInterestsCardUiState.ChipStyle.ChipStyleGreen
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderInterestsCardUiState.ChipStyle.ChipStyleOrange
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderInterestsCardUiState.ChipStyle.ChipStylePurple
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderInterestsCardUiState.ChipStyle.ChipStyleYellow
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderInterestsCardUiState.ReaderInterestUiState
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderPostUiState
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderPostUiState.DiscoverLayoutUiState
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderPostUiState.GalleryThumbnailStripData
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderRecommendedBlogsCardUiState
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderRecommendedBlogsCardUiState.ReaderRecommendedBlogUiState
+import org.wordpress.android.ui.reader.discover.ReaderPostCardAction.PrimaryAction
+import org.wordpress.android.ui.reader.discover.ReaderPostCardAction.SecondaryAction
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.BOOKMARK
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.LIKE
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.REBLOG
+import org.wordpress.android.ui.reader.utils.ReaderImageScannerProvider
+import org.wordpress.android.ui.reader.utils.ReaderUtilsWrapper
+import org.wordpress.android.ui.reader.views.uistates.ReaderBlogSectionUiState
+import org.wordpress.android.ui.reader.views.uistates.ReaderBlogSectionUiState.ReaderBlogSectionClickData
+import org.wordpress.android.ui.utils.UiDimen.UIDimenRes
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringResWithParams
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.DateTimeUtilsWrapper
+import org.wordpress.android.util.GravatarUtilsWrapper
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.UrlUtilsWrapper
+import org.wordpress.android.util.image.BlavatarShape.CIRCULAR
+import org.wordpress.android.util.image.ImageType.AVATAR
+import org.wordpress.android.util.image.ImageType.BLAVATAR
+import javax.inject.Inject
+import javax.inject.Named
+
+private const val READER_INTEREST_LIST_SIZE_LIMIT = 5
+private const val READER_RECOMMENDED_BLOGS_LIST_SIZE_LIMIT = 3
+
+<span class="nc" id="L63">@Reusable</span>
+<span class="nc" id="L64">class ReaderPostUiStateBuilder @Inject constructor(</span>
+<span class="nc" id="L65">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L66">    private val urlUtilsWrapper: UrlUtilsWrapper,</span>
+<span class="nc" id="L67">    private val gravatarUtilsWrapper: GravatarUtilsWrapper,</span>
+<span class="nc" id="L68">    private val dateTimeUtilsWrapper: DateTimeUtilsWrapper,</span>
+<span class="nc" id="L69">    private val readerImageScannerProvider: ReaderImageScannerProvider,</span>
+<span class="nc" id="L70">    private val readerUtilsWrapper: ReaderUtilsWrapper,</span>
+<span class="nc" id="L71">    private val readerPostTagsUiStateBuilder: ReaderPostTagsUiStateBuilder,</span>
+<span class="nc" id="L72">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+) {
+<span class="nc" id="L74">    suspend fun mapPostToUiState(</span>
+        source: String,
+        post: ReaderPost,
+<span class="nc" id="L77">        isDiscover: Boolean = false,</span>
+        photonWidth: Int,
+        photonHeight: Int,
+        postListType: ReaderPostListType,
+        onButtonClicked: (Long, Long, ReaderPostCardActionType) -&gt; Unit,
+        onItemClicked: (Long, Long) -&gt; Unit,
+        onItemRendered: (ReaderCardUiState) -&gt; Unit,
+        onDiscoverSectionClicked: (Long, Long) -&gt; Unit,
+        onMoreButtonClicked: (ReaderPostUiState) -&gt; Unit,
+        onMoreDismissed: (ReaderPostUiState) -&gt; Unit,
+        onVideoOverlayClicked: (Long, Long) -&gt; Unit,
+        onPostHeaderViewClicked: (Long, Long) -&gt; Unit,
+        onTagItemClicked: (String) -&gt; Unit,
+<span class="nc" id="L90">        moreMenuItems: List&lt;SecondaryAction&gt;? = null</span>
+    ): ReaderPostUiState {
+<span class="nc bnc" id="L92" title="All 2 branches missed.">        return withContext(bgDispatcher) {</span>
+<span class="nc" id="L93">            mapPostToUiStateBlocking(</span>
+<span class="nc" id="L94">                    source,</span>
+<span class="nc" id="L95">                    post,</span>
+<span class="nc" id="L96">                    isDiscover,</span>
+<span class="nc" id="L97">                    photonWidth,</span>
+<span class="nc" id="L98">                    photonHeight,</span>
+<span class="nc" id="L99">                    postListType,</span>
+<span class="nc" id="L100">                    onButtonClicked,</span>
+<span class="nc" id="L101">                    onItemClicked,</span>
+<span class="nc" id="L102">                    onItemRendered,</span>
+<span class="nc" id="L103">                    onDiscoverSectionClicked,</span>
+<span class="nc" id="L104">                    onMoreButtonClicked,</span>
+<span class="nc" id="L105">                    onMoreDismissed,</span>
+<span class="nc" id="L106">                    onVideoOverlayClicked,</span>
+<span class="nc" id="L107">                    onPostHeaderViewClicked,</span>
+<span class="nc" id="L108">                    onTagItemClicked,</span>
+<span class="nc" id="L109">                    moreMenuItems</span>
+            )
+        }
+    }
+
+    @Suppress(&quot;LongParameterList&quot;)
+<span class="nc" id="L115">    fun mapPostToUiStateBlocking(</span>
+        source: String,
+        post: ReaderPost,
+<span class="nc" id="L118">        isDiscover: Boolean = false,</span>
+        photonWidth: Int,
+        photonHeight: Int,
+        postListType: ReaderPostListType,
+        onButtonClicked: (Long, Long, ReaderPostCardActionType) -&gt; Unit,
+        onItemClicked: (Long, Long) -&gt; Unit,
+        onItemRendered: (ReaderCardUiState) -&gt; Unit,
+        onDiscoverSectionClicked: (Long, Long) -&gt; Unit,
+        onMoreButtonClicked: (ReaderPostUiState) -&gt; Unit,
+        onMoreDismissed: (ReaderPostUiState) -&gt; Unit,
+        onVideoOverlayClicked: (Long, Long) -&gt; Unit,
+        onPostHeaderViewClicked: (Long, Long) -&gt; Unit,
+        onTagItemClicked: (String) -&gt; Unit,
+<span class="nc" id="L131">        moreMenuItems: List&lt;ReaderPostCardAction&gt;? = null</span>
+    ): ReaderPostUiState {
+<span class="nc" id="L133">        return ReaderPostUiState(</span>
+<span class="nc" id="L134">                source = source,</span>
+<span class="nc" id="L135">                postId = post.postId,</span>
+<span class="nc" id="L136">                blogId = post.blogId,</span>
+<span class="nc" id="L137">                feedId = post.feedId,</span>
+<span class="nc" id="L138">                isFollowed = post.isFollowedByCurrentUser,</span>
+<span class="nc" id="L139">                blogSection = buildBlogSection(post, onPostHeaderViewClicked, postListType, post.isP2orA8C),</span>
+<span class="nc" id="L140">                excerpt = buildExcerpt(post),</span>
+<span class="nc" id="L141">                title = buildTitle(post),</span>
+<span class="nc" id="L142">                tagItems = buildTagItems(post, onTagItemClicked),</span>
+<span class="nc" id="L143">                photoFrameVisibility = buildPhotoFrameVisibility(post),</span>
+<span class="nc" id="L144">                photoTitle = buildPhotoTitle(post),</span>
+<span class="nc" id="L145">                featuredImageUrl = buildFeaturedImageUrl(post, photonWidth, photonHeight),</span>
+<span class="nc" id="L146">                featuredImageCornerRadius = UIDimenRes(R.dimen.reader_featured_image_corner_radius),</span>
+<span class="nc" id="L147">                thumbnailStripSection = buildThumbnailStripUrls(post),</span>
+<span class="nc" id="L148">                expandableTagsViewVisibility = buildExpandedTagsViewVisibility(post, isDiscover),</span>
+<span class="nc" id="L149">                videoOverlayVisibility = buildVideoOverlayVisibility(post),</span>
+<span class="nc" id="L150">                featuredImageVisibility = buildFeaturedImageVisibility(post),</span>
+<span class="nc" id="L151">                moreMenuVisibility = accountStore.hasAccessToken(),</span>
+<span class="nc" id="L152">                moreMenuItems = moreMenuItems,</span>
+<span class="nc" id="L153">                fullVideoUrl = buildFullVideoUrl(post),</span>
+<span class="nc" id="L154">                discoverSection = buildDiscoverSection(post, onDiscoverSectionClicked),</span>
+<span class="nc" id="L155">                bookmarkAction = buildBookmarkSection(post, onButtonClicked),</span>
+<span class="nc" id="L156">                likeAction = buildLikeSection(post, onButtonClicked),</span>
+<span class="nc" id="L157">                reblogAction = buildReblogSection(post, onButtonClicked),</span>
+<span class="nc" id="L158">                commentsAction = buildCommentsSection(post, onButtonClicked),</span>
+<span class="nc" id="L159">                onItemClicked = onItemClicked,</span>
+<span class="nc" id="L160">                onItemRendered = onItemRendered,</span>
+<span class="nc" id="L161">                onMoreButtonClicked = onMoreButtonClicked,</span>
+<span class="nc" id="L162">                onMoreDismissed = onMoreDismissed,</span>
+<span class="nc" id="L163">                onVideoOverlayClicked = onVideoOverlayClicked</span>
+        )
+    }
+
+    fun mapPostToBlogSectionUiState(
+        post: ReaderPost,
+        onBlogSectionClicked: (Long, Long) -&gt; Unit
+    ): ReaderBlogSectionUiState {
+<span class="nc" id="L171">        return buildBlogSection(post, onBlogSectionClicked)</span>
+    }
+
+    fun mapPostToActions(
+        post: ReaderPost,
+        onButtonClicked: (Long, Long, ReaderPostCardActionType) -&gt; Unit
+    ): ReaderPostActions {
+<span class="nc" id="L178">        return ReaderPostActions(</span>
+<span class="nc" id="L179">                bookmarkAction = buildBookmarkSection(post, onButtonClicked),</span>
+<span class="nc" id="L180">                likeAction = buildLikeSection(post, onButtonClicked),</span>
+<span class="nc" id="L181">                reblogAction = buildReblogSection(post, onButtonClicked),</span>
+<span class="nc" id="L182">                commentsAction = buildCommentsSection(post, onButtonClicked)</span>
+        )
+    }
+
+    suspend fun mapTagListToReaderInterestUiState(
+        interests: ReaderTagList,
+        onClicked: ((String) -&gt; Unit)
+    ): ReaderInterestsCardUiState {
+<span class="nc bnc" id="L190" title="All 2 branches missed.">        return withContext(bgDispatcher) {</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">            val listSize = if (interests.size &lt; READER_INTEREST_LIST_SIZE_LIMIT) {</span>
+<span class="nc" id="L192">                interests.size</span>
+            } else {
+<span class="nc" id="L194">                READER_INTEREST_LIST_SIZE_LIMIT</span>
+            }
+
+<span class="nc" id="L197">            return@withContext ReaderInterestsCardUiState(interests.take(listSize).map { interest -&gt;</span>
+<span class="nc" id="L198">                ReaderInterestUiState(</span>
+<span class="nc" id="L199">                        interest = interest.tagTitle,</span>
+<span class="nc" id="L200">                        onClicked = onClicked,</span>
+<span class="nc" id="L201">                        chipStyle = buildChipStyle(interest, interests)</span>
+                )
+            })
+        }
+    }
+
+    suspend fun mapRecommendedBlogsToReaderRecommendedBlogsCardUiState(
+        recommendedBlogs: List&lt;ReaderBlog&gt;,
+        onItemClicked: (Long, Long, Boolean) -&gt; Unit,
+        onFollowClicked: (ReaderRecommendedBlogUiState) -&gt; Unit
+<span class="nc bnc" id="L211" title="All 2 branches missed.">    ): ReaderRecommendedBlogsCardUiState = withContext(bgDispatcher) {</span>
+<span class="nc" id="L212">        recommendedBlogs.take(READER_RECOMMENDED_BLOGS_LIST_SIZE_LIMIT)</span>
+<span class="nc" id="L213">                .map {</span>
+<span class="nc" id="L214">                    ReaderRecommendedBlogUiState(</span>
+<span class="nc" id="L215">                            name = it.name,</span>
+<span class="nc" id="L216">                            url = urlUtilsWrapper.removeScheme(it.url),</span>
+<span class="nc" id="L217">                            blogId = it.blogId,</span>
+<span class="nc" id="L218">                            feedId = it.feedId,</span>
+<span class="nc bnc" id="L219" title="All 4 branches missed.">                            description = it.description.ifEmpty { null },</span>
+<span class="nc" id="L220">                            iconUrl = it.imageUrl,</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">                            isFollowed = it.isFollowing,</span>
+<span class="nc" id="L222">                            onFollowClicked = onFollowClicked,</span>
+<span class="nc" id="L223">                            onItemClicked = onItemClicked</span>
+                    )
+<span class="nc" id="L225">                }.let { ReaderRecommendedBlogsCardUiState(it) }</span>
+<span class="nc" id="L226">    }</span>
+
+<span class="nc" id="L228">    private fun buildBlogSection(</span>
+        post: ReaderPost,
+        onBlogSectionClicked: (Long, Long) -&gt; Unit,
+<span class="nc" id="L231">        postListType: ReaderPostListType? = null,</span>
+<span class="nc" id="L232">        isP2Post: Boolean = false</span>
+<span class="nc" id="L233">    ) = buildBlogSectionUiState(post, onBlogSectionClicked, postListType, isP2Post)</span>
+
+<span class="nc" id="L235">    private fun buildBlogSectionUiState(</span>
+        post: ReaderPost,
+        onBlogSectionClicked: (Long, Long) -&gt; Unit,
+        postListType: ReaderPostListType?,
+<span class="nc" id="L239">        isP2Post: Boolean = false</span>
+    ): ReaderBlogSectionUiState {
+<span class="nc" id="L241">        return ReaderBlogSectionUiState(</span>
+<span class="nc" id="L242">                postId = post.postId,</span>
+<span class="nc" id="L243">                blogId = post.blogId,</span>
+<span class="nc" id="L244">                blogName = buildBlogName(post, isP2Post),</span>
+<span class="nc" id="L245">                blogUrl = buildBlogUrl(post),</span>
+<span class="nc" id="L246">                dateLine = buildDateLine(post),</span>
+<span class="nc" id="L247">                avatarOrBlavatarUrl = buildAvatarOrBlavatarUrl(post),</span>
+<span class="nc" id="L248">                isAuthorAvatarVisible = isP2Post,</span>
+<span class="nc" id="L249">                blavatarType = SiteUtils.getSiteImageType(isP2Post, CIRCULAR),</span>
+<span class="nc" id="L250">                authorAvatarUrl = gravatarUtilsWrapper.fixGravatarUrlWithResource(</span>
+<span class="nc" id="L251">                        post.postAvatar,</span>
+<span class="nc" id="L252">                        R.dimen.avatar_sz_medium</span>
+                ),
+<span class="nc" id="L254">                blogSectionClickData = buildOnBlogSectionClicked(onBlogSectionClicked, postListType)</span>
+        )
+    }
+
+    private fun buildOnBlogSectionClicked(
+        onBlogSectionClicked: (Long, Long) -&gt; Unit,
+        postListType: ReaderPostListType?
+    ): ReaderBlogSectionClickData? {
+<span class="nc bnc" id="L262" title="All 2 branches missed.">        return if (postListType != ReaderPostListType.BLOG_PREVIEW) {</span>
+<span class="nc" id="L263">            ReaderBlogSectionClickData(onBlogSectionClicked, android.R.attr.selectableItemBackground)</span>
+        } else {
+<span class="nc" id="L265">            null</span>
+        }
+    }
+
+<span class="nc" id="L269">    private fun buildBlogUrl(post: ReaderPost) = post</span>
+<span class="nc bnc" id="L270" title="All 4 branches missed.">            .takeIf { it.hasBlogUrl() }</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">            ?.blogUrl</span>
+<span class="nc" id="L272">            ?.let { urlUtilsWrapper.removeScheme(it) }</span>
+
+    private fun buildDiscoverSection(post: ReaderPost, onDiscoverSectionClicked: (Long, Long) -&gt; Unit) =
+<span class="nc bnc" id="L275" title="All 8 branches missed.">            post.takeIf { post.isDiscoverPost &amp;&amp; post.discoverData.discoverType != OTHER }</span>
+<span class="nc" id="L276">                    ?.let { buildDiscoverSectionUiState(post.discoverData, onDiscoverSectionClicked) }</span>
+
+    private fun buildFullVideoUrl(post: ReaderPost) =
+<span class="nc bnc" id="L279" title="All 6 branches missed.">            post.takeIf { post.cardType == VIDEO }</span>
+<span class="nc" id="L280">                    ?.let { post.featuredVideo }</span>
+
+    private fun buildExpandedTagsViewVisibility(post: ReaderPost, isDiscover: Boolean) =
+<span class="nc bnc" id="L283" title="All 6 branches missed.">            post.tags.isNotEmpty() &amp;&amp; isDiscover</span>
+
+    private fun buildTagItems(post: ReaderPost, onClicked: (String) -&gt; Unit) =
+<span class="nc" id="L286">            readerPostTagsUiStateBuilder.mapPostTagsToTagUiStates(post, onClicked)</span>
+
+    // TODO malinjir show overlay when buildFullVideoUrl != null
+<span class="nc bnc" id="L289" title="All 2 branches missed.">    private fun buildVideoOverlayVisibility(post: ReaderPost) = post.cardType == VIDEO</span>
+
+    private fun buildFeaturedImageVisibility(post: ReaderPost) =
+<span class="nc bnc" id="L292" title="All 6 branches missed.">            (post.cardType == PHOTO || post.cardType == DEFAULT) &amp;&amp; post.hasFeaturedImage() ||</span>
+<span class="nc bnc" id="L293" title="All 4 branches missed.">                    post.cardType == VIDEO &amp;&amp; post.hasFeaturedVideo()</span>
+
+    private fun buildThumbnailStripUrls(post: ReaderPost) =
+<span class="nc bnc" id="L296" title="All 6 branches missed.">            post.takeIf { it.cardType == GALLERY }</span>
+<span class="nc" id="L297">                    ?.let { retrieveGalleryThumbnailUrls(post) }</span>
+
+    private fun buildFeaturedImageUrl(post: ReaderPost, photonWidth: Int, photonHeight: Int): String? {
+<span class="nc" id="L300">        return post</span>
+<span class="nc bnc" id="L301" title="All 10 branches missed.">                .takeIf { (it.cardType == PHOTO || it.cardType == DEFAULT) &amp;&amp; it.hasFeaturedImage() }</span>
+<span class="nc" id="L302">                ?.getFeaturedImageForDisplay(photonWidth, photonHeight)</span>
+    }
+
+    private fun buildPhotoTitle(post: ReaderPost) =
+<span class="nc bnc" id="L306" title="All 8 branches missed.">            post.takeIf { it.cardType == PHOTO &amp;&amp; it.hasTitle() }?.title</span>
+
+    private fun buildPhotoFrameVisibility(post: ReaderPost) =
+<span class="nc bnc" id="L309" title="All 4 branches missed.">            (post.hasFeaturedVideo() || post.hasFeaturedImage()) &amp;&amp;</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">                    post.cardType != GALLERY</span>
+
+    // TODO malinjir show title only when buildPhotoTitle == null
+    private fun buildTitle(post: ReaderPost): UiString? {
+<span class="nc bnc" id="L314" title="All 2 branches missed.">        return if (post.cardType != PHOTO) {</span>
+<span class="nc bnc" id="L315" title="All 8 branches missed.">            post.takeIf { it.hasTitle() }?.title?.let { UiStringText(it) }</span>
+<span class="nc" id="L316">                    ?: UiStringRes(R.string.untitled_in_parentheses)</span>
+        } else {
+<span class="nc" id="L318">            null</span>
+        }
+    }
+
+    // TODO malinjir show excerpt only when buildPhotoTitle == null
+    private fun buildExcerpt(post: ReaderPost) =
+<span class="nc bnc" id="L324" title="All 8 branches missed.">            post.takeIf { post.cardType != PHOTO &amp;&amp; post.hasExcerpt() }?.excerpt</span>
+
+<span class="nc" id="L326">    private fun buildBlogName(post: ReaderPost, isP2Post: Boolean = false): UiString {</span>
+<span class="nc bnc" id="L327" title="All 8 branches missed.">        val blogName = post.takeIf { it.hasBlogName() }?.blogName?.let { UiStringText(it) }</span>
+<span class="nc" id="L328">                ?: UiStringRes(R.string.untitled_in_parentheses)</span>
+
+<span class="nc bnc" id="L330" title="All 2 branches missed.">        if (!isP2Post) {</span>
+<span class="nc" id="L331">            return blogName</span>
+        }
+
+<span class="nc bnc" id="L334" title="All 2 branches missed.">        val authorName = if (post.hasAuthorFirstName()) {</span>
+<span class="nc" id="L335">            UiStringText(post.authorFirstName)</span>
+        } else {
+<span class="nc" id="L337">            UiStringText(post.authorName)</span>
+        }
+
+<span class="nc" id="L340">        return UiStringResWithParams(R.string.reader_author_with_blog_name, listOf(authorName, blogName))</span>
+    }
+
+    private fun buildAvatarOrBlavatarUrl(post: ReaderPost) =
+<span class="nc bnc" id="L344" title="All 4 branches missed.">            post.takeIf { it.hasBlogImageUrl() }</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">                    ?.blogImageUrl</span>
+<span class="nc" id="L346">                    ?.let { gravatarUtilsWrapper.fixGravatarUrlWithResource(it, R.dimen.avatar_sz_medium) }</span>
+
+    private fun buildDateLine(post: ReaderPost) =
+<span class="nc" id="L349">            dateTimeUtilsWrapper.javaDateToTimeSpan(post.getDisplayDate(dateTimeUtilsWrapper))</span>
+
+    private fun buildDiscoverSectionUiState(
+        discoverData: ReaderPostDiscoverData,
+        onDiscoverSectionClicked: (Long, Long) -&gt; Unit
+    ): DiscoverLayoutUiState {
+<span class="nc" id="L355">        val discoverText = discoverData.attributionHtml</span>
+<span class="nc" id="L356">        val discoverAvatarUrl = gravatarUtilsWrapper.fixGravatarUrlWithResource(</span>
+<span class="nc" id="L357">                discoverData.avatarUrl,</span>
+<span class="nc" id="L358">                R.dimen.avatar_sz_small</span>
+        )
+<span class="nc bnc" id="L360" title="All 6 branches missed.">        val discoverAvatarImageType = when (discoverData.discoverType) {</span>
+<span class="nc" id="L361">            EDITOR_PICK -&gt; AVATAR</span>
+<span class="nc" id="L362">            SITE_PICK -&gt; BLAVATAR</span>
+<span class="nc" id="L363">            OTHER -&gt; throw IllegalStateException(&quot;This could should be unreachable.&quot;)</span>
+<span class="nc" id="L364">            else -&gt; AVATAR</span>
+        }
+<span class="nc" id="L366">        return DiscoverLayoutUiState(discoverText, discoverAvatarUrl, discoverAvatarImageType, onDiscoverSectionClicked)</span>
+    }
+
+    private fun retrieveGalleryThumbnailUrls(post: ReaderPost): GalleryThumbnailStripData {
+        // scan post content for images suitable in a gallery
+<span class="nc" id="L371">        val images = readerImageScannerProvider.createReaderImageScanner(post.text, post.isPrivate)</span>
+<span class="nc" id="L372">                .getImageList(ReaderConstants.THUMBNAIL_STRIP_IMG_COUNT, ReaderConstants.MIN_GALLERY_IMAGE_WIDTH)</span>
+<span class="nc" id="L373">        return GalleryThumbnailStripData(images, post.isPrivate, post.text)</span>
+    }
+
+    private fun buildBookmarkSection(
+        post: ReaderPost,
+        onClicked: (Long, Long, ReaderPostCardActionType) -&gt; Unit
+    ): PrimaryAction {
+<span class="nc" id="L380">        val contentDescription = UiStringRes(</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">                if (post.isBookmarked) {</span>
+<span class="nc" id="L382">                    R.string.reader_remove_bookmark</span>
+                } else {
+<span class="nc" id="L384">                    R.string.reader_add_bookmark</span>
+                }
+        )
+<span class="nc bnc" id="L387" title="All 4 branches missed.">        return if (post.postId != 0L &amp;&amp; post.blogId != 0L) {</span>
+<span class="nc" id="L388">            PrimaryAction(</span>
+<span class="nc" id="L389">                    isEnabled = true,</span>
+<span class="nc" id="L390">                    isSelected = post.isBookmarked,</span>
+<span class="nc" id="L391">                    contentDescription = contentDescription,</span>
+<span class="nc" id="L392">                    onClicked = onClicked,</span>
+<span class="nc" id="L393">                    type = BOOKMARK</span>
+            )
+        } else {
+<span class="nc" id="L396">            PrimaryAction(isEnabled = false, contentDescription = contentDescription, type = BOOKMARK)</span>
+        }
+    }
+
+    private fun buildLikeSection(
+        post: ReaderPost,
+        onClicked: (Long, Long, ReaderPostCardActionType) -&gt; Unit
+    ): PrimaryAction {
+<span class="nc bnc" id="L404" title="All 4 branches missed.">        val likesEnabled = post.canLikePost() &amp;&amp; accountStore.hasAccessToken()</span>
+
+<span class="nc" id="L406">        return PrimaryAction(</span>
+<span class="nc" id="L407">                isEnabled = likesEnabled,</span>
+<span class="nc" id="L408">                isSelected = post.isLikedByCurrentUser,</span>
+<span class="nc" id="L409">                contentDescription = UiStringText(</span>
+<span class="nc" id="L410">                        readerUtilsWrapper.getLongLikeLabelText(post.numLikes, post.isLikedByCurrentUser)</span>
+                ),
+<span class="nc" id="L412">                count = post.numLikes,</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">                onClicked = if (likesEnabled) onClicked else null,</span>
+<span class="nc" id="L414">                type = LIKE</span>
+        )
+    }
+
+    private fun buildReblogSection(
+        post: ReaderPost,
+        onReblogClicked: (Long, Long, ReaderPostCardActionType) -&gt; Unit
+    ): PrimaryAction {
+<span class="nc bnc" id="L422" title="All 4 branches missed.">        val canReblog = !post.isPrivate &amp;&amp; accountStore.hasAccessToken()</span>
+<span class="nc" id="L423">        return PrimaryAction(</span>
+<span class="nc" id="L424">                isEnabled = canReblog,</span>
+<span class="nc" id="L425">                contentDescription = UiStringRes(R.string.reader_view_reblog),</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">                onClicked = if (canReblog) onReblogClicked else null,</span>
+<span class="nc" id="L427">                type = REBLOG</span>
+        )
+    }
+
+    private fun buildCommentsSection(
+        post: ReaderPost,
+        onCommentsClicked: (Long, Long, ReaderPostCardActionType) -&gt; Unit
+    ): PrimaryAction {
+<span class="nc" id="L435">        val showComments = when {</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">            post.isDiscoverPost -&gt; false</span>
+<span class="nc bnc" id="L437" title="All 4 branches missed.">            !accountStore.hasAccessToken() -&gt; post.numReplies &gt; 0</span>
+<span class="nc bnc" id="L438" title="All 6 branches missed.">            else -&gt; post.isWP &amp;&amp; (post.isCommentsOpen || post.numReplies &gt; 0)</span>
+        }
+<span class="nc" id="L440">        val contentDescription = UiStringRes(R.string.comments)</span>
+
+<span class="nc bnc" id="L442" title="All 2 branches missed.">        return if (showComments) {</span>
+<span class="nc" id="L443">            PrimaryAction(</span>
+<span class="nc" id="L444">                    isEnabled = true,</span>
+<span class="nc" id="L445">                    count = post.numReplies,</span>
+<span class="nc" id="L446">                    contentDescription = contentDescription,</span>
+<span class="nc" id="L447">                    onClicked = onCommentsClicked,</span>
+<span class="nc" id="L448">                    type = ReaderPostCardActionType.COMMENTS</span>
+            )
+        } else {
+<span class="nc" id="L451">            PrimaryAction(</span>
+<span class="nc" id="L452">                    isEnabled = false,</span>
+<span class="nc" id="L453">                    contentDescription = contentDescription,</span>
+<span class="nc" id="L454">                    type = ReaderPostCardActionType.COMMENTS</span>
+            )
+        }
+    }
+
+    private fun buildChipStyle(readerTag: ReaderTag, readerTagList: ReaderTagList): ChipStyle {
+<span class="nc" id="L460">        val colorCount = ReaderInterestChipStyleColor.values().size</span>
+<span class="nc" id="L461">        val index = readerTagList.indexOf(readerTag)</span>
+
+<span class="nc" id="L463">        return when (index % colorCount) {</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">            ReaderInterestChipStyleColor.GREEN.id -&gt; ChipStyleGreen</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">            ReaderInterestChipStyleColor.PURPLE.id -&gt; ChipStylePurple</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">            ReaderInterestChipStyleColor.YELLOW.id -&gt; ChipStyleYellow</span>
+<span class="nc bnc" id="L467" title="All 2 branches missed.">            ReaderInterestChipStyleColor.ORANGE.id -&gt; ChipStyleOrange</span>
+<span class="nc" id="L468">            else -&gt; ChipStyleGreen</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,468 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>BackupDownloadViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.jetpack.backup.download</a> &gt; <span class="el_source">BackupDownloadViewModel.kt</span></div><h1>BackupDownloadViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.jetpack.backup.download
+
+import android.annotation.SuppressLint
+import android.os.Bundle
+import android.os.Parcelable
+import androidx.annotation.VisibleForTesting
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.Observer
+import kotlinx.parcelize.Parcelize
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.flow.collect
+import org.json.JSONObject
+import org.wordpress.android.R.string
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.JETPACK_BACKUP_DOWNLOAD_CONFIRMED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.JETPACK_BACKUP_DOWNLOAD_ERROR
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.JETPACK_BACKUP_DOWNLOAD_FILE_DOWNLOAD_TAPPED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.JETPACK_BACKUP_DOWNLOAD_SHARE_LINK_TAPPED
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.ActivityLogStore.BackupDownloadRequestTypes
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadNavigationEvents.DownloadFile
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadNavigationEvents.ShareLink
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Complete
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Empty
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Failure.NetworkUnavailable
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Failure.OtherRequestRunning
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Failure.RemoteRequestFailure
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Progress
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Success
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadStep.COMPLETE
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadStep.DETAILS
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadStep.ERROR
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadStep.PROGRESS
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadUiState.ContentState.CompleteState
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadUiState.ContentState.DetailsState
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadUiState.ContentState.ProgressState
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadUiState.ErrorState
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadViewModel.BackupDownloadWizardState.BackupDownloadCanceled
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadViewModel.BackupDownloadWizardState.BackupDownloadCompleted
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadViewModel.BackupDownloadWizardState.BackupDownloadInProgress
+import org.wordpress.android.ui.jetpack.backup.download.builders.BackupDownloadStateListItemBuilder
+import org.wordpress.android.ui.jetpack.backup.download.usecases.GetBackupDownloadStatusUseCase
+import org.wordpress.android.ui.jetpack.backup.download.usecases.PostBackupDownloadUseCase
+import org.wordpress.android.ui.jetpack.common.JetpackListItemState
+import org.wordpress.android.ui.jetpack.common.JetpackListItemState.CheckboxState
+import org.wordpress.android.ui.jetpack.common.ViewType
+import org.wordpress.android.ui.jetpack.common.providers.JetpackAvailableItemsProvider
+import org.wordpress.android.ui.jetpack.common.providers.JetpackAvailableItemsProvider.JetpackAvailableItemType
+import org.wordpress.android.ui.jetpack.common.providers.JetpackAvailableItemsProvider.JetpackAvailableItemType.CONTENTS
+import org.wordpress.android.ui.jetpack.common.providers.JetpackAvailableItemsProvider.JetpackAvailableItemType.MEDIA_UPLOADS
+import org.wordpress.android.ui.jetpack.common.providers.JetpackAvailableItemsProvider.JetpackAvailableItemType.PLUGINS
+import org.wordpress.android.ui.jetpack.common.providers.JetpackAvailableItemsProvider.JetpackAvailableItemType.ROOTS
+import org.wordpress.android.ui.jetpack.common.providers.JetpackAvailableItemsProvider.JetpackAvailableItemType.SQLS
+import org.wordpress.android.ui.jetpack.common.providers.JetpackAvailableItemsProvider.JetpackAvailableItemType.THEMES
+import org.wordpress.android.ui.jetpack.usecases.GetActivityLogItemUseCase
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringResWithParams
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.wizard.WizardManager
+import org.wordpress.android.util.wizard.WizardNavigationTarget
+import org.wordpress.android.util.wizard.WizardState
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import java.util.Date
+import java.util.HashMap
+import javax.inject.Inject
+import javax.inject.Named
+
+const val KEY_BACKUP_DOWNLOAD_ACTIVITY_ID_KEY = &quot;key_backup_download_activity_id_key&quot;
+const val KEY_BACKUP_DOWNLOAD_CURRENT_STEP = &quot;key_backup_download_current_step&quot;
+const val KEY_BACKUP_DOWNLOAD_STATE = &quot;key_backup_download_state&quot;
+private const val TRACKING_ERROR_CAUSE_OFFLINE = &quot;offline&quot;
+private const val TRACKING_ERROR_CAUSE_REMOTE = &quot;remote&quot;
+private const val TRACKING_ERROR_CAUSE_OTHER = &quot;other&quot;
+
+<span class="nc" id="L80">@Parcelize</span>
+@SuppressLint(&quot;ParcelCreator&quot;)
+<span class="nc" id="L82">data class BackupDownloadState(</span>
+<span class="nc" id="L83">    val siteId: Long? = null,</span>
+<span class="nc" id="L84">    val activityId: String? = null,</span>
+<span class="nc" id="L85">    val rewindId: String? = null,</span>
+<span class="nc" id="L86">    val downloadId: Long? = null,</span>
+<span class="nc" id="L87">    val published: Date? = null,</span>
+<span class="nc" id="L88">    val url: String? = null,</span>
+<span class="nc" id="L89">    val errorType: Int? = null</span>
+<span class="nc" id="L90">) : WizardState, Parcelable</span>
+
+typealias NavigationTarget = WizardNavigationTarget&lt;BackupDownloadStep, BackupDownloadState&gt;
+
+<span class="nc" id="L94">class BackupDownloadViewModel @Inject constructor(</span>
+<span class="nc" id="L95">    private val wizardManager: WizardManager&lt;BackupDownloadStep&gt;,</span>
+<span class="nc" id="L96">    private val availableItemsProvider: JetpackAvailableItemsProvider,</span>
+<span class="nc" id="L97">    private val getActivityLogItemUseCase: GetActivityLogItemUseCase,</span>
+<span class="nc" id="L98">    private val stateListItemBuilder: BackupDownloadStateListItemBuilder,</span>
+<span class="nc" id="L99">    private val postBackupDownloadUseCase: PostBackupDownloadUseCase,</span>
+<span class="nc" id="L100">    private val getBackupDownloadStatusUseCase: GetBackupDownloadStatusUseCase,</span>
+<span class="nc" id="L101">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L102">) : ScopedViewModel(mainDispatcher) {</span>
+    private var isStarted = false
+    private lateinit var site: SiteModel
+    private lateinit var activityId: String
+
+    private lateinit var backupDownloadState: BackupDownloadState
+    private val progressStart = 0
+
+<span class="nc" id="L110">    private val _wizardFinishedObservable = MutableLiveData&lt;Event&lt;BackupDownloadWizardState&gt;&gt;()</span>
+<span class="nc" id="L111">    val wizardFinishedObservable: LiveData&lt;Event&lt;BackupDownloadWizardState&gt;&gt; = _wizardFinishedObservable</span>
+
+<span class="nc" id="L113">    private val _snackbarEvents = MediatorLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L114">    val snackbarEvents: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _snackbarEvents</span>
+
+<span class="nc" id="L116">    private val _navigationEvents = MediatorLiveData&lt;Event&lt;BackupDownloadNavigationEvents&gt;&gt;()</span>
+<span class="nc" id="L117">    val navigationEvents: LiveData&lt;Event&lt;BackupDownloadNavigationEvents&gt;&gt; = _navigationEvents</span>
+
+<span class="nc" id="L119">    private val _uiState = MutableLiveData&lt;BackupDownloadUiState&gt;()</span>
+<span class="nc" id="L120">    val uiState: LiveData&lt;BackupDownloadUiState&gt; = _uiState</span>
+
+<span class="nc" id="L122">    private val wizardObserver = Observer { data: BackupDownloadStep? -&gt;</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        data?.let {</span>
+<span class="nc" id="L124">            clearOldBackupDownloadState(it)</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">            showStep(NavigationTarget(it, backupDownloadState))</span>
+<span class="nc" id="L126">        }</span>
+<span class="nc" id="L127">    }</span>
+
+    fun start(site: SiteModel, activityId: String, savedInstanceState: Bundle?) {
+<span class="nc bnc" id="L130" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc" id="L131">        isStarted = true</span>
+
+<span class="nc" id="L133">        this.site = site</span>
+<span class="nc" id="L134">        this.activityId = activityId</span>
+
+<span class="nc" id="L136">        wizardManager.navigatorLiveData.observeForever(wizardObserver)</span>
+
+<span class="nc bnc" id="L138" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L139">            backupDownloadState = BackupDownloadState()</span>
+            // Show the next step only if it's a fresh activity so we can handle the navigation
+<span class="nc" id="L141">            wizardManager.showNextStep()</span>
+        } else {
+<span class="nc bnc" id="L143" title="All 2 branches missed.">            backupDownloadState = requireNotNull(savedInstanceState.getParcelable(KEY_BACKUP_DOWNLOAD_STATE))</span>
+<span class="nc" id="L144">            val currentStepIndex = savedInstanceState.getInt(KEY_BACKUP_DOWNLOAD_CURRENT_STEP)</span>
+<span class="nc" id="L145">            wizardManager.setCurrentStepIndex(currentStepIndex)</span>
+        }
+<span class="nc" id="L147">    }</span>
+
+    fun onBackPressed() {
+<span class="nc" id="L150">        when (wizardManager.currentStep) {</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">            DETAILS.id -&gt; _wizardFinishedObservable.value = Event(BackupDownloadCanceled)</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">            PROGRESS.id -&gt; constructProgressEvent()</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">            COMPLETE.id -&gt; constructCompleteEvent()</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">            ERROR.id -&gt; _wizardFinishedObservable.value = Event(BackupDownloadCanceled)</span>
+        }
+<span class="nc" id="L156">    }</span>
+
+    private fun constructProgressEvent() {
+<span class="nc bnc" id="L159" title="All 4 branches missed.">        _wizardFinishedObservable.value = if (backupDownloadState.downloadId != null) {</span>
+<span class="nc" id="L160">            Event(</span>
+<span class="nc" id="L161">                    BackupDownloadInProgress(</span>
+<span class="nc bnc" id="L162" title="All 4 branches missed.">                            backupDownloadState.rewindId as String,</span>
+<span class="nc bnc" id="L163" title="All 4 branches missed.">                            backupDownloadState.downloadId as Long</span>
+                    )
+            )
+        } else {
+<span class="nc" id="L167">            Event(BackupDownloadCanceled)</span>
+        }
+<span class="nc" id="L169">    }</span>
+
+    private fun constructCompleteEvent() {
+<span class="nc bnc" id="L172" title="All 4 branches missed.">        _wizardFinishedObservable.value = if (backupDownloadState.downloadId != null) {</span>
+<span class="nc" id="L173">            Event(</span>
+<span class="nc" id="L174">                    BackupDownloadCompleted(</span>
+<span class="nc bnc" id="L175" title="All 4 branches missed.">                            backupDownloadState.rewindId as String,</span>
+<span class="nc bnc" id="L176" title="All 4 branches missed.">                            backupDownloadState.downloadId as Long</span>
+                    )
+            )
+        } else {
+<span class="nc" id="L180">            Event(BackupDownloadCanceled)</span>
+        }
+<span class="nc" id="L182">    }</span>
+
+    fun writeToBundle(outState: Bundle) {
+<span class="nc" id="L185">        outState.putInt(KEY_BACKUP_DOWNLOAD_CURRENT_STEP, wizardManager.currentStep)</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">        outState.putParcelable(KEY_BACKUP_DOWNLOAD_STATE, backupDownloadState)</span>
+<span class="nc" id="L187">    }</span>
+
+    private fun buildDetails() {
+<span class="nc" id="L190">        launch {</span>
+<span class="nc" id="L191">            val availableItems = availableItemsProvider.getAvailableItems()</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">            val activityLogModel = getActivityLogItemUseCase.get(activityId)</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">            if (activityLogModel != null) {</span>
+<span class="nc" id="L194">                _uiState.value = DetailsState(</span>
+<span class="nc" id="L195">                        activityLogModel = activityLogModel,</span>
+<span class="nc" id="L196">                        items = stateListItemBuilder.buildDetailsListStateItems(</span>
+<span class="nc" id="L197">                                availableItems = availableItems,</span>
+<span class="nc" id="L198">                                published = activityLogModel.published,</span>
+<span class="nc" id="L199">                                onCreateDownloadClick = this@BackupDownloadViewModel::onCreateDownloadClick,</span>
+<span class="nc" id="L200">                                onCheckboxItemClicked = this@BackupDownloadViewModel::onCheckboxItemClicked</span>
+                        ),
+<span class="nc" id="L202">                        type = StateType.DETAILS</span>
+                )
+            } else {
+<span class="nc" id="L205">                trackError(TRACKING_ERROR_CAUSE_OTHER)</span>
+<span class="nc" id="L206">                transitionToError(BackupDownloadErrorTypes.GenericFailure)</span>
+            }
+<span class="nc" id="L208">        }</span>
+<span class="nc" id="L209">    }</span>
+
+    private fun buildProgress() {
+<span class="nc" id="L212">        _uiState.value = ProgressState(</span>
+<span class="nc" id="L213">                items = stateListItemBuilder.buildProgressListStateItems(</span>
+<span class="nc" id="L214">                        progress = progressStart,</span>
+<span class="nc bnc" id="L215" title="All 4 branches missed.">                        published = backupDownloadState.published as Date</span>
+                ),
+<span class="nc" id="L217">                type = StateType.PROGRESS</span>
+        )
+<span class="nc" id="L219">        queryStatus()</span>
+<span class="nc" id="L220">    }</span>
+
+    private fun buildComplete() {
+<span class="nc" id="L223">        _uiState.value = CompleteState(</span>
+<span class="nc" id="L224">                items = stateListItemBuilder.buildCompleteListStateItems(</span>
+<span class="nc bnc" id="L225" title="All 4 branches missed.">                        published = backupDownloadState.published as Date,</span>
+<span class="nc" id="L226">                        onDownloadFileClick = this@BackupDownloadViewModel::onDownloadFileClick,</span>
+<span class="nc" id="L227">                        onShareLinkClick = this@BackupDownloadViewModel::onShareLinkClick</span>
+<span class="nc" id="L228">                ), type = StateType.COMPLETE</span>
+        )
+<span class="nc" id="L230">    }</span>
+
+    private fun buildError(errorType: BackupDownloadErrorTypes) {
+<span class="nc" id="L233">        _uiState.value = ErrorState(</span>
+<span class="nc" id="L234">                errorType = errorType,</span>
+<span class="nc" id="L235">                items = stateListItemBuilder.buildErrorListStateErrorItems(</span>
+<span class="nc" id="L236">                        errorType = errorType,</span>
+<span class="nc" id="L237">                        onDoneClick = this@BackupDownloadViewModel::onDoneClick</span>
+                )
+        )
+<span class="nc" id="L240">    }</span>
+
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun showStep(target: WizardNavigationTarget&lt;BackupDownloadStep, BackupDownloadState&gt;) {
+<span class="nc bnc" id="L244" title="All 5 branches missed.">        when (target.wizardStep) {</span>
+<span class="nc" id="L245">            DETAILS -&gt; buildDetails()</span>
+<span class="nc" id="L246">            PROGRESS -&gt; buildProgress()</span>
+<span class="nc" id="L247">            COMPLETE -&gt; buildComplete()</span>
+<span class="nc" id="L248">            ERROR -&gt; buildError(</span>
+<span class="nc" id="L249">                    BackupDownloadErrorTypes.fromInt(</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">                            target.wizardState.errorType ?: BackupDownloadErrorTypes.GenericFailure.id</span>
+                    )
+            )
+        }
+<span class="nc" id="L254">    }</span>
+
+    private fun transitionToError(errorType: BackupDownloadErrorTypes) {
+<span class="nc bnc" id="L257" title="All 2 branches missed.">        backupDownloadState = backupDownloadState.copy(errorType = errorType.id)</span>
+<span class="nc" id="L258">        wizardManager.setCurrentStepIndex(BackupDownloadStep.indexForErrorTransition())</span>
+<span class="nc" id="L259">        wizardManager.showNextStep()</span>
+<span class="nc" id="L260">    }</span>
+
+    private fun getParams(): Pair&lt;String?, BackupDownloadRequestTypes&gt; {
+<span class="nc bnc" id="L263" title="All 6 branches missed.">        val rewindId = (_uiState.value as? DetailsState)?.activityLogModel?.rewindID</span>
+<span class="nc bnc" id="L264" title="All 4 branches missed.">        val items = _uiState.value?.items ?: mutableListOf()</span>
+<span class="nc" id="L265">        val types = buildBackupDownloadRequestTypes(items)</span>
+<span class="nc" id="L266">        return rewindId to types</span>
+    }
+
+    private fun buildBackupDownloadRequestTypes(items: List&lt;JetpackListItemState&gt;): BackupDownloadRequestTypes {
+<span class="nc" id="L270">        val checkboxes = items.filterIsInstance(CheckboxState::class.java)</span>
+
+<span class="nc" id="L272">        return BackupDownloadRequestTypes(</span>
+<span class="nc bnc" id="L273" title="All 6 branches missed.">                themes = checkboxes.firstOrNull { it.availableItemType == THEMES }?.checked ?: true,</span>
+<span class="nc bnc" id="L274" title="All 6 branches missed.">                plugins = checkboxes.firstOrNull { it.availableItemType == PLUGINS }?.checked</span>
+<span class="nc" id="L275">                        ?: true,</span>
+<span class="nc bnc" id="L276" title="All 6 branches missed.">                uploads = checkboxes.firstOrNull { it.availableItemType == MEDIA_UPLOADS }?.checked</span>
+<span class="nc" id="L277">                        ?: true,</span>
+<span class="nc bnc" id="L278" title="All 6 branches missed.">                sqls = checkboxes.firstOrNull { it.availableItemType == SQLS }?.checked ?: true,</span>
+<span class="nc bnc" id="L279" title="All 6 branches missed.">                roots = checkboxes.firstOrNull { it.availableItemType == ROOTS }?.checked ?: true,</span>
+<span class="nc bnc" id="L280" title="All 6 branches missed.">                contents = checkboxes.firstOrNull { it.availableItemType == CONTENTS }?.checked</span>
+<span class="nc" id="L281">                        ?: true</span>
+        )
+    }
+
+    private fun handleBackupDownloadRequestResult(result: BackupDownloadRequestState) {
+<span class="nc" id="L286">        when (result) {</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">            is NetworkUnavailable -&gt; {</span>
+<span class="nc" id="L288">                trackError(TRACKING_ERROR_CAUSE_OFFLINE)</span>
+<span class="nc" id="L289">                _snackbarEvents.postValue(Event(NetworkUnavailableMsg))</span>
+            }
+<span class="nc bnc" id="L291" title="All 2 branches missed.">            is RemoteRequestFailure -&gt; {</span>
+<span class="nc" id="L292">                trackError(TRACKING_ERROR_CAUSE_REMOTE)</span>
+<span class="nc" id="L293">                _snackbarEvents.postValue(Event(GenericFailureMsg))</span>
+            }
+<span class="nc bnc" id="L295" title="All 2 branches missed.">            is Success -&gt; handleBackupDownloadRequestSuccess(result)</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">            is OtherRequestRunning -&gt; {</span>
+<span class="nc" id="L297">                trackError(TRACKING_ERROR_CAUSE_OTHER)</span>
+<span class="nc" id="L298">                _snackbarEvents.postValue(Event(OtherRequestRunningMsg))</span>
+            }
+<span class="nc" id="L300">            else -&gt; Unit // Do nothing</span>
+        }
+<span class="nc" id="L302">    }</span>
+
+    private fun handleBackupDownloadRequestSuccess(result: Success) {
+<span class="nc bnc" id="L305" title="All 2 branches missed.">        backupDownloadState = backupDownloadState.copy(</span>
+<span class="nc" id="L306">                rewindId = result.rewindId,</span>
+<span class="nc" id="L307">                downloadId = result.downloadId,</span>
+<span class="nc" id="L308">                published = extractPublishedDate()</span>
+        )
+<span class="nc" id="L310">        wizardManager.showNextStep()</span>
+<span class="nc" id="L311">    }</span>
+
+    private fun extractPublishedDate(): Date {
+<span class="nc bnc" id="L314" title="All 8 branches missed.">        return (_uiState.value as? DetailsState)?.activityLogModel?.published as Date</span>
+    }
+
+    private fun queryStatus() {
+<span class="nc" id="L318">        launch {</span>
+<span class="nc bnc" id="L319" title="All 6 branches missed.">            getBackupDownloadStatusUseCase.getBackupDownloadStatus(site, backupDownloadState.downloadId as Long)</span>
+<span class="nc" id="L320">                    .collect { state -&gt; handleQueryStatus(state) }</span>
+<span class="nc" id="L321">        }</span>
+<span class="nc" id="L322">    }</span>
+
+    private fun handleQueryStatus(state: BackupDownloadRequestState) {
+<span class="nc" id="L325">        when (state) {</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">            is NetworkUnavailable -&gt; {</span>
+<span class="nc" id="L327">                trackError(TRACKING_ERROR_CAUSE_OFFLINE)</span>
+<span class="nc" id="L328">                transitionToError(BackupDownloadErrorTypes.RemoteRequestFailure)</span>
+            }
+<span class="nc bnc" id="L330" title="All 2 branches missed.">            is RemoteRequestFailure -&gt; {</span>
+<span class="nc" id="L331">                trackError(TRACKING_ERROR_CAUSE_REMOTE)</span>
+<span class="nc" id="L332">                transitionToError(BackupDownloadErrorTypes.RemoteRequestFailure)</span>
+            }
+<span class="nc bnc" id="L334" title="All 2 branches missed.">            is Progress -&gt; transitionToProgress(state)</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">            is Complete -&gt; transitionToComplete(state)</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">            is Empty -&gt; {</span>
+<span class="nc" id="L337">                trackError(TRACKING_ERROR_CAUSE_REMOTE)</span>
+<span class="nc" id="L338">                transitionToError(BackupDownloadErrorTypes.RemoteRequestFailure)</span>
+            }
+<span class="nc" id="L340">            else -&gt; Unit // Do nothing</span>
+        }
+<span class="nc" id="L342">    }</span>
+
+    private fun transitionToProgress(state: Progress) {
+<span class="nc bnc" id="L345" title="All 4 branches missed.">        (_uiState.value as? ProgressState)?.let { content -&gt;</span>
+<span class="nc" id="L346">            val updatedList = content.items.map { contentState -&gt;</span>
+<span class="nc bnc" id="L347" title="All 2 branches missed.">                if (contentState.type == ViewType.PROGRESS) {</span>
+<span class="nc" id="L348">                    contentState as JetpackListItemState.ProgressState</span>
+<span class="nc" id="L349">                    contentState.copy(</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">                            progress = state.progress ?: 0,</span>
+<span class="nc" id="L351">                            progressLabel = UiStringResWithParams(</span>
+<span class="nc" id="L352">                                    string.backup_download_progress_label,</span>
+<span class="nc bnc" id="L353" title="All 4 branches missed.">                                    listOf(UiStringText(state.progress?.toString() ?: &quot;0&quot;))</span>
+                            )
+                    )
+                } else {
+<span class="nc" id="L357">                    contentState</span>
+                }
+            }
+<span class="nc" id="L360">            _uiState.postValue(content.copy(items = updatedList))</span>
+<span class="nc" id="L361">        }</span>
+<span class="nc" id="L362">    }</span>
+
+    private fun transitionToComplete(state: Complete) {
+<span class="nc bnc" id="L365" title="All 2 branches missed.">        backupDownloadState = backupDownloadState.copy(url = state.url)</span>
+<span class="nc" id="L366">        wizardManager.showNextStep()</span>
+<span class="nc" id="L367">    }</span>
+
+    private fun clearOldBackupDownloadState(wizardStep: BackupDownloadStep) {
+<span class="nc bnc" id="L370" title="All 2 branches missed.">        if (wizardStep == DETAILS) {</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">            backupDownloadState = backupDownloadState.copy(</span>
+<span class="nc" id="L372">                    rewindId = null,</span>
+<span class="nc" id="L373">                    downloadId = null,</span>
+<span class="nc" id="L374">                    url = null,</span>
+<span class="nc" id="L375">                    errorType = null</span>
+            )
+        }
+<span class="nc" id="L378">    }</span>
+
+    private fun onCheckboxItemClicked(itemType: JetpackAvailableItemType) {
+<span class="nc bnc" id="L381" title="All 4 branches missed.">        (_uiState.value as? DetailsState)?.let {</span>
+<span class="nc" id="L382">            val updatedItems = stateListItemBuilder.updateCheckboxes(it, itemType)</span>
+<span class="nc" id="L383">            _uiState.postValue(it.copy(items = updatedItems))</span>
+<span class="nc" id="L384">        }</span>
+<span class="nc" id="L385">    }</span>
+
+    private fun onCreateDownloadClick() {
+<span class="nc" id="L388">        val (rewindId, types) = getParams()</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">        if (rewindId == null) {</span>
+<span class="nc" id="L390">            transitionToError(BackupDownloadErrorTypes.GenericFailure)</span>
+        } else {
+<span class="nc" id="L392">            trackBackupDownloadConfirmed(types)</span>
+<span class="nc" id="L393">            launch {</span>
+<span class="nc" id="L394">                val result = postBackupDownloadUseCase.postBackupDownloadRequest(</span>
+<span class="nc" id="L395">                        rewindId,</span>
+<span class="nc bnc" id="L396" title="All 2 branches missed.">                        site,</span>
+<span class="nc" id="L397">                        types</span>
+                )
+<span class="nc" id="L399">                handleBackupDownloadRequestResult(result)</span>
+<span class="nc" id="L400">            }</span>
+        }
+<span class="nc" id="L402">    }</span>
+
+    private fun onDownloadFileClick() {
+<span class="nc" id="L405">        AnalyticsTracker.track(JETPACK_BACKUP_DOWNLOAD_FILE_DOWNLOAD_TAPPED)</span>
+<span class="nc bnc" id="L406" title="All 4 branches missed.">        backupDownloadState.url?.let { _navigationEvents.postValue(Event(DownloadFile(it))) }</span>
+<span class="nc" id="L407">    }</span>
+
+    private fun onShareLinkClick() {
+<span class="nc" id="L410">        AnalyticsTracker.track(JETPACK_BACKUP_DOWNLOAD_SHARE_LINK_TAPPED)</span>
+<span class="nc bnc" id="L411" title="All 4 branches missed.">        backupDownloadState.url?.let { _navigationEvents.postValue(Event(ShareLink(it))) }</span>
+<span class="nc" id="L412">    }</span>
+
+    private fun onDoneClick() {
+<span class="nc" id="L415">        _wizardFinishedObservable.value = Event(BackupDownloadCanceled)</span>
+<span class="nc" id="L416">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L419">        super.onCleared()</span>
+<span class="nc" id="L420">        wizardManager.navigatorLiveData.removeObserver(wizardObserver)</span>
+<span class="nc" id="L421">    }</span>
+
+    private fun trackBackupDownloadConfirmed(types: BackupDownloadRequestTypes) {
+<span class="nc" id="L424">        val propertiesSetup = mapOf(</span>
+<span class="nc" id="L425">                &quot;themes&quot; to types.themes,</span>
+<span class="nc" id="L426">                &quot;plugins&quot; to types.plugins,</span>
+<span class="nc" id="L427">                &quot;uploads&quot; to types.uploads,</span>
+<span class="nc" id="L428">                &quot;sqls&quot; to types.sqls,</span>
+<span class="nc" id="L429">                &quot;roots&quot; to types.roots,</span>
+<span class="nc" id="L430">                &quot;contents&quot; to types.contents</span>
+        )
+<span class="nc" id="L432">        val map = mapOf(&quot;restore_types&quot; to JSONObject(propertiesSetup))</span>
+<span class="nc" id="L433">        AnalyticsTracker.track(JETPACK_BACKUP_DOWNLOAD_CONFIRMED, map)</span>
+<span class="nc" id="L434">    }</span>
+
+    private fun trackError(cause: String) {
+<span class="nc" id="L437">        val properties: MutableMap&lt;String, String?&gt; = HashMap()</span>
+<span class="nc" id="L438">        properties[&quot;cause&quot;] = cause</span>
+<span class="nc" id="L439">        AnalyticsTracker.track(JETPACK_BACKUP_DOWNLOAD_ERROR, properties)</span>
+<span class="nc" id="L440">    }</span>
+
+    companion object {
+<span class="nc" id="L443">        private val NetworkUnavailableMsg = SnackbarMessageHolder(UiStringRes(string.error_network_connection))</span>
+<span class="nc" id="L444">        private val GenericFailureMsg = SnackbarMessageHolder(UiStringRes(string.backup_download_generic_failure))</span>
+<span class="nc" id="L445">        private val OtherRequestRunningMsg = SnackbarMessageHolder(</span>
+<span class="nc" id="L446">                UiStringRes(string.backup_download_another_download_running)</span>
+        )
+    }
+
+    @SuppressLint(&quot;ParcelCreator&quot;)
+    sealed class BackupDownloadWizardState : Parcelable {
+<span class="nc" id="L452">        @Parcelize</span>
+<span class="nc" id="L453">        object BackupDownloadCanceled : BackupDownloadWizardState()</span>
+
+        @Parcelize
+<span class="nc" id="L456">        data class BackupDownloadInProgress(</span>
+<span class="nc" id="L457">            val rewindId: String,</span>
+<span class="nc" id="L458">            val downloadId: Long</span>
+<span class="nc" id="L459">        ) : BackupDownloadWizardState()</span>
+
+        @Parcelize
+<span class="nc" id="L462">        data class BackupDownloadCompleted(</span>
+<span class="nc" id="L463">            val rewindId: String,</span>
+<span class="nc" id="L464">            val downloadId: Long</span>
+<span class="nc" id="L465">        ) : BackupDownloadWizardState()</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

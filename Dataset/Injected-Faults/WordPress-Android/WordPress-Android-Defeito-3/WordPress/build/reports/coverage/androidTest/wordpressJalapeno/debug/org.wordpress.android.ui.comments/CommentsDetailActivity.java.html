@@ -1,0 +1,295 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CommentsDetailActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.comments</a> &gt; <span class="el_source">CommentsDetailActivity.java</span></div><h1>CommentsDetailActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.comments;
+
+import android.content.Intent;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.text.TextUtils;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.ProgressBar;
+
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.widget.Toolbar;
+import androidx.viewpager.widget.ViewPager;
+
+import com.google.android.material.appbar.AppBarLayout;
+
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.fluxc.action.CommentAction;
+import org.wordpress.android.fluxc.generated.CommentActionBuilder;
+import org.wordpress.android.fluxc.model.CommentModel;
+import org.wordpress.android.fluxc.model.CommentStatus;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.CommentStore.FetchCommentsPayload;
+import org.wordpress.android.fluxc.store.CommentStore.OnCommentChanged;
+import org.wordpress.android.models.CommentList;
+import org.wordpress.android.ui.CollapseFullScreenDialogFragment;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.ui.ScrollableViewInitializedListener;
+import org.wordpress.android.ui.comments.unified.CommentConstants;
+import org.wordpress.android.ui.comments.unified.OnLoadMoreListener;
+import org.wordpress.android.ui.comments.unified.CommentsStoreAdapter;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils.AnalyticsCommentActionSource;
+import org.wordpress.android.widgets.WPViewPager;
+import org.wordpress.android.widgets.WPViewPagerTransformer;
+
+import javax.inject.Inject;
+
+import static org.wordpress.android.ui.comments.unified.CommentConstants.COMMENTS_PER_PAGE;
+
+/**
+ * @deprecated
+ * Comments are being refactored as part of Comments Unification project. If you are adding any
+ * features or modifying this class, please ping develric or klymyam
+ */
+@Deprecated
+<span class="nc" id="L54">public class CommentsDetailActivity extends LocaleAwareActivity</span>
+        implements OnLoadMoreListener,
+        CommentActions.OnCommentActionListener, ScrollableViewInitializedListener {
+    public static final String COMMENT_ID_EXTRA = &quot;commentId&quot;;
+    public static final String COMMENT_STATUS_FILTER_EXTRA = &quot;commentStatusFilter&quot;;
+
+    @Inject CommentsStoreAdapter mCommentsStoreAdapter;
+
+    private WPViewPager mViewPager;
+    private AppBarLayout mAppBarLayout;
+    private ProgressBar mProgressBar;
+
+    private long mCommentId;
+    private CommentStatus mStatusFilter;
+    private SiteModel mSite;
+    private CommentDetailFragmentAdapter mAdapter;
+    private ViewPager.OnPageChangeListener mOnPageChangeListener;
+
+    private boolean mIsLoadingComments;
+    private boolean mIsUpdatingComments;
+<span class="nc" id="L74">    private boolean mCanLoadMoreComments = true;</span>
+
+    @Override
+    public void onBackPressed() {
+<span class="nc" id="L78">        CollapseFullScreenDialogFragment fragment = (CollapseFullScreenDialogFragment)</span>
+<span class="nc" id="L79">                getSupportFragmentManager().findFragmentByTag(CollapseFullScreenDialogFragment.TAG);</span>
+
+<span class="nc bnc" id="L81" title="All 2 branches missed.">        if (fragment != null) {</span>
+<span class="nc" id="L82">            fragment.onBackPressed();</span>
+        } else {
+<span class="nc" id="L84">            super.onBackPressed();</span>
+        }
+<span class="nc" id="L86">    }</span>
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L90">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L91">        ((WordPress) getApplication()).component().inject(this);</span>
+<span class="nc" id="L92">        mCommentsStoreAdapter.register(this);</span>
+<span class="nc" id="L93">        AppLog.i(AppLog.T.COMMENTS, &quot;Creating CommentsDetailActivity&quot;);</span>
+
+<span class="nc" id="L95">        setContentView(R.layout.comments_detail_activity);</span>
+
+<span class="nc" id="L97">        Toolbar toolbar = findViewById(R.id.toolbar_main);</span>
+<span class="nc" id="L98">        setSupportActionBar(toolbar);</span>
+<span class="nc" id="L99">        ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">        if (actionBar != null) {</span>
+<span class="nc" id="L101">            actionBar.setDisplayShowTitleEnabled(true);</span>
+<span class="nc" id="L102">            actionBar.setDisplayHomeAsUpEnabled(true);</span>
+        }
+
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L106">            mCommentId = getIntent().getLongExtra(COMMENT_ID_EXTRA, -1);</span>
+<span class="nc" id="L107">            mSite = (SiteModel) getIntent().getSerializableExtra(WordPress.SITE);</span>
+<span class="nc" id="L108">            mStatusFilter = (CommentStatus) getIntent().getSerializableExtra(COMMENT_STATUS_FILTER_EXTRA);</span>
+        } else {
+<span class="nc" id="L110">            mCommentId = savedInstanceState.getLong(COMMENT_ID_EXTRA);</span>
+<span class="nc" id="L111">            mSite = (SiteModel) savedInstanceState.getSerializable(WordPress.SITE);</span>
+<span class="nc" id="L112">            mStatusFilter = (CommentStatus) savedInstanceState.getSerializable(COMMENT_STATUS_FILTER_EXTRA);</span>
+        }
+
+        // set up the viewpager and adapter for lateral navigation
+<span class="nc" id="L116">        mViewPager = findViewById(R.id.viewpager);</span>
+<span class="nc" id="L117">        mViewPager.setPageTransformer(false,</span>
+                new WPViewPagerTransformer(WPViewPagerTransformer.TransformType.SLIDE_OVER));
+
+<span class="nc" id="L120">        mProgressBar = findViewById(R.id.progress_loading);</span>
+<span class="nc" id="L121">        mAppBarLayout = findViewById(R.id.appbar_main);</span>
+
+        // Asynchronously loads comments and build the adapter
+<span class="nc" id="L124">        loadDataInViewPager();</span>
+
+<span class="nc bnc" id="L126" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+            // track initial comment view
+<span class="nc" id="L128">            AnalyticsUtils.trackCommentActionWithSiteDetails(</span>
+                    Stat.COMMENT_VIEWED, AnalyticsCommentActionSource.SITE_COMMENTS, mSite);
+        }
+<span class="nc" id="L131">    }</span>
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+<span class="nc" id="L135">        outState.putLong(COMMENT_ID_EXTRA, mCommentId);</span>
+<span class="nc" id="L136">        outState.putSerializable(WordPress.SITE, mSite);</span>
+<span class="nc" id="L137">        outState.putSerializable(COMMENT_STATUS_FILTER_EXTRA, mStatusFilter);</span>
+<span class="nc" id="L138">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L139">    }</span>
+
+    @Override
+    public void onDestroy() {
+<span class="nc" id="L143">        mCommentsStoreAdapter.unregister(this);</span>
+<span class="nc" id="L144">        super.onDestroy();</span>
+<span class="nc" id="L145">    }</span>
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        if (item.getItemId() == android.R.id.home) {</span>
+<span class="nc" id="L150">            finish();</span>
+<span class="nc" id="L151">            return true;</span>
+        }
+<span class="nc" id="L153">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    @Override
+    public void onLoadMore() {
+<span class="nc" id="L158">        updateComments();</span>
+<span class="nc" id="L159">    }</span>
+
+    private void updateComments() {
+<span class="nc bnc" id="L162" title="All 2 branches missed.">        if (mIsUpdatingComments) {</span>
+<span class="nc" id="L163">            AppLog.w(AppLog.T.COMMENTS, &quot;update comments task already running&quot;);</span>
+<span class="nc" id="L164">            return;</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        } else if (!NetworkUtils.isNetworkAvailable(this)) {</span>
+<span class="nc" id="L166">            ToastUtils.showToast(this, getString(R.string.error_refresh_comments_showing_older));</span>
+<span class="nc" id="L167">            return;</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">        } else if (!mCanLoadMoreComments) {</span>
+<span class="nc" id="L169">            AppLog.w(AppLog.T.COMMENTS, &quot;no more comments to be loaded&quot;);</span>
+<span class="nc" id="L170">            return;</span>
+        }
+
+<span class="nc" id="L173">        final int offset = mAdapter.getCount();</span>
+<span class="nc" id="L174">        mCommentsStoreAdapter.dispatch(CommentActionBuilder.newFetchCommentsAction(</span>
+                new FetchCommentsPayload(mSite, mStatusFilter, COMMENTS_PER_PAGE, offset)));
+<span class="nc" id="L176">        mIsUpdatingComments = true;</span>
+<span class="nc" id="L177">        setLoadingState(true);</span>
+<span class="nc" id="L178">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onCommentChanged(OnCommentChanged event) {
+<span class="nc" id="L183">        mIsUpdatingComments = false;</span>
+<span class="nc" id="L184">        setLoadingState(false);</span>
+        // Don't refresh the list on push, we already updated comments
+<span class="nc bnc" id="L186" title="All 2 branches missed.">        if (event.causeOfChange != CommentAction.PUSH_COMMENT) {</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">            if (event.changedCommentsLocalIds.size() &gt; 0) {</span>
+<span class="nc" id="L188">                loadDataInViewPager();</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">            } else if (!event.isError()) {</span>
+                // There are no more comments to load
+<span class="nc" id="L191">                mCanLoadMoreComments = false;</span>
+            }
+        }
+<span class="nc bnc" id="L194" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">            if (!TextUtils.isEmpty(event.error.message)) {</span>
+<span class="nc" id="L196">                ToastUtils.showToast(this, event.error.message);</span>
+            }
+        }
+<span class="nc" id="L199">    }</span>
+
+    private void loadDataInViewPager() {
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        if (mIsLoadingComments) {</span>
+<span class="nc" id="L203">            AppLog.w(AppLog.T.COMMENTS, &quot;load comments task already active&quot;);</span>
+        } else {
+<span class="nc" id="L205">            new LoadCommentsTask(mCommentsStoreAdapter, mStatusFilter, mSite, new LoadCommentsTask.LoadingCallback() {</span>
+                @Override
+                public void isLoading(boolean loading) {
+<span class="nc" id="L208">                    setLoadingState(loading);</span>
+<span class="nc" id="L209">                    mIsLoadingComments = loading;</span>
+<span class="nc" id="L210">                }</span>
+
+                @Override
+                public void loadingFinished(CommentList commentList) {
+<span class="nc bnc" id="L214" title="All 2 branches missed.">                    if (!commentList.isEmpty()) {</span>
+<span class="nc" id="L215">                        showCommentList(commentList);</span>
+                    }
+<span class="nc" id="L217">                }</span>
+<span class="nc" id="L218">            }).executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);</span>
+        }
+<span class="nc" id="L220">    }</span>
+
+    private void showCommentList(CommentList commentList) {
+<span class="nc bnc" id="L223" title="All 2 branches missed.">        if (isFinishing()) {</span>
+<span class="nc" id="L224">            return;</span>
+        }
+<span class="nc" id="L226">        final int previousItem = mViewPager.getCurrentItem();</span>
+
+        // Only notify adapter when loading new page
+<span class="nc bnc" id="L229" title="All 4 branches missed.">        if (mAdapter != null &amp;&amp; mAdapter.isAddingNewComments(commentList)) {</span>
+<span class="nc" id="L230">            mAdapter.onNewItems(commentList);</span>
+        } else {
+            // If current items change, rebuild the adapter
+<span class="nc" id="L233">            mAdapter = new CommentDetailFragmentAdapter(getSupportFragmentManager(), commentList, mSite,</span>
+                    CommentsDetailActivity.this);
+<span class="nc" id="L235">            mViewPager.setAdapter(mAdapter);</span>
+        }
+
+<span class="nc" id="L238">        final int commentIndex = mAdapter.commentIndex(mCommentId);</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        if (commentIndex &lt; 0) {</span>
+<span class="nc" id="L240">            showErrorToastAndFinish();</span>
+        }
+<span class="nc bnc" id="L242" title="All 2 branches missed.">        if (mOnPageChangeListener != null) {</span>
+<span class="nc" id="L243">            mViewPager.removeOnPageChangeListener(mOnPageChangeListener);</span>
+        } else {
+<span class="nc" id="L245">            mOnPageChangeListener = new ViewPager.SimpleOnPageChangeListener() {</span>
+                @Override
+                public void onPageSelected(int position) {
+<span class="nc" id="L248">                    super.onPageSelected(position);</span>
+<span class="nc" id="L249">                    final CommentModel comment = mAdapter.getCommentAtPosition(position);</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">                    if (comment != null) {</span>
+<span class="nc" id="L251">                        mCommentId = comment.getRemoteCommentId();</span>
+                        // track subsequent comment views
+<span class="nc" id="L253">                        AnalyticsUtils.trackCommentActionWithSiteDetails(</span>
+<span class="nc" id="L254">                                Stat.COMMENT_VIEWED, AnalyticsCommentActionSource.SITE_COMMENTS, mSite);</span>
+                    }
+<span class="nc" id="L256">                }</span>
+            };
+        }
+<span class="nc bnc" id="L259" title="All 2 branches missed.">        if (commentIndex != previousItem) {</span>
+<span class="nc" id="L260">            mViewPager.setCurrentItem(commentIndex);</span>
+        }
+
+<span class="nc" id="L263">        mViewPager.addOnPageChangeListener(mOnPageChangeListener);</span>
+<span class="nc" id="L264">    }</span>
+
+    private void showErrorToastAndFinish() {
+<span class="nc" id="L267">        AppLog.e(AppLog.T.COMMENTS, &quot;Comment could not be found.&quot;);</span>
+<span class="nc" id="L268">        ToastUtils.showToast(this, R.string.error_load_comment);</span>
+<span class="nc" id="L269">        finish();</span>
+<span class="nc" id="L270">    }</span>
+
+    private void setLoadingState(boolean visible) {
+<span class="nc bnc" id="L273" title="All 2 branches missed.">        if (mProgressBar != null) {</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">            mProgressBar.setVisibility(visible ? View.VISIBLE : View.GONE);</span>
+        }
+<span class="nc" id="L276">    }</span>
+
+
+    @Override
+    public void onModerateComment(final SiteModel site,
+                                  final CommentModel comment,
+                                  final CommentStatus newStatus) {
+<span class="nc" id="L283">        Intent resultIntent = new Intent();</span>
+<span class="nc" id="L284">        resultIntent.putExtra(CommentConstants.COMMENT_MODERATE_ID_EXTRA, comment.getRemoteCommentId());</span>
+<span class="nc" id="L285">        resultIntent.putExtra(CommentConstants.COMMENT_MODERATE_STATUS_EXTRA, newStatus.toString());</span>
+<span class="nc" id="L286">        setResult(RESULT_OK, resultIntent);</span>
+<span class="nc" id="L287">        finish();</span>
+<span class="nc" id="L288">    }</span>
+
+    @Override
+    public void onScrollableViewInitialized(int containerId) {
+<span class="nc" id="L292">        mAppBarLayout.setLiftOnScrollTargetViewId(containerId);</span>
+<span class="nc" id="L293">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

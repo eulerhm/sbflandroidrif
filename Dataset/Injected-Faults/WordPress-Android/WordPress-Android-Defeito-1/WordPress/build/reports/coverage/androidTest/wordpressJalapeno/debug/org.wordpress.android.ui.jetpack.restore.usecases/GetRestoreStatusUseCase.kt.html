@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GetRestoreStatusUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.jetpack.restore.usecases</a> &gt; <span class="el_source">GetRestoreStatusUseCase.kt</span></div><h1>GetRestoreStatusUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.jetpack.restore.usecases
+
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.activity.RewindStatusModel
+import org.wordpress.android.fluxc.model.activity.RewindStatusModel.Reason.MULTISITE_NOT_SUPPORTED
+import org.wordpress.android.fluxc.model.activity.RewindStatusModel.Rewind
+import org.wordpress.android.fluxc.model.activity.RewindStatusModel.Rewind.Status.FAILED
+import org.wordpress.android.fluxc.model.activity.RewindStatusModel.Rewind.Status.FINISHED
+import org.wordpress.android.fluxc.model.activity.RewindStatusModel.Rewind.Status.QUEUED
+import org.wordpress.android.fluxc.model.activity.RewindStatusModel.Rewind.Status.RUNNING
+import org.wordpress.android.fluxc.model.activity.RewindStatusModel.State
+import org.wordpress.android.fluxc.store.ActivityLogStore
+import org.wordpress.android.fluxc.store.ActivityLogStore.FetchRewindStatePayload
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState.AwaitingCredentials
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState.Complete
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState.Empty
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState.Failure
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState.Failure.NetworkUnavailable
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState.Failure.RemoteRequestFailure
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState.Multisite
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState.Progress
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.NetworkUtilsWrapper
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.math.max
+
+const val DELAY_MILLIS = 1000L
+const val MAX_RETRY = 3
+const val DELAY_FACTOR = 2
+
+<span class="nc" id="L40">class GetRestoreStatusUseCase @Inject constructor(</span>
+<span class="nc" id="L41">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L42">    private val activityLogStore: ActivityLogStore,</span>
+<span class="nc" id="L43">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+) {
+<span class="nc" id="L45">    private val tag = javaClass.simpleName</span>
+
+    @Suppress(&quot;ComplexMethod&quot;, &quot;LoopWithTooManyJumpStatements&quot;)
+<span class="nc" id="L48">    suspend fun getRestoreStatus(</span>
+        site: SiteModel,
+<span class="nc" id="L50">        restoreId: Long? = null,</span>
+<span class="nc" id="L51">        checkIfAwaitingCredentials: Boolean = false</span>
+<span class="nc" id="L52">    ) = flow {</span>
+<span class="nc" id="L53">        var retryAttempts = 0</span>
+<span class="nc" id="L54">        while (true) {</span>
+            var rewindStatus: RewindStatusModel?
+<span class="nc bnc" id="L56" title="All 2 branches missed.">            if (checkIfAwaitingCredentials) {</span>
+<span class="nc" id="L57">                rewindStatus = activityLogStore.getRewindStatusForSite(site)</span>
+<span class="nc bnc" id="L58" title="All 4 branches missed.">                emitAwaitingCredentials(rewindStatus?.state == State.AWAITING_CREDENTIALS)</span>
+            }
+
+<span class="nc bnc" id="L61" title="All 2 branches missed.">            if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L62">                val retryAttemptsExceeded = handleError(retryAttempts++, NetworkUnavailable)</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">                if (retryAttemptsExceeded) break else continue</span>
+            }
+<span class="nc bnc" id="L65" title="All 2 branches missed.">            if (!fetchActivitiesRewind(site)) {</span>
+<span class="nc" id="L66">                val retryAttemptsExceeded = handleError(retryAttempts++, RemoteRequestFailure)</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">                if (retryAttemptsExceeded) break else continue</span>
+            }
+
+<span class="nc" id="L70">            retryAttempts = 0</span>
+<span class="nc" id="L71">            rewindStatus = activityLogStore.getRewindStatusForSite(site)</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">            val rewind = rewindStatus?.rewind</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">            if (checkIfAwaitingCredentials) {</span>
+<span class="nc bnc" id="L74" title="All 4 branches missed.">                emitAwaitingCredentials(rewindStatus?.state == State.AWAITING_CREDENTIALS)</span>
+<span class="nc" id="L75">                break</span>
+            }
+<span class="nc bnc" id="L77" title="All 2 branches missed.">            if (rewind == null) {</span>
+<span class="nc bnc" id="L78" title="All 4 branches missed.">                if (rewindStatus?.reason == MULTISITE_NOT_SUPPORTED) {</span>
+<span class="nc" id="L79">                    emit(Multisite)</span>
+                } else {
+<span class="nc" id="L81">                    emit(Empty)</span>
+                }
+<span class="nc" id="L83">                break</span>
+            }
+<span class="nc bnc" id="L85" title="All 6 branches missed.">            if (restoreId == null || rewind.restoreId == restoreId) {</span>
+<span class="nc bnc" id="L86" title="All 5 branches missed.">                when (rewind.status) {</span>
+                    FINISHED -&gt; {
+<span class="nc" id="L88">                        emitFinished(rewind)</span>
+<span class="nc" id="L89">                        break</span>
+                    }
+                    FAILED -&gt; {
+<span class="nc" id="L92">                        emitFailure()</span>
+<span class="nc" id="L93">                        break</span>
+                    }
+<span class="nc" id="L95">                    RUNNING -&gt; emitProgress(rewind)</span>
+<span class="nc" id="L96">                    QUEUED -&gt; emitProgress(rewind)</span>
+                }
+            }
+<span class="nc" id="L99">            delay(DELAY_MILLIS)</span>
+        }
+<span class="nc" id="L101">    }.flowOn(bgDispatcher)</span>
+
+<span class="nc" id="L103">    private suspend fun fetchActivitiesRewind(site: SiteModel): Boolean {</span>
+<span class="nc" id="L104">        val result = activityLogStore.fetchActivitiesRewind(FetchRewindStatePayload(site))</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        return !result.isError</span>
+    }
+
+    private suspend fun FlowCollector&lt;RestoreRequestState&gt;.emitFinished(rewind: Rewind) =
+<span class="nc bnc" id="L109" title="All 2 branches missed.">            if (rewind.rewindId != null) emitComplete(rewind) else emitFailure()</span>
+
+    private suspend fun FlowCollector&lt;RestoreRequestState&gt;.emitComplete(rewind: Rewind) {
+<span class="nc bnc" id="L112" title="All 2 branches missed.">        val rewindId = rewind.rewindId as String</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">        val published = activityLogStore.getActivityLogItemByRewindId(rewindId)?.published</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">        emit(Complete(rewind.rewindId as String, rewind.restoreId, published))</span>
+<span class="nc" id="L115">    }</span>
+
+<span class="nc" id="L117">    private suspend fun FlowCollector&lt;RestoreRequestState&gt;.emitFailure() = emit(RemoteRequestFailure)</span>
+
+    private suspend fun FlowCollector&lt;RestoreRequestState&gt;.emitAwaitingCredentials(isAwaitingCredentials: Boolean) =
+<span class="nc" id="L120">            emit(AwaitingCredentials(isAwaitingCredentials))</span>
+
+    private suspend fun FlowCollector&lt;RestoreRequestState&gt;.emitProgress(rewind: Rewind) {
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        val rewindId = rewind.rewindId as String</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">        val published = activityLogStore.getActivityLogItemByRewindId(rewindId)?.published</span>
+<span class="nc" id="L125">        emit(Progress(rewindId, rewind.progress, rewind.message, rewind.currentEntry, published))</span>
+<span class="nc" id="L126">    }</span>
+
+    private suspend fun FlowCollector&lt;RestoreRequestState&gt;.handleError(retryAttempts: Int, failure: Failure): Boolean {
+<span class="nc bnc" id="L129" title="All 2 branches missed.">        return if (retryAttempts &gt;= MAX_RETRY) {</span>
+<span class="nc" id="L130">            AppLog.d(T.JETPACK_BACKUP, &quot;$tag: Exceeded $MAX_RETRY retries while fetching status&quot;)</span>
+<span class="nc" id="L131">            emit(failure)</span>
+<span class="nc" id="L132">            true</span>
+        } else {
+<span class="nc" id="L134">            delay(DELAY_MILLIS * (max(1, DELAY_FACTOR * retryAttempts)))</span>
+<span class="nc" id="L135">            false</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

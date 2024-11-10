@@ -1,0 +1,346 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CommonsApplication.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons</a> &gt; <span class="el_source">CommonsApplication.java</span></div><h1>CommonsApplication.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons;
+
+import static fr.free.nrw.commons.data.DBOpenHelper.CONTRIBUTIONS_TABLE;
+import static org.acra.ReportField.ANDROID_VERSION;
+import static org.acra.ReportField.APP_VERSION_CODE;
+import static org.acra.ReportField.APP_VERSION_NAME;
+import static org.acra.ReportField.PHONE_MODEL;
+import static org.acra.ReportField.STACK_TRACE;
+import static org.acra.ReportField.USER_COMMENT;
+
+import android.annotation.SuppressLint;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.Context;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteException;
+import android.os.Build;
+import android.os.Process;
+import android.util.Log;
+import androidx.annotation.NonNull;
+import androidx.multidex.MultiDexApplication;
+import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.imagepipeline.core.ImagePipeline;
+import com.facebook.imagepipeline.core.ImagePipelineConfig;
+import com.mapbox.mapboxsdk.Mapbox;
+import com.mapbox.mapboxsdk.WellKnownTileServer;
+import fr.free.nrw.commons.auth.SessionManager;
+import fr.free.nrw.commons.bookmarks.items.BookmarkItemsDao.Table;
+import fr.free.nrw.commons.bookmarks.locations.BookmarkLocationsDao;
+import fr.free.nrw.commons.bookmarks.pictures.BookmarkPicturesDao;
+import fr.free.nrw.commons.category.CategoryDao;
+import fr.free.nrw.commons.concurrency.BackgroundPoolExceptionHandler;
+import fr.free.nrw.commons.concurrency.ThreadPoolService;
+import fr.free.nrw.commons.contributions.ContributionDao;
+import fr.free.nrw.commons.data.DBOpenHelper;
+import fr.free.nrw.commons.di.ApplicationlessInjection;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.logging.FileLoggingTree;
+import fr.free.nrw.commons.logging.LogUtils;
+import fr.free.nrw.commons.media.CustomOkHttpNetworkFetcher;
+import fr.free.nrw.commons.settings.Prefs;
+import fr.free.nrw.commons.upload.FileUtils;
+import fr.free.nrw.commons.utils.ConfigUtils;
+import fr.free.nrw.commons.wikidata.cookies.CommonsCookieJar;
+import io.reactivex.Completable;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.internal.functions.Functions;
+import io.reactivex.plugins.RxJavaPlugins;
+import io.reactivex.schedulers.Schedulers;
+import java.io.File;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import javax.inject.Inject;
+import javax.inject.Named;
+import org.acra.ACRA;
+import org.acra.annotation.AcraCore;
+import org.acra.annotation.AcraDialog;
+import org.acra.annotation.AcraMailSender;
+import org.acra.data.StringFormat;
+import org.wikipedia.language.AppLanguageLookUpTable;
+import timber.log.Timber;
+
+@AcraCore(
+    buildConfigClass = BuildConfig.class,
+    resReportSendSuccessToast = R.string.crash_dialog_ok_toast,
+    reportFormat = StringFormat.KEY_VALUE_LIST,
+    reportContent = {USER_COMMENT, APP_VERSION_CODE, APP_VERSION_NAME, ANDROID_VERSION, PHONE_MODEL,
+        STACK_TRACE}
+)
+
+@AcraMailSender(
+    mailTo = &quot;commons-app-android-private@googlegroups.com&quot;,
+    reportAsFile = false
+)
+
+@AcraDialog(
+    resTheme = R.style.Theme_AppCompat_Dialog,
+    resText = R.string.crash_dialog_text,
+    resTitle = R.string.crash_dialog_title,
+    resCommentPrompt = R.string.crash_dialog_comment_prompt
+)
+
+<span class="fc" id="L85">public class CommonsApplication extends MultiDexApplication {</span>
+
+    public static final String IS_LIMITED_CONNECTION_MODE_ENABLED = &quot;is_limited_connection_mode_enabled&quot;;
+    @Inject
+    SessionManager sessionManager;
+    @Inject
+    DBOpenHelper dbOpenHelper;
+
+    @Inject
+    @Named(&quot;default_preferences&quot;)
+    JsonKvStore defaultPrefs;
+
+    @Inject
+    CommonsCookieJar cookieJar;
+
+    @Inject
+    CustomOkHttpNetworkFetcher customOkHttpNetworkFetcher;
+
+    /**
+     * Constants begin
+     */
+    public static final int OPEN_APPLICATION_DETAIL_SETTINGS = 1001;
+
+    public static final String DEFAULT_EDIT_SUMMARY = &quot;Uploaded using [[COM:MOA|Commons Mobile App]]&quot;;
+
+    public static final String FEEDBACK_EMAIL = &quot;commons-app-android@googlegroups.com&quot;;
+
+    public static final String FEEDBACK_EMAIL_SUBJECT = &quot;Commons Android App Feedback&quot;;
+
+    public static final String REPORT_EMAIL = &quot;commons-app-android-private@googlegroups.com&quot;;
+
+    public static final String REPORT_EMAIL_SUBJECT = &quot;Report a violation&quot;;
+
+    public static final String NOTIFICATION_CHANNEL_ID_ALL = &quot;CommonsNotificationAll&quot;;
+
+    public static final String FEEDBACK_EMAIL_TEMPLATE_HEADER = &quot;-- Technical information --&quot;;
+
+    /**
+     * Constants End
+     */
+
+    private static CommonsApplication INSTANCE;
+
+    public static CommonsApplication getInstance() {
+<span class="nc" id="L129">        return INSTANCE;</span>
+    }
+
+    private AppLanguageLookUpTable languageLookUpTable;
+
+    public AppLanguageLookUpTable getLanguageLookUpTable() {
+<span class="nc" id="L135">        return languageLookUpTable;</span>
+    }
+
+    @Inject
+    ContributionDao contributionDao;
+
+    /**
+     *  In-memory list of contributions whose uploads have been paused by the user
+     */
+<span class="fc" id="L144">    public static Map&lt;String, Boolean&gt; pauseUploads = new HashMap&lt;&gt;();</span>
+
+    /**
+     *  In-memory list of uploads that have been cancelled by the user
+     */
+<span class="fc" id="L149">    public static HashSet&lt;String&gt; cancelledUploads = new HashSet&lt;&gt;();</span>
+
+    /**
+     * Used to declare and initialize various components and dependencies
+     */
+    @Override
+    public void onCreate() {
+<span class="fc" id="L156">        super.onCreate();</span>
+
+<span class="fc" id="L158">        INSTANCE = this;</span>
+<span class="fc" id="L159">        ACRA.init(this);</span>
+<span class="fc" id="L160">        Mapbox.getInstance(this, BuildConfig.MapboxAccessToken, WellKnownTileServer.Mapbox);</span>
+
+<span class="fc" id="L162">        ApplicationlessInjection</span>
+<span class="fc" id="L163">            .getInstance(this)</span>
+<span class="fc" id="L164">            .getCommonsApplicationComponent()</span>
+<span class="fc" id="L165">            .inject(this);</span>
+
+<span class="fc" id="L167">        initTimber();</span>
+
+<span class="pc bpc" id="L169" title="1 of 2 branches missed.">        if (!defaultPrefs.getBoolean(&quot;has_user_manually_removed_location&quot;)) {</span>
+<span class="fc" id="L170">            Set&lt;String&gt; defaultExifTagsSet = defaultPrefs.getStringSet(Prefs.MANAGED_EXIF_TAGS);</span>
+<span class="pc bpc" id="L171" title="1 of 2 branches missed.">            if (null == defaultExifTagsSet) {</span>
+<span class="nc" id="L172">                defaultExifTagsSet = new HashSet&lt;&gt;();</span>
+            }
+<span class="fc" id="L174">            defaultExifTagsSet.add(getString(R.string.exif_tag_location));</span>
+<span class="fc" id="L175">            defaultPrefs.putStringSet(Prefs.MANAGED_EXIF_TAGS, defaultExifTagsSet);</span>
+        }
+
+//        Set DownsampleEnabled to True to downsample the image in case it's heavy
+<span class="fc" id="L179">        ImagePipelineConfig config = ImagePipelineConfig.newBuilder(this)</span>
+<span class="fc" id="L180">            .setNetworkFetcher(customOkHttpNetworkFetcher)</span>
+<span class="fc" id="L181">            .setDownsampleEnabled(true)</span>
+<span class="fc" id="L182">            .build();</span>
+        try {
+<span class="fc" id="L184">            Fresco.initialize(this, config);</span>
+<span class="nc" id="L185">        } catch (Exception e) {</span>
+<span class="nc" id="L186">            Timber.e(e);</span>
+            // TODO: Remove when we're able to initialize Fresco in test builds.
+<span class="fc" id="L188">        }</span>
+
+<span class="fc" id="L190">        createNotificationChannel(this);</span>
+
+<span class="fc" id="L192">        languageLookUpTable = new AppLanguageLookUpTable(this);</span>
+
+        // This handler will catch exceptions thrown from Observables after they are disposed,
+        // or from Observables that are (deliberately or not) missing an onError handler.
+<span class="fc" id="L196">        RxJavaPlugins.setErrorHandler(Functions.emptyConsumer());</span>
+
+        // Fire progress callbacks for every 3% of uploaded content
+<span class="fc" id="L199">        System.setProperty(&quot;in.yuvi.http.fluent.PROGRESS_TRIGGER_THRESHOLD&quot;, &quot;3.0&quot;);</span>
+<span class="fc" id="L200">    }</span>
+
+    /**
+     * Plants debug and file logging tree. Timber lets you plant your own logging trees.
+     */
+    private void initTimber() {
+<span class="fc" id="L206">        boolean isBeta = ConfigUtils.isBetaFlavour();</span>
+        String logFileName =
+<span class="pc bpc" id="L208" title="1 of 2 branches missed.">            isBeta ? &quot;CommonsBetaAppLogs&quot; : &quot;CommonsAppLogs&quot;;</span>
+<span class="fc" id="L209">        String logDirectory = LogUtils.getLogDirectory();</span>
+        //Delete stale logs if they have exceeded the specified size
+<span class="fc" id="L211">        deleteStaleLogs(logFileName, logDirectory);</span>
+
+<span class="fc" id="L213">        FileLoggingTree tree = new FileLoggingTree(</span>
+            Log.VERBOSE,
+            logFileName,
+            logDirectory,
+            1000,
+<span class="fc" id="L218">            getFileLoggingThreadPool());</span>
+
+<span class="fc" id="L220">        Timber.plant(tree);</span>
+<span class="fc" id="L221">        Timber.plant(new Timber.DebugTree());</span>
+<span class="fc" id="L222">    }</span>
+
+    /**
+     * Deletes the logs zip file at the specified directory and file locations specified in the
+     * params
+     *
+     * @param logFileName
+     * @param logDirectory
+     */
+    private void deleteStaleLogs(String logFileName, String logDirectory) {
+        try {
+<span class="fc" id="L233">            File file = new File(logDirectory + &quot;/zip/&quot; + logFileName + &quot;.zip&quot;);</span>
+<span class="pc bpc" id="L234" title="3 of 4 branches missed.">            if (file.exists() &amp;&amp; file.getTotalSpace() &gt; 1000000) {// In Kbs</span>
+<span class="nc" id="L235">                file.delete();</span>
+            }
+<span class="nc" id="L237">        } catch (Exception e) {</span>
+<span class="nc" id="L238">            Timber.e(e);</span>
+<span class="fc" id="L239">        }</span>
+<span class="fc" id="L240">    }</span>
+
+    public static boolean isRoboUnitTest() {
+<span class="nc" id="L243">        return &quot;robolectric&quot;.equals(Build.FINGERPRINT);</span>
+    }
+
+    private ThreadPoolService getFileLoggingThreadPool() {
+<span class="fc" id="L247">        return new ThreadPoolService.Builder(&quot;file-logging-thread&quot;)</span>
+<span class="fc" id="L248">            .setPriority(Process.THREAD_PRIORITY_LOWEST)</span>
+<span class="fc" id="L249">            .setPoolSize(1)</span>
+<span class="fc" id="L250">            .setExceptionHandler(new BackgroundPoolExceptionHandler())</span>
+<span class="fc" id="L251">            .build();</span>
+    }
+
+    public static void createNotificationChannel(@NonNull Context context) {
+<span class="pc bpc" id="L255" title="1 of 2 branches missed.">        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.O) {</span>
+<span class="fc" id="L256">            NotificationManager manager = (NotificationManager) context</span>
+<span class="fc" id="L257">                .getSystemService(Context.NOTIFICATION_SERVICE);</span>
+<span class="fc" id="L258">            NotificationChannel channel = manager</span>
+<span class="fc" id="L259">                .getNotificationChannel(NOTIFICATION_CHANNEL_ID_ALL);</span>
+<span class="pc bpc" id="L260" title="1 of 2 branches missed.">            if (channel == null) {</span>
+<span class="nc" id="L261">                channel = new NotificationChannel(NOTIFICATION_CHANNEL_ID_ALL,</span>
+<span class="nc" id="L262">                    context.getString(R.string.notifications_channel_name_all),</span>
+                    NotificationManager.IMPORTANCE_DEFAULT);
+<span class="nc" id="L264">                manager.createNotificationChannel(channel);</span>
+            }
+        }
+<span class="fc" id="L267">    }</span>
+
+    public String getUserAgent() {
+<span class="nc" id="L270">        return &quot;Commons/&quot; + ConfigUtils.getVersionNameWithSha(this)</span>
+            + &quot; (https://mediawiki.org/wiki/Apps/Commons) Android/&quot; + Build.VERSION.RELEASE;
+    }
+
+    /**
+     * clears data of current application
+     *
+     * @param context        Application context
+     * @param logoutListener Implementation of interface LogoutListener
+     */
+    @SuppressLint(&quot;CheckResult&quot;)
+    public void clearApplicationData(Context context, LogoutListener logoutListener) {
+<span class="nc" id="L282">        File cacheDirectory = context.getCacheDir();</span>
+<span class="nc" id="L283">        File applicationDirectory = new File(cacheDirectory.getParent());</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">        if (applicationDirectory.exists()) {</span>
+<span class="nc" id="L285">            String[] fileNames = applicationDirectory.list();</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">            for (String fileName : fileNames) {</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">                if (!fileName.equals(&quot;lib&quot;)) {</span>
+<span class="nc" id="L288">                    FileUtils.deleteFile(new File(applicationDirectory, fileName));</span>
+                }
+            }
+        }
+
+<span class="nc" id="L293">        sessionManager.logout()</span>
+<span class="nc" id="L294">            .andThen(Completable.fromAction(() -&gt; {</span>
+<span class="nc" id="L295">                    Timber.d(&quot;All accounts have been removed&quot;);</span>
+<span class="nc" id="L296">                    clearImageCache();</span>
+                    //TODO: fix preference manager
+<span class="nc" id="L298">                    defaultPrefs.clearAll();</span>
+<span class="nc" id="L299">                    defaultPrefs.putBoolean(&quot;firstrun&quot;, false);</span>
+<span class="nc" id="L300">                    updateAllDatabases();</span>
+<span class="nc" id="L301">                }</span>
+            ))
+<span class="nc" id="L303">            .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L304">            .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L305">            .subscribe(logoutListener::onLogoutComplete, Timber::e);</span>
+<span class="nc" id="L306">    }</span>
+
+    /**
+     * Clear all images cache held by Fresco
+     */
+    private void clearImageCache() {
+<span class="nc" id="L312">        ImagePipeline imagePipeline = Fresco.getImagePipeline();</span>
+<span class="nc" id="L313">        imagePipeline.clearCaches();</span>
+<span class="nc" id="L314">    }</span>
+
+    /**
+     * Deletes all tables and re-creates them.
+     */
+    private void updateAllDatabases() {
+<span class="nc" id="L320">        dbOpenHelper.getReadableDatabase().close();</span>
+<span class="nc" id="L321">        SQLiteDatabase db = dbOpenHelper.getWritableDatabase();</span>
+
+<span class="nc" id="L323">        CategoryDao.Table.onDelete(db);</span>
+<span class="nc" id="L324">        dbOpenHelper.deleteTable(db,</span>
+            CONTRIBUTIONS_TABLE);//Delete the contributions table in the existing db on older versions
+
+        try {
+<span class="nc" id="L328">            contributionDao.deleteAll();</span>
+<span class="nc" id="L329">        } catch (SQLiteException e) {</span>
+<span class="nc" id="L330">            Timber.e(e);</span>
+<span class="nc" id="L331">        }</span>
+<span class="nc" id="L332">        BookmarkPicturesDao.Table.onDelete(db);</span>
+<span class="nc" id="L333">        BookmarkLocationsDao.Table.onDelete(db);</span>
+<span class="nc" id="L334">        Table.onDelete(db);</span>
+<span class="nc" id="L335">    }</span>
+
+
+    /**
+     * Interface used to get log-out events
+     */
+    public interface LogoutListener {
+
+        void onLogoutComplete();
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

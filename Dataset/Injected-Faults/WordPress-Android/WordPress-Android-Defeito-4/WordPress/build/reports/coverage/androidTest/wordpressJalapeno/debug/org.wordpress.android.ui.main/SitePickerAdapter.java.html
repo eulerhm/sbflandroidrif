@@ -1,0 +1,901 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SitePickerAdapter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.main</a> &gt; <span class="el_source">SitePickerAdapter.java</span></div><h1>SitePickerAdapter.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.main;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.os.AsyncTask;
+import android.text.TextUtils;
+import android.util.TypedValue;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.RadioButton;
+import android.widget.TextView;
+
+import androidx.annotation.LayoutRes;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.core.graphics.ColorUtils;
+import androidx.recyclerview.widget.RecyclerView;
+
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.ui.mysite.SelectedSiteRepository;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.BuildConfigWrapper;
+import org.wordpress.android.util.extensions.ContextExtensionsKt;
+import org.wordpress.android.util.DisplayUtils;
+import org.wordpress.android.util.SiteUtils;
+import org.wordpress.android.util.StringUtils;
+import org.wordpress.android.util.extensions.ViewExtensionsKt;
+import org.wordpress.android.util.image.BlavatarShape;
+import org.wordpress.android.util.image.ImageManager;
+import org.wordpress.android.util.image.ImageType;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+import javax.inject.Inject;
+
+public class SitePickerAdapter extends RecyclerView.Adapter&lt;RecyclerView.ViewHolder&gt; {
+    public interface OnSiteClickListener {
+        void onSiteClick(SiteRecord site);
+
+        boolean onSiteLongClick(SiteRecord site);
+    }
+
+    interface OnSelectedCountChangedListener {
+        void onSelectedCountChanged(int numSelected);
+    }
+
+    public interface OnDataLoadedListener {
+        void onBeforeLoad(boolean isEmpty);
+
+        void onAfterLoad();
+    }
+
+    public interface ViewHolderHandler&lt;T extends RecyclerView.ViewHolder&gt; {
+        T onCreateViewHolder(LayoutInflater layoutInflater, ViewGroup parent, boolean attachToRoot);
+
+        void onBindViewHolder(T holder, SiteList sites);
+    }
+
+    /**
+     * Represents the available SitePicker modes
+     */
+<span class="nc" id="L74">    public enum SitePickerMode {</span>
+<span class="nc" id="L75">        DEFAULT_MODE,</span>
+<span class="nc" id="L76">        REBLOG_SELECT_MODE,</span>
+<span class="nc" id="L77">        REBLOG_CONTINUE_MODE,</span>
+<span class="nc" id="L78">        BLOGGING_PROMPTS_MODE;</span>
+
+        public boolean isReblogMode() {
+<span class="nc bnc" id="L81" title="All 4 branches missed.">            return this == REBLOG_SELECT_MODE || this == REBLOG_CONTINUE_MODE;</span>
+        }
+
+        public boolean isBloggingPromptsMode() {
+<span class="nc bnc" id="L85" title="All 2 branches missed.">            return this == BLOGGING_PROMPTS_MODE;</span>
+        }
+    }
+
+    private final @LayoutRes int mItemLayoutReourceId;
+
+    private static int mBlavatarSz;
+
+<span class="nc" id="L93">    private SiteList mSites = new SiteList();</span>
+    private final int mCurrentLocalId;
+    private int mSelectedLocalId;
+
+    private final int mSelectedItemBackground;
+
+    private final float mDisabledSiteOpacity;
+
+    private final LayoutInflater mInflater;
+<span class="nc" id="L102">    private final HashSet&lt;Integer&gt; mSelectedPositions = new HashSet&lt;&gt;();</span>
+    @Nullable private final ViewHolderHandler mHeaderHandler;
+    @Nullable private final ViewHolderHandler mFooterHandler;
+
+    private boolean mIsMultiSelectEnabled;
+    private final boolean mIsInSearchMode;
+<span class="nc" id="L108">    private boolean mShowHiddenSites = false;</span>
+    private final boolean mShowAndReturn;
+<span class="nc" id="L110">    private boolean mShowSelfHostedSites = true;</span>
+    private String mLastSearch;
+    private SiteList mAllSites;
+    @Nullable private final ArrayList&lt;Integer&gt; mIgnoreSitesIds;
+
+    private OnSiteClickListener mSiteSelectedListener;
+    private OnSelectedCountChangedListener mSelectedCountListener;
+    @NonNull private final OnDataLoadedListener mDataLoadedListener;
+
+    private boolean mIsSingleItemSelectionEnabled;
+    private int mSelectedItemPos;
+
+<span class="nc" id="L122">    private SitePickerMode mSitePickerMode = SitePickerMode.DEFAULT_MODE;</span>
+
+    // show recently picked first if there are at least this many blogs
+    private static final int RECENTLY_PICKED_THRESHOLD = 11;
+
+    private static final int VIEW_TYPE_HEADER = 0;
+    private static final int VIEW_TYPE_ITEM = 1;
+    private static final int VIEW_TYPE_FOOTER = 2;
+
+    @Inject AccountStore mAccountStore;
+    @Inject SiteStore mSiteStore;
+    @Inject ImageManager mImageManager;
+    @Inject BuildConfigWrapper mBuildConfigWrapper;
+    @Inject SelectedSiteRepository mSelectedSiteRepository;
+
+    class SiteViewHolder extends RecyclerView.ViewHolder {
+        private final ViewGroup mLayoutContainer;
+        private final TextView mTxtTitle;
+        private final TextView mTxtDomain;
+        private final ImageView mImgBlavatar;
+        @Nullable private final View mItemDivider;
+        @Nullable private final View mDivider;
+        private Boolean mIsSiteHidden;
+        private final RadioButton mSelectedRadioButton;
+
+<span class="nc" id="L147">        SiteViewHolder(View view) {</span>
+<span class="nc" id="L148">            super(view);</span>
+<span class="nc" id="L149">            mLayoutContainer = view.findViewById(R.id.layout_container);</span>
+<span class="nc" id="L150">            mTxtTitle = view.findViewById(R.id.text_title);</span>
+<span class="nc" id="L151">            mTxtDomain = view.findViewById(R.id.text_domain);</span>
+<span class="nc" id="L152">            mImgBlavatar = view.findViewById(R.id.image_blavatar);</span>
+<span class="nc" id="L153">            mItemDivider = view.findViewById(R.id.item_divider);</span>
+<span class="nc" id="L154">            mDivider = view.findViewById(R.id.divider);</span>
+<span class="nc" id="L155">            mIsSiteHidden = null;</span>
+<span class="nc" id="L156">            mSelectedRadioButton = view.findViewById(R.id.radio_selected);</span>
+<span class="nc" id="L157">        }</span>
+    }
+
+    public SitePickerAdapter(Context context,
+                             @LayoutRes int itemLayoutResourceId,
+                             int currentLocalBlogId,
+                             String lastSearch,
+                             boolean isInSearchMode,
+                             @NonNull OnDataLoadedListener dataLoadedListener,
+                             SitePickerMode sitePickerMode,
+                             boolean isInEditMode
+    ) {
+<span class="nc" id="L169">        this(context, itemLayoutResourceId, currentLocalBlogId, lastSearch, isInSearchMode, dataLoadedListener,</span>
+                null, null, null, sitePickerMode, isInEditMode, false);
+<span class="nc" id="L171">    }</span>
+
+    public SitePickerAdapter(Context context,
+                             @LayoutRes int itemLayoutResourceId,
+                             int currentLocalBlogId,
+                             String lastSearch,
+                             boolean isInSearchMode,
+                             @NonNull OnDataLoadedListener dataLoadedListener,
+                             @NonNull ViewHolderHandler&lt;?&gt; headerHandler,
+                             @Nullable ArrayList&lt;Integer&gt; ignoreSitesIds
+    ) {
+<span class="nc" id="L182">        this(context, itemLayoutResourceId, currentLocalBlogId, lastSearch, isInSearchMode, dataLoadedListener,</span>
+                headerHandler, null, ignoreSitesIds, SitePickerMode.DEFAULT_MODE, false, false);
+<span class="nc" id="L184">    }</span>
+
+    public SitePickerAdapter(Context context,
+                             @LayoutRes int itemLayoutResourceId,
+                             int currentLocalBlogId,
+                             String lastSearch,
+                             boolean isInSearchMode,
+                             @NonNull OnDataLoadedListener dataLoadedListener,
+                             @NonNull ViewHolderHandler&lt;?&gt; headerHandler,
+                             @Nullable ViewHolderHandler&lt;?&gt; footerHandler,
+                             ArrayList&lt;Integer&gt; ignoreSitesIds,
+                             SitePickerMode sitePickerMode,
+                             boolean showAndReturn
+    ) {
+<span class="nc" id="L198">        this(context, itemLayoutResourceId, currentLocalBlogId, lastSearch, isInSearchMode, dataLoadedListener,</span>
+                headerHandler, footerHandler, ignoreSitesIds, sitePickerMode, false, showAndReturn);
+<span class="nc" id="L200">    }</span>
+
+    public SitePickerAdapter(Context context,
+                             @LayoutRes int itemLayoutResourceId,
+                             int currentLocalBlogId,
+                             String lastSearch,
+                             boolean isInSearchMode,
+                             @NonNull OnDataLoadedListener dataLoadedListener,
+                             @Nullable ViewHolderHandler&lt;?&gt; headerHandler,
+                             @Nullable ViewHolderHandler&lt;?&gt; footerHandler,
+                             @Nullable ArrayList&lt;Integer&gt; ignoreSitesIds,
+                             SitePickerMode sitePickerMode,
+                             boolean isInEditMode,
+                             boolean showAndReturn
+    ) {
+<span class="nc" id="L215">        super();</span>
+<span class="nc" id="L216">        ((WordPress) context.getApplicationContext()).component().inject(this);</span>
+
+<span class="nc" id="L218">        setHasStableIds(true);</span>
+
+<span class="nc" id="L220">        mLastSearch = StringUtils.notNullStr(lastSearch);</span>
+<span class="nc" id="L221">        mAllSites = new SiteList();</span>
+<span class="nc" id="L222">        mIsInSearchMode = isInSearchMode;</span>
+<span class="nc" id="L223">        mItemLayoutReourceId = itemLayoutResourceId;</span>
+<span class="nc" id="L224">        mCurrentLocalId = currentLocalBlogId;</span>
+<span class="nc" id="L225">        mSelectedLocalId = mCurrentLocalId;</span>
+<span class="nc" id="L226">        mInflater = LayoutInflater.from(context);</span>
+<span class="nc" id="L227">        mDataLoadedListener = dataLoadedListener;</span>
+
+<span class="nc" id="L229">        mBlavatarSz = context.getResources().getDimensionPixelSize(R.dimen.blavatar_sz);</span>
+
+<span class="nc" id="L231">        TypedValue disabledAlpha = new TypedValue();</span>
+<span class="nc" id="L232">        context.getResources().getValue(R.dimen.material_emphasis_disabled, disabledAlpha, true);</span>
+<span class="nc" id="L233">        mDisabledSiteOpacity = disabledAlpha.getFloat();</span>
+<span class="nc" id="L234">        mSelectedItemBackground = ColorUtils</span>
+<span class="nc" id="L235">                .setAlphaComponent(ContextExtensionsKt.getColorFromAttribute(context, R.attr.colorOnSurface),</span>
+<span class="nc" id="L236">                        context.getResources().getInteger(R.integer.selected_list_item_opacity));</span>
+
+<span class="nc" id="L238">        mHeaderHandler = headerHandler;</span>
+<span class="nc" id="L239">        mFooterHandler = footerHandler;</span>
+<span class="nc" id="L240">        mSelectedItemPos = getPositionOffset();</span>
+
+<span class="nc" id="L242">        mIgnoreSitesIds = ignoreSitesIds;</span>
+
+<span class="nc" id="L244">        mSitePickerMode = sitePickerMode;</span>
+
+<span class="nc" id="L246">        mShowHiddenSites = isInEditMode; // If site picker is in edit mode, show hidden sites.</span>
+
+<span class="nc" id="L248">        mShowAndReturn = showAndReturn;</span>
+
+<span class="nc" id="L250">        loadSites();</span>
+<span class="nc" id="L251">    }</span>
+
+    @Override
+    public int getItemCount() {
+<span class="nc bnc" id="L255" title="All 4 branches missed.">        return (mHeaderHandler != null ? 1 : 0) + mSites.size() + (mFooterHandler != null ? 1 : 0);</span>
+    }
+
+    private int getSitesCount() {
+<span class="nc" id="L259">        return mSites.size();</span>
+    }
+
+    @Override
+    public long getItemId(int position) {
+<span class="nc" id="L264">        int viewType = getItemViewType(position);</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (viewType == VIEW_TYPE_HEADER) {</span>
+<span class="nc" id="L266">            return -1;</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">        } else if (viewType == VIEW_TYPE_FOOTER) {</span>
+<span class="nc" id="L268">            return -2;</span>
+        } else {
+<span class="nc" id="L270">            return getItem(position).mLocalId;</span>
+        }
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+<span class="nc bnc" id="L276" title="All 4 branches missed.">        if (mHeaderHandler != null &amp;&amp; position == 0) {</span>
+<span class="nc" id="L277">            return VIEW_TYPE_HEADER;</span>
+<span class="nc bnc" id="L278" title="All 4 branches missed.">        } else if (mFooterHandler != null &amp;&amp; position == getItemCount() - 1) {</span>
+<span class="nc" id="L279">            return VIEW_TYPE_FOOTER;</span>
+        } else {
+<span class="nc" id="L281">            return VIEW_TYPE_ITEM;</span>
+        }
+    }
+
+    private SiteRecord getItem(int position) {
+<span class="nc" id="L286">        return mSites.get(position - getPositionOffset());</span>
+    }
+
+    private int getPositionOffset() {
+<span class="nc bnc" id="L290" title="All 2 branches missed.">        return (mHeaderHandler == null ? 0 : 1);</span>
+    }
+
+    void setOnSelectedCountChangedListener(OnSelectedCountChangedListener listener) {
+<span class="nc" id="L294">        mSelectedCountListener = listener;</span>
+<span class="nc" id="L295">    }</span>
+
+    public void setOnSiteClickListener(OnSiteClickListener listener) {
+<span class="nc" id="L298">        mSiteSelectedListener = listener;</span>
+<span class="nc" id="L299">        notifyDataSetChanged();</span>
+<span class="nc" id="L300">    }</span>
+
+    @NonNull
+    @Override
+    public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+<span class="nc bnc" id="L305" title="All 2 branches missed.">        if (viewType == VIEW_TYPE_HEADER) {</span>
+<span class="nc" id="L306">            return mHeaderHandler.onCreateViewHolder(mInflater, parent, false);</span>
+<span class="nc bnc" id="L307" title="All 2 branches missed.">        } else if (viewType == VIEW_TYPE_FOOTER) {</span>
+<span class="nc" id="L308">            return mFooterHandler.onCreateViewHolder(mInflater, parent, false);</span>
+        } else {
+<span class="nc" id="L310">            View itemView = mInflater.inflate(mItemLayoutReourceId, parent, false);</span>
+<span class="nc" id="L311">            return new SiteViewHolder(itemView);</span>
+        }
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull final RecyclerView.ViewHolder viewHolder, int position) {
+<span class="nc" id="L317">        int viewType = getItemViewType(position);</span>
+
+<span class="nc bnc" id="L319" title="All 2 branches missed.">        if (viewType == VIEW_TYPE_HEADER) {</span>
+<span class="nc" id="L320">            mHeaderHandler.onBindViewHolder(viewHolder, mSites);</span>
+<span class="nc" id="L321">            return;</span>
+        }
+
+<span class="nc bnc" id="L324" title="All 2 branches missed.">        if (viewType == VIEW_TYPE_FOOTER) {</span>
+<span class="nc" id="L325">            mFooterHandler.onBindViewHolder(viewHolder, mSites);</span>
+<span class="nc" id="L326">            return;</span>
+        }
+
+<span class="nc" id="L329">        SiteRecord site = getItem(position);</span>
+
+<span class="nc" id="L331">        final SiteViewHolder holder = (SiteViewHolder) viewHolder;</span>
+<span class="nc" id="L332">        holder.mTxtTitle.setText(site.getBlogNameOrHomeURL());</span>
+<span class="nc" id="L333">        holder.mTxtDomain.setText(site.mHomeURL);</span>
+<span class="nc" id="L334">        mImageManager.loadImageWithCorners(holder.mImgBlavatar, site.getBlavatarType(), site.mBlavatarUrl,</span>
+<span class="nc" id="L335">                DisplayUtils.dpToPx(holder.itemView.getContext(), 4));</span>
+
+<span class="nc bnc" id="L337" title="All 8 branches missed.">        if ((site.mLocalId == mCurrentLocalId &amp;&amp; !mIsMultiSelectEnabled</span>
+             &amp;&amp; mSitePickerMode == SitePickerMode.DEFAULT_MODE)
+<span class="nc bnc" id="L339" title="All 4 branches missed.">            || (mIsMultiSelectEnabled &amp;&amp; isItemSelected(position))</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">            || (mSitePickerMode == SitePickerMode.REBLOG_CONTINUE_MODE &amp;&amp; mSelectedLocalId == site.mLocalId)) {</span>
+<span class="nc" id="L341">            holder.mLayoutContainer.setBackgroundColor(mSelectedItemBackground);</span>
+        } else {
+<span class="nc" id="L343">            holder.mLayoutContainer.setBackground(null);</span>
+        }
+
+        // different styling for visible/hidden sites
+<span class="nc bnc" id="L347" title="All 4 branches missed.">        if (holder.mIsSiteHidden == null || holder.mIsSiteHidden != site.mIsHidden) {</span>
+<span class="nc" id="L348">            holder.mIsSiteHidden = site.mIsHidden;</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">            holder.mTxtTitle.setAlpha(site.mIsHidden ? mDisabledSiteOpacity : 1f);</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">            holder.mImgBlavatar.setAlpha(site.mIsHidden ? mDisabledSiteOpacity : 1f);</span>
+        }
+
+<span class="nc bnc" id="L353" title="All 2 branches missed.">        if (holder.mItemDivider != null) {</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">            boolean showDivider = position &lt; getItemCount() - 1;</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">            holder.mItemDivider.setVisibility(showDivider ? View.VISIBLE : View.GONE);</span>
+        }
+<span class="nc bnc" id="L357" title="All 2 branches missed.">        if (holder.mDivider != null) {</span>
+            // only show divider after last recent pick
+<span class="nc bnc" id="L359" title="All 4 branches missed.">            boolean showDivider = site.mIsRecentPick</span>
+                                  &amp;&amp; !mIsInSearchMode
+<span class="nc bnc" id="L361" title="All 2 branches missed.">                                  &amp;&amp; position &lt; getItemCount() - 1</span>
+<span class="nc bnc" id="L362" title="All 2 branches missed.">                                  &amp;&amp; !getItem(position + 1).mIsRecentPick;</span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">            holder.mDivider.setVisibility(showDivider ? View.VISIBLE : View.GONE);</span>
+        }
+
+<span class="nc bnc" id="L366" title="All 4 branches missed.">        if (mIsMultiSelectEnabled || mSiteSelectedListener != null) {</span>
+<span class="nc" id="L367">            holder.itemView.setOnClickListener(view -&gt; {</span>
+<span class="nc" id="L368">                int clickedPosition = holder.getAdapterPosition();</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">                if (isValidPosition(clickedPosition)) {</span>
+<span class="nc bnc" id="L370" title="All 2 branches missed.">                    if (mIsMultiSelectEnabled) {</span>
+<span class="nc" id="L371">                        toggleSelection(clickedPosition);</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">                    } else if (mSiteSelectedListener != null) {</span>
+<span class="nc bnc" id="L373" title="All 2 branches missed.">                        if (mSitePickerMode.isReblogMode()) {</span>
+<span class="nc" id="L374">                            mSitePickerMode = SitePickerMode.REBLOG_CONTINUE_MODE;</span>
+<span class="nc" id="L375">                            mSelectedLocalId = site.mLocalId;</span>
+<span class="nc" id="L376">                            selectSingleItem(clickedPosition);</span>
+                        }
+
+<span class="nc" id="L379">                        mSiteSelectedListener.onSiteClick(getItem(clickedPosition));</span>
+                    }
+                } else {
+<span class="nc" id="L382">                    AppLog.w(AppLog.T.MAIN, &quot;site picker &gt; invalid clicked position &quot; + clickedPosition);</span>
+                }
+<span class="nc" id="L384">            });</span>
+
+<span class="nc bnc" id="L386" title="All 2 branches missed.">            if (!mSitePickerMode.isReblogMode()) {</span>
+<span class="nc" id="L387">                holder.itemView.setOnLongClickListener(view -&gt; {</span>
+<span class="nc" id="L388">                    int clickedPosition = holder.getAdapterPosition();</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                    if (isValidPosition(clickedPosition)) {</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">                        if (mIsMultiSelectEnabled) {</span>
+<span class="nc" id="L391">                            toggleSelection(clickedPosition);</span>
+<span class="nc" id="L392">                            return true;</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">                        } else if (mSiteSelectedListener != null) {</span>
+<span class="nc" id="L394">                            return mSiteSelectedListener.onSiteLongClick(getItem(clickedPosition));</span>
+                        }
+                    } else {
+<span class="nc" id="L397">                        AppLog.w(AppLog.T.MAIN, &quot;site picker &gt; invalid clicked position &quot; + clickedPosition);</span>
+                    }
+<span class="nc" id="L399">                    return false;</span>
+                });
+<span class="nc" id="L401">                ViewExtensionsKt.redirectContextClickToLongPressListener(holder.itemView);</span>
+            }
+        }
+
+<span class="nc bnc" id="L405" title="All 2 branches missed.">        if (mIsSingleItemSelectionEnabled) {</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">            if (getSitesCount() &lt;= 1) {</span>
+<span class="nc" id="L407">                holder.mSelectedRadioButton.setVisibility(View.GONE);</span>
+            } else {
+<span class="nc" id="L409">                holder.mSelectedRadioButton.setVisibility(View.VISIBLE);</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">                holder.mSelectedRadioButton.setChecked(mSelectedItemPos == position);</span>
+<span class="nc" id="L411">                holder.mLayoutContainer.setOnClickListener(v -&gt; selectSingleItem(holder.getAdapterPosition()));</span>
+            }
+        } else {
+<span class="nc bnc" id="L414" title="All 2 branches missed.">            if (holder.mSelectedRadioButton != null) {</span>
+<span class="nc" id="L415">                holder.mSelectedRadioButton.setVisibility(View.GONE);</span>
+            }
+        }
+<span class="nc" id="L418">    }</span>
+
+    private void selectSingleItem(final int newItemPosition) {
+        // clear last selected item
+<span class="nc" id="L422">        notifyItemChanged(mSelectedItemPos);</span>
+<span class="nc" id="L423">        mSelectedItemPos = newItemPosition;</span>
+        // select new item
+<span class="nc" id="L425">        notifyItemChanged(mSelectedItemPos);</span>
+<span class="nc" id="L426">    }</span>
+
+    public void setSingleItemSelectionEnabled(final boolean enabled) {
+<span class="nc bnc" id="L429" title="All 2 branches missed.">        if (enabled != mIsSingleItemSelectionEnabled) {</span>
+<span class="nc" id="L430">            mIsSingleItemSelectionEnabled = enabled;</span>
+<span class="nc" id="L431">            notifyDataSetChanged();</span>
+        }
+<span class="nc" id="L433">    }</span>
+
+    public void findAndSelect(final int lastUsedBlogLocalId) {
+<span class="nc" id="L436">        int positionInSitesArray = mSites.indexOfSiteId(lastUsedBlogLocalId);</span>
+<span class="nc bnc" id="L437" title="All 2 branches missed.">        if (positionInSitesArray != -1) {</span>
+<span class="nc" id="L438">            selectSingleItem(positionInSitesArray + getPositionOffset());</span>
+        }
+<span class="nc" id="L440">    }</span>
+
+    public int getSelectedItemLocalId() {
+<span class="nc bnc" id="L443" title="All 2 branches missed.">        return mSites.size() != 0 ? getItem(mSelectedItemPos).mLocalId : -1;</span>
+    }
+
+    public int getItemPosByLocalId(int localId) {
+<span class="nc" id="L447">        int positionInSitesArray = mSites.indexOfSiteId(localId);</span>
+
+<span class="nc bnc" id="L449" title="All 4 branches missed.">        return mSites.size() != 0 &amp;&amp; positionInSitesArray &gt; -1 ? positionInSitesArray : -1;</span>
+    }
+
+    String getLastSearch() {
+<span class="nc" id="L453">        return mLastSearch;</span>
+    }
+
+    void setLastSearch(String lastSearch) {
+<span class="nc" id="L457">        mLastSearch = lastSearch;</span>
+<span class="nc" id="L458">    }</span>
+
+    boolean getIsInSearchMode() {
+<span class="nc" id="L461">        return mIsInSearchMode;</span>
+    }
+
+    void searchSites(String searchText) {
+<span class="nc" id="L465">        mLastSearch = searchText;</span>
+<span class="nc" id="L466">        mSites = filteredSitesByText(mAllSites);</span>
+
+<span class="nc" id="L468">        notifyDataSetChanged();</span>
+<span class="nc" id="L469">    }</span>
+
+    private boolean isValidPosition(int position) {
+<span class="nc bnc" id="L472" title="All 2 branches missed.">        if (isNewLoginEpilogueScreenEnabled()) {</span>
+<span class="nc bnc" id="L473" title="All 4 branches missed.">            return (position &gt;= 0 &amp;&amp; position &lt;= mSites.size());</span>
+        } else {
+<span class="nc bnc" id="L475" title="All 4 branches missed.">            return (position &gt;= 0 &amp;&amp; position &lt; mSites.size());</span>
+        }
+    }
+
+    private boolean isNewLoginEpilogueScreenEnabled() {
+<span class="nc bnc" id="L480" title="All 4 branches missed.">        return mBuildConfigWrapper.isSiteCreationEnabled()</span>
+               &amp;&amp; !mShowAndReturn;
+    }
+
+    /*
+     * called when the user chooses to edit the visibility of wp.com blogs
+     */
+    void setEnableEditMode(boolean enable, HashSet&lt;Integer&gt; selectedPositions) {
+<span class="nc bnc" id="L488" title="All 2 branches missed.">        if (mIsMultiSelectEnabled == enable) {</span>
+<span class="nc" id="L489">            return;</span>
+        }
+
+<span class="nc bnc" id="L492" title="All 2 branches missed.">        if (enable) {</span>
+<span class="nc" id="L493">            mShowHiddenSites = true;</span>
+<span class="nc" id="L494">            mShowSelfHostedSites = false;</span>
+        } else {
+<span class="nc" id="L496">            mShowHiddenSites = false;</span>
+<span class="nc" id="L497">            mShowSelfHostedSites = true;</span>
+        }
+
+<span class="nc" id="L500">        mIsMultiSelectEnabled = enable;</span>
+
+        // If the selectedPositions value that is passed from the activity isn't empty, then we add that to the
+        // Adapter's mSelectedPositions. Otherwise, reset the selected positions.
+<span class="nc bnc" id="L504" title="All 2 branches missed.">        if (!selectedPositions.isEmpty()) {</span>
+<span class="nc" id="L505">            mSelectedPositions.addAll(selectedPositions);</span>
+        } else {
+<span class="nc" id="L507">            mSelectedPositions.clear();</span>
+        }
+
+<span class="nc" id="L510">        loadSites();</span>
+<span class="nc" id="L511">    }</span>
+
+    int getNumSelected() {
+<span class="nc" id="L514">        return mSelectedPositions.size();</span>
+    }
+
+    int getNumHiddenSelected() {
+<span class="nc" id="L518">        int numHidden = 0;</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">        for (Integer i : mSelectedPositions) {</span>
+<span class="nc bnc" id="L520" title="All 4 branches missed.">            if (isValidPosition(i) &amp;&amp; mSites.get(i).mIsHidden) {</span>
+<span class="nc" id="L521">                numHidden++;</span>
+            }
+<span class="nc" id="L523">        }</span>
+<span class="nc" id="L524">        return numHidden;</span>
+    }
+
+    int getNumVisibleSelected() {
+<span class="nc" id="L528">        int numVisible = 0;</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">        for (Integer i : mSelectedPositions) {</span>
+<span class="nc bnc" id="L530" title="All 4 branches missed.">            if (i &lt; mSites.size() &amp;&amp; !mSites.get(i).mIsHidden) {</span>
+<span class="nc" id="L531">                numVisible++;</span>
+            }
+<span class="nc" id="L533">        }</span>
+<span class="nc" id="L534">        return numVisible;</span>
+    }
+
+    private void toggleSelection(int position) {
+<span class="nc bnc" id="L538" title="All 2 branches missed.">        setItemSelected(position, !isItemSelected(position));</span>
+<span class="nc" id="L539">    }</span>
+
+    private boolean isItemSelected(int position) {
+<span class="nc" id="L542">        return mSelectedPositions.contains(position);</span>
+    }
+
+    private void setItemSelected(int position, boolean isSelected) {
+<span class="nc bnc" id="L546" title="All 2 branches missed.">        if (isItemSelected(position) == isSelected) {</span>
+<span class="nc" id="L547">            return;</span>
+        }
+
+<span class="nc bnc" id="L550" title="All 2 branches missed.">        if (isSelected) {</span>
+<span class="nc" id="L551">            mSelectedPositions.add(position);</span>
+        } else {
+<span class="nc" id="L553">            mSelectedPositions.remove(position);</span>
+        }
+<span class="nc" id="L555">        notifyItemChanged(position);</span>
+
+<span class="nc bnc" id="L557" title="All 2 branches missed.">        if (mSelectedCountListener != null) {</span>
+<span class="nc" id="L558">            mSelectedCountListener.onSelectedCountChanged(getNumSelected());</span>
+        }
+<span class="nc" id="L560">    }</span>
+
+    void selectAll() {
+<span class="nc bnc" id="L563" title="All 2 branches missed.">        if (mSelectedPositions.size() == mSites.size()) {</span>
+<span class="nc" id="L564">            return;</span>
+        }
+
+<span class="nc" id="L567">        mSelectedPositions.clear();</span>
+<span class="nc bnc" id="L568" title="All 2 branches missed.">        for (int i = 0; i &lt; mSites.size(); i++) {</span>
+<span class="nc" id="L569">            mSelectedPositions.add(i);</span>
+        }
+<span class="nc" id="L571">        notifyDataSetChanged();</span>
+
+<span class="nc bnc" id="L573" title="All 2 branches missed.">        if (mSelectedCountListener != null) {</span>
+<span class="nc" id="L574">            mSelectedCountListener.onSelectedCountChanged(getNumSelected());</span>
+        }
+<span class="nc" id="L576">    }</span>
+
+    void deselectAll() {
+<span class="nc bnc" id="L579" title="All 2 branches missed.">        if (mSelectedPositions.size() == 0) {</span>
+<span class="nc" id="L580">            return;</span>
+        }
+
+<span class="nc" id="L583">        mSelectedPositions.clear();</span>
+<span class="nc" id="L584">        notifyDataSetChanged();</span>
+
+<span class="nc bnc" id="L586" title="All 2 branches missed.">        if (mSelectedCountListener != null) {</span>
+<span class="nc" id="L587">            mSelectedCountListener.onSelectedCountChanged(getNumSelected());</span>
+        }
+<span class="nc" id="L589">    }</span>
+
+    void clearReblogSelection() {
+<span class="nc" id="L592">        mSitePickerMode = SitePickerMode.REBLOG_SELECT_MODE;</span>
+<span class="nc" id="L593">        notifyDataSetChanged();</span>
+<span class="nc" id="L594">    }</span>
+
+    @NonNull
+    private SiteList getSelectedSites() {
+<span class="nc" id="L598">        SiteList sites = new SiteList();</span>
+<span class="nc bnc" id="L599" title="All 2 branches missed.">        if (!mIsMultiSelectEnabled) {</span>
+<span class="nc" id="L600">            return sites;</span>
+        }
+
+<span class="nc bnc" id="L603" title="All 2 branches missed.">        for (Integer position : mSelectedPositions) {</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">            if (isValidPosition(position)) {</span>
+<span class="nc" id="L605">                sites.add(mSites.get(position));</span>
+            }
+<span class="nc" id="L607">        }</span>
+
+<span class="nc" id="L609">        return sites;</span>
+    }
+
+    public HashSet&lt;Integer&gt; getSelectedPositions() {
+<span class="nc" id="L613">        return mSelectedPositions;</span>
+    }
+
+    SiteList getHiddenSites() {
+<span class="nc" id="L617">        SiteList hiddenSites = new SiteList();</span>
+<span class="nc bnc" id="L618" title="All 2 branches missed.">        for (SiteRecord site : mSites) {</span>
+<span class="nc bnc" id="L619" title="All 2 branches missed.">            if (site.mIsHidden) {</span>
+<span class="nc" id="L620">                hiddenSites.add(site);</span>
+            }
+<span class="nc" id="L622">        }</span>
+
+<span class="nc" id="L624">        return hiddenSites;</span>
+    }
+
+    Set&lt;SiteRecord&gt; setVisibilityForSelectedSites(boolean makeVisible) {
+<span class="nc" id="L628">        SiteList sites = getSelectedSites();</span>
+<span class="nc" id="L629">        Set&lt;SiteRecord&gt; changeSet = new HashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L630" title="All 2 branches missed.">        if (sites.size() &gt; 0) {</span>
+<span class="nc" id="L631">            ArrayList&lt;Integer&gt; recentIds = AppPrefs.getRecentlyPickedSiteIds();</span>
+<span class="nc" id="L632">            int selectedSiteLocalId = mSelectedSiteRepository.getSelectedSiteLocalId();</span>
+<span class="nc bnc" id="L633" title="All 2 branches missed.">            for (SiteRecord site : sites) {</span>
+<span class="nc" id="L634">                int index = mAllSites.indexOfSite(site);</span>
+<span class="nc bnc" id="L635" title="All 2 branches missed.">                if (index &gt; -1) {</span>
+<span class="nc" id="L636">                    SiteRecord siteRecord = mAllSites.get(index);</span>
+<span class="nc bnc" id="L637" title="All 2 branches missed.">                    if (siteRecord.mIsHidden == makeVisible) {</span>
+<span class="nc" id="L638">                        changeSet.add(siteRecord);</span>
+<span class="nc bnc" id="L639" title="All 2 branches missed.">                        siteRecord.mIsHidden = !makeVisible;</span>
+<span class="nc bnc" id="L640" title="All 2 branches missed.">                        if (!makeVisible</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">                            &amp;&amp; siteRecord.mLocalId != selectedSiteLocalId</span>
+<span class="nc bnc" id="L642" title="All 2 branches missed.">                            &amp;&amp; recentIds.contains(siteRecord.mLocalId)) {</span>
+<span class="nc" id="L643">                            AppPrefs.removeRecentlyPickedSiteId(siteRecord.mLocalId);</span>
+                        }
+                    }
+                }
+<span class="nc" id="L647">            }</span>
+
+<span class="nc bnc" id="L649" title="All 2 branches missed.">            if (!changeSet.isEmpty()) {</span>
+<span class="nc" id="L650">                notifyDataSetChanged();</span>
+            }
+        }
+
+<span class="nc" id="L654">        return changeSet;</span>
+    }
+
+    void loadSites() {
+<span class="nc" id="L658">        new LoadSitesTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);</span>
+<span class="nc" id="L659">    }</span>
+
+    private SiteList filteredSitesByTextIfInSearchMode(SiteList sites) {
+<span class="nc bnc" id="L662" title="All 2 branches missed.">        if (!mIsInSearchMode) {</span>
+<span class="nc" id="L663">            return sites;</span>
+        } else {
+<span class="nc" id="L665">            return filteredSitesByText(sites);</span>
+        }
+    }
+
+    private SiteList filteredSitesByText(SiteList sites) {
+<span class="nc" id="L670">        SiteList filteredSiteList = new SiteList();</span>
+
+<span class="nc bnc" id="L672" title="All 2 branches missed.">        for (int i = 0; i &lt; sites.size(); i++) {</span>
+<span class="nc" id="L673">            SiteRecord record = sites.get(i);</span>
+<span class="nc" id="L674">            String siteNameLowerCase = record.mBlogName.toLowerCase(Locale.getDefault());</span>
+<span class="nc" id="L675">            String hostNameLowerCase = record.mHomeURL.toLowerCase(Locale.ROOT);</span>
+
+<span class="nc bnc" id="L677" title="All 2 branches missed.">            if (siteNameLowerCase.contains(mLastSearch.toLowerCase(Locale.getDefault())) || hostNameLowerCase</span>
+<span class="nc bnc" id="L678" title="All 2 branches missed.">                    .contains(mLastSearch.toLowerCase(Locale.ROOT))) {</span>
+<span class="nc" id="L679">                filteredSiteList.add(record);</span>
+            }
+        }
+
+<span class="nc" id="L683">        return filteredSiteList;</span>
+    }
+
+    public List&lt;SiteModel&gt; getBlogsForCurrentView() {
+<span class="nc bnc" id="L687" title="All 4 branches missed.">        if (mSitePickerMode.isReblogMode() || mSitePickerMode.isBloggingPromptsMode()) {</span>
+            // If we are reblogging we only want to select or search into the WPCom visible sites.
+<span class="nc" id="L689">            return mSiteStore.getVisibleSitesAccessedViaWPCom();</span>
+<span class="nc bnc" id="L690" title="All 2 branches missed.">        } else if (mIsInSearchMode) {</span>
+<span class="nc" id="L691">            return mSiteStore.getSites();</span>
+        }
+<span class="nc bnc" id="L693" title="All 2 branches missed.">        if (mShowHiddenSites) {</span>
+<span class="nc bnc" id="L694" title="All 2 branches missed.">            if (mShowSelfHostedSites) {</span>
+<span class="nc" id="L695">                return mSiteStore.getSites();</span>
+            } else {
+<span class="nc" id="L697">                return mSiteStore.getSitesAccessedViaWPComRest();</span>
+            }
+        } else {
+<span class="nc bnc" id="L700" title="All 2 branches missed.">            if (mShowSelfHostedSites) {</span>
+<span class="nc" id="L701">                List&lt;SiteModel&gt; out = mSiteStore.getVisibleSitesAccessedViaWPCom();</span>
+<span class="nc" id="L702">                out.addAll(mSiteStore.getSitesAccessedViaXMLRPC());</span>
+<span class="nc" id="L703">                return out;</span>
+            } else {
+<span class="nc" id="L705">                return mSiteStore.getVisibleSitesAccessedViaWPCom();</span>
+            }
+        }
+    }
+
+    /*
+     * AsyncTask which loads sites from database and populates the adapter
+     */
+    @SuppressLint(&quot;StaticFieldLeak&quot;)
+<span class="nc" id="L714">    private class LoadSitesTask extends AsyncTask&lt;Void, Void, SiteList[]&gt; {</span>
+        @Override
+        protected void onPreExecute() {
+<span class="nc" id="L717">            super.onPreExecute();</span>
+<span class="nc bnc" id="L718" title="All 4 branches missed.">            boolean isEmpty = mSites == null || mSites.size() == 0;</span>
+<span class="nc" id="L719">            mDataLoadedListener.onBeforeLoad(isEmpty);</span>
+<span class="nc" id="L720">        }</span>
+
+        @Override
+        protected void onCancelled() {
+<span class="nc" id="L724">            super.onCancelled();</span>
+<span class="nc" id="L725">        }</span>
+
+        @Override
+        protected SiteList[] doInBackground(Void... params) {
+<span class="nc" id="L729">            List&lt;SiteModel&gt; siteModels = getBlogsForCurrentView();</span>
+
+<span class="nc bnc" id="L731" title="All 2 branches missed.">            if (mIgnoreSitesIds != null) {</span>
+<span class="nc" id="L732">                List&lt;SiteModel&gt; unignoredSiteModels = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L733" title="All 2 branches missed.">                for (SiteModel site : siteModels) {</span>
+<span class="nc bnc" id="L734" title="All 2 branches missed.">                    if (!mIgnoreSitesIds.contains(site.getId())) {</span>
+<span class="nc" id="L735">                        unignoredSiteModels.add(site);</span>
+                    }
+<span class="nc" id="L737">                }</span>
+<span class="nc" id="L738">                siteModels = unignoredSiteModels;</span>
+            }
+
+<span class="nc" id="L741">            SiteList sites = new SiteList(siteModels);</span>
+
+            // sort primary blog to the top, otherwise sort by blog/host
+<span class="nc" id="L744">            final long primaryBlogId = mAccountStore.getAccount().getPrimarySiteId();</span>
+<span class="nc" id="L745">            Collections.sort(sites, (site1, site2) -&gt; {</span>
+<span class="nc bnc" id="L746" title="All 4 branches missed.">                if (primaryBlogId &gt; 0 &amp;&amp; !mIsInSearchMode) {</span>
+<span class="nc bnc" id="L747" title="All 2 branches missed.">                    if (site1.mSiteId == primaryBlogId) {</span>
+<span class="nc" id="L748">                        return -1;</span>
+<span class="nc bnc" id="L749" title="All 2 branches missed.">                    } else if (site2.mSiteId == primaryBlogId) {</span>
+<span class="nc" id="L750">                        return 1;</span>
+                    }
+                }
+<span class="nc" id="L753">                return site1.getBlogNameOrHomeURL().compareToIgnoreCase(site2.getBlogNameOrHomeURL());</span>
+            });
+
+            // flag recently-picked sites and move them to the top if there are enough sites and
+            // the user isn't searching
+<span class="nc bnc" id="L758" title="All 4 branches missed.">            if (!mIsInSearchMode &amp;&amp; sites.size() &gt;= RECENTLY_PICKED_THRESHOLD) {</span>
+<span class="nc" id="L759">                ArrayList&lt;Integer&gt; pickedIds = AppPrefs.getRecentlyPickedSiteIds();</span>
+<span class="nc bnc" id="L760" title="All 2 branches missed.">                for (int i = pickedIds.size() - 1; i &gt; -1; i--) {</span>
+<span class="nc" id="L761">                    int thisId = pickedIds.get(i);</span>
+<span class="nc" id="L762">                    int indexOfSite = sites.indexOfSiteId(thisId);</span>
+<span class="nc bnc" id="L763" title="All 2 branches missed.">                    if (indexOfSite &gt; -1) {</span>
+<span class="nc" id="L764">                        SiteRecord site = sites.remove(indexOfSite);</span>
+<span class="nc" id="L765">                        site.mIsRecentPick = true;</span>
+<span class="nc" id="L766">                        sites.add(0, site);</span>
+                    }
+                }
+            }
+
+<span class="nc bnc" id="L771" title="All 4 branches missed.">            if (mSites == null || !mSites.isSameList(sites)) {</span>
+<span class="nc" id="L772">                SiteList allSites = (SiteList) sites.clone();</span>
+<span class="nc" id="L773">                SiteList filteredSites = filteredSitesByTextIfInSearchMode(sites);</span>
+
+<span class="nc" id="L775">                return new SiteList[]{allSites, filteredSites};</span>
+            }
+
+<span class="nc" id="L778">            return null;</span>
+        }
+
+        @Override
+        protected void onPostExecute(SiteList[] updatedSiteLists) {
+<span class="nc bnc" id="L783" title="All 2 branches missed.">            if (updatedSiteLists != null) {</span>
+<span class="nc" id="L784">                mAllSites = updatedSiteLists[0];</span>
+<span class="nc" id="L785">                mSites = updatedSiteLists[1];</span>
+<span class="nc" id="L786">                notifyDataSetChanged();</span>
+            }
+<span class="nc" id="L788">            mDataLoadedListener.onAfterLoad();</span>
+<span class="nc" id="L789">        }</span>
+    }
+
+    /**
+     * SiteRecord is a simplified version of the full account (blog) record
+     */
+    public static class SiteRecord {
+        private final int mLocalId;
+        private final long mSiteId;
+        private final String mBlogName;
+        private final String mHomeURL;
+        private final String mBlavatarUrl;
+        private final ImageType mBlavatarType;
+        private boolean mIsHidden;
+        private boolean mIsRecentPick;
+
+<span class="nc" id="L805">        public SiteRecord(SiteModel siteModel) {</span>
+<span class="nc" id="L806">            mLocalId = siteModel.getId();</span>
+<span class="nc" id="L807">            mSiteId = siteModel.getSiteId();</span>
+<span class="nc" id="L808">            mBlogName = SiteUtils.getSiteNameOrHomeURL(siteModel);</span>
+<span class="nc" id="L809">            mHomeURL = SiteUtils.getHomeURLOrHostName(siteModel);</span>
+<span class="nc" id="L810">            mBlavatarUrl = SiteUtils.getSiteIconUrl(siteModel, mBlavatarSz);</span>
+<span class="nc" id="L811">            mBlavatarType = SiteUtils.getSiteImageType(</span>
+<span class="nc" id="L812">                    siteModel.isWpForTeamsSite(), BlavatarShape.SQUARE_WITH_ROUNDED_CORNERES);</span>
+<span class="nc bnc" id="L813" title="All 2 branches missed.">            mIsHidden = !siteModel.isVisible();</span>
+<span class="nc" id="L814">        }</span>
+
+        public String getBlogNameOrHomeURL() {
+<span class="nc bnc" id="L817" title="All 2 branches missed.">            if (TextUtils.isEmpty(mBlogName)) {</span>
+<span class="nc" id="L818">                return mHomeURL;</span>
+            }
+<span class="nc" id="L820">            return mBlogName;</span>
+        }
+
+        public int getLocalId() {
+<span class="nc" id="L824">            return mLocalId;</span>
+        }
+
+        public boolean isHidden() {
+<span class="nc" id="L828">            return mIsHidden;</span>
+        }
+
+        public void setHidden(boolean hidden) {
+<span class="nc" id="L832">            mIsHidden = hidden;</span>
+<span class="nc" id="L833">        }</span>
+
+        public String getHomeURL() {
+<span class="nc" id="L836">            return mHomeURL;</span>
+        }
+
+        public String getBlavatarUrl() {
+<span class="nc" id="L840">            return mBlavatarUrl;</span>
+        }
+
+        public ImageType getBlavatarType() {
+<span class="nc" id="L844">            return mBlavatarType;</span>
+        }
+
+        public long getSiteId() {
+<span class="nc" id="L848">            return mSiteId;</span>
+        }
+    }
+
+    public static class SiteList extends ArrayList&lt;SiteRecord&gt; {
+<span class="nc" id="L853">        SiteList() {</span>
+<span class="nc" id="L854">        }</span>
+
+<span class="nc" id="L856">        SiteList(List&lt;SiteModel&gt; siteModels) {</span>
+<span class="nc bnc" id="L857" title="All 2 branches missed.">            if (siteModels != null) {</span>
+<span class="nc bnc" id="L858" title="All 2 branches missed.">                for (SiteModel siteModel : siteModels) {</span>
+<span class="nc" id="L859">                    add(new SiteRecord(siteModel));</span>
+<span class="nc" id="L860">                }</span>
+            }
+<span class="nc" id="L862">        }</span>
+
+        boolean isSameList(SiteList sites) {
+<span class="nc bnc" id="L865" title="All 4 branches missed.">            if (sites == null || sites.size() != this.size()) {</span>
+<span class="nc" id="L866">                return false;</span>
+            }
+            int i;
+<span class="nc bnc" id="L869" title="All 2 branches missed.">            for (SiteRecord site : sites) {</span>
+<span class="nc" id="L870">                i = indexOfSite(site);</span>
+<span class="nc bnc" id="L871" title="All 2 branches missed.">                if (i == -1</span>
+<span class="nc bnc" id="L872" title="All 2 branches missed.">                    || this.get(i).mIsHidden != site.mIsHidden</span>
+<span class="nc bnc" id="L873" title="All 2 branches missed.">                    || this.get(i).mIsRecentPick != site.mIsRecentPick) {</span>
+<span class="nc" id="L874">                    return false;</span>
+                }
+<span class="nc" id="L876">            }</span>
+<span class="nc" id="L877">            return true;</span>
+        }
+
+        int indexOfSite(SiteRecord site) {
+<span class="nc bnc" id="L881" title="All 4 branches missed.">            if (site != null &amp;&amp; site.mSiteId &gt; 0) {</span>
+<span class="nc bnc" id="L882" title="All 2 branches missed.">                for (int i = 0; i &lt; size(); i++) {</span>
+<span class="nc bnc" id="L883" title="All 2 branches missed.">                    if (site.mSiteId == this.get(i).mSiteId) {</span>
+<span class="nc" id="L884">                        return i;</span>
+                    }
+                }
+            }
+<span class="nc" id="L888">            return -1;</span>
+        }
+
+        int indexOfSiteId(int localId) {
+<span class="nc bnc" id="L892" title="All 2 branches missed.">            for (int i = 0; i &lt; size(); i++) {</span>
+<span class="nc bnc" id="L893" title="All 2 branches missed.">                if (localId == this.get(i).mLocalId) {</span>
+<span class="nc" id="L894">                    return i;</span>
+                }
+            }
+<span class="nc" id="L897">            return -1;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

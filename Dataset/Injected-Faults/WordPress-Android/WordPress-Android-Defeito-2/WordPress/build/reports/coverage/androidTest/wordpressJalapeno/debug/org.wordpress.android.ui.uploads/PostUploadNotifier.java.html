@@ -1,0 +1,1035 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostUploadNotifier.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.uploads</a> &gt; <span class="el_source">PostUploadNotifier.java</span></div><h1>PostUploadNotifier.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.uploads;
+
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.text.TextUtils;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.collection.SparseArrayCompat;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.TaskStackBuilder;
+
+import org.greenrobot.eventbus.EventBus;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.fluxc.model.MediaModel;
+import org.wordpress.android.fluxc.model.PostImmutableModel;
+import org.wordpress.android.fluxc.model.PostModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.model.post.PostStatus;
+import org.wordpress.android.push.NotificationType;
+import org.wordpress.android.push.NotificationsProcessingService;
+import org.wordpress.android.ui.RequestCodes;
+import org.wordpress.android.ui.media.MediaBrowserActivity;
+import org.wordpress.android.ui.notifications.SystemNotificationsTracker;
+import org.wordpress.android.ui.pages.PagesActivity;
+import org.wordpress.android.ui.posts.EditPostActivity;
+import org.wordpress.android.ui.posts.PostUtils;
+import org.wordpress.android.ui.posts.PostsListActivity;
+import org.wordpress.android.ui.posts.PostsListActivityKt;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.SystemServiceFactory;
+import org.wordpress.android.util.WPMeShortlinks;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+
+import static org.wordpress.android.push.NotificationsProcessingService.ARG_NOTIFICATION_TYPE;
+import static org.wordpress.android.ui.pages.PagesActivityKt.EXTRA_PAGE_REMOTE_ID_KEY;
+
+class PostUploadNotifier {
+    private final Context mContext;
+    private final UploadService mService;
+
+    private final NotificationManager mNotificationManager;
+    private final SystemNotificationsTracker mSystemNotificationsTracker;
+    private final NotificationCompat.Builder mNotificationBuilder;
+
+    private static final int BASE_MEDIA_ERROR_NOTIFICATION_ID = 72000;
+
+<span class="nc" id="L57">    private enum PagesOrPostsType {</span>
+<span class="nc" id="L58">        POST,</span>
+<span class="nc" id="L59">        PAGE,</span>
+<span class="nc" id="L60">        POSTS,</span>
+<span class="nc" id="L61">        PAGES,</span>
+<span class="nc" id="L62">        PAGES_OR_POSTS</span>
+    }
+
+    // used to hold notification data for everything (only one outstanding foreground notification
+    // for the live UploadService instance
+    private static NotificationData sNotificationData;
+
+<span class="nc" id="L69">    private class NotificationData {</span>
+        int mNotificationId;
+        int mTotalMediaItems;
+        int mCurrentMediaItem;
+        int mTotalPostItems;
+        int mTotalPageItemsIncludedInPostCount;
+        int mCurrentPostItem;
+<span class="nc" id="L76">        final SparseArrayCompat&lt;Float&gt; mediaItemToProgressMap = new SparseArrayCompat&lt;&gt;();</span>
+<span class="nc" id="L77">        final List&lt;PostImmutableModel&gt; mUploadedPostsCounted = new ArrayList&lt;&gt;();</span>
+    }
+
+<span class="nc" id="L80">    PostUploadNotifier(Context context, UploadService service, SystemNotificationsTracker systemNotificationsTracker) {</span>
+        // Add the uploader to the notification bar
+<span class="nc" id="L82">        mContext = context;</span>
+<span class="nc" id="L83">        mService = service;</span>
+<span class="nc" id="L84">        mSystemNotificationsTracker = systemNotificationsTracker;</span>
+<span class="nc" id="L85">        sNotificationData = new NotificationData();</span>
+<span class="nc" id="L86">        mNotificationManager = (NotificationManager) SystemServiceFactory.get(mContext,</span>
+                Context.NOTIFICATION_SERVICE);
+<span class="nc" id="L88">        mNotificationBuilder = new NotificationCompat.Builder(mContext.getApplicationContext(),</span>
+<span class="nc" id="L89">                context.getString(R.string.notification_channel_transient_id));</span>
+<span class="nc" id="L90">        mNotificationBuilder.setSmallIcon(android.R.drawable.stat_sys_upload)</span>
+<span class="nc" id="L91">                            .setColor(context.getResources().getColor(R.color.primary_50))</span>
+<span class="nc" id="L92">                            .setOnlyAlertOnce(true);</span>
+<span class="nc" id="L93">    }</span>
+
+    private void updateForegroundNotification(@Nullable PostImmutableModel post) {
+<span class="nc" id="L96">        updateNotificationBuilder(post);</span>
+<span class="nc" id="L97">        updateNotificationProgress();</span>
+<span class="nc" id="L98">    }</span>
+
+    private void updateNotificationBuilder(@Nullable PostImmutableModel post) {
+        // set the Notification's title and prepare the Notifications message text, i.e. &quot;1/3 Posts, 4/17 media items&quot;
+<span class="nc bnc" id="L102" title="All 4 branches missed.">        if (sNotificationData.mTotalMediaItems &gt; 0 &amp;&amp; sNotificationData.mTotalPostItems == 0) {</span>
+            // only media items are being uploaded
+            // check if special case for ONE media item
+<span class="nc bnc" id="L105" title="All 2 branches missed.">            if (sNotificationData.mTotalMediaItems == 1) {</span>
+<span class="nc" id="L106">                mNotificationBuilder.setContentTitle(buildNotificationTitleForMedia());</span>
+<span class="nc" id="L107">                mNotificationBuilder.setContentText(buildNotificationSubtitleForMedia());</span>
+            } else {
+<span class="nc" id="L109">                mNotificationBuilder.setContentTitle(buildNotificationTitleForMixedContent());</span>
+<span class="nc" id="L110">                mNotificationBuilder.setContentText(buildNotificationSubtitleForMedia());</span>
+            }
+<span class="nc bnc" id="L112" title="All 4 branches missed.">        } else if (sNotificationData.mTotalMediaItems == 0 &amp;&amp; sNotificationData.mTotalPostItems &gt; 0) {</span>
+            // only Post / Pages are being uploaded
+            // check if special case for ONE Post
+<span class="nc bnc" id="L115" title="All 2 branches missed.">            if (sNotificationData.mTotalPostItems == 1) {</span>
+<span class="nc" id="L116">                mNotificationBuilder.setContentTitle(buildNotificationTitleForPost(post));</span>
+<span class="nc" id="L117">                mNotificationBuilder.setContentText(buildNotificationSubtitleForPost(post));</span>
+            } else {
+<span class="nc" id="L119">                mNotificationBuilder.setContentTitle(buildNotificationTitleForMixedContent());</span>
+<span class="nc" id="L120">                mNotificationBuilder.setContentText(buildNotificationSubtitleForPosts());</span>
+            }
+        } else {
+            // mixed content (Post/Pages and media) is being uploaded
+<span class="nc" id="L124">            mNotificationBuilder.setContentTitle(buildNotificationTitleForMixedContent());</span>
+<span class="nc" id="L125">            mNotificationBuilder.setContentText(buildNotificationSubtitleForMixedContent());</span>
+        }
+<span class="nc" id="L127">    }</span>
+
+    private synchronized void startOrUpdateForegroundNotification(@Nullable PostImmutableModel post) {
+<span class="nc bnc" id="L130" title="All 4 branches missed.">        boolean isTotalPostsAndMediaItemsCountZero = sNotificationData.mTotalPostItems == 0</span>
+                                                     &amp;&amp; sNotificationData.mTotalMediaItems == 0;
+<span class="nc bnc" id="L132" title="All 2 branches missed.">        if (isTotalPostsAndMediaItemsCountZero) {</span>
+<span class="nc" id="L133">            return;</span>
+        }
+<span class="nc" id="L135">        updateNotificationBuilder(post);</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (sNotificationData.mNotificationId == 0) {</span>
+<span class="nc" id="L137">            sNotificationData.mNotificationId = (new Random()).nextInt();</span>
+<span class="nc" id="L138">            mService.startForeground(sNotificationData.mNotificationId, mNotificationBuilder.build());</span>
+        } else {
+            // service was already started, let's just modify the notification
+<span class="nc" id="L141">            doNotify(sNotificationData.mNotificationId, mNotificationBuilder.build(), null);</span>
+        }
+<span class="nc" id="L143">    }</span>
+
+    void removePostInfoFromForegroundNotificationData(@NonNull PostImmutableModel post,
+                                                      @Nullable List&lt;MediaModel&gt; media) {
+<span class="nc bnc" id="L147" title="All 2 branches missed.">        if (sNotificationData.mTotalPostItems &gt; 0) {</span>
+<span class="nc" id="L148">            sNotificationData.mTotalPostItems--;</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">            if (post.isPage()) {</span>
+<span class="nc" id="L150">                sNotificationData.mTotalPageItemsIncludedInPostCount--;</span>
+            }
+        }
+<span class="nc bnc" id="L153" title="All 2 branches missed.">        if (media != null) {</span>
+<span class="nc" id="L154">            removeMediaInfoFromForegroundNotification(media);</span>
+        }
+<span class="nc" id="L156">    }</span>
+
+    // Post could have initial media, or not (nullable)
+    void addPostInfoToForegroundNotification(@NonNull PostImmutableModel post, @Nullable List&lt;MediaModel&gt; media) {
+<span class="nc" id="L160">        sNotificationData.mTotalPostItems++;</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">        if (post.isPage()) {</span>
+<span class="nc" id="L162">            sNotificationData.mTotalPageItemsIncludedInPostCount++;</span>
+        }
+<span class="nc bnc" id="L164" title="All 2 branches missed.">        if (media != null) {</span>
+<span class="nc" id="L165">            addMediaInfoToForegroundNotification(media);</span>
+        }
+<span class="nc" id="L167">        startOrUpdateForegroundNotification(post);</span>
+<span class="nc" id="L168">    }</span>
+
+    void removePostInfoFromForegroundNotification(@NonNull PostImmutableModel post, @Nullable List&lt;MediaModel&gt; media) {
+<span class="nc" id="L171">        removePostInfoFromForegroundNotificationData(post, media);</span>
+<span class="nc" id="L172">        startOrUpdateForegroundNotification(post);</span>
+<span class="nc" id="L173">    }</span>
+
+    void removeMediaInfoFromForegroundNotification(@NonNull List&lt;MediaModel&gt; mediaList) {
+<span class="nc bnc" id="L176" title="All 2 branches missed.">        if (sNotificationData.mTotalMediaItems &gt;= mediaList.size()) {</span>
+<span class="nc" id="L177">            sNotificationData.mTotalMediaItems -= mediaList.size();</span>
+            // update Notification now
+<span class="nc" id="L179">            updateForegroundNotification(null);</span>
+        }
+<span class="nc" id="L181">    }</span>
+
+    void removeOneMediaItemInfoFromForegroundNotification() {
+<span class="nc bnc" id="L184" title="All 2 branches missed.">        if (sNotificationData.mTotalMediaItems &gt;= 1) {</span>
+<span class="nc" id="L185">            sNotificationData.mTotalMediaItems--;</span>
+            // update Notification now
+<span class="nc" id="L187">            updateForegroundNotification(null);</span>
+        }
+<span class="nc" id="L189">    }</span>
+
+    void addMediaInfoToForegroundNotification(@NonNull List&lt;MediaModel&gt; mediaList) {
+<span class="nc" id="L192">        sNotificationData.mTotalMediaItems += mediaList.size();</span>
+        // setup progresses for each media item
+<span class="nc bnc" id="L194" title="All 2 branches missed.">        for (MediaModel media : mediaList) {</span>
+<span class="nc" id="L195">            setProgressForMediaItem(media.getId(), 0.0f);</span>
+<span class="nc" id="L196">        }</span>
+<span class="nc" id="L197">        startOrUpdateForegroundNotification(null);</span>
+<span class="nc" id="L198">    }</span>
+
+    void addMediaInfoToForegroundNotification(@NonNull MediaModel media) {
+<span class="nc" id="L201">        sNotificationData.mTotalMediaItems++;</span>
+        // setup progress for media item
+<span class="nc" id="L203">        setProgressForMediaItem(media.getId(), 0.0f);</span>
+<span class="nc" id="L204">        startOrUpdateForegroundNotification(null);</span>
+<span class="nc" id="L205">    }</span>
+
+    void incrementUploadedPostCountFromForegroundNotification(@NonNull PostImmutableModel post) {
+<span class="nc" id="L208">        incrementUploadedPostCountFromForegroundNotification(post, false);</span>
+<span class="nc" id="L209">    }</span>
+
+    void incrementUploadedPostCountFromForegroundNotification(@NonNull PostImmutableModel post, boolean force) {
+        // first we need to check that we only count this post once as &quot;ended&quot; (either successfully or with error)
+        // for every error we get. We'll then try to increment the Post count as it's been cancelled/failed because the
+        // related media was cancelled or has failed too (i.e. we can't upload a Post with failed media, therefore
+        // it needs to be cancelled).
+<span class="nc bnc" id="L216" title="All 4 branches missed.">        if (!force &amp;&amp; isPostAlreadyInPostCount(post)) {</span>
+<span class="nc" id="L217">            return;</span>
+        } else {
+<span class="nc" id="L219">            addPostToPostCount(post);</span>
+        }
+<span class="nc" id="L221">        sNotificationData.mCurrentPostItem++;</span>
+
+        // update Notification now
+<span class="nc bnc" id="L224" title="All 2 branches missed.">        if (!removeNotificationAndStopForegroundServiceIfNoItemsInQueue()) {</span>
+<span class="nc" id="L225">            updateForegroundNotification(post);</span>
+        }
+<span class="nc" id="L227">    }</span>
+
+    void incrementUploadedMediaCountFromProgressNotification(int mediaId) {
+<span class="nc" id="L230">        sNotificationData.mCurrentMediaItem++;</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">        if (!removeNotificationAndStopForegroundServiceIfNoItemsInQueue()) {</span>
+            // update Notification now
+<span class="nc" id="L233">            updateForegroundNotification(null);</span>
+        }
+<span class="nc" id="L235">    }</span>
+
+    private boolean removeNotificationAndStopForegroundServiceIfNoItemsInQueue() {
+<span class="nc bnc" id="L238" title="All 4 branches missed.">        if (sNotificationData.mCurrentPostItem == sNotificationData.mTotalPostItems</span>
+            &amp;&amp; sNotificationData.mCurrentMediaItem == sNotificationData.mTotalMediaItems) {
+<span class="nc" id="L240">            mNotificationManager.cancel(sNotificationData.mNotificationId);</span>
+            // reset the notification id so a new one is generated next time the service is started
+<span class="nc" id="L242">            sNotificationData.mNotificationId = 0;</span>
+<span class="nc" id="L243">            resetNotificationCounters();</span>
+<span class="nc" id="L244">            mService.stopForeground(true);</span>
+<span class="nc" id="L245">            return true;</span>
+        }
+<span class="nc" id="L247">        return false;</span>
+    }
+
+    private void resetNotificationCounters() {
+<span class="nc" id="L251">        sNotificationData.mCurrentPostItem = 0;</span>
+<span class="nc" id="L252">        sNotificationData.mCurrentMediaItem = 0;</span>
+<span class="nc" id="L253">        sNotificationData.mTotalMediaItems = 0;</span>
+<span class="nc" id="L254">        sNotificationData.mTotalPostItems = 0;</span>
+<span class="nc" id="L255">        sNotificationData.mTotalPageItemsIncludedInPostCount = 0;</span>
+<span class="nc" id="L256">        sNotificationData.mediaItemToProgressMap.clear();</span>
+<span class="nc" id="L257">        sNotificationData.mUploadedPostsCounted.clear();</span>
+<span class="nc" id="L258">    }</span>
+
+    private boolean isPostAlreadyInPostCount(@NonNull PostImmutableModel post) {
+<span class="nc bnc" id="L261" title="All 2 branches missed.">        for (PostImmutableModel onePost : sNotificationData.mUploadedPostsCounted) {</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">            if (onePost.getId() == post.getId()) {</span>
+<span class="nc" id="L263">                return true;</span>
+            }
+<span class="nc" id="L265">        }</span>
+<span class="nc" id="L266">        return false;</span>
+    }
+
+    private void addPostToPostCount(@NonNull PostImmutableModel post) {
+<span class="nc" id="L270">        sNotificationData.mUploadedPostsCounted.add(post);</span>
+<span class="nc" id="L271">    }</span>
+
+    // cancels the error or success notification (only one of these exist per Post at any given
+    // time
+    static void cancelFinalNotification(Context context, @NonNull PostImmutableModel post) {
+<span class="nc bnc" id="L276" title="All 2 branches missed.">        if (context != null) {</span>
+<span class="nc" id="L277">            NotificationManager notificationManager =</span>
+<span class="nc" id="L278">                    (NotificationManager) SystemServiceFactory.get(context, Context.NOTIFICATION_SERVICE);</span>
+<span class="nc" id="L279">            notificationManager.cancel((int) getNotificationIdForPost(post));</span>
+        }
+<span class="nc" id="L281">    }</span>
+
+    static void cancelFinalNotificationForMedia(Context context, @NonNull SiteModel site) {
+<span class="nc bnc" id="L284" title="All 2 branches missed.">        if (context != null) {</span>
+<span class="nc" id="L285">            NotificationManager notificationManager =</span>
+<span class="nc" id="L286">                    (NotificationManager) SystemServiceFactory.get(context, Context.NOTIFICATION_SERVICE);</span>
+<span class="nc" id="L287">            notificationManager.cancel((int) getNotificationIdForMedia(site));</span>
+        }
+<span class="nc" id="L289">    }</span>
+
+    void updateNotificationSuccessForPost(@NonNull PostImmutableModel post, @NonNull SiteModel site,
+                                          boolean isFirstTimePublish) {
+<span class="nc bnc" id="L293" title="All 2 branches missed.">        if (!WordPress.Companion.getAppIsInTheBackground()) {</span>
+            // only produce success notifications for the user if the app is in the background
+<span class="nc" id="L295">            return;</span>
+        }
+<span class="nc" id="L297">        AppLog.d(AppLog.T.POSTS, &quot;updateNotificationSuccessForPost&quot;);</span>
+
+        // Get the shareableUrl
+<span class="nc" id="L300">        String shareableUrl = WPMeShortlinks.getPostShortlink(site, post);</span>
+<span class="nc bnc" id="L301" title="All 4 branches missed.">        if (shareableUrl == null &amp;&amp; !TextUtils.isEmpty(post.getLink())) {</span>
+<span class="nc" id="L302">            shareableUrl = post.getLink();</span>
+        }
+
+        // Notification builder
+<span class="nc" id="L306">        NotificationCompat.Builder notificationBuilder =</span>
+<span class="nc" id="L307">                new NotificationCompat.Builder(mContext.getApplicationContext(),</span>
+<span class="nc" id="L308">                        mContext.getString(R.string.notification_channel_normal_id));</span>
+        String notificationTitle;
+        String notificationMessage;
+
+<span class="nc bnc" id="L312" title="All 2 branches missed.">        String postTitle = TextUtils.isEmpty(post.getTitle()) ? mContext.getString(R.string.untitled) : post.getTitle();</span>
+<span class="nc" id="L313">        notificationTitle = &quot;\&quot;&quot; + postTitle + &quot;\&quot; &quot;;</span>
+<span class="nc" id="L314">        notificationMessage = site.getName();</span>
+
+<span class="nc" id="L316">        PostStatus status = PostStatus.fromPost(post);</span>
+<span class="nc bnc" id="L317" title="All 4 branches missed.">        switch (status) {</span>
+            case DRAFT:
+<span class="nc" id="L319">                notificationTitle += mContext.getString(R.string.draft_uploaded);</span>
+<span class="nc" id="L320">                break;</span>
+            case SCHEDULED:
+<span class="nc" id="L322">                notificationTitle += mContext.getString(</span>
+<span class="nc bnc" id="L323" title="All 2 branches missed.">                        post.isPage() ? R.string.page_scheduled : R.string.post_scheduled);</span>
+<span class="nc" id="L324">                break;</span>
+            case PUBLISHED:
+<span class="nc bnc" id="L326" title="All 2 branches missed.">                if (post.isPage()) {</span>
+<span class="nc" id="L327">                    notificationTitle += mContext.getString(</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">                            isFirstTimePublish ? R.string.page_published : R.string.page_updated);</span>
+                } else {
+<span class="nc" id="L330">                    notificationTitle += mContext.getString(</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">                            isFirstTimePublish ? R.string.post_published : R.string.post_updated);</span>
+                }
+<span class="nc" id="L333">                break;</span>
+            default:
+<span class="nc bnc" id="L335" title="All 2 branches missed.">                notificationTitle += mContext.getString(post.isPage() ? R.string.page_updated : R.string.post_updated);</span>
+                break;
+        }
+
+<span class="nc" id="L339">        notificationBuilder.setSmallIcon(R.drawable.ic_app_white_24dp);</span>
+<span class="nc" id="L340">        notificationBuilder.setColor(mContext.getResources().getColor(R.color.primary_50));</span>
+
+<span class="nc" id="L342">        notificationBuilder.setContentTitle(notificationTitle);</span>
+<span class="nc" id="L343">        notificationBuilder.setContentText(notificationMessage);</span>
+<span class="nc" id="L344">        notificationBuilder.setStyle(new NotificationCompat.BigTextStyle().bigText(notificationMessage));</span>
+<span class="nc" id="L345">        notificationBuilder.setOnlyAlertOnce(true);</span>
+<span class="nc" id="L346">        notificationBuilder.setAutoCancel(true);</span>
+<span class="nc" id="L347">        long notificationId = getNotificationIdForPost(post);</span>
+
+<span class="nc" id="L349">        NotificationType notificationType = NotificationType.POST_UPLOAD_SUCCESS;</span>
+<span class="nc" id="L350">        notificationBuilder.setDeleteIntent(NotificationsProcessingService</span>
+<span class="nc" id="L351">                .getPendingIntentForNotificationDismiss(mContext, (int) notificationId,</span>
+                        notificationType));
+
+<span class="nc" id="L354">        Intent notificationIntent = getNotificationIntent(post, site);</span>
+<span class="nc" id="L355">        notificationIntent.putExtra(ARG_NOTIFICATION_TYPE, notificationType);</span>
+
+<span class="nc" id="L357">        PendingIntent pendingIntentPost = PendingIntent.getActivity(</span>
+                mContext,
+                (int) notificationId,
+                notificationIntent,
+                PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+<span class="nc" id="L363">        notificationBuilder.setContentIntent(pendingIntentPost);</span>
+
+        // Share intent - started if the user tap the share link button - only if the link exist
+<span class="nc bnc" id="L366" title="All 4 branches missed.">        if (shareableUrl != null &amp;&amp; PostStatus.fromPost(post) == PostStatus.PUBLISHED) {</span>
+<span class="nc" id="L367">            notificationBuilder.addAction(R.drawable.ic_share_white_24dp, mContext.getString(R.string.share_action),</span>
+<span class="nc" id="L368">                    getSharePendingIntent(post, shareableUrl));</span>
+        }
+
+        // add draft Publish action for drafts
+<span class="nc bnc" id="L372" title="All 4 branches missed.">        if (PostStatus.fromPost(post) == PostStatus.DRAFT || PostStatus.fromPost(post) == PostStatus.PENDING) {</span>
+<span class="nc" id="L373">            Intent publishIntent = UploadService.getPublishPostServiceIntent(mContext, post, isFirstTimePublish);</span>
+<span class="nc" id="L374">            PendingIntent pendingIntent = PendingIntent.getService(mContext, 0, publishIntent,</span>
+                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+<span class="nc" id="L376">            notificationBuilder.addAction(R.drawable.ic_posts_white_24dp, mContext.getString(R.string.button_publish),</span>
+                    pendingIntent);
+        }
+
+<span class="nc" id="L380">        doNotify(notificationId, notificationBuilder.build(), notificationType);</span>
+<span class="nc" id="L381">    }</span>
+
+    void updateNotificationSuccessForMedia(@NonNull List&lt;MediaModel&gt; mediaList, @NonNull SiteModel site) {
+        // show the snackbar
+<span class="nc bnc" id="L385" title="All 4 branches missed.">        if (mediaList != null &amp;&amp; !mediaList.isEmpty()) {</span>
+<span class="nc" id="L386">            String snackbarMessage = buildSnackbarSuccessMessageForMedia(mediaList.size());</span>
+<span class="nc" id="L387">            EventBus.getDefault().postSticky(new UploadService.UploadMediaSuccessEvent(mediaList, snackbarMessage));</span>
+        }
+
+<span class="nc bnc" id="L390" title="All 2 branches missed.">        if (!WordPress.Companion.getAppIsInTheBackground()) {</span>
+            // only produce success notifications for the user if the app is in the background
+<span class="nc" id="L392">            return;</span>
+        }
+<span class="nc" id="L394">        AppLog.d(AppLog.T.MEDIA, &quot;updateNotificationSuccessForMedia&quot;);</span>
+
+<span class="nc" id="L396">        NotificationCompat.Builder notificationBuilder =</span>
+<span class="nc" id="L397">                new NotificationCompat.Builder(mContext.getApplicationContext(),</span>
+<span class="nc" id="L398">                        mContext.getString(R.string.notification_channel_normal_id));</span>
+
+<span class="nc" id="L400">        long notificationId = getNotificationIdForMedia(site);</span>
+        // Tap notification intent (open the media browser)
+<span class="nc" id="L402">        Intent notificationIntent = new Intent(mContext, MediaBrowserActivity.class);</span>
+<span class="nc" id="L403">        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);</span>
+<span class="nc" id="L404">        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);</span>
+<span class="nc" id="L405">        notificationIntent.putExtra(WordPress.SITE, site);</span>
+<span class="nc" id="L406">        notificationIntent.setAction(String.valueOf(notificationId));</span>
+<span class="nc" id="L407">        NotificationType notificationType = NotificationType.MEDIA_UPLOAD_SUCCESS;</span>
+<span class="nc" id="L408">        notificationIntent.putExtra(ARG_NOTIFICATION_TYPE, notificationType);</span>
+
+<span class="nc" id="L410">        PendingIntent pendingIntent = PendingIntent.getActivity(</span>
+                mContext,
+                (int) notificationId,
+                notificationIntent,
+                PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+<span class="nc" id="L417">        notificationBuilder.setSmallIcon(R.drawable.ic_app_white_24dp);</span>
+<span class="nc" id="L418">        notificationBuilder.setColor(mContext.getResources().getColor(R.color.primary_50));</span>
+
+<span class="nc" id="L420">        String notificationTitle = buildSuccessMessageForMedia(mediaList.size());</span>
+        String notificationMessage =
+<span class="nc bnc" id="L422" title="All 2 branches missed.">                TextUtils.isEmpty(site.getName()) ? mContext.getString(R.string.untitled) : site.getName();</span>
+
+<span class="nc" id="L424">        notificationBuilder.setContentTitle(notificationTitle);</span>
+<span class="nc" id="L425">        notificationBuilder.setContentText(notificationMessage);</span>
+        // notificationBuilder.setStyle(new NotificationCompat.BigTextStyle().bigText(newSuccessMessage));
+<span class="nc" id="L427">        notificationBuilder.setContentIntent(pendingIntent);</span>
+<span class="nc" id="L428">        notificationBuilder.setOnlyAlertOnce(true);</span>
+<span class="nc" id="L429">        notificationBuilder.setAutoCancel(true);</span>
+<span class="nc" id="L430">        notificationBuilder.setDeleteIntent(NotificationsProcessingService</span>
+<span class="nc" id="L431">                .getPendingIntentForNotificationDismiss(mContext, (int) notificationId,</span>
+                        notificationType));
+
+        // Add WRITE POST action - only if there is media we can insert in the Post
+<span class="nc bnc" id="L435" title="All 4 branches missed.">        if (mediaList != null &amp;&amp; !mediaList.isEmpty()) {</span>
+<span class="nc" id="L436">            ArrayList&lt;MediaModel&gt; mediaToIncludeInPost = new ArrayList&lt;&gt;(mediaList);</span>
+
+<span class="nc" id="L438">            Intent writePostIntent = new Intent(mContext, EditPostActivity.class);</span>
+<span class="nc" id="L439">            writePostIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);</span>
+<span class="nc" id="L440">            writePostIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);</span>
+<span class="nc" id="L441">            writePostIntent.putExtra(WordPress.SITE, site);</span>
+<span class="nc" id="L442">            writePostIntent.putExtra(EditPostActivity.EXTRA_IS_PAGE, false);</span>
+<span class="nc" id="L443">            writePostIntent.putExtra(EditPostActivity.EXTRA_INSERT_MEDIA, mediaToIncludeInPost);</span>
+<span class="nc" id="L444">            writePostIntent.setAction(String.valueOf(notificationId));</span>
+
+<span class="nc" id="L446">            PendingIntent actionPendingIntent =</span>
+<span class="nc" id="L447">                    PendingIntent.getActivity(mContext, RequestCodes.EDIT_POST, writePostIntent,</span>
+                            PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+<span class="nc" id="L449">            notificationBuilder</span>
+<span class="nc" id="L450">                    .addAction(0, mContext.getString(R.string.media_files_uploaded_write_post), actionPendingIntent);</span>
+        }
+
+<span class="nc" id="L453">        doNotify(notificationId, notificationBuilder.build(), notificationType);</span>
+<span class="nc" id="L454">    }</span>
+
+    public static long getNotificationIdForPost(PostImmutableModel post) {
+<span class="nc" id="L457">        long postIdToUse = post.getRemotePostId();</span>
+<span class="nc bnc" id="L458" title="All 2 branches missed.">        if (post.isLocalDraft()) {</span>
+<span class="nc" id="L459">            postIdToUse = post.getId();</span>
+            // Note: local drafts just don't have a remote post Id set yet, so they are all 0. Because of this, we only
+            // use the local id for local drafts.
+            // there could be the case where a local draft on the device, and a remote post, can get the same ID,
+            // since the ID is returned from 2 different sources. In theory this is true, but however the chances are
+            // too low so it seems it should work in practically 100% of times.
+        }
+        // We can't use the local table post id here because it can change between first post (local draft) to
+        // first edit (post pulled from the server)
+        // but, if this is a local draft, we don't have a choice but to use the local id.
+        // otherwise, remote ID is always 0 for any local draft, and this means we'd be providing the same
+        // notificationId for 2 different local drafts for the same site, with this ending in the latest notification
+        // &quot;stepping&quot; on the first one (the user would always get to see the latest failed local draft, but wouldn't get
+        // a notice about the previous ones).
+<span class="nc" id="L473">        return post.getLocalSiteId() + postIdToUse;</span>
+    }
+
+    public static long getNotificationIdForMedia(SiteModel site) {
+<span class="nc bnc" id="L477" title="All 2 branches missed.">        if (site != null) {</span>
+<span class="nc" id="L478">            return BASE_MEDIA_ERROR_NOTIFICATION_ID + site.getId();</span>
+        } else {
+<span class="nc" id="L480">            return BASE_MEDIA_ERROR_NOTIFICATION_ID;</span>
+        }
+    }
+
+    /*
+     * This method will create an error notification with the description of the *final state* of the queue
+     * for this Post (i.e. how many media items have been uploaded successfully and how many failed, as well
+     * as the information for the Post itself if we couldn't upload it).
+     *
+     * In order to give the user a description of the *current state* of failed media items, you can pass a value
+     * other than zero (0) in overrideMediaNotUploadedCount and this value will be shown instead.
+     */
+    void updateNotificationErrorForPost(@NonNull PostModel post, @NonNull SiteModel site, String errorMessage,
+                                        int overrideMediaNotUploadedCount) {
+<span class="nc" id="L494">        AppLog.d(AppLog.T.POSTS, &quot;updateNotificationErrorForPost: &quot; + errorMessage);</span>
+
+<span class="nc" id="L496">        NotificationCompat.Builder notificationBuilder =</span>
+<span class="nc" id="L497">                new NotificationCompat.Builder(mContext.getApplicationContext(),</span>
+<span class="nc" id="L498">                        mContext.getString(R.string.notification_channel_normal_id));</span>
+
+<span class="nc" id="L500">        long notificationId = getNotificationIdForPost(post);</span>
+<span class="nc" id="L501">        Intent notificationIntent = getNotificationIntent(post, site);</span>
+<span class="nc" id="L502">        notificationIntent.setAction(String.valueOf(notificationId));</span>
+<span class="nc" id="L503">        NotificationType notificationType = NotificationType.POST_UPLOAD_ERROR;</span>
+<span class="nc" id="L504">        notificationIntent.putExtra(ARG_NOTIFICATION_TYPE, notificationType);</span>
+
+<span class="nc" id="L506">        PendingIntent pendingIntent = PendingIntent.getActivity(</span>
+                mContext,
+                (int) notificationId,
+                notificationIntent,
+                PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+<span class="nc" id="L513">        notificationBuilder.setSmallIcon(android.R.drawable.stat_notify_error);</span>
+
+<span class="nc bnc" id="L515" title="All 2 branches missed.">        String postTitle = TextUtils.isEmpty(post.getTitle()) ? mContext.getString(R.string.untitled) : post.getTitle();</span>
+<span class="nc" id="L516">        String notificationTitle = String.format(mContext.getString(R.string.upload_failed_param), postTitle);</span>
+
+<span class="nc" id="L518">        String newErrorMessage = buildErrorMessageMixed(overrideMediaNotUploadedCount);</span>
+<span class="nc" id="L519">        String snackbarMessage = buildSnackbarErrorMessage(newErrorMessage, errorMessage);</span>
+
+<span class="nc" id="L521">        notificationBuilder.setContentTitle(notificationTitle);</span>
+<span class="nc" id="L522">        notificationBuilder.setContentText(newErrorMessage);</span>
+<span class="nc" id="L523">        notificationBuilder.setStyle(new NotificationCompat.BigTextStyle().bigText(newErrorMessage));</span>
+<span class="nc" id="L524">        notificationBuilder.setContentIntent(pendingIntent);</span>
+<span class="nc" id="L525">        notificationBuilder.setAutoCancel(true);</span>
+<span class="nc" id="L526">        notificationBuilder.setOnlyAlertOnce(true);</span>
+<span class="nc" id="L527">        notificationBuilder.setDeleteIntent(NotificationsProcessingService</span>
+<span class="nc" id="L528">                .getPendingIntentForNotificationDismiss(mContext, (int) notificationId,</span>
+                        notificationType));
+
+        // Add RETRY action - only available on Aztec
+<span class="nc bnc" id="L532" title="All 2 branches missed.">        if (AppPrefs.isAztecEditorEnabled()) {</span>
+<span class="nc" id="L533">            Intent publishIntent = UploadService.getRetryUploadServiceIntent(mContext, post,</span>
+<span class="nc" id="L534">                    PostUtils.isFirstTimePublish(post));</span>
+<span class="nc" id="L535">            PendingIntent actionPendingIntent = PendingIntent.getService(mContext, 0, publishIntent,</span>
+                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+<span class="nc" id="L537">            notificationBuilder.addAction(0, mContext.getString(R.string.retry),</span>
+                    actionPendingIntent)
+<span class="nc" id="L539">                               .setColor(mContext.getResources().getColor(R.color.accent));</span>
+        }
+
+<span class="nc" id="L542">        EventBus.getDefault().postSticky(new UploadService.UploadErrorEvent(post, snackbarMessage));</span>
+
+<span class="nc" id="L544">        doNotify(notificationId, notificationBuilder.build(), notificationType);</span>
+<span class="nc" id="L545">    }</span>
+
+    @NonNull
+    private Intent getNotificationIntent(@NonNull PostImmutableModel post, @NonNull SiteModel site) {
+        // Tap notification intent (open the post/page list)
+        Intent notificationIntent;
+<span class="nc bnc" id="L551" title="All 2 branches missed.">        if (post.isPage()) {</span>
+<span class="nc" id="L552">            notificationIntent = new Intent(mContext, PagesActivity.class);</span>
+<span class="nc" id="L553">            notificationIntent.putExtra(EXTRA_PAGE_REMOTE_ID_KEY, post.getRemotePostId());</span>
+<span class="nc" id="L554">            notificationIntent.putExtra(WordPress.SITE, site);</span>
+        } else {
+<span class="nc" id="L556">            notificationIntent = PostsListActivity.buildIntent(mContext, site);</span>
+<span class="nc" id="L557">            notificationIntent.putExtra(PostsListActivityKt.EXTRA_TARGET_POST_LOCAL_ID, post.getId());</span>
+        }
+
+<span class="nc" id="L560">        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);</span>
+<span class="nc" id="L561">        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);</span>
+<span class="nc" id="L562">        return notificationIntent;</span>
+    }
+
+    @Nullable
+    private PendingIntent getSharePendingIntent(@NonNull PostImmutableModel post, String shareableUrl) {
+<span class="nc" id="L567">        Intent shareIntent = new Intent(Intent.ACTION_SEND);</span>
+<span class="nc" id="L568">        shareIntent.setType(&quot;text/plain&quot;);</span>
+<span class="nc" id="L569">        shareIntent.putExtra(Intent.EXTRA_TEXT, shareableUrl);</span>
+<span class="nc" id="L570">        shareIntent.putExtra(Intent.EXTRA_SUBJECT, post.getTitle());</span>
+<span class="nc" id="L571">        shareIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);</span>
+
+<span class="nc" id="L573">        TaskStackBuilder builder = TaskStackBuilder.create(mContext);</span>
+<span class="nc" id="L574">        builder.addNextIntentWithParentStack(shareIntent);</span>
+<span class="nc" id="L575">        PendingIntent pendingIntent = builder</span>
+<span class="nc" id="L576">                .getPendingIntent(0, PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);</span>
+<span class="nc" id="L577">        return pendingIntent;</span>
+    }
+
+    void updateNotificationErrorForMedia(@NonNull List&lt;MediaModel&gt; mediaList, @NonNull SiteModel site,
+                                         String errorMessage) {
+<span class="nc" id="L582">        AppLog.d(AppLog.T.MEDIA, &quot;updateNotificationErrorForMedia: &quot; + errorMessage);</span>
+
+<span class="nc" id="L584">        NotificationCompat.Builder notificationBuilder =</span>
+<span class="nc" id="L585">                new NotificationCompat.Builder(mContext.getApplicationContext(),</span>
+<span class="nc" id="L586">                        mContext.getString(R.string.notification_channel_normal_id));</span>
+
+<span class="nc" id="L588">        long notificationId = getNotificationIdForMedia(site);</span>
+        // Tap notification intent (open the media browser)
+<span class="nc" id="L590">        Intent notificationIntent = new Intent(mContext, MediaBrowserActivity.class);</span>
+<span class="nc" id="L591">        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);</span>
+<span class="nc" id="L592">        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);</span>
+<span class="nc" id="L593">        notificationIntent.putExtra(WordPress.SITE, site);</span>
+<span class="nc" id="L594">        notificationIntent.setAction(String.valueOf(notificationId));</span>
+<span class="nc" id="L595">        NotificationType notificationType = NotificationType.MEDIA_UPLOAD_ERROR;</span>
+<span class="nc" id="L596">        notificationIntent.putExtra(ARG_NOTIFICATION_TYPE, notificationType);</span>
+
+<span class="nc" id="L598">        PendingIntent pendingIntent = PendingIntent.getActivity(</span>
+                mContext,
+                (int) notificationId,
+                notificationIntent,
+                PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+<span class="nc" id="L605">        notificationBuilder.setSmallIcon(android.R.drawable.stat_notify_error);</span>
+
+<span class="nc bnc" id="L607" title="All 2 branches missed.">        String siteName = TextUtils.isEmpty(site.getName()) ? mContext.getString(R.string.untitled) : site.getName();</span>
+<span class="nc" id="L608">        String notificationTitle = String.format(mContext.getString(R.string.upload_failed_param), siteName);</span>
+
+<span class="nc" id="L610">        String newErrorMessage = buildErrorMessageForMedia(mediaList.size());</span>
+<span class="nc" id="L611">        String snackbarMessage = buildSnackbarErrorMessage(newErrorMessage, errorMessage);</span>
+
+<span class="nc" id="L613">        notificationBuilder.setContentTitle(notificationTitle);</span>
+<span class="nc" id="L614">        notificationBuilder.setContentText(newErrorMessage);</span>
+<span class="nc" id="L615">        notificationBuilder.setStyle(new NotificationCompat.BigTextStyle().bigText(newErrorMessage));</span>
+<span class="nc" id="L616">        notificationBuilder.setContentIntent(pendingIntent);</span>
+<span class="nc" id="L617">        notificationBuilder.setAutoCancel(true);</span>
+<span class="nc" id="L618">        notificationBuilder.setOnlyAlertOnce(true);</span>
+<span class="nc" id="L619">        notificationBuilder.setDeleteIntent(NotificationsProcessingService</span>
+<span class="nc" id="L620">                .getPendingIntentForNotificationDismiss(mContext, (int) notificationId,</span>
+                        notificationType));
+
+        // Add RETRY action - only if there is media to retry
+<span class="nc bnc" id="L624" title="All 4 branches missed.">        if (mediaList != null &amp;&amp; !mediaList.isEmpty()) {</span>
+<span class="nc" id="L625">            ArrayList&lt;MediaModel&gt; mediaListToRetry = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L626">            mediaListToRetry.addAll(mediaList);</span>
+<span class="nc" id="L627">            Intent publishIntent = UploadService.getUploadMediaServiceIntent(mContext, mediaListToRetry, true);</span>
+<span class="nc" id="L628">            PendingIntent actionPendingIntent = PendingIntent.getService(mContext, 1, publishIntent,</span>
+                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+<span class="nc" id="L630">            notificationBuilder.addAction(0, mContext.getString(R.string.retry),</span>
+                    actionPendingIntent)
+<span class="nc" id="L632">                               .setColor(mContext.getResources().getColor(R.color.accent));</span>
+        }
+
+<span class="nc" id="L635">        EventBus.getDefault().postSticky(new UploadService.UploadErrorEvent(mediaList, snackbarMessage));</span>
+<span class="nc" id="L636">        doNotify(notificationId, notificationBuilder.build(), notificationType);</span>
+<span class="nc" id="L637">    }</span>
+
+    private String buildErrorMessageMixed(int overrideMediaNotUploadedCount) {
+        // first we build a summary of what failed and what went OK, like this:
+        // i.e. &quot;1 post, with 3 media files not uploaded (9 successfully uploaded)&quot;
+<span class="nc" id="L642">        String newErrorMessage = &quot;&quot;;</span>
+<span class="nc bnc" id="L643" title="All 2 branches missed.">        int postItemsNotUploaded = sNotificationData.mTotalPostItems &gt; 0</span>
+<span class="nc" id="L644">                ? sNotificationData.mTotalPostItems - getCurrentPostItem() : 0;</span>
+<span class="nc bnc" id="L645" title="All 2 branches missed.">        int mediaItemsNotUploaded = overrideMediaNotUploadedCount &gt; 0</span>
+<span class="nc" id="L646">                ? overrideMediaNotUploadedCount : sNotificationData.mTotalMediaItems - getCurrentMediaItem();</span>
+
+<span class="nc bnc" id="L648" title="All 4 branches missed.">        if (postItemsNotUploaded &gt; 0 &amp;&amp; mediaItemsNotUploaded &gt; 0) {</span>
+<span class="nc bnc" id="L649" title="All 5 branches missed.">            switch (getPagesAndOrPostsType(postItemsNotUploaded)) {</span>
+                case POST:
+<span class="nc bnc" id="L651" title="All 2 branches missed.">                    newErrorMessage = (mediaItemsNotUploaded == 1</span>
+<span class="nc" id="L652">                            ? mContext.getString(R.string.media_file_post_singular_mixed_not_uploaded_one_file)</span>
+<span class="nc" id="L653">                            : String.format(</span>
+<span class="nc" id="L654">                                    mContext.getString(</span>
+                                            R.string.media_file_post_singular_mixed_not_uploaded_files_plural),
+<span class="nc" id="L656">                                    mediaItemsNotUploaded));</span>
+<span class="nc" id="L657">                    break;</span>
+                case PAGE:
+<span class="nc bnc" id="L659" title="All 2 branches missed.">                    newErrorMessage = (mediaItemsNotUploaded == 1</span>
+<span class="nc" id="L660">                            ? mContext.getString(R.string.media_file_page_singular_mixed_not_uploaded_one_file)</span>
+<span class="nc" id="L661">                            : String.format(</span>
+<span class="nc" id="L662">                                    mContext.getString(</span>
+                                            R.string.media_file_page_singular_mixed_not_uploaded_files_plural),
+<span class="nc" id="L664">                                    mediaItemsNotUploaded));</span>
+<span class="nc" id="L665">                    break;</span>
+                case PAGES:
+<span class="nc bnc" id="L667" title="All 2 branches missed.">                    newErrorMessage = (mediaItemsNotUploaded == 1</span>
+<span class="nc" id="L668">                            ? String.format(</span>
+<span class="nc" id="L669">                            mContext.getString(R.string.media_file_pages_plural_mixed_not_uploaded_one_file),</span>
+<span class="nc" id="L670">                            postItemsNotUploaded)</span>
+<span class="nc" id="L671">                            : String.format(</span>
+<span class="nc" id="L672">                                    mContext.getString(</span>
+                                            R.string.media_file_pages_plural_mixed_not_uploaded_files_plural),
+<span class="nc" id="L674">                                    postItemsNotUploaded,</span>
+<span class="nc" id="L675">                                    mediaItemsNotUploaded));</span>
+<span class="nc" id="L676">                    break;</span>
+                case PAGES_OR_POSTS:
+<span class="nc bnc" id="L678" title="All 2 branches missed.">                    newErrorMessage = (mediaItemsNotUploaded == 1</span>
+<span class="nc" id="L679">                            ? String.format(</span>
+<span class="nc" id="L680">                            mContext.getString(R.string.media_file_pages_and_posts_mixed_not_uploaded_one_file),</span>
+<span class="nc" id="L681">                            postItemsNotUploaded)</span>
+<span class="nc" id="L682">                            : String.format(</span>
+<span class="nc" id="L683">                                    mContext.getString(</span>
+                                            R.string.media_file_pages_and_posts_mixed_not_uploaded_files_plural),
+<span class="nc" id="L685">                                    postItemsNotUploaded,</span>
+<span class="nc" id="L686">                                    mediaItemsNotUploaded));</span>
+<span class="nc" id="L687">                    break;</span>
+                case POSTS:
+                default:
+<span class="nc bnc" id="L690" title="All 2 branches missed.">                    newErrorMessage = (mediaItemsNotUploaded == 1</span>
+<span class="nc" id="L691">                            ? String.format(</span>
+<span class="nc" id="L692">                            mContext.getString(R.string.media_file_posts_plural_mixed_not_uploaded_one_file),</span>
+<span class="nc" id="L693">                            postItemsNotUploaded)</span>
+<span class="nc" id="L694">                            : String.format(</span>
+<span class="nc" id="L695">                                    mContext.getString(</span>
+                                            R.string.media_file_posts_plural_mixed_not_uploaded_files_plural),
+<span class="nc" id="L697">                                    postItemsNotUploaded,</span>
+<span class="nc" id="L698">                                    mediaItemsNotUploaded));</span>
+<span class="nc" id="L699">                    break;</span>
+            }
+<span class="nc bnc" id="L701" title="All 2 branches missed.">        } else if (postItemsNotUploaded &gt; 0) {</span>
+<span class="nc bnc" id="L702" title="All 5 branches missed.">            switch (getPagesAndOrPostsType(postItemsNotUploaded)) {</span>
+                case POST:
+<span class="nc" id="L704">                    newErrorMessage = mContext.getString(R.string.media_file_post_singular_only_not_uploaded);</span>
+<span class="nc" id="L705">                    break;</span>
+                case PAGE:
+<span class="nc" id="L707">                    newErrorMessage = mContext.getString(R.string.media_file_page_singular_only_not_uploaded);</span>
+<span class="nc" id="L708">                    break;</span>
+                case PAGES:
+<span class="nc" id="L710">                    newErrorMessage = String.format(</span>
+<span class="nc" id="L711">                            mContext.getString(R.string.media_file_pages_plural_only_not_uploaded),</span>
+<span class="nc" id="L712">                            postItemsNotUploaded);</span>
+<span class="nc" id="L713">                    break;</span>
+                case PAGES_OR_POSTS:
+<span class="nc" id="L715">                    newErrorMessage = String.format(</span>
+<span class="nc" id="L716">                            mContext.getString(R.string.media_file_pages_and_posts_only_not_uploaded),</span>
+<span class="nc" id="L717">                            postItemsNotUploaded);</span>
+<span class="nc" id="L718">                    break;</span>
+                case POSTS:
+                default:
+<span class="nc" id="L721">                    newErrorMessage = String.format(</span>
+<span class="nc" id="L722">                            mContext.getString(R.string.media_file_posts_plural_only_not_uploaded),</span>
+<span class="nc" id="L723">                            postItemsNotUploaded);</span>
+<span class="nc" id="L724">                    break;</span>
+            }
+<span class="nc bnc" id="L726" title="All 2 branches missed.">        } else if (mediaItemsNotUploaded &gt; 0) {</span>
+<span class="nc bnc" id="L727" title="All 2 branches missed.">            if (mediaItemsNotUploaded == 1) {</span>
+<span class="nc" id="L728">                newErrorMessage = mContext.getString(R.string.media_file_not_uploaded);</span>
+            } else {
+<span class="nc" id="L730">                newErrorMessage =</span>
+<span class="nc" id="L731">                        String.format(mContext.getString(R.string.media_files_not_uploaded), mediaItemsNotUploaded);</span>
+            }
+        }
+
+<span class="nc bnc" id="L735" title="All 2 branches missed.">        if (mediaItemsNotUploaded &gt; 0</span>
+<span class="nc bnc" id="L736" title="All 2 branches missed.">            &amp;&amp; (getCurrentMediaItem()) &gt; 0) {</span>
+            // some media items were uploaded successfully
+<span class="nc" id="L738">            newErrorMessage += String.format(mContext.getString(R.string.media_files_uploaded_successfully),</span>
+<span class="nc" id="L739">                    sNotificationData.mCurrentMediaItem);</span>
+        }
+
+<span class="nc" id="L742">        return newErrorMessage;</span>
+    }
+
+    private String buildErrorMessageForMedia(int mediaItemsNotUploaded) {
+<span class="nc" id="L746">        String newErrorMessage = &quot;&quot;;</span>
+<span class="nc bnc" id="L747" title="All 2 branches missed.">        if (mediaItemsNotUploaded &gt; 0) {</span>
+<span class="nc bnc" id="L748" title="All 2 branches missed.">            if (mediaItemsNotUploaded == 1) {</span>
+<span class="nc" id="L749">                newErrorMessage += mContext.getString(R.string.media_file_not_uploaded);</span>
+            } else {
+<span class="nc" id="L751">                newErrorMessage +=</span>
+<span class="nc" id="L752">                        String.format(mContext.getString(R.string.media_files_not_uploaded), mediaItemsNotUploaded);</span>
+            }
+
+<span class="nc bnc" id="L755" title="All 2 branches missed.">            if (mediaItemsNotUploaded &lt;= sNotificationData.mCurrentMediaItem) {</span>
+                // some media items were uploaded successfully
+<span class="nc" id="L757">                newErrorMessage += &quot; &quot; + String.format(mContext.getString(R.string.media_files_uploaded_successfully),</span>
+<span class="nc" id="L758">                        sNotificationData.mCurrentMediaItem);</span>
+            }
+        }
+
+<span class="nc" id="L762">        return newErrorMessage;</span>
+    }
+
+    private String buildSuccessMessageForMedia(int mediaItemsUploaded) {
+        // all media items were uploaded successfully
+<span class="nc bnc" id="L767" title="All 2 branches missed.">        String successMessage = mediaItemsUploaded == 1 ? mContext.getString(R.string.media_file_uploaded)</span>
+<span class="nc" id="L768">                : String.format(mContext.getString(R.string.media_all_files_uploaded_successfully),</span>
+<span class="nc" id="L769">                        mediaItemsUploaded);</span>
+<span class="nc" id="L770">        return successMessage;</span>
+    }
+
+    private String buildSnackbarSuccessMessageForMedia(int mediaItemsUploaded) {
+<span class="nc" id="L774">        String successMessage = &quot;&quot;;</span>
+<span class="nc bnc" id="L775" title="All 2 branches missed.">        if (mediaItemsUploaded &gt; 0) {</span>
+<span class="nc bnc" id="L776" title="All 2 branches missed.">            if (mediaItemsUploaded == 1) {</span>
+<span class="nc" id="L777">                successMessage += mContext.getString(R.string.media_file_uploaded);</span>
+            } else {
+<span class="nc" id="L779">                successMessage += String.format(mContext.getString(R.string.media_files_uploaded), mediaItemsUploaded);</span>
+            }
+        }
+<span class="nc" id="L782">        return successMessage;</span>
+    }
+
+    private String buildSnackbarErrorMessage(String newErrorMessage, String detailErrorMessage) {
+        // now append the detailed error message below
+<span class="nc" id="L787">        String snackbarMessage = new String(newErrorMessage);</span>
+<span class="nc bnc" id="L788" title="All 2 branches missed.">        if (newErrorMessage.length() &gt; 0) {</span>
+<span class="nc" id="L789">            snackbarMessage += &quot;\n&quot; + detailErrorMessage;</span>
+        } else {
+<span class="nc" id="L791">            snackbarMessage = detailErrorMessage;</span>
+        }
+
+<span class="nc" id="L794">        return snackbarMessage;</span>
+    }
+
+
+    void updateNotificationProgressForMedia(MediaModel media, float progress) {
+<span class="nc bnc" id="L799" title="All 4 branches missed.">        if (sNotificationData.mTotalMediaItems == 0 &amp;&amp; sNotificationData.mTotalPostItems == 0) {</span>
+<span class="nc" id="L800">            return;</span>
+        }
+
+        // only update if media item is in our map - this check is performed because
+        // it could happen that a media item is already done uploading but we receive an upload
+        // progress event from FluxC after that. We just need to avoid re-adding the item to the map.
+<span class="nc" id="L806">        Float currentProgress = sNotificationData.mediaItemToProgressMap.get(media.getId());</span>
+        // also, only set updates in increments of 5% per media item to avoid lots of notification updates
+<span class="nc bnc" id="L808" title="All 4 branches missed.">        if (currentProgress != null &amp;&amp; progress &gt; (currentProgress + 0.05f)) {</span>
+<span class="nc" id="L809">            setProgressForMediaItem(media.getId(), progress);</span>
+<span class="nc" id="L810">            updateNotificationProgress();</span>
+        }
+<span class="nc" id="L812">    }</span>
+
+    private void updateNotificationProgress() {
+<span class="nc bnc" id="L815" title="All 4 branches missed.">        if (sNotificationData.mTotalMediaItems == 0 &amp;&amp; sNotificationData.mTotalPostItems == 0) {</span>
+<span class="nc" id="L816">            return;</span>
+        }
+
+<span class="nc" id="L819">        mNotificationBuilder.setProgress(100, (int) Math.ceil(getCurrentOverallProgress() * 100), false);</span>
+<span class="nc" id="L820">        doNotify(sNotificationData.mNotificationId, mNotificationBuilder.build(), null);</span>
+<span class="nc" id="L821">    }</span>
+
+    private void setProgressForMediaItem(int mediaId, float progress) {
+<span class="nc" id="L824">        sNotificationData.mediaItemToProgressMap.put(mediaId, progress);</span>
+<span class="nc" id="L825">    }</span>
+
+    private float getCurrentOverallProgress() {
+<span class="nc" id="L828">        int totalItemCount = sNotificationData.mTotalPostItems + sNotificationData.mTotalMediaItems;</span>
+<span class="nc" id="L829">        float currentMediaProgress = getCurrentMediaProgress();</span>
+        float overAllProgress;
+<span class="nc bnc" id="L831" title="All 2 branches missed.">        overAllProgress = sNotificationData.mTotalPostItems &gt; 0</span>
+<span class="nc" id="L832">                ? (sNotificationData.mCurrentPostItem / sNotificationData.mTotalPostItems) * totalItemCount : 0;</span>
+<span class="nc bnc" id="L833" title="All 2 branches missed.">        overAllProgress += sNotificationData.mTotalMediaItems &gt; 0</span>
+<span class="nc" id="L834">                ? (sNotificationData.mCurrentMediaItem / sNotificationData.mTotalMediaItems) * totalItemCount : 0;</span>
+<span class="nc" id="L835">        overAllProgress += currentMediaProgress;</span>
+<span class="nc" id="L836">        return overAllProgress;</span>
+    }
+
+    private float getCurrentMediaProgress() {
+<span class="nc" id="L840">        float currentMediaProgress = 0.0f;</span>
+<span class="nc" id="L841">        int size = sNotificationData.mediaItemToProgressMap.size();</span>
+<span class="nc bnc" id="L842" title="All 2 branches missed.">        for (int i = 0; i &lt; size; i++) {</span>
+<span class="nc" id="L843">            int key = sNotificationData.mediaItemToProgressMap.keyAt(i);</span>
+<span class="nc" id="L844">            float itemProgress = sNotificationData.mediaItemToProgressMap.get(key);</span>
+<span class="nc" id="L845">            currentMediaProgress += (itemProgress / size);</span>
+        }
+<span class="nc" id="L847">        return currentMediaProgress;</span>
+    }
+
+    private synchronized void doNotify(long id, Notification notification, NotificationType notificationType) {
+        try {
+<span class="nc" id="L852">            mNotificationManager.notify((int) id, notification);</span>
+<span class="nc bnc" id="L853" title="All 2 branches missed.">            if (notificationType != null) {</span>
+<span class="nc" id="L854">                mSystemNotificationsTracker.trackShownNotification(notificationType);</span>
+            }
+<span class="nc" id="L856">        } catch (RuntimeException runtimeException) {</span>
+<span class="nc" id="L857">            AppLog.e(T.POSTS, &quot;doNotify failed; See issue #2858 / #3966&quot;, runtimeException);</span>
+<span class="nc" id="L858">        }</span>
+<span class="nc" id="L859">    }</span>
+
+    void setTotalMediaItems(PostImmutableModel post, int totalMediaItems) {
+<span class="nc bnc" id="L862" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L863">            sNotificationData.mTotalPostItems = 1;</span>
+<span class="nc bnc" id="L864" title="All 2 branches missed.">            if (post.isPage()) {</span>
+<span class="nc" id="L865">                sNotificationData.mTotalPageItemsIncludedInPostCount = 1;</span>
+            }
+        }
+<span class="nc" id="L868">        sNotificationData.mTotalMediaItems = totalMediaItems;</span>
+<span class="nc" id="L869">    }</span>
+
+    private String buildNotificationTitleForPost(PostImmutableModel post) {
+        String postTitle =
+<span class="nc bnc" id="L873" title="All 4 branches missed.">                (post == null || TextUtils.isEmpty(post.getTitle())) ? mContext.getString(R.string.untitled)</span>
+<span class="nc" id="L874">                        : post.getTitle();</span>
+<span class="nc" id="L875">        return String.format(mContext.getString(R.string.uploading_post), postTitle);</span>
+    }
+
+    private String buildNotificationTitleForMedia() {
+<span class="nc" id="L879">        return mContext.getString(R.string.uploading_media);</span>
+    }
+
+    private String buildNotificationTitleForMixedContent() {
+<span class="nc" id="L883">        return mContext.getString(R.string.uploading_title);</span>
+    }
+
+    private String buildNotificationSubtitleForPost(PostImmutableModel post) {
+        String uploadingMessage =
+<span class="nc bnc" id="L888" title="All 4 branches missed.">                (post != null &amp;&amp; post.isPage()) ? mContext.getString(R.string.uploading_subtitle_pages_only_one)</span>
+<span class="nc" id="L889">                        : mContext.getString(R.string.uploading_subtitle_posts_only_one);</span>
+<span class="nc" id="L890">        return uploadingMessage;</span>
+    }
+
+    private String buildNotificationSubtitleForPosts() {
+<span class="nc" id="L894">        int remaining = sNotificationData.mTotalPostItems - getCurrentPostItem();</span>
+<span class="nc" id="L895">        PagesOrPostsType pagesAndOrPosts = getPagesAndOrPostsType(remaining);</span>
+        String strToUse;
+<span class="nc bnc" id="L897" title="All 3 branches missed.">        switch (pagesAndOrPosts) {</span>
+            case PAGES:
+<span class="nc" id="L899">                strToUse = mContext.getString(R.string.uploading_subtitle_pages_only_plural);</span>
+<span class="nc" id="L900">                break;</span>
+            case PAGES_OR_POSTS:
+<span class="nc" id="L902">                strToUse = mContext.getString(R.string.uploading_subtitle_pages_posts);</span>
+<span class="nc" id="L903">                break;</span>
+            case POSTS:
+            default:
+<span class="nc" id="L906">                strToUse = mContext.getString(R.string.uploading_subtitle_posts_only_plural);</span>
+                break;
+        }
+
+<span class="nc" id="L910">        return String.format(strToUse, remaining);</span>
+    }
+
+    private PagesOrPostsType getPagesAndOrPostsType(int remaining) {
+        PagesOrPostsType pagesAndOrPosts;
+<span class="nc bnc" id="L915" title="All 6 branches missed.">        if (sNotificationData.mTotalPageItemsIncludedInPostCount &gt; 0 &amp;&amp; sNotificationData.mTotalPostItems &gt; 0</span>
+            &amp;&amp; sNotificationData.mTotalPostItems &gt; sNotificationData.mTotalPageItemsIncludedInPostCount) {
+            // we have both pages and posts
+<span class="nc" id="L918">            pagesAndOrPosts = PagesOrPostsType.PAGES_OR_POSTS;</span>
+<span class="nc bnc" id="L919" title="All 2 branches missed.">        } else if (sNotificationData.mTotalPageItemsIncludedInPostCount &gt; 0) {</span>
+            // we have only pages
+<span class="nc bnc" id="L921" title="All 2 branches missed.">            if (remaining == 1) {</span>
+                // only one page
+<span class="nc" id="L923">                pagesAndOrPosts = PagesOrPostsType.PAGE;</span>
+            } else {
+<span class="nc" id="L925">                pagesAndOrPosts = PagesOrPostsType.PAGES;</span>
+            }
+        } else {
+            // we have only posts
+<span class="nc bnc" id="L929" title="All 2 branches missed.">            if (remaining == 1) {</span>
+                // only one post
+<span class="nc" id="L931">                pagesAndOrPosts = PagesOrPostsType.POST;</span>
+            } else {
+<span class="nc" id="L933">                pagesAndOrPosts = PagesOrPostsType.POSTS;</span>
+            }
+        }
+<span class="nc" id="L936">        return pagesAndOrPosts;</span>
+    }
+
+    private String buildNotificationSubtitleForMedia() {
+        String uploadingMessage;
+<span class="nc bnc" id="L941" title="All 2 branches missed.">        if (sNotificationData.mTotalMediaItems == 1) {</span>
+<span class="nc" id="L942">            uploadingMessage = mContext.getString(R.string.uploading_subtitle_media_only_one);</span>
+        } else {
+<span class="nc" id="L944">            uploadingMessage = String.format(</span>
+<span class="nc" id="L945">                    mContext.getString(R.string.uploading_subtitle_media_only),</span>
+<span class="nc" id="L946">                    sNotificationData.mTotalMediaItems - getCurrentMediaItem(),</span>
+<span class="nc" id="L947">                    sNotificationData.mTotalMediaItems</span>
+            );
+        }
+<span class="nc" id="L950">        return uploadingMessage;</span>
+    }
+
+    private String buildNotificationSubtitleForMixedContent() {
+<span class="nc" id="L954">        int remaining = sNotificationData.mTotalPostItems - getCurrentPostItem();</span>
+        String uploadingMessage;
+
+<span class="nc bnc" id="L957" title="All 2 branches missed.">        if (sNotificationData.mTotalMediaItems == 1) {</span>
+<span class="nc bnc" id="L958" title="All 5 branches missed.">            switch (getPagesAndOrPostsType(remaining)) {</span>
+                case PAGES:
+<span class="nc" id="L960">                    uploadingMessage = String.format(</span>
+<span class="nc" id="L961">                            mContext.getString(R.string.uploading_subtitle_mixed_pages_plural_media_one),</span>
+<span class="nc" id="L962">                            remaining);</span>
+<span class="nc" id="L963">                    break;</span>
+                case PAGE:
+<span class="nc" id="L965">                    uploadingMessage = mContext.getString(R.string.uploading_subtitle_mixed_page_singular_media_one);</span>
+<span class="nc" id="L966">                    break;</span>
+                case POST:
+<span class="nc" id="L968">                    uploadingMessage = mContext.getString(R.string.uploading_subtitle_mixed_post_singular_media_one);</span>
+<span class="nc" id="L969">                    break;</span>
+                case PAGES_OR_POSTS:
+<span class="nc" id="L971">                    uploadingMessage = String.format(</span>
+<span class="nc" id="L972">                            mContext.getString(R.string.uploading_subtitle_mixed_pages_and_posts_plural_media_one),</span>
+<span class="nc" id="L973">                            remaining);</span>
+<span class="nc" id="L974">                    break;</span>
+                case POSTS:
+                default:
+<span class="nc" id="L977">                    uploadingMessage = String.format(</span>
+<span class="nc" id="L978">                            mContext.getString(R.string.uploading_subtitle_mixed_posts_plural_media_one),</span>
+<span class="nc" id="L979">                            remaining);</span>
+<span class="nc" id="L980">                    break;</span>
+            }
+        } else {
+<span class="nc bnc" id="L983" title="All 5 branches missed.">            switch (getPagesAndOrPostsType(remaining)) {</span>
+                case PAGES:
+<span class="nc" id="L985">                    uploadingMessage = String.format(</span>
+<span class="nc" id="L986">                            mContext.getString(R.string.uploading_subtitle_mixed_pages_plural_media_plural),</span>
+<span class="nc" id="L987">                            remaining,</span>
+<span class="nc" id="L988">                            sNotificationData.mTotalMediaItems - getCurrentMediaItem(),</span>
+<span class="nc" id="L989">                            sNotificationData.mTotalMediaItems);</span>
+<span class="nc" id="L990">                    break;</span>
+                case PAGE:
+<span class="nc" id="L992">                    uploadingMessage = String.format(</span>
+<span class="nc" id="L993">                            mContext.getString(R.string.uploading_subtitle_mixed_page_singular_media_plural),</span>
+<span class="nc" id="L994">                            sNotificationData.mTotalMediaItems - getCurrentMediaItem(),</span>
+<span class="nc" id="L995">                            sNotificationData.mTotalMediaItems);</span>
+<span class="nc" id="L996">                    break;</span>
+                case POST:
+<span class="nc" id="L998">                    uploadingMessage = String.format(</span>
+<span class="nc" id="L999">                            mContext.getString(R.string.uploading_subtitle_mixed_post_singular_media_plural),</span>
+<span class="nc" id="L1000">                            sNotificationData.mTotalMediaItems - getCurrentMediaItem(),</span>
+<span class="nc" id="L1001">                            sNotificationData.mTotalMediaItems);</span>
+<span class="nc" id="L1002">                    break;</span>
+                case PAGES_OR_POSTS:
+<span class="nc" id="L1004">                    uploadingMessage = String.format(</span>
+<span class="nc" id="L1005">                            mContext.getString(R.string.uploading_subtitle_mixed_pages_and_posts_plural_media_plural),</span>
+<span class="nc" id="L1006">                            remaining,</span>
+<span class="nc" id="L1007">                            sNotificationData.mTotalMediaItems - getCurrentMediaItem(),</span>
+<span class="nc" id="L1008">                            sNotificationData.mTotalMediaItems);</span>
+<span class="nc" id="L1009">                    break;</span>
+                case POSTS:
+                default:
+<span class="nc" id="L1012">                    uploadingMessage = String.format(</span>
+<span class="nc" id="L1013">                            mContext.getString(R.string.uploading_subtitle_mixed_posts_plural_media_plural),</span>
+<span class="nc" id="L1014">                            remaining,</span>
+<span class="nc" id="L1015">                            sNotificationData.mTotalMediaItems - getCurrentMediaItem(),</span>
+<span class="nc" id="L1016">                            sNotificationData.mTotalMediaItems);</span>
+                    break;
+            }
+        }
+<span class="nc" id="L1020">        return uploadingMessage;</span>
+    }
+
+    private int getCurrentPostItem() {
+<span class="nc bnc" id="L1024" title="All 2 branches missed.">        int currentPostItem = sNotificationData.mCurrentPostItem &gt;= sNotificationData.mTotalPostItems</span>
+<span class="nc" id="L1025">                ? sNotificationData.mTotalPostItems - 1 : sNotificationData.mCurrentPostItem;</span>
+<span class="nc" id="L1026">        return currentPostItem;</span>
+    }
+
+    private int getCurrentMediaItem() {
+<span class="nc bnc" id="L1030" title="All 2 branches missed.">        int currentMediaItem = sNotificationData.mCurrentMediaItem &gt;= sNotificationData.mTotalMediaItems</span>
+<span class="nc" id="L1031">                ? sNotificationData.mTotalMediaItems - 1 : sNotificationData.mCurrentMediaItem;</span>
+<span class="nc" id="L1032">        return currentMediaItem;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

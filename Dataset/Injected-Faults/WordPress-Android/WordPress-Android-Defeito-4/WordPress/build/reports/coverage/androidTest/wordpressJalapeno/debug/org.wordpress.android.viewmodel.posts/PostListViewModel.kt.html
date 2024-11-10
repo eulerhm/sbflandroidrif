@@ -1,0 +1,411 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostListViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.posts</a> &gt; <span class="el_source">PostListViewModel.kt</span></div><h1>PostListViewModel.kt</h1><pre class="source lang-java linenums"><span class="nc" id="L1">package org.wordpress.android.viewmodel.posts</span>
+
+import android.text.TextUtils
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.Observer
+import androidx.lifecycle.viewModelScope
+import androidx.paging.PagedList
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.PostModel
+import org.wordpress.android.fluxc.model.list.AuthorFilter
+import org.wordpress.android.fluxc.model.list.AuthorFilter.Everyone
+import org.wordpress.android.fluxc.model.list.AuthorFilter.SpecificAuthor
+import org.wordpress.android.fluxc.model.list.PagedListWrapper
+import org.wordpress.android.fluxc.model.list.PostListDescriptor
+import org.wordpress.android.fluxc.model.list.PostListDescriptor.PostListDescriptorForRestSite
+import org.wordpress.android.fluxc.model.list.PostListDescriptor.PostListDescriptorForXmlRpcSite
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.ListStore
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.posts.AuthorFilterSelection
+import org.wordpress.android.ui.posts.AuthorFilterSelection.EVERYONE
+import org.wordpress.android.ui.posts.AuthorFilterSelection.ME
+import org.wordpress.android.ui.posts.PostListType.SEARCH
+import org.wordpress.android.ui.posts.PostUtils
+import org.wordpress.android.ui.posts.trackPostListAction
+import org.wordpress.android.ui.reader.utils.ReaderUtilsWrapper
+import org.wordpress.android.ui.uploads.UploadStarter
+import org.wordpress.android.ui.uploads.UploadUtilsWrapper
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.ThrottleLiveData
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import org.wordpress.android.viewmodel.helpers.ConnectionStatus
+import org.wordpress.android.viewmodel.posts.PostListEmptyUiState.RefreshError
+import org.wordpress.android.viewmodel.posts.PostListItemIdentifier.LocalPostId
+import org.wordpress.android.viewmodel.posts.PostListItemType.PostListItemUiState
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.properties.Delegates
+
+typealias PagedPostList = PagedList&lt;PostListItemType&gt;
+
+private const val SEARCH_DELAY_MS = 500L
+private const val SEARCH_PROGRESS_INDICATOR_DELAY_MS = 500L
+private const val EMPTY_VIEW_THROTTLE = 250L
+
+<span class="nc" id="L61">class PostListViewModel @Inject constructor(</span>
+<span class="nc" id="L62">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L63">    private val listStore: ListStore,</span>
+<span class="nc" id="L64">    private val postStore: PostStore,</span>
+<span class="nc" id="L65">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L66">    private val listItemUiStateHelper: PostListItemUiStateHelper,</span>
+<span class="nc" id="L67">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L68">    private val uploadStarter: UploadStarter,</span>
+<span class="nc" id="L69">    private val readerUtilsWrapper: ReaderUtilsWrapper,</span>
+<span class="nc" id="L70">    private val uploadUtilsWrapper: UploadUtilsWrapper,</span>
+<span class="nc" id="L71">    @Named(UI_THREAD) private val uiDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L72">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+    connectionStatus: LiveData&lt;ConnectionStatus&gt;
+<span class="nc" id="L74">) : ScopedViewModel(uiDispatcher) {</span>
+<span class="nc" id="L75">    private val isStatsSupported: Boolean by lazy {</span>
+<span class="nc bnc" id="L76" title="All 8 branches missed.">        SiteUtils.isAccessedViaWPComRest(connector.site) &amp;&amp; connector.site.hasCapabilityViewStats</span>
+    }
+    private var isStarted: Boolean = false
+    private lateinit var connector: PostListViewModelConnector
+
+<span class="nc" id="L81">    private var photonWidth by Delegates.notNull&lt;Int&gt;()</span>
+<span class="nc" id="L82">    private var photonHeight by Delegates.notNull&lt;Int&gt;()</span>
+
+    private var scrollToLocalPostId: LocalPostId? = null
+
+<span class="nc" id="L86">    private val _scrollToPosition = SingleLiveEvent&lt;Int&gt;()</span>
+<span class="nc" id="L87">    val scrollToPosition: LiveData&lt;Int&gt; = _scrollToPosition</span>
+
+<span class="nc" id="L89">    private val dataSource: PostListItemDataSource by lazy {</span>
+<span class="nc" id="L90">        PostListItemDataSource(</span>
+<span class="nc" id="L91">                dispatcher = dispatcher,</span>
+<span class="nc" id="L92">                postStore = postStore,</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">                postFetcher = connector.postFetcher,</span>
+<span class="nc" id="L94">                transform = this::transformPostModelToPostListItemUiState,</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">                postListType = connector.postListType</span>
+        )
+    }
+
+    private var pagedListWrapper: PagedListWrapper&lt;PostListItemType&gt;? = null
+
+<span class="nc" id="L101">    private val _pagedListData = MediatorLiveData&lt;PagedPostList&gt;()</span>
+<span class="nc" id="L102">    val pagedListData: LiveData&lt;PagedPostList&gt; = _pagedListData</span>
+
+<span class="nc" id="L104">    private val _emptyViewState = ThrottleLiveData&lt;PostListEmptyUiState&gt;(</span>
+<span class="nc" id="L105">            offset = EMPTY_VIEW_THROTTLE,</span>
+<span class="nc" id="L106">            coroutineScope = viewModelScope,</span>
+<span class="nc" id="L107">            mainDispatcher = uiDispatcher,</span>
+<span class="nc" id="L108">            backgroundDispatcher = bgDispatcher</span>
+    )
+<span class="nc" id="L110">    val emptyViewState: LiveData&lt;PostListEmptyUiState&gt; = _emptyViewState</span>
+
+<span class="nc" id="L112">    private val _isLoadingMore = MediatorLiveData&lt;Boolean&gt;()</span>
+<span class="nc" id="L113">    val isLoadingMore: LiveData&lt;Boolean&gt; = _isLoadingMore</span>
+
+<span class="nc" id="L115">    private val _isFetchingFirstPage = MediatorLiveData&lt;Boolean&gt;()</span>
+<span class="nc" id="L116">    val isFetchingFirstPage: LiveData&lt;Boolean&gt; = _isFetchingFirstPage</span>
+
+    private var searchQuery: String? = null
+    private var searchJob: Job? = null
+    private var searchProgressJob: Job? = null
+    private lateinit var authorFilterSelection: AuthorFilterSelection
+
+<span class="nc" id="L123">    private val lifecycleOwner = object : LifecycleOwner {</span>
+<span class="nc" id="L124">        val lifecycleRegistry = LifecycleRegistry(this)</span>
+<span class="nc" id="L125">        override fun getLifecycle(): Lifecycle = lifecycleRegistry</span>
+    }
+
+    fun start(
+        postListViewModelConnector: PostListViewModelConnector,
+        value: AuthorFilterSelection,
+        photonWidth: Int,
+        photonHeight: Int
+    ) {
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L135">            return</span>
+        }
+<span class="nc" id="L137">        this.photonHeight = photonHeight</span>
+<span class="nc" id="L138">        this.photonWidth = photonWidth</span>
+<span class="nc" id="L139">        connector = postListViewModelConnector</span>
+
+<span class="nc" id="L141">        isStarted = true</span>
+<span class="nc" id="L142">        lifecycleOwner.lifecycleRegistry.currentState = Lifecycle.State.STARTED</span>
+
+<span class="nc bnc" id="L144" title="All 4 branches missed.">        if (connector.postListType == SEARCH) {</span>
+<span class="nc" id="L145">            this.authorFilterSelection = EVERYONE</span>
+        } else {
+<span class="nc" id="L147">            this.authorFilterSelection = value</span>
+            /*
+             * We don't want to initialize the list with empty search query in search mode as it'd send an unnecessary
+             * request to fetch ids of all posts on the site.
+             */
+<span class="nc" id="L152">            initList(dataSource, lifecycleOwner.lifecycle)</span>
+        }
+<span class="nc" id="L154">    }</span>
+
+    private fun initList(dataSource: PostListItemDataSource, lifecycle: Lifecycle) {
+<span class="nc" id="L157">        val listDescriptor: PostListDescriptor = initListDescriptor(searchQuery)</span>
+
+<span class="nc" id="L159">        clearLiveDataSources()</span>
+
+<span class="nc" id="L161">        val pagedListWrapper = listStore.getList(listDescriptor, dataSource, lifecycle)</span>
+
+<span class="nc" id="L163">        listenToEmptyViewStateLiveData(pagedListWrapper)</span>
+
+<span class="nc" id="L165">        _pagedListData.addSource(pagedListWrapper.data) { pagedPostList -&gt;</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">            pagedPostList?.let {</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">                if (isSearchResultDeliverable()) {</span>
+<span class="nc" id="L168">                    onDataUpdated(it)</span>
+<span class="nc" id="L169">                    _pagedListData.value = it</span>
+                }
+<span class="nc" id="L171">            }</span>
+<span class="nc" id="L172">        }</span>
+<span class="nc" id="L173">        _isFetchingFirstPage.addSource(pagedListWrapper.isFetchingFirstPage) {</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">            searchProgressJob?.cancel()</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">            if (it == true) {</span>
+<span class="nc bnc" id="L176" title="All 4 branches missed.">                val delay = if (connector.postListType != SEARCH) {</span>
+<span class="nc" id="L177">                    0</span>
+                } else {
+<span class="nc" id="L179">                    SEARCH_PROGRESS_INDICATOR_DELAY_MS</span>
+                }
+<span class="nc" id="L181">                searchProgressJob = launch {</span>
+<span class="nc" id="L182">                    delay(delay)</span>
+<span class="nc" id="L183">                    searchProgressJob = null</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">                    if (isActive) {</span>
+<span class="nc" id="L185">                        _isFetchingFirstPage.value = true</span>
+                    }
+<span class="nc" id="L187">                }</span>
+            } else {
+<span class="nc" id="L189">                _isFetchingFirstPage.value = false</span>
+            }
+<span class="nc" id="L191">        }</span>
+<span class="nc" id="L192">        _isLoadingMore.addSource(pagedListWrapper.isLoadingMore) {</span>
+<span class="nc" id="L193">            _isLoadingMore.value = it</span>
+<span class="nc" id="L194">        }</span>
+
+<span class="nc" id="L196">        this.pagedListWrapper = pagedListWrapper</span>
+<span class="nc" id="L197">        fetchFirstPage()</span>
+<span class="nc" id="L198">    }</span>
+
+    private fun clearLiveDataSources() {
+<span class="nc bnc" id="L201" title="All 2 branches missed.">        pagedListWrapper?.let {</span>
+<span class="nc" id="L202">            _pagedListData.removeSource(it.data)</span>
+<span class="nc" id="L203">            _emptyViewState.removeSource(pagedListData)</span>
+<span class="nc" id="L204">            _emptyViewState.removeSource(it.isEmpty)</span>
+<span class="nc" id="L205">            _emptyViewState.removeSource(it.isFetchingFirstPage)</span>
+<span class="nc" id="L206">            _emptyViewState.removeSource(it.listError)</span>
+<span class="nc" id="L207">            _isFetchingFirstPage.removeSource(it.isFetchingFirstPage)</span>
+<span class="nc" id="L208">            _isLoadingMore.removeSource(it.isLoadingMore)</span>
+<span class="nc" id="L209">        }</span>
+<span class="nc" id="L210">    }</span>
+
+    private fun initListDescriptor(searchQuery: String?): PostListDescriptor {
+<span class="nc bnc" id="L213" title="All 4 branches missed.">        return if (connector.site.isUsingWpComRestApi) {</span>
+<span class="nc bnc" id="L214" title="All 4 branches missed.">            val author: AuthorFilter = when (authorFilterSelection) {</span>
+<span class="nc" id="L215">                ME -&gt; SpecificAuthor(accountStore.account.userId)</span>
+<span class="nc" id="L216">                EVERYONE -&gt; Everyone</span>
+            }
+
+<span class="nc" id="L219">            PostListDescriptorForRestSite(</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">                    site = connector.site,</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">                    statusList = connector.postListType.postStatuses,</span>
+<span class="nc" id="L222">                    author = author,</span>
+<span class="nc" id="L223">                    searchQuery = searchQuery</span>
+            )
+        } else {
+<span class="nc" id="L226">            PostListDescriptorForXmlRpcSite(</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">                    site = connector.site,</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">                    statusList = connector.postListType.postStatuses,</span>
+<span class="nc" id="L229">                    searchQuery = searchQuery</span>
+            )
+        }
+    }
+
+    private fun listenToEmptyViewStateLiveData(pagedListWrapper: PagedListWrapper&lt;PostListItemType&gt;) {
+<span class="nc" id="L235">        val update = {</span>
+<span class="nc" id="L236">            createEmptyUiState(</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">                    postListType = connector.postListType,</span>
+<span class="nc" id="L238">                    isNetworkAvailable = networkUtilsWrapper.isNetworkAvailable(),</span>
+<span class="nc bnc" id="L239" title="All 4 branches missed.">                    isLoadingData = pagedListWrapper.isFetchingFirstPage.value ?: false ||</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">                            pagedListWrapper.data.value == null,</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">                    isListEmpty = pagedListWrapper.isEmpty.value ?: true,</span>
+<span class="nc" id="L242">                    isSearchPromptRequired = isEmptySearch(),</span>
+<span class="nc" id="L243">                    error = pagedListWrapper.listError.value,</span>
+<span class="nc" id="L244">                    fetchFirstPage = this::fetchFirstPage,</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">                    newPost = connector.postActionHandler::newPost</span>
+            )
+        }
+
+<span class="nc" id="L249">        _emptyViewState.addSource(pagedListWrapper.isEmpty) { _emptyViewState.postValue(update()) }</span>
+<span class="nc" id="L250">        _emptyViewState.addSource(pagedListWrapper.isFetchingFirstPage) { _emptyViewState.postValue(update()) }</span>
+<span class="nc" id="L251">        _emptyViewState.addSource(pagedListWrapper.listError) { _emptyViewState.postValue(update()) }</span>
+<span class="nc" id="L252">    }</span>
+
+    // used to filter out dataset changes that might trigger empty view when performing search
+    private fun isSearchResultDeliverable(): Boolean {
+<span class="nc bnc" id="L256" title="All 4 branches missed.">        return connector.postListType != SEARCH ||</span>
+<span class="nc bnc" id="L257" title="All 4 branches missed.">                (connector.postListType == SEARCH &amp;&amp;</span>
+<span class="nc bnc" id="L258" title="All 6 branches missed.">                        pagedListWrapper?.isFetchingFirstPage?.value != null &amp;&amp;</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">                        isFetchingFirstPage.value == false)</span>
+    }
+
+    private fun isEmptySearch(): Boolean {
+<span class="nc bnc" id="L263" title="All 6 branches missed.">        return TextUtils.isEmpty(searchQuery) &amp;&amp; connector.postListType == SEARCH</span>
+    }
+
+<span class="nc" id="L266">    init {</span>
+<span class="nc" id="L267">        connectionStatus.observe(lifecycleOwner, Observer {</span>
+<span class="nc" id="L268">            retryOnConnectionAvailableAfterRefreshError()</span>
+<span class="nc" id="L269">        })</span>
+<span class="nc" id="L270">        lifecycleOwner.lifecycleRegistry.markState(Lifecycle.State.CREATED)</span>
+<span class="nc" id="L271">    }</span>
+
+<span class="nc" id="L273">    fun search(query: String?, delay: Long = SEARCH_DELAY_MS) {</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        if (searchQuery == query) {</span>
+<span class="nc" id="L275">            return</span>
+        }
+<span class="nc bnc" id="L277" title="All 2 branches missed.">        searchJob?.cancel()</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">        searchProgressJob?.cancel()</span>
+<span class="nc" id="L279">        searchQuery = query</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">        if (TextUtils.isEmpty(query)) {</span>
+<span class="nc" id="L281">            clearLiveDataSources()</span>
+<span class="nc" id="L282">            pagedListWrapper = null</span>
+<span class="nc" id="L283">            _isFetchingFirstPage.value = false</span>
+<span class="nc" id="L284">            showEmptySearchPrompt()</span>
+        } else {
+<span class="nc" id="L286">            searchJob = launch {</span>
+<span class="nc" id="L287">                delay(delay)</span>
+<span class="nc" id="L288">                searchJob = null</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">                if (isActive) {</span>
+<span class="nc" id="L290">                    initList(dataSource, lifecycleOwner.lifecycle)</span>
+                }
+<span class="nc" id="L292">            }</span>
+        }
+<span class="nc" id="L294">    }</span>
+
+    private fun showEmptySearchPrompt() {
+<span class="nc" id="L297">        _emptyViewState.value = createEmptyUiState(</span>
+<span class="nc" id="L298">                postListType = SEARCH,</span>
+<span class="nc" id="L299">                isNetworkAvailable = networkUtilsWrapper.isNetworkAvailable(),</span>
+<span class="nc" id="L300">                isLoadingData = false,</span>
+<span class="nc" id="L301">                isListEmpty = true,</span>
+<span class="nc" id="L302">                isSearchPromptRequired = true,</span>
+<span class="nc" id="L303">                error = null,</span>
+<span class="nc" id="L304">                fetchFirstPage = this@PostListViewModel::fetchFirstPage,</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">                newPost = connector.postActionHandler::newPost</span>
+        )
+<span class="nc" id="L307">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L310">        lifecycleOwner.lifecycleRegistry.currentState = Lifecycle.State.DESTROYED</span>
+<span class="nc" id="L311">        super.onCleared()</span>
+<span class="nc" id="L312">    }</span>
+
+    // Public Methods
+
+    fun swipeToRefresh() {
+<span class="nc bnc" id="L317" title="All 2 branches missed.">        uploadStarter.queueUploadFromSite(connector.site)</span>
+<span class="nc" id="L318">        fetchFirstPage()</span>
+<span class="nc" id="L319">    }</span>
+
+    fun scrollToPost(localPostId: LocalPostId) {
+<span class="nc" id="L322">        val data = pagedListData.value</span>
+<span class="nc bnc" id="L323" title="All 2 branches missed.">        if (data != null) {</span>
+<span class="nc" id="L324">            updateScrollPosition(data, localPostId)</span>
+        } else {
+            // store the target post id and scroll there when the data is loaded
+<span class="nc" id="L327">            scrollToLocalPostId = localPostId</span>
+        }
+<span class="nc" id="L329">    }</span>
+
+    // Utils
+
+    private fun fetchFirstPage() {
+<span class="nc bnc" id="L334" title="All 2 branches missed.">        pagedListWrapper?.fetchFirstPage()</span>
+<span class="nc" id="L335">    }</span>
+
+    private fun onDataUpdated(data: PagedPostList) {
+<span class="nc" id="L338">        val localPostId = scrollToLocalPostId</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">        if (localPostId != null) {</span>
+<span class="nc" id="L340">            scrollToLocalPostId = null</span>
+<span class="nc" id="L341">            updateScrollPosition(data, localPostId)</span>
+        }
+<span class="nc" id="L343">    }</span>
+
+    private fun updateScrollPosition(data: PagedPostList, localPostId: LocalPostId) {
+<span class="nc" id="L346">        val position = findItemListPosition(data, localPostId)</span>
+<span class="nc bnc" id="L347" title="All 4 branches missed.">        position?.let {</span>
+<span class="nc" id="L348">            _scrollToPosition.value = it</span>
+<span class="nc" id="L349">        } ?: AppLog.e(AppLog.T.POSTS, &quot;ScrollToPost failed - the post not found.&quot;)</span>
+<span class="nc" id="L350">    }</span>
+
+    private fun findItemListPosition(data: PagedPostList, localPostId: LocalPostId): Int? {
+<span class="nc bnc" id="L353" title="All 6 branches missed.">        return data.listIterator().withIndex().asSequence().find { listItem -&gt;</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">            if (listItem.value is PostListItemUiState) {</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">                (listItem.value as PostListItemUiState).data.localPostId == localPostId</span>
+            } else {
+<span class="nc" id="L357">                false</span>
+            }
+<span class="nc" id="L359">        }?.index</span>
+    }
+
+    private fun transformPostModelToPostListItemUiState(post: PostModel): PostListItemUiState {
+<span class="nc bnc" id="L363" title="All 2 branches missed.">        val hasAutoSave = connector.hasAutoSave(post)</span>
+<span class="nc" id="L364">        return listItemUiStateHelper.createPostListItemUiState(</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">                authorFilterSelection,</span>
+<span class="nc" id="L366">                post = post,</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">                site = connector.site,</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">                unhandledConflicts = connector.doesPostHaveUnhandledConflict(post),</span>
+<span class="nc" id="L369">                hasAutoSave = hasAutoSave,</span>
+<span class="nc bnc" id="L370" title="All 2 branches missed.">                capabilitiesToPublish = uploadUtilsWrapper.userCanPublish(connector.site),</span>
+<span class="nc" id="L371">                statsSupported = isStatsSupported,</span>
+                featuredImageUrl =
+<span class="nc bnc" id="L373" title="All 2 branches missed.">                convertToPhotonUrlIfPossible(connector.getFeaturedImageUrl(post.featuredImageId)),</span>
+<span class="nc" id="L374">                formattedDate = PostUtils.getFormattedDate(post),</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">                performingCriticalAction = connector.postActionHandler.isPerformingCriticalAction(LocalId(post.id)),</span>
+                onAction = { postModel, buttonType, statEvent -&gt;
+<span class="nc bnc" id="L377" title="All 2 branches missed.">                    trackPostListAction(connector.site, buttonType, postModel, statEvent)</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">                    connector.postActionHandler.handlePostButton(buttonType, postModel, hasAutoSave)</span>
+<span class="nc" id="L379">                },</span>
+<span class="nc bnc" id="L380" title="All 2 branches missed.">                uploadStatusTracker = connector.uploadStatusTracker,</span>
+<span class="nc bnc" id="L381" title="All 4 branches missed.">                isSearch = connector.postListType == SEARCH</span>
+        )
+    }
+
+    private fun retryOnConnectionAvailableAfterRefreshError() {
+<span class="nc bnc" id="L386" title="All 2 branches missed.">        val connectionAvailableAfterRefreshError = networkUtilsWrapper.isNetworkAvailable() &amp;&amp;</span>
+<span class="nc bnc" id="L387" title="All 2 branches missed.">                emptyViewState.value is RefreshError</span>
+
+<span class="nc bnc" id="L389" title="All 2 branches missed.">        if (connectionAvailableAfterRefreshError) {</span>
+<span class="nc" id="L390">            fetchFirstPage()</span>
+        }
+<span class="nc" id="L392">    }</span>
+
+    private fun convertToPhotonUrlIfPossible(featuredImageUrl: String?): String? =
+<span class="nc" id="L395">            readerUtilsWrapper.getResizedImageUrl(</span>
+<span class="nc" id="L396">                    featuredImageUrl,</span>
+<span class="nc" id="L397">                    photonWidth,</span>
+<span class="nc" id="L398">                    photonHeight,</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">                    SiteUtils.getAccessibilityInfoFromSite(connector.site)</span>
+<span class="nc" id="L400">            )</span>
+
+    fun updateAuthorFilterIfNotSearch(authorFilterSelection: AuthorFilterSelection): Boolean {
+<span class="nc bnc" id="L403" title="All 8 branches missed.">        if (connector.postListType != SEARCH &amp;&amp; this.authorFilterSelection != authorFilterSelection) {</span>
+<span class="nc" id="L404">            this.authorFilterSelection = authorFilterSelection</span>
+<span class="nc" id="L405">            initList(dataSource, lifecycleOwner.lifecycle)</span>
+<span class="nc" id="L406">            return true</span>
+        }
+<span class="nc" id="L408">        return false</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,400 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WPMainActivityViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.main</a> &gt; <span class="el_source">WPMainActivityViewModel.kt</span></div><h1>WPMainActivityViewModel.kt</h1><pre class="source lang-java linenums">@file:Suppress(&quot;MaximumLineLength&quot;)
+
+package org.wordpress.android.viewmodel.main
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.distinctUntilChanged
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.firstOrNull
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.QuickStartStore
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartExistingSiteTask
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartNewSiteTask.PUBLISH_POST
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartTask
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.fluxc.store.bloggingprompts.BloggingPromptsStore
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.main.MainActionListItem
+import org.wordpress.android.ui.main.MainActionListItem.ActionType
+import org.wordpress.android.ui.main.MainActionListItem.ActionType.ANSWER_BLOGGING_PROMPT
+import org.wordpress.android.ui.main.MainActionListItem.ActionType.CREATE_NEW_PAGE
+import org.wordpress.android.ui.main.MainActionListItem.ActionType.CREATE_NEW_POST
+import org.wordpress.android.ui.main.MainActionListItem.ActionType.CREATE_NEW_STORY
+import org.wordpress.android.ui.main.MainActionListItem.ActionType.NO_ACTION
+import org.wordpress.android.ui.main.MainActionListItem.AnswerBloggingPromptAction
+import org.wordpress.android.ui.main.MainActionListItem.CreateAction
+import org.wordpress.android.ui.main.MainFabUiState
+import org.wordpress.android.ui.mysite.SelectedSiteRepository
+import org.wordpress.android.ui.mysite.cards.dashboard.bloggingprompts.BloggingPromptAttribution
+import org.wordpress.android.ui.mysite.cards.quickstart.QuickStartRepository
+import org.wordpress.android.ui.mysite.tabs.MySiteDefaultTabExperiment
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.ui.whatsnew.FeatureAnnouncementProvider
+import org.wordpress.android.util.BuildConfigWrapper
+import org.wordpress.android.util.FluxCUtils
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.SiteUtils.hasFullAccessToContent
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.util.config.BloggingPromptsFeatureConfig
+import org.wordpress.android.util.map
+import org.wordpress.android.util.mapNullable
+import org.wordpress.android.util.merge
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import java.util.Date
+import java.util.Locale
+import javax.inject.Inject
+import javax.inject.Named
+
+private const val SWITCH_TO_MY_SITE_DELAY = 500L
+private const val ONE_SITE = 1
+
+<span class="nc" id="L59">class WPMainActivityViewModel @Inject constructor(</span>
+<span class="nc" id="L60">    private val featureAnnouncementProvider: FeatureAnnouncementProvider,</span>
+<span class="nc" id="L61">    private val buildConfigWrapper: BuildConfigWrapper,</span>
+<span class="nc" id="L62">    private val appPrefsWrapper: AppPrefsWrapper,</span>
+<span class="nc" id="L63">    private val analyticsTracker: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L64">    private val quickStartRepository: QuickStartRepository,</span>
+<span class="nc" id="L65">    private val selectedSiteRepository: SelectedSiteRepository,</span>
+<span class="nc" id="L66">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L67">    private val siteStore: SiteStore,</span>
+<span class="nc" id="L68">    private val mySiteDefaultTabExperiment: MySiteDefaultTabExperiment,</span>
+<span class="nc" id="L69">    private val bloggingPromptsFeatureConfig: BloggingPromptsFeatureConfig,</span>
+<span class="nc" id="L70">    private val bloggingPromptsStore: BloggingPromptsStore,</span>
+<span class="nc" id="L71">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L72">) : ScopedViewModel(mainDispatcher) {</span>
+    private var isStarted = false
+
+<span class="nc" id="L75">    private val _fabUiState = MutableLiveData&lt;MainFabUiState&gt;()</span>
+<span class="nc" id="L76">    val fabUiState: LiveData&lt;MainFabUiState&gt; = merge(</span>
+<span class="nc" id="L77">            _fabUiState,</span>
+<span class="nc" id="L78">            quickStartRepository.activeTask</span>
+    ) { fabUiState, activeTask -&gt;
+<span class="nc bnc" id="L80" title="All 8 branches missed.">        val isFocusPointVisible = activeTask == PUBLISH_POST &amp;&amp; fabUiState?.isFabVisible == true</span>
+<span class="nc bnc" id="L81" title="All 6 branches missed.">        if (isFocusPointVisible != fabUiState?.isFocusPointVisible) {</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">            fabUiState?.copy(isFocusPointVisible = isFocusPointVisible)</span>
+        } else {
+<span class="nc" id="L84">            fabUiState</span>
+        }
+    }
+
+<span class="nc" id="L88">    private val _showQuickStarInBottomSheet = MutableLiveData&lt;Boolean&gt;()</span>
+
+<span class="nc" id="L90">    private val _mainActions = MutableLiveData&lt;List&lt;MainActionListItem&gt;&gt;()</span>
+<span class="nc" id="L91">    val mainActions: LiveData&lt;List&lt;MainActionListItem&gt;&gt; = merge(</span>
+<span class="nc" id="L92">            _mainActions,</span>
+<span class="nc" id="L93">            _showQuickStarInBottomSheet</span>
+    ) { mainActions, showQuickStart -&gt;
+<span class="nc bnc" id="L95" title="All 4 branches missed.">        if (showQuickStart != null &amp;&amp; mainActions != null) {</span>
+<span class="nc" id="L96">            mainActions.map {</span>
+<span class="nc bnc" id="L97" title="All 4 branches missed.">                if (it is CreateAction &amp;&amp; it.actionType == CREATE_NEW_POST) it.copy(</span>
+<span class="nc" id="L98">                        showQuickStartFocusPoint = showQuickStart</span>
+<span class="nc" id="L99">                ) else it</span>
+            }
+        } else {
+<span class="nc" id="L102">            mainActions</span>
+        }
+    }
+<span class="nc" id="L105">    private val _createAction = SingleLiveEvent&lt;ActionType&gt;()</span>
+<span class="nc" id="L106">    val createAction: LiveData&lt;ActionType&gt; = _createAction</span>
+
+<span class="nc" id="L108">    private val _isBottomSheetShowing = MutableLiveData&lt;Event&lt;Boolean&gt;&gt;()</span>
+<span class="nc" id="L109">    val isBottomSheetShowing: LiveData&lt;Event&lt;Boolean&gt;&gt; = _isBottomSheetShowing</span>
+
+<span class="nc" id="L111">    private val _startLoginFlow = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L112">    val startLoginFlow: LiveData&lt;Event&lt;Unit&gt;&gt; = _startLoginFlow</span>
+
+<span class="nc" id="L114">    private val _switchToMySite = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L115">    val switchToMySite: LiveData&lt;Event&lt;Unit&gt;&gt; = _switchToMySite</span>
+
+<span class="nc" id="L117">    private val _onFeatureAnnouncementRequested = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L118">    val onFeatureAnnouncementRequested: LiveData&lt;Unit&gt; = _onFeatureAnnouncementRequested</span>
+
+<span class="nc" id="L120">    private val _createPostWithBloggingPrompt = SingleLiveEvent&lt;Int&gt;()</span>
+<span class="nc" id="L121">    val createPostWithBloggingPrompt: LiveData&lt;Int&gt; = _createPostWithBloggingPrompt</span>
+
+<span class="nc" id="L123">    private val _openBloggingPromptsOnboarding = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L124">    val openBloggingPromptsOnboarding: LiveData&lt;Unit&gt; = _openBloggingPromptsOnboarding</span>
+
+<span class="nc" id="L126">    val onFocusPointVisibilityChange = quickStartRepository.activeTask</span>
+<span class="nc" id="L127">            .mapNullable { getExternalFocusPointInfo(it) }</span>
+<span class="nc" id="L128">            .distinctUntilChanged()</span>
+<span class="nc" id="L129">            .map { Event(it) } as LiveData&lt;Event&lt;List&lt;FocusPointInfo&gt;&gt;&gt;</span>
+
+    val hasMultipleSites: Boolean
+<span class="nc bnc" id="L132" title="All 2 branches missed.">        get() = siteStore.sitesCount &gt; ONE_SITE</span>
+
+    val firstSite: SiteModel?
+<span class="nc bnc" id="L135" title="All 2 branches missed.">        get() = if (siteStore.hasSite()) {</span>
+<span class="nc" id="L136">            siteStore.sites[0]</span>
+<span class="nc" id="L137">        } else null</span>
+
+    val isSignedInWPComOrHasWPOrgSite: Boolean
+<span class="nc" id="L140">        get() = FluxCUtils.isSignedInWPComOrHasWPOrgSite(accountStore, siteStore)</span>
+
+    fun start(site: SiteModel?) {
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc" id="L144">        isStarted = true</span>
+
+<span class="nc" id="L146">        setMainFabUiState(false, site)</span>
+
+<span class="nc" id="L148">        loadMainActions(site)</span>
+
+<span class="nc" id="L150">        updateFeatureAnnouncements()</span>
+<span class="nc" id="L151">    }</span>
+
+    @Suppress(&quot;LongMethod&quot;)
+<span class="nc" id="L154">    private fun loadMainActions(site: SiteModel?) = launch {</span>
+<span class="nc" id="L155">        val actionsList = ArrayList&lt;MainActionListItem&gt;()</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">        if (bloggingPromptsFeatureConfig.isEnabled()) {</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">            val prompt = site?.let {</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">                if (it.isUsingWpComRestApi) {</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">                    bloggingPromptsStore.getPromptForDate(it, Date()).firstOrNull()?.model</span>
+                } else {
+<span class="nc" id="L161">                    null</span>
+                }
+            }
+
+<span class="nc bnc" id="L165" title="All 2 branches missed.">            prompt?.let {</span>
+<span class="nc" id="L166">                actionsList.add(</span>
+<span class="nc" id="L167">                        AnswerBloggingPromptAction(</span>
+<span class="nc" id="L168">                                actionType = ANSWER_BLOGGING_PROMPT,</span>
+<span class="nc" id="L169">                                promptTitle = UiStringText(it.text),</span>
+<span class="nc" id="L170">                                isAnswered = prompt.isAnswered,</span>
+<span class="nc" id="L171">                                promptId = prompt.id,</span>
+<span class="nc" id="L172">                                attribution = BloggingPromptAttribution.fromString(prompt.attribution),</span>
+<span class="nc" id="L173">                                onClickAction = ::onAnswerPromptActionClicked,</span>
+<span class="nc" id="L174">                                onHelpAction = ::onHelpPrompActionClicked</span>
+                        )
+                )
+            }
+        }
+
+<span class="nc" id="L180">        actionsList.add(</span>
+<span class="nc" id="L181">                CreateAction(</span>
+<span class="nc" id="L182">                        actionType = NO_ACTION,</span>
+<span class="nc" id="L183">                        iconRes = 0,</span>
+<span class="nc" id="L184">                        labelRes = R.string.my_site_bottom_sheet_title,</span>
+<span class="nc" id="L185">                        onClickAction = null</span>
+                )
+        )
+<span class="nc bnc" id="L188" title="All 2 branches missed.">        if (SiteUtils.supportsStoriesFeature(site)) {</span>
+<span class="nc" id="L189">            actionsList.add(</span>
+<span class="nc" id="L190">                    CreateAction(</span>
+<span class="nc" id="L191">                            actionType = CREATE_NEW_STORY,</span>
+<span class="nc" id="L192">                            iconRes = R.drawable.ic_story_icon_24dp,</span>
+<span class="nc" id="L193">                            labelRes = R.string.my_site_bottom_sheet_add_story,</span>
+<span class="nc" id="L194">                            onClickAction = ::onCreateActionClicked</span>
+                    )
+            )
+        }
+<span class="nc" id="L198">        actionsList.add(</span>
+<span class="nc" id="L199">                CreateAction(</span>
+<span class="nc" id="L200">                        actionType = CREATE_NEW_POST,</span>
+<span class="nc" id="L201">                        iconRes = R.drawable.ic_posts_white_24dp,</span>
+<span class="nc" id="L202">                        labelRes = R.string.my_site_bottom_sheet_add_post,</span>
+<span class="nc" id="L203">                        onClickAction = ::onCreateActionClicked</span>
+                )
+        )
+<span class="nc bnc" id="L206" title="All 2 branches missed.">        if (hasFullAccessToContent(site)) {</span>
+<span class="nc" id="L207">            actionsList.add(</span>
+<span class="nc" id="L208">                    CreateAction(</span>
+<span class="nc" id="L209">                            actionType = CREATE_NEW_PAGE,</span>
+<span class="nc" id="L210">                            iconRes = R.drawable.ic_pages_white_24dp,</span>
+<span class="nc" id="L211">                            labelRes = R.string.my_site_bottom_sheet_add_page,</span>
+<span class="nc" id="L212">                            onClickAction = ::onCreateActionClicked</span>
+                    )
+            )
+        }
+
+<span class="nc" id="L217">        _mainActions.postValue(actionsList)</span>
+<span class="nc" id="L218">    }</span>
+
+    private fun onCreateActionClicked(actionType: ActionType) {
+<span class="nc" id="L221">        val properties = mapOf(&quot;action&quot; to actionType.name.toLowerCase(Locale.ROOT))</span>
+<span class="nc" id="L222">        analyticsTracker.track(Stat.MY_SITE_CREATE_SHEET_ACTION_TAPPED, properties)</span>
+<span class="nc" id="L223">        _isBottomSheetShowing.postValue(Event(false))</span>
+<span class="nc" id="L224">        _createAction.postValue(actionType)</span>
+
+<span class="nc bnc" id="L226" title="All 2 branches missed.">        _showQuickStarInBottomSheet.value?.let { showQuickStart -&gt;</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">            if (showQuickStart) {</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">                if (actionType == CREATE_NEW_POST) quickStartRepository.completeTask(PUBLISH_POST)</span>
+<span class="nc" id="L229">                _showQuickStarInBottomSheet.postValue(false)</span>
+            }
+<span class="nc" id="L231">        }</span>
+<span class="nc" id="L232">    }</span>
+
+    private fun onAnswerPromptActionClicked(promptId: Int) {
+<span class="nc" id="L235">        analyticsTracker.track(Stat.MY_SITE_CREATE_SHEET_ANSWER_PROMPT_TAPPED)</span>
+<span class="nc" id="L236">        _isBottomSheetShowing.postValue(Event(false))</span>
+<span class="nc" id="L237">        _createPostWithBloggingPrompt.postValue(promptId)</span>
+<span class="nc" id="L238">    }</span>
+
+    private fun onHelpPrompActionClicked() {
+<span class="nc" id="L241">        analyticsTracker.track(Stat.MY_SITE_CREATE_SHEET_PROMPT_HELP_TAPPED)</span>
+<span class="nc" id="L242">        _openBloggingPromptsOnboarding.call()</span>
+<span class="nc" id="L243">    }</span>
+
+    private fun disableTooltip(site: SiteModel?) {
+<span class="nc" id="L246">        appPrefsWrapper.setMainFabTooltipDisabled(true)</span>
+
+<span class="nc" id="L248">        val oldState = _fabUiState.value</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">        oldState?.let {</span>
+<span class="nc" id="L250">            _fabUiState.value = MainFabUiState(</span>
+<span class="nc" id="L251">                    isFabVisible = it.isFabVisible,</span>
+<span class="nc" id="L252">                    isFabTooltipVisible = false,</span>
+<span class="nc" id="L253">                    CreateContentMessageId = getCreateContentMessageId(site)</span>
+            )
+<span class="nc" id="L255">        }</span>
+<span class="nc" id="L256">    }</span>
+
+    fun onFabClicked(site: SiteModel?) {
+<span class="nc" id="L259">        appPrefsWrapper.setMainFabTooltipDisabled(true)</span>
+<span class="nc" id="L260">        setMainFabUiState(true, site)</span>
+
+<span class="nc bnc" id="L262" title="All 2 branches missed.">        _showQuickStarInBottomSheet.postValue(quickStartRepository.activeTask.value == PUBLISH_POST)</span>
+
+<span class="nc bnc" id="L264" title="All 4 branches missed.">        if (SiteUtils.supportsStoriesFeature(site) || hasFullAccessToContent(site)) {</span>
+            // The user has at least two create options available for this site (pages and/or story posts),
+            // so we should show a bottom sheet.
+            // Creation options added in the future should also be weighed here.
+
+            // Reload main actions, since the first time this is initialized the SiteModel may not contain the
+            // latest info.
+<span class="nc" id="L271">            loadMainActions(site)</span>
+
+<span class="nc" id="L273">            analyticsTracker.track(Stat.MY_SITE_CREATE_SHEET_SHOWN)</span>
+<span class="nc" id="L274">            _isBottomSheetShowing.value = Event(true)</span>
+        } else {
+            // User only has one option - creating a post. Skip the bottom sheet and go straight to that action.
+<span class="nc" id="L277">            _createAction.postValue(CREATE_NEW_POST)</span>
+        }
+<span class="nc" id="L279">    }</span>
+
+    fun onPageChanged(isOnMySitePageWithValidSite: Boolean, site: SiteModel?) {
+<span class="nc bnc" id="L282" title="All 2 branches missed.">        val showFab = if (buildConfigWrapper.isCreateFabEnabled) isOnMySitePageWithValidSite else false</span>
+<span class="nc" id="L283">        setMainFabUiState(showFab, site)</span>
+<span class="nc" id="L284">    }</span>
+
+    fun onTooltipTapped(site: SiteModel?) {
+<span class="nc" id="L287">        disableTooltip(site)</span>
+<span class="nc" id="L288">    }</span>
+
+    fun onFabLongPressed(site: SiteModel?) {
+<span class="nc" id="L291">        disableTooltip(site)</span>
+<span class="nc" id="L292">    }</span>
+
+<span class="nc" id="L294">    fun onOpenLoginPage(mySitePosition: Int) = launch {</span>
+<span class="nc" id="L295">        _startLoginFlow.value = Event(Unit)</span>
+<span class="nc" id="L296">        appPrefsWrapper.setMainPageIndex(mySitePosition)</span>
+<span class="nc" id="L297">        delay(SWITCH_TO_MY_SITE_DELAY)</span>
+<span class="nc" id="L298">        _switchToMySite.value = Event(Unit)</span>
+<span class="nc" id="L299">    }</span>
+
+    fun checkAndSetVariantForMySiteDefaultTabExperiment() {
+<span class="nc" id="L302">        mySiteDefaultTabExperiment.checkAndSetVariantIfNeeded()</span>
+<span class="nc" id="L303">    }</span>
+
+    fun onResume(site: SiteModel?, isOnMySitePageWithValidSite: Boolean) {
+<span class="nc bnc" id="L306" title="All 2 branches missed.">        val showFab = if (buildConfigWrapper.isCreateFabEnabled) isOnMySitePageWithValidSite else false</span>
+<span class="nc" id="L307">        setMainFabUiState(showFab, site)</span>
+
+<span class="nc" id="L309">        checkAndShowFeatureAnnouncement()</span>
+<span class="nc" id="L310">    }</span>
+
+    private fun checkAndShowFeatureAnnouncement() {
+<span class="nc bnc" id="L313" title="All 2 branches missed.">        if (buildConfigWrapper.isWhatsNewFeatureEnabled) {</span>
+<span class="nc" id="L314">            launch {</span>
+<span class="nc" id="L315">                val currentVersionCode = buildConfigWrapper.getAppVersionCode()</span>
+<span class="nc" id="L316">                val previousVersionCode = appPrefsWrapper.lastFeatureAnnouncementAppVersionCode</span>
+
+                // only proceed to feature announcement logic if we are upgrading the app
+<span class="nc bnc" id="L319" title="All 4 branches missed.">                if (previousVersionCode != 0 &amp;&amp; previousVersionCode &lt; currentVersionCode) {</span>
+<span class="nc bnc" id="L320" title="All 2 branches missed.">                    if (canShowFeatureAnnouncement()) {</span>
+<span class="nc" id="L321">                        analyticsTracker.track(Stat.FEATURE_ANNOUNCEMENT_SHOWN_ON_APP_UPGRADE)</span>
+<span class="nc" id="L322">                        _onFeatureAnnouncementRequested.call()</span>
+                    }
+                } else {
+<span class="nc" id="L325">                    appPrefsWrapper.lastFeatureAnnouncementAppVersionCode = currentVersionCode</span>
+                }
+<span class="nc" id="L327">            }</span>
+        }
+<span class="nc" id="L329">    }</span>
+
+    private fun setMainFabUiState(isFabVisible: Boolean, site: SiteModel?) {
+<span class="nc" id="L332">        val newState = MainFabUiState(</span>
+<span class="nc" id="L333">                isFabVisible = isFabVisible,</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">                isFabTooltipVisible = if (appPrefsWrapper.isMainFabTooltipDisabled()) false else isFabVisible,</span>
+<span class="nc" id="L335">                CreateContentMessageId = getCreateContentMessageId(site)</span>
+        )
+
+<span class="nc" id="L338">        _fabUiState.value = newState</span>
+<span class="nc" id="L339">    }</span>
+
+    fun getCreateContentMessageId(site: SiteModel?): Int {
+<span class="nc bnc" id="L342" title="All 2 branches missed.">        return if (SiteUtils.supportsStoriesFeature(site)) {</span>
+<span class="nc" id="L343">            getCreateContentMessageId_StoriesFlagOn(hasFullAccessToContent(site))</span>
+        } else {
+<span class="nc" id="L345">            getCreateContentMessageId_StoriesFlagOff(hasFullAccessToContent(site))</span>
+        }
+    }
+
+    // create_post_page_fab_tooltip_stories_feature_flag_on
+    private fun getCreateContentMessageId_StoriesFlagOn(hasFullAccessToContent: Boolean): Int {
+<span class="nc bnc" id="L351" title="All 2 branches missed.">        return if (hasFullAccessToContent) {</span>
+<span class="nc" id="L352">            R.string.create_post_page_fab_tooltip_stories_enabled</span>
+        } else {
+<span class="nc" id="L354">            R.string.create_post_page_fab_tooltip_contributors_stories_enabled</span>
+        }
+    }
+
+    private fun getCreateContentMessageId_StoriesFlagOff(hasFullAccessToContent: Boolean): Int {
+<span class="nc bnc" id="L359" title="All 2 branches missed.">        return if (hasFullAccessToContent) {</span>
+<span class="nc" id="L360">            R.string.create_post_page_fab_tooltip</span>
+        } else {
+<span class="nc" id="L362">            R.string.create_post_page_fab_tooltip_contributors</span>
+        }
+    }
+
+    private fun updateFeatureAnnouncements() {
+<span class="nc" id="L367">        launch {</span>
+<span class="nc" id="L368">            featureAnnouncementProvider.getLatestFeatureAnnouncement(false)</span>
+<span class="nc" id="L369">        }</span>
+<span class="nc" id="L370">    }</span>
+
+<span class="nc" id="L372">    private suspend fun canShowFeatureAnnouncement(): Boolean {</span>
+<span class="nc" id="L373">        val cachedAnnouncement = featureAnnouncementProvider.getLatestFeatureAnnouncement(true)</span>
+
+<span class="nc bnc" id="L375" title="All 2 branches missed.">        return cachedAnnouncement != null &amp;&amp;</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">                cachedAnnouncement.canBeDisplayedOnAppUpgrade(buildConfigWrapper.getAppVersionName()) &amp;&amp;</span>
+<span class="nc bnc" id="L377" title="All 2 branches missed.">                appPrefsWrapper.featureAnnouncementShownVersion &lt; cachedAnnouncement.announcementVersion</span>
+    }
+
+    private fun getExternalFocusPointInfo(task: QuickStartTask?): List&lt;FocusPointInfo&gt; {
+<span class="nc" id="L381">        val followSiteTask = quickStartRepository.quickStartType</span>
+<span class="nc" id="L382">                .getTaskFromString(QuickStartStore.QUICK_START_FOLLOW_SITE_LABEL)</span>
+<span class="nc" id="L383">        val followSitesTaskFocusPointInfo = FocusPointInfo(followSiteTask, task == followSiteTask)</span>
+<span class="nc" id="L384">        val checkNotifsTaskFocusPointInfo = FocusPointInfo(</span>
+<span class="nc" id="L385">                QuickStartExistingSiteTask.CHECK_NOTIFICATIONS,</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">                task == QuickStartExistingSiteTask.CHECK_NOTIFICATIONS</span>
+        )
+<span class="nc" id="L388">        return listOf(followSitesTaskFocusPointInfo, checkNotifsTaskFocusPointInfo)</span>
+    }
+
+    fun handleSiteRemoved() {
+<span class="nc" id="L392">        selectedSiteRepository.removeSite()</span>
+<span class="nc" id="L393">    }</span>
+
+<span class="nc" id="L395">    data class FocusPointInfo(</span>
+<span class="nc" id="L396">        val task: QuickStartTask,</span>
+<span class="nc" id="L397">        val isVisible: Boolean</span>
+    )
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

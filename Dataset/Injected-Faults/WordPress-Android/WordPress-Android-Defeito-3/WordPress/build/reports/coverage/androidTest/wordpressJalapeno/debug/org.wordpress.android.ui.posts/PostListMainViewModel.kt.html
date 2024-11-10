@@ -1,0 +1,630 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostListMainViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts</a> &gt; <span class="el_source">PostListMainViewModel.kt</span></div><h1>PostListMainViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.Observer
+import androidx.lifecycle.ViewModel
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.R.string
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.POST_LIST_AUTHOR_FILTER_CHANGED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.POST_LIST_SEARCH_ACCESSED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.POST_LIST_TAB_CHANGED
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.ListActionBuilder
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.PostModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.list.PostListDescriptor
+import org.wordpress.android.fluxc.model.post.PostStatus
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.MediaStore
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.fluxc.store.UploadStore
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.posts.PostListType.DRAFTS
+import org.wordpress.android.ui.posts.PostListType.PUBLISHED
+import org.wordpress.android.ui.posts.PostListType.SCHEDULED
+import org.wordpress.android.ui.posts.PostListType.TRASHED
+import org.wordpress.android.ui.posts.PostListViewLayoutType.COMPACT
+import org.wordpress.android.ui.posts.PostListViewLayoutType.STANDARD
+import org.wordpress.android.ui.posts.PostListViewLayoutTypeMenuUiState.CompactViewLayoutTypeMenuUiState
+import org.wordpress.android.ui.posts.PostListViewLayoutTypeMenuUiState.StandardViewLayoutTypeMenuUiState
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.uploads.UploadActionUseCase
+import org.wordpress.android.ui.uploads.UploadStarter
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.ToastUtils.Duration
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.util.analytics.AnalyticsUtils
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import org.wordpress.android.viewmodel.helpers.DialogHolder
+import org.wordpress.android.viewmodel.helpers.ToastMessageHolder
+import org.wordpress.android.viewmodel.posts.PostFetcher
+import org.wordpress.android.viewmodel.posts.PostListItemIdentifier.LocalPostId
+import org.wordpress.android.viewmodel.posts.PostListViewModelConnector
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.CoroutineContext
+
+private const val SCROLL_TO_DELAY = 50L
+private const val SEARCH_COLLAPSE_DELAY = 500L
+<span class="nc" id="L69">private val FAB_VISIBLE_POST_LIST_PAGES = listOf(PUBLISHED, DRAFTS)</span>
+<span class="nc" id="L70">val POST_LIST_PAGES = listOf(PUBLISHED, DRAFTS, SCHEDULED, TRASHED)</span>
+private const val TRACKS_SELECTED_TAB = &quot;selected_tab&quot;
+private const val TRACKS_SELECTED_AUTHOR_FILTER = &quot;author_filter_selection&quot;
+
+<span class="nc" id="L74">class PostListMainViewModel @Inject constructor(</span>
+<span class="nc" id="L75">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L76">    private val postStore: PostStore,</span>
+<span class="nc" id="L77">    private val accountStore: AccountStore,</span>
+    uploadActionUseCase: UploadActionUseCase,
+    uploadStore: UploadStore,
+    mediaStore: MediaStore,
+<span class="nc" id="L81">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L82">    private val prefs: AppPrefsWrapper,</span>
+<span class="nc" id="L83">    private val postListEventListenerFactory: PostListEventListener.Factory,</span>
+<span class="nc" id="L84">    private val previewStateHelper: PreviewStateHelper,</span>
+<span class="nc" id="L85">    private val analyticsTracker: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L86">    private val savePostToDbUseCase: SavePostToDbUseCase,</span>
+<span class="nc" id="L87">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L88">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L89">    private val uploadStarter: UploadStarter</span>
+<span class="nc" id="L90">) : ViewModel(), CoroutineScope {</span>
+<span class="nc" id="L91">    private val lifecycleOwner = object : LifecycleOwner {</span>
+<span class="nc" id="L92">        val lifecycleRegistry = LifecycleRegistry(this)</span>
+        override fun getLifecycle(): Lifecycle {
+<span class="nc" id="L94">            return lifecycleRegistry</span>
+        }
+    }
+
+<span class="nc" id="L98">    private val scrollToTargetPostJob: Job = Job()</span>
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L100">        get() = bgDispatcher + scrollToTargetPostJob</span>
+
+    private lateinit var site: SiteModel
+    private lateinit var editPostRepository: EditPostRepository
+<span class="nc" id="L104">    var currentBottomSheetPostId: LocalId? = null</span>
+
+<span class="nc" id="L106">    private val _viewState = MutableLiveData&lt;PostListMainViewState&gt;()</span>
+<span class="nc" id="L107">    val viewState: LiveData&lt;PostListMainViewState&gt; = _viewState</span>
+
+<span class="nc" id="L109">    private val _postListAction = SingleLiveEvent&lt;PostListAction&gt;()</span>
+<span class="nc" id="L110">    val postListAction: LiveData&lt;PostListAction&gt; = _postListAction</span>
+
+<span class="nc" id="L112">    private val _authorSelectionUpdated = MutableLiveData&lt;AuthorFilterSelection&gt;()</span>
+<span class="nc" id="L113">    val authorSelectionUpdated = _authorSelectionUpdated</span>
+
+<span class="nc" id="L115">    private val _selectTab = SingleLiveEvent&lt;Int&gt;()</span>
+<span class="nc" id="L116">    val selectTab = _selectTab as LiveData&lt;Int&gt;</span>
+
+<span class="nc" id="L118">    private val _scrollToLocalPostId = SingleLiveEvent&lt;LocalPostId&gt;()</span>
+<span class="nc" id="L119">    val scrollToLocalPostId = _scrollToLocalPostId as LiveData&lt;LocalPostId&gt;</span>
+
+<span class="nc" id="L121">    private val _openPrepublishingBottomSheet = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L122">    val openPrepublishingBottomSheet: LiveData&lt;Event&lt;Unit&gt;&gt; = _openPrepublishingBottomSheet</span>
+
+<span class="nc" id="L124">    private val _snackBarMessage = SingleLiveEvent&lt;SnackbarMessageHolder&gt;()</span>
+<span class="nc" id="L125">    val snackBarMessage = _snackBarMessage as LiveData&lt;SnackbarMessageHolder&gt;</span>
+
+<span class="nc" id="L127">    private val _previewState = SingleLiveEvent&lt;PostListRemotePreviewState&gt;()</span>
+<span class="nc" id="L128">    val previewState = _previewState as LiveData&lt;PostListRemotePreviewState&gt;</span>
+
+<span class="nc" id="L130">    private val _toastMessage = SingleLiveEvent&lt;ToastMessageHolder&gt;()</span>
+<span class="nc" id="L131">    val toastMessage: LiveData&lt;ToastMessageHolder&gt; = _toastMessage</span>
+
+<span class="nc" id="L133">    private val _dialogAction = SingleLiveEvent&lt;DialogHolder&gt;()</span>
+<span class="nc" id="L134">    val dialogAction: LiveData&lt;DialogHolder&gt; = _dialogAction</span>
+
+<span class="nc" id="L136">    private val _postUploadAction = SingleLiveEvent&lt;PostUploadAction&gt;()</span>
+<span class="nc" id="L137">    val postUploadAction: LiveData&lt;PostUploadAction&gt; = _postUploadAction</span>
+
+<span class="nc" id="L139">    private val _viewLayoutType = MutableLiveData&lt;PostListViewLayoutType&gt;()</span>
+<span class="nc" id="L140">    val viewLayoutType: LiveData&lt;PostListViewLayoutType&gt; = _viewLayoutType</span>
+
+<span class="nc" id="L142">    private val _viewLayoutTypeMenuUiState = MutableLiveData&lt;PostListViewLayoutTypeMenuUiState&gt;()</span>
+<span class="nc" id="L143">    val viewLayoutTypeMenuUiState: LiveData&lt;PostListViewLayoutTypeMenuUiState&gt; = _viewLayoutTypeMenuUiState</span>
+
+<span class="nc" id="L145">    private val _isSearchExpanded = MutableLiveData&lt;Boolean&gt;()</span>
+<span class="nc" id="L146">    val isSearchExpanded: LiveData&lt;Boolean&gt; = _isSearchExpanded</span>
+
+<span class="nc" id="L148">    private val _searchQuery = MutableLiveData&lt;String?&gt;()</span>
+<span class="nc" id="L149">    val searchQuery: LiveData&lt;String?&gt; = _searchQuery</span>
+
+<span class="nc" id="L151">    private val _onFabClicked = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L152">    val onFabClicked: LiveData&lt;Event&lt;Unit&gt;&gt; = _onFabClicked</span>
+
+<span class="nc" id="L154">    private val _onFabLongPressedForCreateMenu = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L155">    val onFabLongPressedForCreateMenu: LiveData&lt;Event&lt;Unit&gt;&gt; = _onFabLongPressedForCreateMenu</span>
+
+<span class="nc" id="L157">    private val _onFabLongPressedForPostList = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L158">    val onFabLongPressedForPostList: LiveData&lt;Event&lt;Unit&gt;&gt; = _onFabLongPressedForPostList</span>
+
+<span class="nc" id="L160">    private val uploadStatusTracker = PostModelUploadStatusTracker(</span>
+<span class="nc" id="L161">            uploadStore = uploadStore,</span>
+<span class="nc" id="L162">            uploadActionUseCase = uploadActionUseCase</span>
+    )
+<span class="nc" id="L164">    private val featuredImageTracker = PostListFeaturedImageTracker(dispatcher = dispatcher, mediaStore = mediaStore)</span>
+
+<span class="nc" id="L166">    private val postFetcher by lazy {</span>
+<span class="nc" id="L167">        PostFetcher(lifecycleOwner.lifecycle, dispatcher)</span>
+    }
+
+<span class="nc" id="L170">    private val postListDialogHelper: PostListDialogHelper by lazy {</span>
+<span class="nc" id="L171">        PostListDialogHelper(</span>
+<span class="nc" id="L172">                showDialog = { _dialogAction.postValue(it) },</span>
+<span class="nc" id="L173">                checkNetworkConnection = this::checkNetworkConnection,</span>
+<span class="nc" id="L174">                analyticsTracker = analyticsTracker</span>
+        )
+    }
+
+<span class="nc" id="L178">    private val postConflictResolver: PostConflictResolver by lazy {</span>
+<span class="nc" id="L179">        PostConflictResolver(</span>
+<span class="nc" id="L180">                dispatcher = dispatcher,</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">                site = site,</span>
+<span class="nc" id="L182">                getPostByLocalPostId = postStore::getPostByLocalPostId,</span>
+<span class="nc" id="L183">                invalidateList = this::invalidateAllLists,</span>
+<span class="nc" id="L184">                checkNetworkConnection = this::checkNetworkConnection,</span>
+<span class="nc" id="L185">                showSnackbar = { _snackBarMessage.postValue(it) },</span>
+<span class="nc" id="L186">                showToast = { _toastMessage.postValue(it) }</span>
+        )
+    }
+
+<span class="nc" id="L190">    private val postActionHandler: PostActionHandler by lazy {</span>
+<span class="nc" id="L191">        PostActionHandler(</span>
+<span class="nc" id="L192">                dispatcher = dispatcher,</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">                site = site,</span>
+<span class="nc" id="L194">                postStore = postStore,</span>
+<span class="nc" id="L195">                postListDialogHelper = postListDialogHelper,</span>
+<span class="nc" id="L196">                doesPostHaveUnhandledConflict = postConflictResolver::doesPostHaveUnhandledConflict,</span>
+<span class="nc" id="L197">                hasUnhandledAutoSave = postConflictResolver::hasUnhandledAutoSave,</span>
+<span class="nc" id="L198">                triggerPostListAction = { _postListAction.postValue(it) },</span>
+<span class="nc" id="L199">                triggerPostUploadAction = { _postUploadAction.postValue(it) },</span>
+<span class="nc" id="L200">                triggerPublishAction = this::showPrepublishingBottomSheet,</span>
+<span class="nc" id="L201">                invalidateList = this::invalidateAllLists,</span>
+<span class="nc" id="L202">                checkNetworkConnection = this::checkNetworkConnection,</span>
+<span class="nc" id="L203">                showSnackbar = { _snackBarMessage.postValue(it) },</span>
+<span class="nc" id="L204">                showToast = { _toastMessage.postValue(it) },</span>
+<span class="nc" id="L205">                triggerPreviewStateUpdate = this::updatePreviewAndDialogState,</span>
+<span class="nc" id="L206">                copyPost = this::copyPost</span>
+        )
+    }
+
+<span class="nc" id="L210">    fun copyPost(site: SiteModel, postToCopy: PostModel, performChecks: Boolean = false) {</span>
+<span class="nc bnc" id="L211" title="All 4 branches missed.">        if (performChecks &amp;&amp; (postConflictResolver.doesPostHaveUnhandledConflict(postToCopy) ||</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">                        postConflictResolver.hasUnhandledAutoSave(postToCopy))) {</span>
+<span class="nc" id="L213">            postListDialogHelper.showCopyConflictDialog(postToCopy)</span>
+<span class="nc" id="L214">            return</span>
+        }
+<span class="nc" id="L216">        val post = postStore.instantiatePostModel(</span>
+<span class="nc" id="L217">                site,</span>
+<span class="nc" id="L218">                false,</span>
+<span class="nc" id="L219">                postToCopy.title,</span>
+<span class="nc" id="L220">                postToCopy.content,</span>
+<span class="nc" id="L221">                PostStatus.DRAFT.toString(),</span>
+<span class="nc" id="L222">                postToCopy.categoryIdList,</span>
+<span class="nc" id="L223">                postToCopy.postFormat,</span>
+<span class="nc" id="L224">                true</span>
+        )
+<span class="nc" id="L226">        _postListAction.postValue(PostListAction.EditPost(site, post, loadAutoSaveRevision = false))</span>
+<span class="nc" id="L227">    }</span>
+
+    /**
+     * Filtering by author is disable on:
+     * 1) Self-hosted sites - The XMLRPC api doesn't support filtering by author.
+     * 2) Jetpack sites - we need to pass in the self-hosted user id to be able to filter for authors
+     * which we currently can't
+     * 3) Sites on which the user doesn't have permissions to edit posts of other users.
+     *
+     * This behavior is consistent with Calypso as of 11/4/2019.
+     */
+<span class="nc" id="L238">    private val isFilteringByAuthorSupported: Boolean by lazy {</span>
+<span class="nc bnc" id="L239" title="All 8 branches missed.">        site.isWPCom &amp;&amp; site.hasCapabilityEditOthersPosts</span>
+    }
+
+<span class="nc" id="L242">    init {</span>
+<span class="nc" id="L243">        lifecycleOwner.lifecycleRegistry.currentState = Lifecycle.State.CREATED</span>
+<span class="nc" id="L244">    }</span>
+
+    fun start(
+        site: SiteModel,
+        initPreviewState: PostListRemotePreviewState,
+        currentBottomSheetPostId: LocalId,
+        editPostRepository: EditPostRepository,
+        context: Context
+    ) {
+<span class="nc" id="L253">        this.site = site</span>
+<span class="nc" id="L254">        this.editPostRepository = editPostRepository</span>
+
+<span class="nc bnc" id="L256" title="All 2 branches missed.">        if (isSearchExpanded.value == true) {</span>
+<span class="nc" id="L257">            setViewLayoutAndIcon(COMPACT, false)</span>
+        } else {
+<span class="nc" id="L259">            setUserPreferredViewLayoutType()</span>
+        }
+
+<span class="nc bnc" id="L262" title="All 2 branches missed.">        val authorFilterSelection: AuthorFilterSelection = if (isFilteringByAuthorSupported) {</span>
+<span class="nc" id="L263">            prefs.postListAuthorSelection</span>
+        } else {
+<span class="nc" id="L265">            AuthorFilterSelection.EVERYONE</span>
+        }
+
+<span class="nc" id="L268">        postListEventListenerFactory.createAndStartListening(</span>
+<span class="nc" id="L269">                lifecycle = lifecycleOwner.lifecycle,</span>
+<span class="nc" id="L270">                dispatcher = dispatcher,</span>
+<span class="nc" id="L271">                bgDispatcher = bgDispatcher,</span>
+<span class="nc" id="L272">                postStore = postStore,</span>
+<span class="nc" id="L273">                site = site,</span>
+<span class="nc" id="L274">                postActionHandler = postActionHandler,</span>
+<span class="nc" id="L275">                handlePostUpdatedWithoutError = postConflictResolver::onPostSuccessfullyUpdated,</span>
+                handlePostUploadedWithoutError = {
+<span class="nc" id="L277">                    refreshAllLists()</span>
+<span class="nc" id="L278">                },</span>
+<span class="nc" id="L279">                triggerPostUploadAction = { _postUploadAction.postValue(it) },</span>
+                invalidateUploadStatus = {
+<span class="nc" id="L281">                    uploadStatusTracker.invalidateUploadStatus(it)</span>
+<span class="nc" id="L282">                    invalidateAllLists()</span>
+<span class="nc" id="L283">                },</span>
+                invalidateFeaturedMedia = {
+<span class="nc" id="L285">                    featuredImageTracker.invalidateFeaturedMedia(it)</span>
+<span class="nc" id="L286">                    invalidateAllLists()</span>
+<span class="nc" id="L287">                },</span>
+<span class="nc" id="L288">                triggerPreviewStateUpdate = this::updatePreviewAndDialogState,</span>
+<span class="nc" id="L289">                isRemotePreviewingFromPostsList = this::isRemotePreviewingFromPostsList,</span>
+<span class="nc" id="L290">                hasRemoteAutoSavePreviewError = this::hasRemoteAutoSavePreviewError</span>
+        )
+
+<span class="nc" id="L293">        _authorSelectionUpdated.value = authorFilterSelection</span>
+<span class="nc" id="L294">        _viewState.value = PostListMainViewState(</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">                isFabVisible = FAB_VISIBLE_POST_LIST_PAGES.contains(POST_LIST_PAGES.first()) &amp;&amp;</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">                        isSearchExpanded.value != true,</span>
+<span class="nc" id="L297">                isAuthorFilterVisible = isFilteringByAuthorSupported,</span>
+<span class="nc" id="L298">                authorFilterSelection = authorFilterSelection,</span>
+<span class="nc bnc" id="L299" title="All 2 branches missed.">                authorFilterItems = getAuthorFilterItems(authorFilterSelection, accountStore.account?.avatarUrl)</span>
+        )
+<span class="nc bnc" id="L301" title="All 2 branches missed.">        _previewState.value = _previewState.value ?: initPreviewState</span>
+
+<span class="nc" id="L303">        currentBottomSheetPostId.let { postId -&gt;</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">            if (postId.value != 0) {</span>
+<span class="nc" id="L305">                editPostRepository.loadPostByLocalPostId(postId.value)</span>
+            }
+<span class="nc" id="L307">        }</span>
+
+<span class="nc" id="L309">        lifecycleOwner.lifecycleRegistry.currentState = Lifecycle.State.STARTED</span>
+
+<span class="nc" id="L311">        uploadStarter.queueUploadFromSite(site)</span>
+
+<span class="nc" id="L313">        editPostRepository.run {</span>
+<span class="nc" id="L314">            postChanged.observe(lifecycleOwner, Observer {</span>
+<span class="nc" id="L315">                savePostToDbUseCase.savePostToDb(editPostRepository, site)</span>
+<span class="nc" id="L316">            })</span>
+<span class="nc" id="L317">        }</span>
+<span class="nc" id="L318">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L321">        lifecycleOwner.lifecycleRegistry.currentState = Lifecycle.State.DESTROYED</span>
+<span class="nc" id="L322">        scrollToTargetPostJob.cancel() // cancels all coroutines with the default coroutineContext</span>
+<span class="nc" id="L323">        super.onCleared()</span>
+<span class="nc" id="L324">    }</span>
+
+    /*
+     * FUTURE_REFACTOR: We shouldn't need to pass the AuthorFilterSelection to fragments and get it back, we have that
+     * info already
+     */
+    fun getPostListViewModelConnector(
+        postListType: PostListType
+    ): PostListViewModelConnector {
+<span class="nc" id="L333">        return PostListViewModelConnector(</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">                site = site,</span>
+<span class="nc" id="L335">                postListType = postListType,</span>
+<span class="nc" id="L336">                postActionHandler = postActionHandler,</span>
+<span class="nc" id="L337">                uploadStatusTracker = uploadStatusTracker,</span>
+<span class="nc" id="L338">                doesPostHaveUnhandledConflict = postConflictResolver::doesPostHaveUnhandledConflict,</span>
+<span class="nc" id="L339">                hasAutoSave = postConflictResolver::hasUnhandledAutoSave,</span>
+<span class="nc" id="L340">                postFetcher = postFetcher,</span>
+<span class="nc" id="L341">                getFeaturedImageUrl = featuredImageTracker::getFeaturedImageUrl</span>
+        )
+    }
+
+    fun onSearchExpanded(restorePreviousSearch: Boolean) {
+<span class="nc bnc" id="L346" title="All 2 branches missed.">        if (isSearchExpanded.value != true) {</span>
+<span class="nc" id="L347">            setViewLayoutAndIcon(COMPACT, false)</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">            AnalyticsUtils.trackWithSiteDetails(POST_LIST_SEARCH_ACCESSED, site)</span>
+
+<span class="nc bnc" id="L350" title="All 2 branches missed.">            if (!restorePreviousSearch) {</span>
+<span class="nc" id="L351">                clearSearch()</span>
+            }
+
+<span class="nc" id="L354">            _isSearchExpanded.value = true</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">            _viewState.value = _viewState.value?.copy(isFabVisible = false)</span>
+        }
+<span class="nc" id="L357">    }</span>
+
+<span class="nc" id="L359">    fun onSearchCollapsed(delay: Long = SEARCH_COLLAPSE_DELAY) {</span>
+<span class="nc" id="L360">        setUserPreferredViewLayoutType()</span>
+<span class="nc" id="L361">        _isSearchExpanded.value = false</span>
+<span class="nc" id="L362">        clearSearch()</span>
+
+<span class="nc" id="L364">        launch {</span>
+<span class="nc" id="L365">            delay(delay)</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">            withContext(mainDispatcher) {</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">                _viewState.value = _viewState.value?.copy(isFabVisible = true)</span>
+<span class="nc" id="L368">            }</span>
+<span class="nc" id="L369">        }</span>
+<span class="nc" id="L370">    }</span>
+
+    fun onSearch(searchQuery: String) {
+<span class="nc" id="L373">        _searchQuery.value = searchQuery</span>
+<span class="nc" id="L374">    }</span>
+
+    private fun clearSearch() {
+<span class="nc" id="L377">        _searchQuery.value = null</span>
+<span class="nc" id="L378">    }</span>
+
+    fun fabClicked() {
+<span class="nc bnc" id="L381" title="All 4 branches missed.">        if (SiteUtils.supportsStoriesFeature(site)) {</span>
+<span class="nc" id="L382">            _onFabClicked.postValue(Event(Unit))</span>
+        } else {
+<span class="nc" id="L384">            newPost()</span>
+        }
+<span class="nc" id="L386">    }</span>
+
+    fun newPost() {
+<span class="nc" id="L389">        postActionHandler.newPost()</span>
+<span class="nc" id="L390">    }</span>
+
+    fun newStoryPost() {
+<span class="nc" id="L393">        postActionHandler.newStoryPost()</span>
+<span class="nc" id="L394">    }</span>
+
+    fun updateAuthorFilterSelection(selectionId: Long) {
+<span class="nc" id="L397">        val selection = AuthorFilterSelection.fromId(selectionId)</span>
+
+<span class="nc" id="L399">        updateViewStateTriggerPagerChange(</span>
+<span class="nc" id="L400">                authorFilterSelection = selection,</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">                authorFilterItems = getAuthorFilterItems(selection, accountStore.account?.avatarUrl)</span>
+        )
+<span class="nc bnc" id="L403" title="All 2 branches missed.">        if (isFilteringByAuthorSupported) {</span>
+<span class="nc" id="L404">            prefs.postListAuthorSelection = selection</span>
+        }
+<span class="nc" id="L406">    }</span>
+
+    fun onTabChanged(position: Int) {
+<span class="nc" id="L409">        val currentPage = POST_LIST_PAGES[position]</span>
+<span class="nc" id="L410">        updateViewStateTriggerPagerChange(isFabVisible = FAB_VISIBLE_POST_LIST_PAGES.contains(currentPage))</span>
+
+<span class="nc" id="L412">        AnalyticsUtils.trackWithSiteDetails(</span>
+<span class="nc" id="L413">                POST_LIST_TAB_CHANGED,</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">                site,</span>
+<span class="nc" id="L415">                mutableMapOf(TRACKS_SELECTED_TAB to currentPage.toString() as Any)</span>
+        )
+<span class="nc" id="L417">    }</span>
+
+    fun showTargetPost(targetPostId: Int) {
+<span class="nc" id="L420">        val postModel = postStore.getPostByLocalPostId(targetPostId)</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">        if (postModel == null) {</span>
+<span class="nc" id="L422">            _snackBarMessage.value = SnackbarMessageHolder(UiStringRes(string.error_post_does_not_exist))</span>
+        } else {
+<span class="nc" id="L424">            launch(mainDispatcher) {</span>
+<span class="nc" id="L425">                val targetTab = PostListType.fromPostStatus(PostStatus.fromPost(postModel))</span>
+<span class="nc" id="L426">                _selectTab.value = POST_LIST_PAGES.indexOf(targetTab)</span>
+                // we need to make sure the ViewPager initializes the targetTab fragment before we can propagate
+                // the targetPostId to it
+<span class="nc" id="L429">                withContext(bgDispatcher) {</span>
+<span class="nc" id="L430">                    delay(SCROLL_TO_DELAY)</span>
+<span class="nc" id="L431">                }</span>
+<span class="nc" id="L432">                _scrollToLocalPostId.value = LocalPostId(LocalId(postModel.id))</span>
+<span class="nc" id="L433">            }</span>
+        }
+<span class="nc" id="L435">    }</span>
+
+    fun handleEditPostResult(data: Intent?) {
+<span class="nc" id="L438">        postActionHandler.handleEditPostResult(data)</span>
+<span class="nc" id="L439">    }</span>
+
+    private fun editRestoredAutoSavePost(localPostId: Int) {
+<span class="nc" id="L442">        val post = postStore.getPostByLocalPostId(localPostId)</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc bnc" id="L444" title="All 2 branches missed.">            _postListAction.postValue(PostListAction.EditPost(site, post, loadAutoSaveRevision = true))</span>
+        } else {
+<span class="nc" id="L446">            _snackBarMessage.value = SnackbarMessageHolder(UiStringRes((R.string.error_post_does_not_exist)))</span>
+        }
+<span class="nc" id="L448">    }</span>
+
+    private fun editLocalPost(localPostId: Int) {
+<span class="nc" id="L451">        val post = postStore.getPostByLocalPostId(localPostId)</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">            _postListAction.postValue(PostListAction.EditPost(site, post, loadAutoSaveRevision = false))</span>
+        } else {
+<span class="nc" id="L455">            _snackBarMessage.value = SnackbarMessageHolder(UiStringRes(R.string.error_post_does_not_exist))</span>
+        }
+<span class="nc" id="L457">    }</span>
+
+    private fun copyLocalPost(localPostId: Int) {
+<span class="nc" id="L460">        val post = postStore.getPostByLocalPostId(localPostId)</span>
+<span class="nc bnc" id="L461" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc bnc" id="L462" title="All 2 branches missed.">            copyPost(site, post)</span>
+        } else {
+<span class="nc" id="L464">            _snackBarMessage.value = SnackbarMessageHolder(UiStringRes(R.string.error_post_does_not_exist))</span>
+        }
+<span class="nc" id="L466">    }</span>
+
+    // BasicFragmentDialog Events
+
+    fun onPositiveClickedForBasicDialog(instanceTag: String) {
+<span class="nc" id="L471">        postListDialogHelper.onPositiveClickedForBasicDialog(</span>
+<span class="nc" id="L472">                instanceTag = instanceTag,</span>
+<span class="nc" id="L473">                trashPostWithLocalChanges = postActionHandler::trashPostWithLocalChanges,</span>
+<span class="nc" id="L474">                trashPostWithUnsavedChanges = postActionHandler::trashPostWithUnsavedChanges,</span>
+<span class="nc" id="L475">                deletePost = postActionHandler::deletePost,</span>
+<span class="nc" id="L476">                publishPost = postActionHandler::publishPost,</span>
+<span class="nc" id="L477">                updateConflictedPostWithRemoteVersion = postConflictResolver::updateConflictedPostWithRemoteVersion,</span>
+<span class="nc" id="L478">                editRestoredAutoSavePost = this::editRestoredAutoSavePost,</span>
+<span class="nc" id="L479">                moveTrashedPostToDraft = postActionHandler::moveTrashedPostToDraft,</span>
+<span class="nc" id="L480">                resolveConflictsAndEditPost = postActionHandler::resolveConflictsAndEditPost</span>
+        )
+<span class="nc" id="L482">    }</span>
+
+    fun onNegativeClickedForBasicDialog(instanceTag: String) {
+<span class="nc" id="L485">        postListDialogHelper.onNegativeClickedForBasicDialog(</span>
+<span class="nc" id="L486">                instanceTag = instanceTag,</span>
+<span class="nc" id="L487">                updateConflictedPostWithLocalVersion = postConflictResolver::updateConflictedPostWithLocalVersion,</span>
+<span class="nc" id="L488">                editLocalPost = this::editLocalPost,</span>
+<span class="nc" id="L489">                copyLocalPost = this::copyLocalPost</span>
+        )
+<span class="nc" id="L491">    }</span>
+
+    fun onDismissByOutsideTouchForBasicDialog(instanceTag: String) {
+<span class="nc" id="L494">        postListDialogHelper.onDismissByOutsideTouchForBasicDialog(</span>
+<span class="nc" id="L495">                instanceTag = instanceTag,</span>
+<span class="nc" id="L496">                updateConflictedPostWithLocalVersion = postConflictResolver::updateConflictedPostWithLocalVersion,</span>
+<span class="nc" id="L497">                editLocalPost = this::editLocalPost,</span>
+<span class="nc" id="L498">                copyLocalPost = this::copyLocalPost</span>
+        )
+<span class="nc" id="L500">    }</span>
+
+    private fun showPrepublishingBottomSheet(post: PostModel) {
+<span class="nc" id="L503">        currentBottomSheetPostId = LocalId(post.id)</span>
+<span class="nc bnc" id="L504" title="All 2 branches missed.">        editPostRepository.loadPostByLocalPostId(post.id)</span>
+<span class="nc" id="L505">        _openPrepublishingBottomSheet.postValue(Event(Unit))</span>
+<span class="nc" id="L506">    }</span>
+
+    /**
+     * Only the non-null variables will be changed in the current state
+     */
+    @SuppressLint(&quot;NullSafeMutableLiveData&quot;)
+<span class="nc" id="L512">    private fun updateViewStateTriggerPagerChange(</span>
+<span class="nc" id="L513">        isFabVisible: Boolean? = null,</span>
+<span class="nc" id="L514">        isAuthorFilterVisible: Boolean? = null,</span>
+<span class="nc" id="L515">        authorFilterSelection: AuthorFilterSelection? = null,</span>
+<span class="nc" id="L516">        authorFilterItems: List&lt;AuthorFilterListItemUIState&gt;? = null</span>
+    ) {
+<span class="nc bnc" id="L518" title="All 2 branches missed.">        val currentState = requireNotNull(viewState.value) {</span>
+<span class="nc" id="L519">            &quot;updateViewStateTriggerPagerChange should not be called before the initial state is set&quot;</span>
+        }
+
+<span class="nc" id="L522">        _viewState.value = PostListMainViewState(</span>
+<span class="nc bnc" id="L523" title="All 2 branches missed.">                isFabVisible ?: currentState.isFabVisible,</span>
+<span class="nc bnc" id="L524" title="All 2 branches missed.">                isAuthorFilterVisible ?: currentState.isAuthorFilterVisible,</span>
+<span class="nc bnc" id="L525" title="All 2 branches missed.">                authorFilterSelection ?: currentState.authorFilterSelection,</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">                authorFilterItems ?: currentState.authorFilterItems</span>
+        )
+
+<span class="nc bnc" id="L529" title="All 4 branches missed.">        if (authorFilterSelection != null &amp;&amp; currentState.authorFilterSelection != authorFilterSelection) {</span>
+<span class="nc" id="L530">            _authorSelectionUpdated.value = authorFilterSelection</span>
+
+<span class="nc" id="L532">            AnalyticsUtils.trackWithSiteDetails(</span>
+<span class="nc" id="L533">                    POST_LIST_AUTHOR_FILTER_CHANGED,</span>
+<span class="nc bnc" id="L534" title="All 2 branches missed.">                    site,</span>
+<span class="nc" id="L535">                    mutableMapOf(TRACKS_SELECTED_AUTHOR_FILTER to authorFilterSelection.toString() as Any)</span>
+            )
+        }
+<span class="nc" id="L538">    }</span>
+
+    private fun invalidateAllLists() {
+<span class="nc bnc" id="L541" title="All 2 branches missed.">        val listTypeIdentifier = PostListDescriptor.calculateTypeIdentifier(site.id)</span>
+<span class="nc" id="L542">        dispatcher.dispatch(ListActionBuilder.newListDataInvalidatedAction(listTypeIdentifier))</span>
+<span class="nc" id="L543">    }</span>
+
+    private fun refreshAllLists() {
+<span class="nc bnc" id="L546" title="All 2 branches missed.">        val listTypeIdentifier = PostListDescriptor.calculateTypeIdentifier(site.id)</span>
+<span class="nc" id="L547">        dispatcher.dispatch(ListActionBuilder.newListRequiresRefreshAction(listTypeIdentifier))</span>
+<span class="nc" id="L548">    }</span>
+
+<span class="nc bnc" id="L550" title="All 2 branches missed.">    private fun isRemotePreviewingFromPostsList() = _previewState.value != null &amp;&amp;</span>
+<span class="nc bnc" id="L551" title="All 2 branches missed.">            _previewState.value != PostListRemotePreviewState.NONE</span>
+
+<span class="nc bnc" id="L553" title="All 2 branches missed.">    private fun hasRemoteAutoSavePreviewError() = _previewState.value != null &amp;&amp;</span>
+<span class="nc bnc" id="L554" title="All 2 branches missed.">            _previewState.value == PostListRemotePreviewState.REMOTE_AUTO_SAVE_PREVIEW_ERROR</span>
+
+    private fun checkNetworkConnection(): Boolean =
+<span class="nc bnc" id="L557" title="All 2 branches missed.">            if (networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L558">                true</span>
+            } else {
+<span class="nc" id="L560">                _toastMessage.postValue(ToastMessageHolder(R.string.no_network_message, Duration.SHORT))</span>
+<span class="nc" id="L561">                false</span>
+<span class="nc" id="L562">            }</span>
+
+    fun handleRemotePreviewClosing() {
+<span class="nc" id="L565">        updatePreviewAndDialogState(PostListRemotePreviewState.NONE, PostInfoType.PostNoInfo)</span>
+<span class="nc" id="L566">    }</span>
+
+    private fun updatePreviewAndDialogState(newState: PostListRemotePreviewState, postInfo: PostInfoType) {
+        // We need only transitions, so...
+<span class="nc bnc" id="L570" title="All 2 branches missed.">        if (_previewState.value == newState) return</span>
+
+<span class="nc" id="L572">        AppLog.d(</span>
+<span class="nc" id="L573">                AppLog.T.POSTS,</span>
+<span class="nc" id="L574">                &quot;Posts list preview state machine: transition from ${_previewState.value} to $newState&quot;</span>
+        )
+
+        // update the state
+<span class="nc" id="L578">        val prevState = _previewState.value</span>
+<span class="nc" id="L579">        _previewState.postValue(newState)</span>
+
+        // take care of exit actions on state transition
+<span class="nc" id="L582">        previewStateHelper.managePreviewStateTransitions(</span>
+<span class="nc" id="L583">                newState,</span>
+<span class="nc" id="L584">                prevState,</span>
+<span class="nc" id="L585">                postInfo,</span>
+<span class="nc" id="L586">                postActionHandler::handleRemotePreview</span>
+        )
+<span class="nc" id="L588">    }</span>
+
+    fun toggleViewLayout() {
+<span class="nc bnc" id="L591" title="All 2 branches missed.">        val currentLayoutType = viewLayoutType.value ?: PostListViewLayoutType.defaultValue</span>
+<span class="nc bnc" id="L592" title="All 2 branches missed.">        val toggledValue = when (currentLayoutType) {</span>
+<span class="nc" id="L593">            STANDARD -&gt; COMPACT</span>
+<span class="nc" id="L594">            COMPACT -&gt; STANDARD</span>
+        }
+<span class="nc" id="L596">        AnalyticsUtils.trackAnalyticsPostListToggleLayout(toggledValue)</span>
+<span class="nc" id="L597">        setViewLayoutAndIcon(toggledValue, true)</span>
+<span class="nc" id="L598">    }</span>
+
+<span class="nc" id="L600">    private fun setViewLayoutAndIcon(layout: PostListViewLayoutType, storeIntoPreferences: Boolean = true) {</span>
+<span class="nc" id="L601">        _viewLayoutType.value = layout</span>
+<span class="nc bnc" id="L602" title="All 2 branches missed.">        _viewLayoutTypeMenuUiState.value = when (layout) {</span>
+<span class="nc" id="L603">            STANDARD -&gt; StandardViewLayoutTypeMenuUiState</span>
+<span class="nc" id="L604">            COMPACT -&gt; CompactViewLayoutTypeMenuUiState</span>
+        }
+<span class="nc bnc" id="L606" title="All 2 branches missed.">        if (storeIntoPreferences) {</span>
+<span class="nc" id="L607">            prefs.postListViewLayoutType = layout</span>
+        }
+<span class="nc" id="L609">    }</span>
+
+    private fun setUserPreferredViewLayoutType() {
+<span class="nc" id="L612">        val savedLayoutType = prefs.postListViewLayoutType</span>
+<span class="nc" id="L613">        setViewLayoutAndIcon(savedLayoutType, false)</span>
+<span class="nc" id="L614">    }</span>
+
+    fun onBottomSheetPublishButtonClicked() {
+<span class="nc bnc" id="L617" title="All 4 branches missed.">        editPostRepository.getEditablePost()?.let {</span>
+<span class="nc" id="L618">            postActionHandler.publishPost(it)</span>
+<span class="nc" id="L619">        }</span>
+<span class="nc" id="L620">    }</span>
+
+    fun onFabLongPressed() {
+<span class="nc bnc" id="L623" title="All 4 branches missed.">        if (SiteUtils.supportsStoriesFeature(site)) {</span>
+<span class="nc" id="L624">            _onFabLongPressedForCreateMenu.postValue(Event(Unit))</span>
+        } else {
+<span class="nc" id="L626">            _onFabLongPressedForPostList.postValue(Event(Unit))</span>
+        }
+<span class="nc" id="L628">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

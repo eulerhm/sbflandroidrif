@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PromptReminderNotifier.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.workers.reminder.prompt</a> &gt; <span class="el_source">PromptReminderNotifier.kt</span></div><h1>PromptReminderNotifier.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.workers.reminder.prompt
+
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import androidx.core.app.NotificationCompat.Action.Builder
+import androidx.core.app.NotificationCompat.CATEGORY_REMINDER
+import androidx.core.app.NotificationCompat.PRIORITY_DEFAULT
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
+import org.wordpress.android.BuildConfig
+import org.wordpress.android.R
+import org.wordpress.android.R.drawable
+import org.wordpress.android.R.string
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.BLOGGING_REMINDERS_NOTIFICATION_PROMPT_ANSWER_TAPPED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.BLOGGING_REMINDERS_NOTIFICATION_PROMPT_TAPPED
+import org.wordpress.android.fluxc.model.bloggingprompts.BloggingPromptModel
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.BloggingRemindersStore
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.fluxc.store.bloggingprompts.BloggingPromptsStore
+import org.wordpress.android.push.NotificationPushIds.REMINDER_NOTIFICATION_ID
+import org.wordpress.android.ui.ActivityLauncher
+import org.wordpress.android.ui.bloggingreminders.BloggingRemindersAnalyticsTracker
+import org.wordpress.android.ui.notifications.DismissNotificationReceiver
+import org.wordpress.android.ui.posts.PostUtils.EntryPoint
+import org.wordpress.android.util.HtmlCompatWrapper
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.config.BloggingPromptsFeatureConfig
+import org.wordpress.android.viewmodel.ContextProvider
+import org.wordpress.android.viewmodel.ResourceProvider
+import org.wordpress.android.workers.reminder.ReminderNotification
+import org.wordpress.android.workers.reminder.ReminderNotificationManager
+import java.util.Date
+import javax.inject.Inject
+
+<span class="fc" id="L38">class PromptReminderNotifier @Inject constructor(</span>
+<span class="pc" id="L39">    val contextProvider: ContextProvider,</span>
+<span class="pc" id="L40">    val resourceProvider: ResourceProvider,</span>
+<span class="pc" id="L41">    val siteStore: SiteStore,</span>
+<span class="pc" id="L42">    val accountStore: AccountStore,</span>
+<span class="pc" id="L43">    val reminderNotificationManager: ReminderNotificationManager,</span>
+<span class="pc" id="L44">    val bloggingPromptsFeatureConfig: BloggingPromptsFeatureConfig,</span>
+<span class="pc" id="L45">    val bloggingPromptsStore: BloggingPromptsStore,</span>
+<span class="pc" id="L46">    val bloggingRemindersAnalyticsTracker: BloggingRemindersAnalyticsTracker,</span>
+<span class="pc" id="L47">    val htmlCompatWrapper: HtmlCompatWrapper,</span>
+<span class="fc" id="L48">    private val bloggingRemindersStore: BloggingRemindersStore</span>
+) {
+    @Suppress(&quot;MagicNumber&quot;)
+    suspend fun notify(siteId: Int) {
+<span class="nc" id="L52">        val notificationId = REMINDER_NOTIFICATION_ID + siteId</span>
+<span class="nc" id="L53">        val context = contextProvider.getContext()</span>
+<span class="nc bnc" id="L54" title="All 2 branches missed.">        val site = siteStore.getSiteByLocalId(siteId) ?: return</span>
+
+<span class="nc bnc" id="L56" title="All 2 branches missed.">        val prompt = bloggingPromptsStore.getPromptForDate(site, Date()).firstOrNull()?.model</span>
+<span class="nc" id="L57">        val contentPendingIntent =</span>
+<span class="nc" id="L58">                createContentPendingIntent(context, notificationId + 1, notificationId, prompt)</span>
+<span class="nc" id="L59">        val openEditorPendingIntent =</span>
+<span class="nc" id="L60">                createOpenEditorPendingIntent(context, notificationId + 2, notificationId, prompt)</span>
+<span class="nc" id="L61">        val dismissNotificationButtonPendingIntent = createDismissNotificationButtonPendingIntent(</span>
+<span class="nc" id="L62">            context,</span>
+<span class="nc" id="L63">            notificationId + 3,</span>
+<span class="nc" id="L64">            DismissNotificationReceiver.newIntent(</span>
+<span class="nc" id="L65">                context, notificationId, Stat.BLOGGING_REMINDERS_NOTIFICATION_PROMPT_DISMISS_TAPPED</span>
+            )
+        )
+<span class="nc" id="L68">        val dismissNotificationSwipePendingIntent = createDismissNotificationSwipePendingIntent(</span>
+<span class="nc" id="L69">            context,</span>
+<span class="nc" id="L70">            notificationId + 4,</span>
+<span class="nc" id="L71">            DismissNotificationReceiver.newIntent(</span>
+<span class="nc" id="L72">                context, notificationId, Stat.BLOGGING_REMINDERS_NOTIFICATION_PROMPT_DISMISSED</span>
+            )
+        )
+<span class="nc" id="L75">        val answerPromptReminderNotification = ReminderNotification(</span>
+<span class="nc" id="L76">            channel = resourceProvider.getString(string.notification_channel_reminder_id),</span>
+<span class="nc" id="L77">            contentIntentBuilder = { contentPendingIntent },</span>
+<span class="nc" id="L78">            deleteIntentBuilder = { dismissNotificationSwipePendingIntent },</span>
+<span class="nc" id="L79">            contentTitle = resourceProvider.getString(</span>
+<span class="nc" id="L80">                    string.blogging_prompts_answer_prompt_notification_title, SiteUtils.getSiteNameOrHomeURL(site)</span>
+            ),
+<span class="nc bnc" id="L82" title="All 4 branches missed.">            contentText = htmlCompatWrapper.fromHtml(prompt?.text.orEmpty()).toString(),</span>
+<span class="nc" id="L83">            priority = PRIORITY_DEFAULT,</span>
+<span class="nc" id="L84">            category = CATEGORY_REMINDER,</span>
+<span class="nc" id="L85">            autoCancel = true,</span>
+<span class="nc" id="L86">            colorized = true,</span>
+<span class="nc" id="L87">            color = if (BuildConfig.IS_JETPACK_APP) {</span>
+                resourceProvider.getColor(R.color.jetpack_green)
+            } else {
+<span class="nc" id="L90">                resourceProvider.getColor(R.color.blue_50)</span>
+            },
+<span class="nc" id="L92">            smallIcon = drawable.ic_app_white_24dp,</span>
+<span class="nc" id="L93">            firstAction = Builder(</span>
+<span class="nc" id="L94">                0,</span>
+<span class="nc" id="L95">                resourceProvider.getString(string.blogging_prompts_answer_prompt_notification_answer_action),</span>
+<span class="nc" id="L96">                openEditorPendingIntent</span>
+<span class="nc" id="L97">            ).build(),</span>
+<span class="nc" id="L98">            secondAction = Builder(</span>
+<span class="nc" id="L99">                0,</span>
+<span class="nc" id="L100">                resourceProvider.getString(string.blogging_prompts_notification_dismiss),</span>
+<span class="nc" id="L101">                dismissNotificationButtonPendingIntent</span>
+<span class="nc" id="L102">            ).build()</span>
+        )
+<span class="nc" id="L104">        reminderNotificationManager.notify(notificationId, answerPromptReminderNotification)</span>
+<span class="nc" id="L105">        bloggingRemindersAnalyticsTracker.trackNotificationReceived(true)</span>
+<span class="nc" id="L106">    }</span>
+
+    private fun createDismissNotificationButtonPendingIntent(
+        context: Context,
+        dismissNotificationRequestCode: Int,
+        dismissButtonIntent: Intent
+<span class="nc" id="L112">    ) = PendingIntent.getBroadcast(</span>
+<span class="nc" id="L113">        context,</span>
+<span class="nc" id="L114">        dismissNotificationRequestCode,</span>
+<span class="nc" id="L115">        dismissButtonIntent,</span>
+<span class="nc" id="L116">        PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE</span>
+<span class="nc" id="L117">    )</span>
+
+    private fun createDismissNotificationSwipePendingIntent(
+        context: Context,
+        dismissNotificationRequestCode: Int,
+        dismissSwipeIntent: Intent
+<span class="nc" id="L123">    ) = PendingIntent.getBroadcast(</span>
+<span class="nc" id="L124">        context,</span>
+<span class="nc" id="L125">        dismissNotificationRequestCode,</span>
+<span class="nc" id="L126">        dismissSwipeIntent,</span>
+<span class="nc" id="L127">        PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE</span>
+<span class="nc" id="L128">    )</span>
+
+    private fun createOpenEditorPendingIntent(
+        context: Context,
+        openEditorRequestCode: Int,
+        notificationId: Int,
+        bloggingPrompt: BloggingPromptModel?
+<span class="nc" id="L135">    ) = PendingIntent.getActivity(</span>
+<span class="nc" id="L136">        context,</span>
+<span class="nc" id="L137">        openEditorRequestCode,</span>
+<span class="nc" id="L138">        ActivityLauncher.openEditorWithPromptAndDismissNotificationIntent(</span>
+<span class="nc" id="L139">            context,</span>
+<span class="nc" id="L140">            notificationId,</span>
+<span class="nc" id="L141">            bloggingPrompt,</span>
+<span class="nc" id="L142">            BLOGGING_REMINDERS_NOTIFICATION_PROMPT_ANSWER_TAPPED,</span>
+<span class="nc" id="L143">            EntryPoint.BLOGGING_REMINDERS_NOTIFICATION_ANSWER_PROMPT</span>
+        ),
+<span class="nc" id="L145">        PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE</span>
+<span class="nc" id="L146">    )</span>
+
+    private fun createContentPendingIntent(
+        context: Context,
+        openEditorRequestCode: Int,
+        notificationId: Int,
+        bloggingPrompt: BloggingPromptModel?
+<span class="nc" id="L153">    ) = PendingIntent.getActivity(</span>
+<span class="nc" id="L154">        context,</span>
+<span class="nc" id="L155">        openEditorRequestCode,</span>
+<span class="nc" id="L156">        ActivityLauncher.openEditorWithPromptAndDismissNotificationIntent(</span>
+<span class="nc" id="L157">            context,</span>
+<span class="nc" id="L158">            notificationId,</span>
+<span class="nc" id="L159">            bloggingPrompt,</span>
+<span class="nc" id="L160">            BLOGGING_REMINDERS_NOTIFICATION_PROMPT_TAPPED,</span>
+<span class="nc" id="L161">            EntryPoint.BLOGGING_REMINDERS_NOTIFICATION_ANSWER_PROMPT</span>
+        ),
+<span class="nc" id="L163">        PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE</span>
+<span class="nc" id="L164">    )</span>
+
+<span class="nc" id="L166">    suspend fun shouldNotify(siteId: Int): Boolean {</span>
+<span class="nc" id="L167">        val hasAccessToken = accountStore.hasAccessToken()</span>
+<span class="nc" id="L168">        val isBloggingPromptsEnabled = bloggingPromptsFeatureConfig.isEnabled()</span>
+<span class="nc" id="L169">        val siteModel = siteStore.getSiteByLocalId(siteId)</span>
+<span class="nc" id="L170">        val bloggingRemindersModel = bloggingRemindersStore.bloggingRemindersModel(siteId).first()</span>
+<span class="nc bnc" id="L171" title="All 4 branches missed.">        val hasOptedInBloggingPromptsReminders = siteModel != null &amp;&amp; bloggingRemindersModel.isPromptIncluded</span>
+<span class="nc bnc" id="L172" title="All 6 branches missed.">        return hasAccessToken &amp;&amp; isBloggingPromptsEnabled &amp;&amp; hasOptedInBloggingPromptsReminders</span>
+    }
+
+    companion object {
+        const val NO_SITE_ID = -1
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

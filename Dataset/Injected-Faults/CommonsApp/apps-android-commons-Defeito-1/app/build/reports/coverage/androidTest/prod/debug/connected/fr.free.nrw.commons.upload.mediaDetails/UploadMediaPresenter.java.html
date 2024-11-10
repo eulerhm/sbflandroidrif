@@ -1,0 +1,375 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UploadMediaPresenter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.upload.mediaDetails</a> &gt; <span class="el_source">UploadMediaPresenter.java</span></div><h1>UploadMediaPresenter.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.upload.mediaDetails;
+
+import static fr.free.nrw.commons.di.CommonsApplicationModule.IO_THREAD;
+import static fr.free.nrw.commons.di.CommonsApplicationModule.MAIN_THREAD;
+import static fr.free.nrw.commons.utils.ImageUtils.EMPTY_CAPTION;
+import static fr.free.nrw.commons.utils.ImageUtils.FILE_NAME_EXISTS;
+import static fr.free.nrw.commons.utils.ImageUtils.IMAGE_KEEP;
+import static fr.free.nrw.commons.utils.ImageUtils.IMAGE_OK;
+
+import androidx.annotation.Nullable;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.filepicker.UploadableFile;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.nearby.Place;
+import fr.free.nrw.commons.repository.UploadRepository;
+import fr.free.nrw.commons.upload.ImageCoordinates;
+import fr.free.nrw.commons.upload.SimilarImageInterface;
+import fr.free.nrw.commons.upload.UploadItem;
+import fr.free.nrw.commons.upload.UploadMediaDetail;
+import fr.free.nrw.commons.upload.mediaDetails.UploadMediaDetailsContract.UserActionListener;
+import fr.free.nrw.commons.upload.mediaDetails.UploadMediaDetailsContract.View;
+import io.github.coordinates2country.Coordinates2Country;
+import io.reactivex.Maybe;
+import io.reactivex.Scheduler;
+import io.reactivex.disposables.CompositeDisposable;
+import io.reactivex.disposables.Disposable;
+import java.lang.reflect.Proxy;
+import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import javax.inject.Inject;
+import javax.inject.Named;
+import org.jetbrains.annotations.NotNull;
+import timber.log.Timber;
+
+public class UploadMediaPresenter implements UserActionListener, SimilarImageInterface {
+
+<span class="nc" id="L43">    private static final UploadMediaDetailsContract.View DUMMY = (UploadMediaDetailsContract.View) Proxy</span>
+<span class="nc" id="L44">            .newProxyInstance(</span>
+<span class="nc" id="L45">                    UploadMediaDetailsContract.View.class.getClassLoader(),</span>
+                    new Class[]{UploadMediaDetailsContract.View.class},
+<span class="nc" id="L47">                    (proxy, method, methodArgs) -&gt; null);</span>
+
+    private final UploadRepository repository;
+<span class="nc" id="L50">    private UploadMediaDetailsContract.View view = DUMMY;</span>
+
+    private CompositeDisposable compositeDisposable;
+
+    private final JsonKvStore defaultKVStore;
+    private Scheduler ioScheduler;
+    private Scheduler mainThreadScheduler;
+
+<span class="nc" id="L58">    private final List&lt;String&gt; WLM_SUPPORTED_COUNTRIES= Arrays.asList(&quot;am&quot;,&quot;at&quot;,&quot;az&quot;,&quot;br&quot;,&quot;hr&quot;,&quot;sv&quot;,&quot;fi&quot;,&quot;fr&quot;,&quot;de&quot;,&quot;gh&quot;,&quot;in&quot;,&quot;ie&quot;,&quot;il&quot;,&quot;mk&quot;,&quot;my&quot;,&quot;mt&quot;,&quot;pk&quot;,&quot;pe&quot;,&quot;pl&quot;,&quot;ru&quot;,&quot;rw&quot;,&quot;si&quot;,&quot;es&quot;,&quot;se&quot;,&quot;tw&quot;,&quot;ug&quot;,&quot;ua&quot;,&quot;us&quot;);</span>
+<span class="nc" id="L59">    private Map&lt;String, String&gt; countryNamesAndCodes = null;</span>
+
+    @Inject
+    public UploadMediaPresenter(UploadRepository uploadRepository,
+        @Named(&quot;default_preferences&quot;) JsonKvStore defaultKVStore,
+                                @Named(IO_THREAD) Scheduler ioScheduler,
+<span class="nc" id="L65">                                @Named(MAIN_THREAD) Scheduler mainThreadScheduler) {</span>
+<span class="nc" id="L66">        this.repository = uploadRepository;</span>
+<span class="nc" id="L67">        this.defaultKVStore = defaultKVStore;</span>
+<span class="nc" id="L68">        this.ioScheduler = ioScheduler;</span>
+<span class="nc" id="L69">        this.mainThreadScheduler = mainThreadScheduler;</span>
+<span class="nc" id="L70">        compositeDisposable = new CompositeDisposable();</span>
+<span class="nc" id="L71">    }</span>
+
+    @Override
+    public void onAttachView(View view) {
+<span class="nc" id="L75">        this.view = view;</span>
+<span class="nc" id="L76">    }</span>
+
+    @Override
+    public void onDetachView() {
+<span class="nc" id="L80">        this.view = DUMMY;</span>
+<span class="nc" id="L81">        compositeDisposable.clear();</span>
+<span class="nc" id="L82">    }</span>
+
+    /**
+     * Sets the Upload Media Details for the corresponding upload item
+     *
+     * @param uploadMediaDetails
+     * @param uploadItemIndex
+     */
+    @Override
+    public void setUploadMediaDetails(List&lt;UploadMediaDetail&gt; uploadMediaDetails, int uploadItemIndex) {
+<span class="nc" id="L92">        repository.getUploads().get(uploadItemIndex).setMediaDetails(uploadMediaDetails);</span>
+<span class="nc" id="L93">    }</span>
+
+    /**
+     * Receives the corresponding uploadable file, processes it and return the view with and uplaod item
+     *  @param uploadableFile
+     * @param place
+     */
+    @Override
+    public void receiveImage(final UploadableFile uploadableFile, final Place place,
+                            LatLng inAppPictureLocation) {
+<span class="nc" id="L103">        view.showProgress(true);</span>
+<span class="nc" id="L104">        compositeDisposable.add(</span>
+            repository
+<span class="nc" id="L106">                .preProcessImage(uploadableFile, place, this, inAppPictureLocation)</span>
+<span class="nc" id="L107">                .map(uploadItem -&gt; {</span>
+<span class="nc bnc" id="L108" title="All 4 branches missed.">                    if(place!=null &amp;&amp; place.isMonument()){</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">                        if (place.location != null) {</span>
+<span class="nc" id="L110">                            final String countryCode = reverseGeoCode(place.location);</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">                            if (countryCode != null &amp;&amp; WLM_SUPPORTED_COUNTRIES</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">                                .contains(countryCode.toLowerCase())) {</span>
+<span class="nc" id="L113">                                uploadItem.setWLMUpload(true);</span>
+<span class="nc" id="L114">                                uploadItem.setCountryCode(countryCode.toLowerCase());</span>
+                            }
+                        }
+                    }
+<span class="nc" id="L118">                    return uploadItem;</span>
+                })
+<span class="nc" id="L120">                .subscribeOn(ioScheduler)</span>
+<span class="nc" id="L121">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L122">                .subscribe(uploadItem -&gt;</span>
+                    {
+<span class="nc" id="L124">                        view.onImageProcessed(uploadItem, place);</span>
+<span class="nc" id="L125">                        view.updateMediaDetails(uploadItem.getUploadMediaDetails());</span>
+<span class="nc" id="L126">                        final ImageCoordinates gpsCoords = uploadItem.getGpsCoords();</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">                        final boolean hasImageCoordinates =</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">                          gpsCoords != null &amp;&amp; gpsCoords.getImageCoordsExists();</span>
+<span class="nc" id="L129">                        view.showProgress(false);</span>
+<span class="nc bnc" id="L130" title="All 4 branches missed.">                        if (hasImageCoordinates &amp;&amp; place == null) {</span>
+<span class="nc" id="L131">                            checkNearbyPlaces(uploadItem);</span>
+                        }
+<span class="nc" id="L133">                    },</span>
+<span class="nc" id="L134">                    throwable -&gt; Timber.e(throwable, &quot;Error occurred in processing images&quot;)));</span>
+<span class="nc" id="L135">    }</span>
+
+    @Nullable
+    private String reverseGeoCode(final LatLng latLng){
+<span class="nc bnc" id="L139" title="All 2 branches missed.">        if(countryNamesAndCodes == null){</span>
+<span class="nc" id="L140">            countryNamesAndCodes = getCountryNamesAndCodes();</span>
+        }
+<span class="nc" id="L142">        return countryNamesAndCodes.get(Coordinates2Country.country(latLng.getLatitude(), latLng.getLongitude()));</span>
+    }
+
+    /**
+     * Creates HashMap containing all ISO countries 2-letter codes provided by &lt;code&gt;Locale.getISOCountries()&lt;/code&gt;
+     * and their english names
+     *
+     * @return HashMap where Key is country english name and Value is 2-letter country code
+     * e.g. [&quot;Germany&quot;:&quot;DE&quot;, ...]
+     */
+    private Map&lt;String, String&gt; getCountryNamesAndCodes(){
+<span class="nc" id="L153">        final Map&lt;String, String&gt; result = new HashMap&lt;&gt;();</span>
+
+<span class="nc" id="L155">        final String[] isoCountries = Locale.getISOCountries();</span>
+
+<span class="nc bnc" id="L157" title="All 2 branches missed.">        for (final String isoCountry : isoCountries) {</span>
+<span class="nc" id="L158">            result.put(</span>
+<span class="nc" id="L159">                new Locale(&quot;en&quot;, isoCountry).getDisplayCountry(Locale.ENGLISH),</span>
+                isoCountry
+            );
+        }
+
+<span class="nc" id="L164">        return result;</span>
+    }
+
+    /**
+     * This method checks for the nearest location that needs images and suggests it to the user.
+     * @param uploadItem
+     */
+    private void checkNearbyPlaces(final UploadItem uploadItem) {
+<span class="nc" id="L172">        final Disposable checkNearbyPlaces = Maybe.fromCallable(() -&gt; repository</span>
+<span class="nc" id="L173">                .checkNearbyPlaces(uploadItem.getGpsCoords().getDecLatitude(),</span>
+<span class="nc" id="L174">                        uploadItem.getGpsCoords().getDecLongitude()))</span>
+<span class="nc" id="L175">                .subscribeOn(ioScheduler)</span>
+<span class="nc" id="L176">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L177">                .subscribe(place -&gt; {</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">                        if (place != null) {</span>
+<span class="nc" id="L179">                            view.onNearbyPlaceFound(uploadItem, place);</span>
+                        }
+<span class="nc" id="L181">                    },</span>
+<span class="nc" id="L182">                    throwable -&gt; Timber.e(throwable, &quot;Error occurred in processing images&quot;));</span>
+<span class="nc" id="L183">            compositeDisposable.add(checkNearbyPlaces);</span>
+<span class="nc" id="L184">    }</span>
+
+    /**
+     * asks the repository to verify image quality
+     *
+     * @param uploadItemIndex
+     */
+    @Override
+    public boolean verifyImageQuality(int uploadItemIndex, LatLng inAppPictureLocation) {
+<span class="nc" id="L193">      final List&lt;UploadItem&gt; uploadItems = repository.getUploads();</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">      if (uploadItems.size()==0) {</span>
+<span class="nc" id="L195">          view.showProgress(false);</span>
+          // No internationalization required for this error message because it's an internal error.
+<span class="nc" id="L197">          view.showMessage(&quot;Internal error: Zero upload items received by the Upload Media Detail Fragment. Sorry, please upload again.&quot;,R.color.color_error);</span>
+<span class="nc" id="L198">          return false;</span>
+      }
+<span class="nc" id="L200">      UploadItem uploadItem = uploadItems.get(uploadItemIndex);</span>
+
+<span class="nc bnc" id="L202" title="All 4 branches missed.">      if (uploadItem.getGpsCoords().getDecimalCoords() == null &amp;&amp; inAppPictureLocation == null) {</span>
+<span class="nc" id="L203">          final Runnable onSkipClicked = () -&gt; {</span>
+<span class="nc" id="L204">              view.showProgress(true);</span>
+<span class="nc" id="L205">              compositeDisposable.add(</span>
+                  repository
+<span class="nc" id="L207">                      .getImageQuality(uploadItem, inAppPictureLocation)</span>
+<span class="nc" id="L208">                      .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L209">                      .subscribe(imageResult -&gt; {</span>
+<span class="nc" id="L210">                              view.showProgress(false);</span>
+<span class="nc" id="L211">                              handleImageResult(imageResult, uploadItem);</span>
+<span class="nc" id="L212">                          },</span>
+                          throwable -&gt; {
+<span class="nc" id="L214">                              view.showProgress(false);</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">                              if (throwable instanceof UnknownHostException) {</span>
+<span class="nc" id="L216">                                  view.showConnectionErrorPopup();</span>
+                              } else {
+<span class="nc" id="L218">                                  view.showMessage(&quot;&quot; + throwable.getLocalizedMessage(),</span>
+                                      R.color.color_error);
+                              }
+<span class="nc" id="L221">                              Timber.e(throwable, &quot;Error occurred while handling image&quot;);</span>
+<span class="nc" id="L222">                          })</span>
+              );
+<span class="nc" id="L224">          };</span>
+<span class="nc" id="L225">          view.displayAddLocationDialog(onSkipClicked);</span>
+<span class="nc" id="L226">      } else {</span>
+<span class="nc" id="L227">          view.showProgress(true);</span>
+<span class="nc" id="L228">          compositeDisposable.add(</span>
+              repository
+<span class="nc" id="L230">                  .getImageQuality(uploadItem, inAppPictureLocation)</span>
+<span class="nc" id="L231">                  .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L232">                  .subscribe(imageResult -&gt; {</span>
+<span class="nc" id="L233">                          view.showProgress(false);</span>
+<span class="nc" id="L234">                          handleImageResult(imageResult, uploadItem);</span>
+<span class="nc" id="L235">                      },</span>
+                      throwable -&gt; {
+<span class="nc" id="L237">                          view.showProgress(false);</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">                          if (throwable instanceof UnknownHostException) {</span>
+<span class="nc" id="L239">                              view.showConnectionErrorPopup();</span>
+                          } else {
+<span class="nc" id="L241">                              view.showMessage(&quot;&quot; + throwable.getLocalizedMessage(),</span>
+                                  R.color.color_error);
+                          }
+<span class="nc" id="L244">                          Timber.e(throwable, &quot;Error occurred while handling image&quot;);</span>
+<span class="nc" id="L245">                      })</span>
+          );
+      }
+<span class="nc" id="L248">      return true;</span>
+    }
+
+
+    /**
+     * Copies the caption and description of the current item to the subsequent media
+     *
+     * @param indexInViewFlipper
+     */
+    @Override
+    public void copyTitleAndDescriptionToSubsequentMedia(int indexInViewFlipper) {
+<span class="nc bnc" id="L259" title="All 2 branches missed.">      for(int i = indexInViewFlipper+1; i &lt; repository.getCount(); i++){</span>
+<span class="nc" id="L260">        final UploadItem subsequentUploadItem = repository.getUploads().get(i);</span>
+<span class="nc" id="L261">        subsequentUploadItem.setMediaDetails(deepCopy(repository.getUploads().get(indexInViewFlipper).getUploadMediaDetails()));</span>
+      }
+<span class="nc" id="L263">    }</span>
+
+  /**
+   * Fetches and set the caption and description of the item
+   *
+   * @param indexInViewFlipper
+   */
+  @Override
+  public void fetchTitleAndDescription(int indexInViewFlipper) {
+<span class="nc" id="L272">    final UploadItem currentUploadItem = repository.getUploads().get(indexInViewFlipper);</span>
+<span class="nc" id="L273">    view.updateMediaDetails(currentUploadItem.getUploadMediaDetails());</span>
+<span class="nc" id="L274">  }</span>
+
+  @NotNull
+  private List&lt;UploadMediaDetail&gt; deepCopy(List&lt;UploadMediaDetail&gt; uploadMediaDetails) {
+<span class="nc" id="L278">    final ArrayList&lt;UploadMediaDetail&gt; newList = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">    for (UploadMediaDetail uploadMediaDetail : uploadMediaDetails) {</span>
+<span class="nc" id="L280">      newList.add(uploadMediaDetail.javaCopy());</span>
+<span class="nc" id="L281">    }</span>
+<span class="nc" id="L282">    return newList;</span>
+  }
+
+  @Override
+  public void useSimilarPictureCoordinates(ImageCoordinates imageCoordinates, int uploadItemIndex) {
+<span class="nc" id="L287">    repository.useSimilarPictureCoordinates(imageCoordinates, uploadItemIndex);</span>
+<span class="nc" id="L288">  }</span>
+
+  @Override
+  public void onMapIconClicked(int indexInViewFlipper) {
+<span class="nc" id="L292">    view.showExternalMap(repository.getUploads().get(indexInViewFlipper));</span>
+<span class="nc" id="L293">  }</span>
+
+  @Override
+  public void onEditButtonClicked(int indexInViewFlipper){
+<span class="nc" id="L297">      view.showEditActivity(repository.getUploads().get(indexInViewFlipper));</span>
+<span class="nc" id="L298">  }</span>
+
+  @Override
+  public void onUserConfirmedUploadIsOfPlace(Place place, int uploadItemPosition) {
+<span class="nc" id="L302">    final List&lt;UploadMediaDetail&gt; uploadMediaDetails = repository.getUploads()</span>
+<span class="nc" id="L303">        .get(uploadItemPosition)</span>
+<span class="nc" id="L304">        .getUploadMediaDetails();</span>
+<span class="nc" id="L305">    UploadItem uploadItem = repository.getUploads()</span>
+<span class="nc" id="L306">        .get(uploadItemPosition);</span>
+<span class="nc" id="L307">    uploadItem.setPlace(place);</span>
+<span class="nc" id="L308">    uploadMediaDetails.set(0, new UploadMediaDetail(place));</span>
+<span class="nc" id="L309">    view.updateMediaDetails(uploadMediaDetails);</span>
+<span class="nc" id="L310">  }</span>
+
+  /**
+     * handles image quality verifications
+     *
+   * @param imageResult
+   * @param uploadItem
+   */
+    public void handleImageResult(Integer imageResult,
+        UploadItem uploadItem) {
+<span class="nc bnc" id="L320" title="All 4 branches missed.">        if (imageResult == IMAGE_KEEP || imageResult == IMAGE_OK) {</span>
+<span class="nc" id="L321">            view.onImageValidationSuccess();</span>
+<span class="nc" id="L322">            uploadItem.setHasInvalidLocation(false);</span>
+        } else {
+<span class="nc" id="L324">            handleBadImage(imageResult, uploadItem);</span>
+        }
+<span class="nc" id="L326">    }</span>
+
+    /**
+     * Handle  images, say empty caption, duplicate file name, bad picture(in all other cases)
+     *
+     * @param errorCode
+     * @param uploadItem
+     */
+    public void handleBadImage(Integer errorCode,
+        UploadItem uploadItem) {
+<span class="nc" id="L336">        Timber.d(&quot;Handle bad picture with error code %d&quot;, errorCode);</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">        if (errorCode</span>
+            &gt;= 8) { // If location of image and nearby does not match
+<span class="nc" id="L339">            uploadItem.setHasInvalidLocation(true);</span>
+        }
+
+        // If errorCode is empty caption show message
+<span class="nc bnc" id="L343" title="All 2 branches missed.">        if (errorCode == EMPTY_CAPTION) {</span>
+<span class="nc" id="L344">            Timber.d(&quot;Captions are empty. Showing toast&quot;);</span>
+<span class="nc" id="L345">            view.showMessage(R.string.add_caption_toast, R.color.color_error);</span>
+        }
+
+        // If image with same file name exists check the bit in errorCode is set or not
+<span class="nc bnc" id="L349" title="All 2 branches missed.">        if ((errorCode &amp; FILE_NAME_EXISTS) != 0) {</span>
+<span class="nc" id="L350">            Timber.d(&quot;Trying to show duplicate picture popup&quot;);</span>
+<span class="nc" id="L351">            view.showDuplicatePicturePopup(uploadItem);</span>
+        }
+
+        // If image has some other problems, show popup accordingly
+<span class="nc bnc" id="L355" title="All 4 branches missed.">        if (errorCode != EMPTY_CAPTION &amp;&amp; errorCode != FILE_NAME_EXISTS) {</span>
+<span class="nc" id="L356">            view.showBadImagePopup(errorCode, uploadItem);</span>
+        }
+
+<span class="nc" id="L359">    }</span>
+
+    /**
+     * notifies the user that a similar image exists
+     * @param originalFilePath
+     * @param possibleFilePath
+     * @param similarImageCoordinates
+     */
+    @Override
+    public void showSimilarImageFragment(String originalFilePath, String possibleFilePath,
+        ImageCoordinates similarImageCoordinates) {
+<span class="nc" id="L370">        view.showSimilarImageFragment(originalFilePath, possibleFilePath,</span>
+            similarImageCoordinates
+        );
+<span class="nc" id="L373">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

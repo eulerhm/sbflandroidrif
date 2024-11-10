@@ -1,0 +1,362 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CommentListUiModelHelper.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.comments.unified</a> &gt; <span class="el_source">CommentListUiModelHelper.kt</span></div><h1>CommentListUiModelHelper.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.comments.unified
+
+import okhttp3.internal.toImmutableList
+import org.wordpress.android.R
+import org.wordpress.android.R.string
+import org.wordpress.android.fluxc.model.CommentStatus
+import org.wordpress.android.fluxc.model.CommentStatus.DELETED
+import org.wordpress.android.fluxc.model.CommentStatus.TRASH
+import org.wordpress.android.fluxc.model.CommentStatus.UNAPPROVED
+import org.wordpress.android.fluxc.persistence.comments.CommentsDao.CommentEntity
+import org.wordpress.android.ui.comments.unified.CommentFilter.PENDING
+import org.wordpress.android.ui.comments.unified.CommentFilter.SPAM
+import org.wordpress.android.ui.comments.unified.CommentFilter.TRASHED
+import org.wordpress.android.ui.comments.unified.CommentFilter.UNREPLIED
+import org.wordpress.android.ui.comments.unified.CommentListUiModelHelper.ActionModeUiModel.Hidden
+import org.wordpress.android.ui.comments.unified.CommentListUiModelHelper.ActionModeUiModel.Visible
+import org.wordpress.android.ui.comments.unified.CommentListUiModelHelper.BatchModerationStatus.AskingToModerate
+import org.wordpress.android.ui.comments.unified.CommentListUiModelHelper.CommentsListUiModel.WithData
+import org.wordpress.android.ui.comments.unified.UnifiedCommentListItem.ClickAction
+import org.wordpress.android.ui.comments.unified.UnifiedCommentListItem.Comment
+import org.wordpress.android.ui.comments.unified.UnifiedCommentListItem.NextPageLoader
+import org.wordpress.android.ui.comments.unified.UnifiedCommentListItem.SubHeader
+import org.wordpress.android.ui.comments.unified.UnifiedCommentListItem.ToggleAction
+import org.wordpress.android.ui.comments.unified.UnifiedCommentListViewModel.SelectedComment
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.usecase.UseCaseResult.Failure
+import org.wordpress.android.usecase.UseCaseResult.Loading
+import org.wordpress.android.usecase.UseCaseResult.Success
+import org.wordpress.android.util.DateTimeUtils
+import org.wordpress.android.util.DateTimeUtilsWrapper
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.viewmodel.ResourceProvider
+import javax.inject.Inject
+
+<span class="nc" id="L37">class CommentListUiModelHelper @Inject constructor(</span>
+<span class="nc" id="L38">    private val resourceProvider: ResourceProvider,</span>
+<span class="nc" id="L39">    private val dateTimeUtilsWrapper: DateTimeUtilsWrapper,</span>
+<span class="nc" id="L40">    private val networkUtilsWrapper: NetworkUtilsWrapper</span>
+) {
+    @Suppress(&quot;LongParameterList&quot;)
+    internal fun buildUiModel(
+        commentFilter: CommentFilter,
+        commentsPagingResult: CommentsPagingResult,
+        selectedComments: List&lt;SelectedComment&gt;,
+        batchModerationStatus: BatchModerationStatus,
+        previousUiModelState: CommentsUiModel?,
+        onToggle: (remoteCommentId: Long, commentStatus: CommentStatus) -&gt; Unit,
+        onClick: (comment: CommentEntity) -&gt; Unit,
+        onLoadNextPage: (offset: Int) -&gt; Unit,
+        onBatchModerationConfirmed: (comment: CommentStatus) -&gt; Unit,
+        onBatchModerationCancelled: () -&gt; Unit
+    ): CommentsUiModel {
+<span class="nc" id="L55">        return CommentsUiModel(</span>
+<span class="nc" id="L56">                buildCommentList(</span>
+<span class="nc" id="L57">                        commentsPagingResult,</span>
+<span class="nc" id="L58">                        selectedComments,</span>
+<span class="nc" id="L59">                        commentFilter,</span>
+<span class="nc" id="L60">                        onToggle,</span>
+<span class="nc" id="L61">                        onClick,</span>
+<span class="nc" id="L62">                        onLoadNextPage</span>
+                ),
+<span class="nc" id="L64">                buildCommentsListUiModel(</span>
+<span class="nc" id="L65">                        commentsPagingResult,</span>
+<span class="nc" id="L66">                        commentFilter,</span>
+<span class="nc" id="L67">                        previousUiModelState</span>
+                ),
+<span class="nc" id="L69">                buildActionModeUiModel(selectedComments, commentFilter),</span>
+<span class="nc" id="L70">                buildConfirmationDialogUiState(</span>
+<span class="nc" id="L71">                        batchModerationStatus,</span>
+<span class="nc" id="L72">                        selectedComments,</span>
+<span class="nc" id="L73">                        onBatchModerationConfirmed,</span>
+<span class="nc" id="L74">                        onBatchModerationCancelled</span>
+                )
+        )
+    }
+
+    sealed class CommentsListUiModel {
+<span class="nc" id="L80">        object WithData : CommentsListUiModel()</span>
+
+<span class="nc" id="L82">        data class Empty(</span>
+<span class="nc" id="L83">            val title: UiString,</span>
+<span class="nc" id="L84">            val image: Int? = null</span>
+<span class="nc" id="L85">        ) : CommentsListUiModel()</span>
+
+<span class="nc" id="L87">        object Loading : CommentsListUiModel()</span>
+<span class="nc" id="L88">        object Refreshing : CommentsListUiModel()</span>
+
+<span class="nc" id="L90">        object Initial : CommentsListUiModel()</span>
+    }
+
+    sealed class BatchModerationStatus {
+<span class="nc" id="L94">        data class AskingToModerate(val commentStatus: CommentStatus) : BatchModerationStatus()</span>
+<span class="nc" id="L95">        object Idle : BatchModerationStatus()</span>
+    }
+
+    sealed class ConfirmationDialogUiModel {
+<span class="nc" id="L99">        object Hidden : ConfirmationDialogUiModel()</span>
+<span class="nc" id="L100">        data class Visible(</span>
+<span class="nc" id="L101">            val title: Int,</span>
+<span class="nc" id="L102">            val message: Int,</span>
+<span class="nc" id="L103">            val positiveButton: Int,</span>
+<span class="nc" id="L104">            val negativeButton: Int,</span>
+<span class="nc" id="L105">            val confirmAction: () -&gt; Unit,</span>
+<span class="nc" id="L106">            val cancelAction: () -&gt; Unit</span>
+<span class="nc" id="L107">        ) : ConfirmationDialogUiModel()</span>
+    }
+
+<span class="nc" id="L110">    data class CommentsUiModel(</span>
+<span class="nc" id="L111">        val commentData: CommentList,</span>
+<span class="nc" id="L112">        val commentsListUiModel: CommentsListUiModel,</span>
+<span class="nc" id="L113">        val actionModeUiModel: ActionModeUiModel,</span>
+<span class="nc" id="L114">        val confirmationDialogUiModel: ConfirmationDialogUiModel</span>
+    ) {
+        companion object {
+            fun buildInitialState(): CommentsUiModel {
+<span class="nc" id="L118">                return CommentsUiModel(</span>
+<span class="nc" id="L119">                        commentData = CommentList(emptyList(), false),</span>
+<span class="nc" id="L120">                        commentsListUiModel = CommentsListUiModel.Loading,</span>
+<span class="nc" id="L121">                        actionModeUiModel = Hidden,</span>
+<span class="nc" id="L122">                        confirmationDialogUiModel = ConfirmationDialogUiModel.Hidden</span>
+                )
+            }
+        }
+    }
+
+    internal fun buildActionModeUiModel(
+        selectedComments: List&lt;SelectedComment&gt;?,
+        commentListFilter: CommentFilter
+    ): ActionModeUiModel {
+<span class="nc bnc" id="L132" title="All 6 branches missed.">        if (selectedComments.isNullOrEmpty()) {</span>
+<span class="nc" id="L133">            return Hidden</span>
+        }
+<span class="nc" id="L135">        val title: UiString? = when (val numSelected = selectedComments.size) {</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">            0 -&gt; null</span>
+            else -&gt; {
+<span class="nc" id="L138">                UiStringText(String.format(resourceProvider.getString(string.cab_selected), numSelected))</span>
+            }
+        }
+
+<span class="nc" id="L142">        val approveActionUiModel = ActionUiModel(</span>
+<span class="nc" id="L143">                true,</span>
+<span class="nc bnc" id="L144" title="All 6 branches missed.">                selectedComments.any { it.status == UNAPPROVED || it.status == CommentStatus.SPAM })</span>
+<span class="nc" id="L145">        val unaproveActionUiModel = ActionUiModel(</span>
+<span class="nc" id="L146">                true,</span>
+<span class="nc bnc" id="L147" title="All 6 branches missed.">                (commentListFilter != TRASHED &amp;&amp; commentListFilter != SPAM &amp;&amp; commentListFilter != PENDING) &amp;&amp;</span>
+<span class="nc bnc" id="L148" title="All 4 branches missed.">                        selectedComments.any { it.status == CommentStatus.APPROVED }</span>
+        )
+<span class="nc bnc" id="L150" title="All 2 branches missed.">        val spamActionUiModel = ActionUiModel(commentListFilter != SPAM, true)</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        val unspamActionUiModel = ActionUiModel(commentListFilter == SPAM, true)</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">        val trashActionUiModel = ActionUiModel(commentListFilter != TRASHED, true)</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">        val unTrashActionUiModel = ActionUiModel(commentListFilter == TRASHED, true)</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        val deleteActionUiModel = ActionUiModel(commentListFilter == TRASHED, true)</span>
+
+<span class="nc" id="L156">        return Visible(</span>
+<span class="nc" id="L157">                title,</span>
+<span class="nc" id="L158">                approveActionUiModel,</span>
+<span class="nc" id="L159">                unaproveActionUiModel,</span>
+<span class="nc" id="L160">                spamActionUiModel,</span>
+<span class="nc" id="L161">                unspamActionUiModel,</span>
+<span class="nc" id="L162">                trashActionUiModel,</span>
+<span class="nc" id="L163">                unTrashActionUiModel,</span>
+<span class="nc" id="L164">                deleteActionUiModel</span>
+        )
+    }
+
+<span class="nc" id="L168">    data class CommentList(val comments: List&lt;UnifiedCommentListItem&gt;, val hasMore: Boolean)</span>
+
+    internal fun buildConfirmationDialogUiState(
+        batchModerationStatus: BatchModerationStatus,
+        selectedComments: List&lt;SelectedComment&gt;,
+        onModerateComments: (comment: CommentStatus) -&gt; Unit,
+        onCancel: () -&gt; Unit
+    ): ConfirmationDialogUiModel {
+<span class="nc bnc" id="L176" title="All 2 branches missed.">        if (batchModerationStatus is AskingToModerate) {</span>
+<span class="nc bnc" id="L177" title="All 3 branches missed.">            return when (batchModerationStatus.commentStatus) {</span>
+                DELETED -&gt; {
+<span class="nc bnc" id="L179" title="All 2 branches missed.">                    val messageResId = if (selectedComments.size &gt; 1) {</span>
+<span class="nc" id="L180">                        string.dlg_sure_to_delete_comments</span>
+                    } else {
+<span class="nc" id="L182">                        string.dlg_sure_to_delete_comment</span>
+                    }
+<span class="nc" id="L184">                    ConfirmationDialogUiModel.Visible(</span>
+<span class="nc" id="L185">                            title = string.delete,</span>
+<span class="nc" id="L186">                            message = messageResId,</span>
+<span class="nc" id="L187">                            positiveButton = string.yes,</span>
+<span class="nc" id="L188">                            negativeButton = string.no,</span>
+<span class="nc" id="L189">                            confirmAction = {</span>
+<span class="nc" id="L190">                                onModerateComments.invoke(batchModerationStatus.commentStatus)</span>
+<span class="nc" id="L191">                            },</span>
+<span class="nc" id="L192">                            cancelAction = {</span>
+<span class="nc" id="L193">                                onCancel.invoke()</span>
+<span class="nc" id="L194">                            }</span>
+                    )
+                }
+                TRASH -&gt; {
+<span class="nc" id="L198">                    ConfirmationDialogUiModel.Visible(</span>
+<span class="nc" id="L199">                            title = string.trash,</span>
+<span class="nc" id="L200">                            message = string.dlg_confirm_trash_comments,</span>
+<span class="nc" id="L201">                            positiveButton = string.dlg_confirm_action_trash,</span>
+<span class="nc" id="L202">                            negativeButton = string.dlg_cancel_action_dont_trash,</span>
+<span class="nc" id="L203">                            confirmAction = {</span>
+<span class="nc" id="L204">                                onModerateComments.invoke(batchModerationStatus.commentStatus)</span>
+<span class="nc" id="L205">                            },</span>
+<span class="nc" id="L206">                            cancelAction = {</span>
+<span class="nc" id="L207">                                onCancel.invoke()</span>
+<span class="nc" id="L208">                            }</span>
+                    )
+                }
+                else -&gt; {
+<span class="nc" id="L212">                    ConfirmationDialogUiModel.Hidden</span>
+                }
+            }
+        } else {
+<span class="nc" id="L216">            return ConfirmationDialogUiModel.Hidden</span>
+        }
+    }
+
+    @Suppress(&quot;LongParameterList&quot;)
+    internal fun buildCommentList(
+        commentsDataResult: CommentsPagingResult,
+        selectedComments: List&lt;SelectedComment&gt;?,
+        commentFilter: CommentFilter,
+        onToggle: (remoteCommentId: Long, commentStatus: CommentStatus) -&gt; Unit,
+        onClick: (comment: CommentEntity) -&gt; Unit,
+        onLoadNextPage: (offset: Int) -&gt; Unit
+    ): CommentList {
+<span class="nc" id="L229">        val (comments, hasMore) = when (commentsDataResult) {</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">            is Failure -&gt; Pair(</span>
+<span class="nc" id="L231">                    commentsDataResult.cachedData.comments,</span>
+<span class="nc" id="L232">                    commentsDataResult.cachedData.hasMore</span>
+            )
+<span class="nc bnc" id="L234" title="All 2 branches missed.">            is Loading -&gt; Pair(listOf(), false)</span>
+<span class="nc" id="L235">            is Success -&gt; Pair(commentsDataResult.data.comments, commentsDataResult.data.hasMore)</span>
+        }
+
+<span class="nc" id="L238">        val list = ArrayList&lt;UnifiedCommentListItem&gt;()</span>
+<span class="nc" id="L239">        comments.forEachIndexed { index, commentModel -&gt;</span>
+<span class="nc" id="L240">            val previousItem = comments.getOrNull(index - 1)</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">            if (previousItem == null) {</span>
+<span class="nc" id="L242">                list.add(SubHeader(getFormattedDate(commentModel), -1))</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">            } else if (shouldAddSeparator(previousItem, commentModel)) {</span>
+<span class="nc" id="L244">                list.add(SubHeader(getFormattedDate(commentModel), -1))</span>
+            }
+
+<span class="nc" id="L247">            val toggleAction = ToggleAction(commentModel, onToggle)</span>
+<span class="nc" id="L248">            val clickAction = ClickAction(commentModel, onClick)</span>
+
+<span class="nc bnc" id="L250" title="All 6 branches missed.">            val isSelected = selectedComments?.any { it.remoteCommentId == commentModel.remoteCommentId }</span>
+<span class="nc" id="L251">            val isPending = commentModel.status == UNAPPROVED.toString()</span>
+
+<span class="nc" id="L253">            list.add(</span>
+<span class="nc" id="L254">                    Comment(</span>
+<span class="nc" id="L255">                            remoteCommentId = commentModel.remoteCommentId,</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">                            postTitle = commentModel.postTitle.orEmpty(),</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">                            authorName = commentModel.authorName.orEmpty(),</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">                            authorEmail = commentModel.authorEmail.orEmpty(),</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">                            content = commentModel.content.orEmpty(),</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">                            publishedDate = commentModel.datePublished.orEmpty(),</span>
+<span class="nc" id="L261">                            publishedTimestamp = commentModel.publishedTimestamp,</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">                            authorAvatarUrl = commentModel.authorProfileImageUrl.orEmpty(),</span>
+<span class="nc" id="L263">                            isPending = isPending,</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">                            isSelected = isSelected ?: false,</span>
+<span class="nc" id="L265">                            clickAction = clickAction,</span>
+<span class="nc" id="L266">                            toggleAction = toggleAction</span>
+                    )
+            )
+<span class="nc" id="L269">        }</span>
+
+<span class="nc bnc" id="L271" title="All 8 branches missed.">        if (comments.isNotEmpty() &amp;&amp; hasMore &amp;&amp; commentFilter != UNREPLIED) {</span>
+<span class="nc bnc" id="L272" title="All 4 branches missed.">            list.add(NextPageLoader(hasMore &amp;&amp; commentsDataResult !is Failure, -1) {</span>
+<span class="nc" id="L273">                onLoadNextPage.invoke(comments.size)</span>
+<span class="nc" id="L274">            })</span>
+        }
+<span class="nc" id="L276">        return CommentList(list.toImmutableList(), hasMore)</span>
+    }
+
+    private fun shouldAddSeparator(before: CommentEntity, after: CommentEntity): Boolean {
+<span class="nc bnc" id="L280" title="All 2 branches missed.">        return getFormattedDate(before) != getFormattedDate(after)</span>
+    }
+
+    private fun getFormattedDate(comment: CommentEntity): String {
+<span class="nc" id="L284">        return dateTimeUtilsWrapper.javaDateToTimeSpan(DateTimeUtils.dateFromIso8601(comment.datePublished))</span>
+    }
+
+    internal fun buildCommentsListUiModel(
+        commentsDataResult: CommentsPagingResult,
+        commentFilter: CommentFilter,
+        previousState: CommentsUiModel?
+    ): CommentsListUiModel {
+<span class="nc" id="L292">        return when (commentsDataResult) {</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">            is Loading -&gt; {</span>
+<span class="nc bnc" id="L294" title="All 6 branches missed.">                if (previousState != null &amp;&amp; previousState.commentData.comments.isNotEmpty()) {</span>
+<span class="nc" id="L295">                    CommentsListUiModel.Refreshing</span>
+                } else {
+<span class="nc" id="L297">                    CommentsListUiModel.Loading</span>
+                }
+            }
+<span class="nc bnc" id="L300" title="All 2 branches missed.">            is Success -&gt; {</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">                if (commentsDataResult.data.comments.isEmpty()) {</span>
+<span class="nc" id="L302">                    CommentsListUiModel.Empty(</span>
+<span class="nc" id="L303">                            UiStringRes(getEmptyViewMessageResId(commentFilter)),</span>
+<span class="nc" id="L304">                            R.drawable.img_illustration_empty_results_216dp</span>
+                    )
+                } else {
+<span class="nc" id="L307">                    WithData</span>
+                }
+            }
+<span class="nc" id="L310">            is Failure -&gt; {</span>
+<span class="nc" id="L311">                val errorMessage = commentsDataResult.error.message</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">                if (commentsDataResult.cachedData.comments.isEmpty()) {</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">                    val errorString = if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L314">                        UiStringRes(string.no_network_message)</span>
+<span class="nc bnc" id="L315" title="All 6 branches missed.">                    } else if (errorMessage.isNullOrEmpty()) {</span>
+<span class="nc" id="L316">                        UiStringRes(string.error_refresh_comments)</span>
+                    } else {
+<span class="nc" id="L318">                        UiStringText(errorMessage)</span>
+                    }
+<span class="nc" id="L320">                    CommentsListUiModel.Empty(</span>
+<span class="nc" id="L321">                            errorString,</span>
+<span class="nc" id="L322">                            R.drawable.img_illustration_empty_results_216dp</span>
+                    )
+                } else {
+<span class="nc" id="L325">                    return WithData</span>
+                }
+            }
+        }
+    }
+
+    fun getEmptyViewMessageResId(commentFilter: CommentFilter): Int {
+<span class="nc bnc" id="L332" title="All 6 branches missed.">        return when (commentFilter) {</span>
+<span class="nc" id="L333">            CommentFilter.APPROVED -&gt; string.comments_empty_list_filtered_approved</span>
+<span class="nc" id="L334">            PENDING -&gt; string.comments_empty_list_filtered_pending</span>
+<span class="nc" id="L335">            UNREPLIED -&gt; string.comments_empty_list_filtered_unreplied</span>
+<span class="nc" id="L336">            SPAM -&gt; string.comments_empty_list_filtered_spam</span>
+<span class="nc" id="L337">            TRASHED -&gt; string.comments_empty_list_filtered_trashed</span>
+<span class="nc" id="L338">            CommentFilter.DELETE, CommentFilter.ALL -&gt; string.comments_empty_list</span>
+        }
+    }
+
+    sealed class ActionModeUiModel {
+<span class="nc" id="L343">        data class Visible(</span>
+<span class="nc" id="L344">            val actionModeTitle: UiString? = null,</span>
+<span class="nc" id="L345">            val approveActionUiModel: ActionUiModel,</span>
+<span class="nc" id="L346">            val unparoveActionUiModel: ActionUiModel,</span>
+<span class="nc" id="L347">            val spamActionUiModel: ActionUiModel,</span>
+<span class="nc" id="L348">            val unspamActionUiModel: ActionUiModel,</span>
+<span class="nc" id="L349">            val trashActionUiModel: ActionUiModel,</span>
+<span class="nc" id="L350">            val unTrashActionUiModel: ActionUiModel,</span>
+<span class="nc" id="L351">            val deleteActionUiModel: ActionUiModel</span>
+<span class="nc" id="L352">        ) : ActionModeUiModel()</span>
+
+<span class="nc" id="L354">        object Hidden : ActionModeUiModel()</span>
+    }
+
+<span class="nc" id="L357">    data class ActionUiModel(</span>
+<span class="nc" id="L358">        val isVisible: Boolean = false,</span>
+<span class="nc" id="L359">        val isEnabled: Boolean = false</span>
+<span class="nc" id="L360">    )</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,838 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ContributionsFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.contributions</a> &gt; <span class="el_source">ContributionsFragment.java</span></div><h1>ContributionsFragment.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.contributions;
+
+import static android.content.Context.SENSOR_SERVICE;
+import static fr.free.nrw.commons.contributions.Contribution.STATE_FAILED;
+import static fr.free.nrw.commons.contributions.Contribution.STATE_PAUSED;
+import static fr.free.nrw.commons.nearby.fragments.NearbyParentFragment.WLM_URL;
+import static fr.free.nrw.commons.profile.ProfileActivity.KEY_USERNAME;
+import static fr.free.nrw.commons.utils.LengthUtils.computeBearing;
+import static fr.free.nrw.commons.utils.LengthUtils.formatDistanceBetween;
+
+import android.Manifest;
+import android.Manifest.permission;
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.os.Bundle;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.MenuItem.OnMenuItemClickListener;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.CheckBox;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
+import androidx.activity.result.ActivityResultCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager.OnBackStackChangedListener;
+import androidx.fragment.app.FragmentTransaction;
+import fr.free.nrw.commons.CommonsApplication;
+import fr.free.nrw.commons.Utils;
+import fr.free.nrw.commons.auth.SessionManager;
+import fr.free.nrw.commons.notification.models.Notification;
+import fr.free.nrw.commons.notification.NotificationController;
+import fr.free.nrw.commons.profile.ProfileActivity;
+import fr.free.nrw.commons.theme.BaseActivity;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import javax.inject.Inject;
+import javax.inject.Named;
+import androidx.work.WorkManager;
+import butterknife.BindView;
+import butterknife.ButterKnife;
+import fr.free.nrw.commons.Media;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.campaigns.models.Campaign;
+import fr.free.nrw.commons.campaigns.CampaignView;
+import fr.free.nrw.commons.campaigns.CampaignsPresenter;
+import fr.free.nrw.commons.campaigns.ICampaignsView;
+import fr.free.nrw.commons.contributions.ContributionsListFragment.Callback;
+import fr.free.nrw.commons.contributions.MainActivity.ActiveFragment;
+import fr.free.nrw.commons.di.CommonsDaggerSupportFragment;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.location.LocationServiceManager;
+import fr.free.nrw.commons.location.LocationUpdateListener;
+import fr.free.nrw.commons.media.MediaDetailPagerFragment;
+import fr.free.nrw.commons.media.MediaDetailPagerFragment.MediaDetailProvider;
+import fr.free.nrw.commons.mwapi.OkHttpJsonApiClient;
+import fr.free.nrw.commons.nearby.NearbyController;
+import fr.free.nrw.commons.nearby.NearbyNotificationCardView;
+import fr.free.nrw.commons.nearby.Place;
+import fr.free.nrw.commons.notification.NotificationActivity;
+import fr.free.nrw.commons.upload.worker.UploadWorker;
+import fr.free.nrw.commons.utils.ConfigUtils;
+import fr.free.nrw.commons.utils.DialogUtil;
+import fr.free.nrw.commons.utils.NetworkUtils;
+import fr.free.nrw.commons.utils.PermissionUtils;
+import fr.free.nrw.commons.utils.ViewUtil;
+import io.reactivex.Observable;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.CompositeDisposable;
+import io.reactivex.schedulers.Schedulers;
+import timber.log.Timber;
+
+<span class="nc" id="L86">public class ContributionsFragment</span>
+        extends CommonsDaggerSupportFragment
+        implements
+        OnBackStackChangedListener,
+        LocationUpdateListener,
+    MediaDetailProvider,
+    SensorEventListener,
+    ICampaignsView, ContributionsContract.View, Callback{
+    @Inject @Named(&quot;default_preferences&quot;) JsonKvStore store;
+    @Inject NearbyController nearbyController;
+    @Inject OkHttpJsonApiClient okHttpJsonApiClient;
+    @Inject CampaignsPresenter presenter;
+    @Inject LocationServiceManager locationManager;
+    @Inject NotificationController notificationController;
+
+<span class="nc" id="L101">    private CompositeDisposable compositeDisposable = new CompositeDisposable();</span>
+
+    private ContributionsListFragment contributionsListFragment;
+    private static final String CONTRIBUTION_LIST_FRAGMENT_TAG = &quot;ContributionListFragmentTag&quot;;
+    private MediaDetailPagerFragment mediaDetailPagerFragment;
+    static final String MEDIA_DETAIL_PAGER_FRAGMENT_TAG = &quot;MediaDetailFragmentTag&quot;;
+    private static final int MAX_RETRIES = 10;
+
+    @BindView(R.id.card_view_nearby) public NearbyNotificationCardView nearbyNotificationCardView;
+    @BindView(R.id.campaigns_view) CampaignView campaignView;
+    @BindView(R.id.limited_connection_enabled_layout) LinearLayout limitedConnectionEnabledLayout;
+    @BindView(R.id.limited_connection_description_text_view) TextView limitedConnectionDescriptionTextView;
+
+    @Inject ContributionsPresenter contributionsPresenter;
+
+    @Inject
+    SessionManager sessionManager;
+
+    private LatLng curLatLng;
+
+<span class="nc" id="L121">    private boolean isFragmentAttachedBefore = false;</span>
+    private View checkBoxView;
+    private CheckBox checkBox;
+
+    public TextView notificationCount;
+
+    private Campaign wlmCampaign;
+
+    String userName;
+    private boolean isUserProfile;
+
+    private SensorManager mSensorManager;
+    private Sensor mLight;
+    private float direction;
+<span class="nc" id="L135">    private ActivityResultLauncher&lt;String[]&gt; nearbyLocationPermissionLauncher = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), new ActivityResultCallback&lt;Map&lt;String, Boolean&gt;&gt;() {</span>
+        @Override
+        public void onActivityResult(Map&lt;String, Boolean&gt; result) {
+<span class="nc" id="L138">            boolean areAllGranted = true;</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">            for (final boolean b : result.values()) {</span>
+<span class="nc bnc" id="L140" title="All 4 branches missed.">                areAllGranted = areAllGranted &amp;&amp; b;</span>
+<span class="nc" id="L141">            }</span>
+
+<span class="nc bnc" id="L143" title="All 2 branches missed.">            if (areAllGranted) {</span>
+<span class="nc" id="L144">                onLocationPermissionGranted();</span>
+            } else {
+<span class="nc bnc" id="L146" title="All 2 branches missed.">                if (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION)</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">                    &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">                    &amp;&amp; !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false)</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">                    &amp;&amp; (((MainActivity) getActivity()).activeFragment == ActiveFragment.CONTRIBUTIONS)) {</span>
+<span class="nc" id="L150">                    nearbyNotificationCardView.permissionType = NearbyNotificationCardView.PermissionType.ENABLE_LOCATION_PERMISSION;</span>
+<span class="nc" id="L151">                    showNearbyCardPermissionRationale();</span>
+                } else {
+<span class="nc" id="L153">                    displayYouWontSeeNearbyMessage();</span>
+                }
+            }
+<span class="nc" id="L156">        }</span>
+    });
+
+    @NonNull
+    public static ContributionsFragment newInstance() {
+<span class="nc" id="L161">        ContributionsFragment fragment = new ContributionsFragment();</span>
+<span class="nc" id="L162">        fragment.setRetainInstance(true);</span>
+<span class="nc" id="L163">        return fragment;</span>
+    }
+
+    private boolean shouldShowMediaDetailsFragment;
+
+    @Override
+    public void onCreate(@Nullable Bundle savedInstanceState) {
+<span class="nc" id="L170">        super.onCreate(savedInstanceState);</span>
+<span class="nc bnc" id="L171" title="All 4 branches missed.">        if (getArguments() != null &amp;&amp; getArguments().getString(KEY_USERNAME) != null) {</span>
+<span class="nc" id="L172">            userName = getArguments().getString(KEY_USERNAME);</span>
+<span class="nc" id="L173">            isUserProfile = true;</span>
+        }
+<span class="nc" id="L175">        mSensorManager = (SensorManager) getActivity().getSystemService(SENSOR_SERVICE);</span>
+<span class="nc" id="L176">        mLight = mSensorManager.getDefaultSensor(Sensor.TYPE_ORIENTATION);</span>
+<span class="nc" id="L177">    }</span>
+
+    @Nullable
+    @Override
+    public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+<span class="nc" id="L182">        View view = inflater.inflate(R.layout.fragment_contributions, container, false);</span>
+<span class="nc" id="L183">        ButterKnife.bind(this, view);</span>
+<span class="nc" id="L184">        initWLMCampaign();</span>
+<span class="nc" id="L185">        presenter.onAttachView(this);</span>
+<span class="nc" id="L186">        contributionsPresenter.onAttachView(this);</span>
+<span class="nc" id="L187">        campaignView.setVisibility(View.GONE);</span>
+<span class="nc" id="L188">        checkBoxView = View.inflate(getActivity(), R.layout.nearby_permission_dialog, null);</span>
+<span class="nc" id="L189">        checkBox = (CheckBox) checkBoxView.findViewById(R.id.never_ask_again);</span>
+<span class="nc" id="L190">        checkBox.setOnCheckedChangeListener((buttonView, isChecked) -&gt; {</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">            if (isChecked) {</span>
+                // Do not ask for permission on activity start again
+<span class="nc" id="L193">                store.putBoolean(&quot;displayLocationPermissionForCardView&quot;,false);</span>
+            }
+<span class="nc" id="L195">        });</span>
+
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L198">            mediaDetailPagerFragment = (MediaDetailPagerFragment) getChildFragmentManager()</span>
+<span class="nc" id="L199">                .findFragmentByTag(MEDIA_DETAIL_PAGER_FRAGMENT_TAG);</span>
+<span class="nc" id="L200">            contributionsListFragment = (ContributionsListFragment) getChildFragmentManager()</span>
+<span class="nc" id="L201">                .findFragmentByTag(CONTRIBUTION_LIST_FRAGMENT_TAG);</span>
+<span class="nc" id="L202">            shouldShowMediaDetailsFragment = savedInstanceState.getBoolean(&quot;mediaDetailsVisible&quot;);</span>
+        }
+
+<span class="nc" id="L205">        initFragments();</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">        if(isUserProfile) {</span>
+<span class="nc" id="L207">            limitedConnectionEnabledLayout.setVisibility(View.GONE);</span>
+        }else {
+<span class="nc" id="L209">            upDateUploadCount();</span>
+        }
+<span class="nc bnc" id="L211" title="All 2 branches missed.">        if(shouldShowMediaDetailsFragment){</span>
+<span class="nc" id="L212">            showMediaDetailPagerFragment();</span>
+        }else{
+<span class="nc bnc" id="L214" title="All 2 branches missed.">            if (mediaDetailPagerFragment != null) {</span>
+<span class="nc" id="L215">                removeFragment(mediaDetailPagerFragment);</span>
+            }
+<span class="nc" id="L217">            showContributionsListFragment();</span>
+        }
+
+<span class="nc bnc" id="L220" title="All 4 branches missed.">        if (!ConfigUtils.isBetaFlavour() &amp;&amp; sessionManager.isUserLoggedIn()</span>
+<span class="nc bnc" id="L221" title="All 4 branches missed.">            &amp;&amp; sessionManager.getCurrentAccount() != null &amp;&amp; !isUserProfile) {</span>
+<span class="nc" id="L222">            setUploadCount();</span>
+        }
+<span class="nc" id="L224">        limitedConnectionEnabledLayout.setOnClickListener(toggleDescriptionListener);</span>
+<span class="nc" id="L225">        setHasOptionsMenu(true);</span>
+<span class="nc" id="L226">        return view;</span>
+    }
+
+    /**
+     * Initialise the campaign object for WML
+     */
+    private void initWLMCampaign() {
+<span class="nc" id="L233">        wlmCampaign = new Campaign(getString(R.string.wlm_campaign_title),</span>
+<span class="nc" id="L234">            getString(R.string.wlm_campaign_description), Utils.getWLMStartDate().toString(),</span>
+<span class="nc" id="L235">            Utils.getWLMEndDate().toString(), WLM_URL, true);</span>
+<span class="nc" id="L236">    }</span>
+
+    @Override
+    public void onCreateOptionsMenu(@NonNull final Menu menu, @NonNull final MenuInflater inflater) {
+
+        // Removing contributions menu items for ProfileActivity
+<span class="nc bnc" id="L242" title="All 2 branches missed.">        if (getActivity() instanceof ProfileActivity) { return; }</span>
+
+<span class="nc" id="L244">        inflater.inflate(R.menu.contribution_activity_notification_menu, menu);</span>
+
+<span class="nc" id="L246">        MenuItem notificationsMenuItem = menu.findItem(R.id.notifications);</span>
+<span class="nc" id="L247">        final View notification = notificationsMenuItem.getActionView();</span>
+<span class="nc" id="L248">        notificationCount = notification.findViewById(R.id.notification_count_badge);</span>
+<span class="nc" id="L249">        notification.setOnClickListener(view -&gt; {</span>
+<span class="nc" id="L250">            NotificationActivity.startYourself(getContext(), &quot;unread&quot;);</span>
+<span class="nc" id="L251">        });</span>
+<span class="nc" id="L252">        updateLimitedConnectionToggle(menu);</span>
+<span class="nc" id="L253">    }</span>
+
+    @SuppressLint(&quot;CheckResult&quot;)
+    public void setNotificationCount() {
+<span class="nc" id="L257">        compositeDisposable.add(notificationController.getNotifications(false)</span>
+<span class="nc" id="L258">            .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L259">            .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L260">            .subscribe(this::initNotificationViews,</span>
+<span class="nc" id="L261">                throwable -&gt; Timber.e(throwable, &quot;Error occurred while loading notifications&quot;)));</span>
+<span class="nc" id="L262">    }</span>
+
+    public void scrollToTop( ){
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (contributionsListFragment != null) {</span>
+<span class="nc" id="L266">            contributionsListFragment.scrollToTop();</span>
+        }
+<span class="nc" id="L268">    }</span>
+
+    private void initNotificationViews(List&lt;Notification&gt; notificationList) {
+<span class="nc" id="L271">        Timber.d(&quot;Number of notifications is %d&quot;, notificationList.size());</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">        if (notificationList.isEmpty()) {</span>
+<span class="nc" id="L273">            notificationCount.setVisibility(View.GONE);</span>
+        } else {
+<span class="nc" id="L275">            notificationCount.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L276">            notificationCount.setText(String.valueOf(notificationList.size()));</span>
+        }
+<span class="nc" id="L278">    }</span>
+
+    public void updateLimitedConnectionToggle(Menu menu) {
+<span class="nc" id="L281">        MenuItem checkable = menu.findItem(R.id.toggle_limited_connection_mode);</span>
+<span class="nc" id="L282">        boolean isEnabled = store</span>
+<span class="nc" id="L283">            .getBoolean(CommonsApplication.IS_LIMITED_CONNECTION_MODE_ENABLED, false);</span>
+
+<span class="nc" id="L285">        checkable.setChecked(isEnabled);</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">        if (isEnabled) {</span>
+<span class="nc" id="L287">            limitedConnectionEnabledLayout.setVisibility(View.VISIBLE);</span>
+        } else {
+<span class="nc" id="L289">            limitedConnectionEnabledLayout.setVisibility(View.GONE);</span>
+        }
+<span class="nc bnc" id="L291" title="All 2 branches missed.">        checkable.setIcon((isEnabled) ? R.drawable.ic_baseline_cloud_off_24:R.drawable.ic_baseline_cloud_queue_24);</span>
+<span class="nc" id="L292">        checkable.setOnMenuItemClickListener(new OnMenuItemClickListener() {</span>
+            @Override
+            public boolean onMenuItemClick(MenuItem item) {
+<span class="nc" id="L295">                ((MainActivity) getActivity()).toggleLimitedConnectionMode();</span>
+<span class="nc" id="L296">                boolean isEnabled = store.getBoolean(CommonsApplication.IS_LIMITED_CONNECTION_MODE_ENABLED, false);</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">                if (isEnabled) {</span>
+<span class="nc" id="L298">                    limitedConnectionEnabledLayout.setVisibility(View.VISIBLE);</span>
+                } else {
+<span class="nc" id="L300">                    limitedConnectionEnabledLayout.setVisibility(View.GONE);</span>
+                }
+<span class="nc bnc" id="L302" title="All 2 branches missed.">                checkable.setIcon((isEnabled) ? R.drawable.ic_baseline_cloud_off_24:R.drawable.ic_baseline_cloud_queue_24);</span>
+<span class="nc" id="L303">                return false;</span>
+            }
+        });
+<span class="nc" id="L306">    }</span>
+
+    @Override
+    public void onAttach(Context context) {
+<span class="nc" id="L310">        super.onAttach(context);</span>
+        /*
+        - There are some operations we need auth, so we need to make sure isAuthCookieAcquired.
+        - And since we use same retained fragment doesn't want to make all network operations
+        all over again on same fragment attached to recreated activity, we do this network
+        operations on first time fragment attached to an activity. Then they will be retained
+        until fragment life time ends.
+         */
+<span class="nc bnc" id="L318" title="All 4 branches missed.">        if (!isFragmentAttachedBefore &amp;&amp; getActivity() != null) {</span>
+<span class="nc" id="L319">            isFragmentAttachedBefore = true;</span>
+        }
+<span class="nc" id="L321">    }</span>
+
+    /**
+     * Replace FrameLayout with ContributionsListFragment, user will see contributions list. Creates
+     * new one if null.
+     */
+    private void showContributionsListFragment() {
+        // show nearby card view on contributions list is visible
+<span class="nc bnc" id="L329" title="All 4 branches missed.">        if (nearbyNotificationCardView != null &amp;&amp; !isUserProfile) {</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">            if (store.getBoolean(&quot;displayNearbyCardView&quot;, true)) {</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">                if (nearbyNotificationCardView.cardViewVisibilityState</span>
+                    == NearbyNotificationCardView.CardViewVisibilityState.READY) {
+<span class="nc" id="L333">                    nearbyNotificationCardView.setVisibility(View.VISIBLE);</span>
+                }
+            } else {
+<span class="nc" id="L336">                nearbyNotificationCardView.setVisibility(View.GONE);</span>
+            }
+        }
+<span class="nc" id="L339">        showFragment(contributionsListFragment, CONTRIBUTION_LIST_FRAGMENT_TAG, mediaDetailPagerFragment);</span>
+<span class="nc" id="L340">    }</span>
+
+    private void showMediaDetailPagerFragment() {
+        // hide nearby card view on media detail is visible
+<span class="nc" id="L344">        setupViewForMediaDetails();</span>
+<span class="nc" id="L345">        showFragment(mediaDetailPagerFragment, MEDIA_DETAIL_PAGER_FRAGMENT_TAG, contributionsListFragment);</span>
+<span class="nc" id="L346">    }</span>
+
+    private void setupViewForMediaDetails() {
+<span class="nc" id="L349">        campaignView.setVisibility(View.GONE);</span>
+<span class="nc" id="L350">        nearbyNotificationCardView.setVisibility(View.GONE);</span>
+<span class="nc" id="L351">    }</span>
+
+    @Override
+    public void onBackStackChanged() {
+<span class="nc" id="L355">        fetchCampaigns();</span>
+<span class="nc" id="L356">    }</span>
+
+    private void initFragments() {
+<span class="nc bnc" id="L359" title="All 2 branches missed.">        if (null == contributionsListFragment) {</span>
+<span class="nc" id="L360">            contributionsListFragment = new ContributionsListFragment();</span>
+<span class="nc" id="L361">            Bundle contributionsListBundle = new Bundle();</span>
+<span class="nc" id="L362">            contributionsListBundle.putString(KEY_USERNAME, userName);</span>
+<span class="nc" id="L363">            contributionsListFragment.setArguments(contributionsListBundle);</span>
+        }
+
+<span class="nc bnc" id="L366" title="All 2 branches missed.">        if (shouldShowMediaDetailsFragment) {</span>
+<span class="nc" id="L367">            showMediaDetailPagerFragment();</span>
+        } else {
+<span class="nc" id="L369">            showContributionsListFragment();</span>
+        }
+
+<span class="nc" id="L372">        showFragment(contributionsListFragment, CONTRIBUTION_LIST_FRAGMENT_TAG, mediaDetailPagerFragment);</span>
+<span class="nc" id="L373">    }</span>
+
+    /**
+     * Replaces the root frame layout with the given fragment
+     *
+     * @param fragment
+     * @param tag
+     * @param otherFragment
+     */
+    private void showFragment(Fragment fragment, String tag, Fragment otherFragment) {
+<span class="nc" id="L383">        FragmentTransaction transaction = getChildFragmentManager().beginTransaction();</span>
+<span class="nc bnc" id="L384" title="All 4 branches missed.">        if (fragment.isAdded() &amp;&amp; otherFragment != null) {</span>
+<span class="nc" id="L385">            transaction.hide(otherFragment);</span>
+<span class="nc" id="L386">            transaction.show(fragment);</span>
+<span class="nc" id="L387">            transaction.addToBackStack(tag);</span>
+<span class="nc" id="L388">            transaction.commit();</span>
+<span class="nc" id="L389">            getChildFragmentManager().executePendingTransactions();</span>
+<span class="nc bnc" id="L390" title="All 4 branches missed.">        } else if (fragment.isAdded() &amp;&amp; otherFragment == null) {</span>
+<span class="nc" id="L391">            transaction.show(fragment);</span>
+<span class="nc" id="L392">            transaction.addToBackStack(tag);</span>
+<span class="nc" id="L393">            transaction.commit();</span>
+<span class="nc" id="L394">            getChildFragmentManager().executePendingTransactions();</span>
+<span class="nc bnc" id="L395" title="All 4 branches missed.">        }else if (!fragment.isAdded() &amp;&amp; otherFragment != null ) {</span>
+<span class="nc" id="L396">            transaction.hide(otherFragment);</span>
+<span class="nc" id="L397">            transaction.add(R.id.root_frame, fragment, tag);</span>
+<span class="nc" id="L398">            transaction.addToBackStack(tag);</span>
+<span class="nc" id="L399">            transaction.commit();</span>
+<span class="nc" id="L400">            getChildFragmentManager().executePendingTransactions();</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">        } else if (!fragment.isAdded()) {</span>
+<span class="nc" id="L402">            transaction.replace(R.id.root_frame, fragment, tag);</span>
+<span class="nc" id="L403">            transaction.addToBackStack(tag);</span>
+<span class="nc" id="L404">            transaction.commit();</span>
+<span class="nc" id="L405">            getChildFragmentManager().executePendingTransactions();</span>
+        }
+<span class="nc" id="L407">    }</span>
+
+    public void removeFragment(Fragment fragment) {
+<span class="nc" id="L410">        getChildFragmentManager()</span>
+<span class="nc" id="L411">            .beginTransaction()</span>
+<span class="nc" id="L412">            .remove(fragment)</span>
+<span class="nc" id="L413">            .commit();</span>
+<span class="nc" id="L414">        getChildFragmentManager().executePendingTransactions();</span>
+<span class="nc" id="L415">    }</span>
+
+    @SuppressWarnings(&quot;ConstantConditions&quot;)
+    private void setUploadCount() {
+<span class="nc" id="L419">        compositeDisposable.add(okHttpJsonApiClient</span>
+<span class="nc" id="L420">                .getUploadCount(((MainActivity)getActivity()).sessionManager.getCurrentAccount().name)</span>
+<span class="nc" id="L421">                .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L422">                .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L423">                .subscribe(this::displayUploadCount,</span>
+<span class="nc" id="L424">                        t -&gt; Timber.e(t, &quot;Fetching upload count failed&quot;)</span>
+                ));
+<span class="nc" id="L426">    }</span>
+
+    private void displayUploadCount(Integer uploadCount) {
+<span class="nc bnc" id="L429" title="All 2 branches missed.">        if (getActivity().isFinishing()</span>
+<span class="nc bnc" id="L430" title="All 2 branches missed.">                || getResources() == null) {</span>
+<span class="nc" id="L431">            return;</span>
+        }
+
+<span class="nc" id="L434">        ((MainActivity)getActivity()).setNumOfUploads(uploadCount);</span>
+
+<span class="nc" id="L436">    }</span>
+
+    @Override
+    public void onPause() {
+<span class="nc" id="L440">        super.onPause();</span>
+<span class="nc" id="L441">        locationManager.removeLocationListener(this);</span>
+<span class="nc" id="L442">        locationManager.unregisterLocationManager();</span>
+<span class="nc" id="L443">        mSensorManager.unregisterListener(this);</span>
+<span class="nc" id="L444">    }</span>
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+<span class="nc" id="L448">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L449">    }</span>
+
+    @Override
+    public void onResume() {
+<span class="nc" id="L453">        super.onResume();</span>
+<span class="nc" id="L454">        contributionsPresenter.onAttachView(this);</span>
+<span class="nc" id="L455">        locationManager.addLocationListener(this);</span>
+<span class="nc" id="L456">        nearbyNotificationCardView.permissionRequestButton.setOnClickListener(v -&gt; {</span>
+<span class="nc" id="L457">            showNearbyCardPermissionRationale();</span>
+<span class="nc" id="L458">        });</span>
+
+        // Notification cards should only be seen on contributions list, not in media details
+<span class="nc bnc" id="L461" title="All 4 branches missed.">        if (mediaDetailPagerFragment == null &amp;&amp; !isUserProfile) {</span>
+<span class="nc bnc" id="L462" title="All 2 branches missed.">            if (store.getBoolean(&quot;displayNearbyCardView&quot;, true)) {</span>
+<span class="nc" id="L463">                checkPermissionsAndShowNearbyCardView();</span>
+                
+                // Calling nearby card to keep showing it even when user clicks on it and comes back
+                try {
+<span class="nc" id="L467">                    updateClosestNearbyCardViewInfo();</span>
+<span class="nc" id="L468">                } catch (Exception e) {</span>
+<span class="nc" id="L469">                    Timber.e(e);</span>
+<span class="nc" id="L470">                }</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">                if (nearbyNotificationCardView.cardViewVisibilityState == NearbyNotificationCardView.CardViewVisibilityState.READY) {</span>
+<span class="nc" id="L472">                    nearbyNotificationCardView.setVisibility(View.VISIBLE);</span>
+                }
+
+            } else {
+                // Hide nearby notification card view if related shared preferences is false
+<span class="nc" id="L477">                nearbyNotificationCardView.setVisibility(View.GONE);</span>
+            }
+
+            // Notification Count and Campaigns should not be set, if it is used in User Profile
+<span class="nc bnc" id="L481" title="All 2 branches missed.">            if(!isUserProfile) {</span>
+<span class="nc" id="L482">                setNotificationCount();</span>
+<span class="nc" id="L483">                fetchCampaigns();</span>
+            }
+        }
+<span class="nc" id="L486">        mSensorManager.registerListener(this, mLight, SensorManager.SENSOR_DELAY_UI);</span>
+<span class="nc" id="L487">    }</span>
+
+    private void checkPermissionsAndShowNearbyCardView() {
+<span class="nc bnc" id="L490" title="All 2 branches missed.">        if (PermissionUtils.hasPermission(getActivity(), new String[]{Manifest.permission.ACCESS_FINE_LOCATION})) {</span>
+<span class="nc" id="L491">            onLocationPermissionGranted();</span>
+<span class="nc bnc" id="L492" title="All 2 branches missed.">        } else if (shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_FINE_LOCATION)</span>
+<span class="nc bnc" id="L493" title="All 2 branches missed.">                &amp;&amp; store.getBoolean(&quot;displayLocationPermissionForCardView&quot;, true)</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">                &amp;&amp; !store.getBoolean(&quot;doNotAskForLocationPermission&quot;, false)</span>
+<span class="nc bnc" id="L495" title="All 2 branches missed.">                &amp;&amp; (((MainActivity) getActivity()).activeFragment == ActiveFragment.CONTRIBUTIONS)) {</span>
+<span class="nc" id="L496">            nearbyNotificationCardView.permissionType = NearbyNotificationCardView.PermissionType.ENABLE_LOCATION_PERMISSION;</span>
+<span class="nc" id="L497">            showNearbyCardPermissionRationale();</span>
+        }
+<span class="nc" id="L499">    }</span>
+
+    private void requestLocationPermission() {
+<span class="nc" id="L502">        nearbyLocationPermissionLauncher.launch(new String[]{permission.ACCESS_FINE_LOCATION});</span>
+<span class="nc" id="L503">    }</span>
+
+    private void onLocationPermissionGranted() {
+<span class="nc" id="L506">        nearbyNotificationCardView.permissionType = NearbyNotificationCardView.PermissionType.NO_PERMISSION_NEEDED;</span>
+<span class="nc" id="L507">        locationManager.registerLocationManager();</span>
+<span class="nc" id="L508">    }</span>
+
+    private void showNearbyCardPermissionRationale() {
+<span class="nc" id="L511">        DialogUtil.showAlertDialog(getActivity(),</span>
+<span class="nc" id="L512">                getString(R.string.nearby_card_permission_title),</span>
+<span class="nc" id="L513">                getString(R.string.nearby_card_permission_explanation),</span>
+                this::requestLocationPermission,
+                this::displayYouWontSeeNearbyMessage,
+                checkBoxView,
+                false);
+<span class="nc" id="L518">    }</span>
+
+    private void displayYouWontSeeNearbyMessage() {
+<span class="nc" id="L521">        ViewUtil.showLongToast(getActivity(), getResources().getString(R.string.unable_to_display_nearest_place));</span>
+<span class="nc" id="L522">        store.putBoolean(&quot;doNotAskForLocationPermission&quot;, true);</span>
+<span class="nc" id="L523">    }</span>
+
+
+    private void updateClosestNearbyCardViewInfo() {
+<span class="nc" id="L527">        curLatLng = locationManager.getLastLocation();</span>
+<span class="nc" id="L528">        compositeDisposable.add(Observable.fromCallable(() -&gt; nearbyController</span>
+<span class="nc" id="L529">                .loadAttractionsFromLocation(curLatLng, curLatLng, true, false, false)) // thanks to boolean, it will only return closest result</span>
+<span class="nc" id="L530">                .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L531">                .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L532">                .subscribe(this::updateNearbyNotification,</span>
+                        throwable -&gt; {
+<span class="nc" id="L534">                            Timber.d(throwable);</span>
+<span class="nc" id="L535">                            updateNearbyNotification(null);</span>
+<span class="nc" id="L536">                        }));</span>
+<span class="nc" id="L537">    }</span>
+
+    private void updateNearbyNotification(@Nullable NearbyController.NearbyPlacesInfo nearbyPlacesInfo) {
+<span class="nc bnc" id="L540" title="All 6 branches missed.">        if (nearbyPlacesInfo != null &amp;&amp; nearbyPlacesInfo.placeList != null &amp;&amp; nearbyPlacesInfo.placeList.size() &gt; 0) {</span>
+<span class="nc" id="L541">            Place closestNearbyPlace = null;</span>
+            // Find the first nearby place that has no image and exists
+<span class="nc bnc" id="L543" title="All 2 branches missed.">            for (Place place : nearbyPlacesInfo.placeList) {</span>
+<span class="nc bnc" id="L544" title="All 4 branches missed.">                if (place.pic.equals(&quot;&quot;) &amp;&amp; place.exists) {</span>
+<span class="nc" id="L545">                    closestNearbyPlace = place;</span>
+<span class="nc" id="L546">                    break;</span>
+                }
+<span class="nc" id="L548">            }</span>
+
+<span class="nc bnc" id="L550" title="All 2 branches missed.">            if(closestNearbyPlace == null) {</span>
+<span class="nc" id="L551">                nearbyNotificationCardView.setVisibility(View.GONE);</span>
+            }else{
+<span class="nc" id="L553">                String distance = formatDistanceBetween(curLatLng, closestNearbyPlace.location);</span>
+<span class="nc" id="L554">                closestNearbyPlace.setDistance(distance);</span>
+<span class="nc" id="L555">                direction = (float) computeBearing(curLatLng, closestNearbyPlace.location);</span>
+<span class="nc" id="L556">                nearbyNotificationCardView.updateContent(closestNearbyPlace);</span>
+            }
+<span class="nc" id="L558">        } else {</span>
+            // Means that no close nearby place is found
+<span class="nc" id="L560">            nearbyNotificationCardView.setVisibility(View.GONE);</span>
+        }
+
+        // Prevent Nearby banner from appearing in Media Details, fixing bug https://github.com/commons-app/apps-android-commons/issues/4731
+<span class="nc bnc" id="L564" title="All 4 branches missed.">        if (mediaDetailPagerFragment != null &amp;&amp; !contributionsListFragment.isVisible()) {</span>
+<span class="nc" id="L565">            nearbyNotificationCardView.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L567">    }</span>
+
+    @Override
+    public void onDestroy() {
+        try{
+<span class="nc" id="L572">            compositeDisposable.clear();</span>
+<span class="nc" id="L573">            getChildFragmentManager().removeOnBackStackChangedListener(this);</span>
+<span class="nc" id="L574">            locationManager.unregisterLocationManager();</span>
+<span class="nc" id="L575">            locationManager.removeLocationListener(this);</span>
+<span class="nc" id="L576">            super.onDestroy();</span>
+<span class="nc" id="L577">        } catch (IllegalArgumentException | IllegalStateException exception) {</span>
+<span class="nc" id="L578">            Timber.e(exception);</span>
+<span class="nc" id="L579">        }</span>
+<span class="nc" id="L580">    }</span>
+
+    @Override
+    public void onLocationChangedSignificantly(LatLng latLng) {
+        // Will be called if location changed more than 1000 meter
+<span class="nc" id="L585">        updateClosestNearbyCardViewInfo();</span>
+<span class="nc" id="L586">    }</span>
+
+    @Override
+    public void onLocationChangedSlightly(LatLng latLng) {
+        /* Update closest nearby notification card onLocationChangedSlightly
+        */
+        try {
+<span class="nc" id="L593">            updateClosestNearbyCardViewInfo();</span>
+<span class="nc" id="L594">        } catch (Exception e) {</span>
+<span class="nc" id="L595">            Timber.e(e);</span>
+<span class="nc" id="L596">        }</span>
+<span class="nc" id="L597">    }</span>
+
+    @Override
+    public void onLocationChangedMedium(LatLng latLng) {
+        // Update closest nearby card view if location changed more than 500 meters
+<span class="nc" id="L602">        updateClosestNearbyCardViewInfo();</span>
+<span class="nc" id="L603">    }</span>
+
+    @Override public void onViewCreated(@NonNull View view,
+        @Nullable Bundle savedInstanceState) {
+<span class="nc" id="L607">        super.onViewCreated(view, savedInstanceState);</span>
+<span class="nc" id="L608">    }</span>
+
+    /**
+     * As the home screen has limited space, we have choosen to show either campaigns or WLM card.
+     * The WLM Card gets the priority over monuments, so if the WLM is going on we show that instead
+     * of campaigns on the campaigns card
+     */
+    private void fetchCampaigns() {
+<span class="nc bnc" id="L616" title="All 2 branches missed.">        if (Utils.isMonumentsEnabled(new Date())) {</span>
+<span class="nc" id="L617">            campaignView.setCampaign(wlmCampaign);</span>
+<span class="nc" id="L618">            campaignView.setVisibility(View.VISIBLE);</span>
+<span class="nc bnc" id="L619" title="All 2 branches missed.">        } else if (store.getBoolean(CampaignView.CAMPAIGNS_DEFAULT_PREFERENCE, true)) {</span>
+<span class="nc" id="L620">            presenter.getCampaigns();</span>
+        } else {
+<span class="nc" id="L622">            campaignView.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L624">    }</span>
+
+    @Override public void showMessage(String message) {
+<span class="nc" id="L627">        Toast.makeText(getContext(), message, Toast.LENGTH_SHORT).show();</span>
+<span class="nc" id="L628">    }</span>
+
+    @Override public void showCampaigns(Campaign campaign) {
+<span class="nc bnc" id="L631" title="All 4 branches missed.">        if (campaign != null &amp;&amp; !isUserProfile) {</span>
+<span class="nc" id="L632">            campaignView.setCampaign(campaign);</span>
+        }
+<span class="nc" id="L634">    }</span>
+
+    @Override public void onDestroyView() {
+<span class="nc" id="L637">        super.onDestroyView();</span>
+<span class="nc" id="L638">        presenter.onDetachView();</span>
+<span class="nc" id="L639">    }</span>
+
+    @Override
+    public void notifyDataSetChanged() {
+<span class="nc bnc" id="L643" title="All 2 branches missed.">        if (mediaDetailPagerFragment != null) {</span>
+<span class="nc" id="L644">            mediaDetailPagerFragment.notifyDataSetChanged();</span>
+        }
+<span class="nc" id="L646">    }</span>
+
+    /**
+     * Restarts the upload process for a contribution
+     * @param contribution
+     */
+    public void restartUpload(Contribution contribution) {
+<span class="nc" id="L653">        contribution.setState(Contribution.STATE_QUEUED);</span>
+<span class="nc" id="L654">        contributionsPresenter.saveContribution(contribution);</span>
+<span class="nc" id="L655">        Timber.d(&quot;Restarting for %s&quot;, contribution.toString());</span>
+<span class="nc" id="L656">    }</span>
+    /**
+     * Retry upload when it is failed
+     *
+     * @param contribution contribution to be retried
+     */
+    @Override
+    public void retryUpload(Contribution contribution) {
+<span class="nc bnc" id="L664" title="All 2 branches missed.">        if (NetworkUtils.isInternetConnectionEstablished(getContext())) {</span>
+<span class="nc bnc" id="L665" title="All 4 branches missed.">            if (contribution.getState() == STATE_PAUSED || contribution.getState()==Contribution.STATE_QUEUED_LIMITED_CONNECTION_MODE) {</span>
+<span class="nc" id="L666">                restartUpload(contribution);</span>
+<span class="nc bnc" id="L667" title="All 2 branches missed.">            } else if (contribution.getState() == STATE_FAILED) {</span>
+<span class="nc" id="L668">                int retries = contribution.getRetries();</span>
+                // TODO: Improve UX. Additional details: https://github.com/commons-app/apps-android-commons/pull/5257#discussion_r1304662562
+                /* Limit the number of retries for a failed upload
+                   to handle cases like invalid filename as such uploads
+                   will never be successful */
+<span class="nc bnc" id="L673" title="All 2 branches missed.">                if(retries &lt; MAX_RETRIES) {</span>
+<span class="nc" id="L674">                    contribution.setRetries(retries + 1);</span>
+<span class="nc" id="L675">                    Timber.d(&quot;Retried uploading %s %d times&quot;, contribution.getMedia().getFilename(), retries + 1);</span>
+<span class="nc" id="L676">                    restartUpload(contribution);</span>
+                } else {
+                    // TODO: Show the exact reason for failure
+<span class="nc" id="L679">                    Toast.makeText(getContext(),</span>
+<span class="nc" id="L680">                        R.string.retry_limit_reached, Toast.LENGTH_SHORT).show();</span>
+                }
+<span class="nc" id="L682">            } else {</span>
+<span class="nc" id="L683">                Timber.d(&quot;Skipping re-upload for non-failed %s&quot;, contribution.toString());</span>
+            }
+        } else {
+<span class="nc" id="L686">            ViewUtil.showLongToast(getContext(), R.string.this_function_needs_network_connection);</span>
+        }
+
+<span class="nc" id="L689">    }</span>
+
+    /**
+     * Pauses the upload
+     * @param contribution
+     */
+    @Override
+    public void pauseUpload(Contribution contribution) {
+        //Pause the upload in the global singleton
+<span class="nc" id="L698">        CommonsApplication.pauseUploads.put(contribution.getPageId(), true);</span>
+        //Retain the paused state in DB
+<span class="nc" id="L700">        contribution.setState(STATE_PAUSED);</span>
+<span class="nc" id="L701">        contributionsPresenter.saveContribution(contribution);</span>
+<span class="nc" id="L702">    }</span>
+
+    /**
+     * Notify the viewpager that number of items have changed.
+     */
+    @Override
+    public void viewPagerNotifyDataSetChanged() {
+<span class="nc bnc" id="L709" title="All 2 branches missed.">        if (mediaDetailPagerFragment != null) {</span>
+<span class="nc" id="L710">            mediaDetailPagerFragment.notifyDataSetChanged();</span>
+        }
+<span class="nc" id="L712">    }</span>
+
+    /**
+     * Replace whatever is in the current contributionsFragmentContainer view with
+     * mediaDetailPagerFragment, and preserve previous state in back stack. Called when user selects a
+     * contribution.
+     */
+    @Override
+    public void showDetail(int position, boolean isWikipediaButtonDisplayed) {
+<span class="nc bnc" id="L721" title="All 4 branches missed.">        if (mediaDetailPagerFragment == null || !mediaDetailPagerFragment.isVisible()) {</span>
+<span class="nc" id="L722">            mediaDetailPagerFragment = MediaDetailPagerFragment.newInstance(false, true);</span>
+<span class="nc bnc" id="L723" title="All 2 branches missed.">            if(isUserProfile) {</span>
+<span class="nc" id="L724">                ((ProfileActivity)getActivity()).setScroll(false);</span>
+            }
+<span class="nc" id="L726">            showMediaDetailPagerFragment();</span>
+        }
+<span class="nc" id="L728">        mediaDetailPagerFragment.showImage(position, isWikipediaButtonDisplayed);</span>
+<span class="nc" id="L729">    }</span>
+
+    @Override
+    public Media getMediaAtPosition(int i) {
+<span class="nc" id="L733">        return contributionsListFragment.getMediaAtPosition(i);</span>
+    }
+
+    @Override
+    public int getTotalMediaCount() {
+<span class="nc" id="L738">        return contributionsListFragment.getTotalMediaCount();</span>
+    }
+
+    @Override
+    public Integer getContributionStateAt(int position) {
+<span class="nc" id="L743">        return contributionsListFragment.getContributionStateAt(position);</span>
+    }
+
+    public boolean backButtonClicked() {
+<span class="nc bnc" id="L747" title="All 4 branches missed.">        if (mediaDetailPagerFragment != null &amp;&amp; mediaDetailPagerFragment.isVisible()) {</span>
+<span class="nc bnc" id="L748" title="All 4 branches missed.">            if (store.getBoolean(&quot;displayNearbyCardView&quot;, true) &amp;&amp; !isUserProfile) {</span>
+<span class="nc bnc" id="L749" title="All 2 branches missed.">                if (nearbyNotificationCardView.cardViewVisibilityState == NearbyNotificationCardView.CardViewVisibilityState.READY) {</span>
+<span class="nc" id="L750">                    nearbyNotificationCardView.setVisibility(View.VISIBLE);</span>
+                }
+            } else {
+<span class="nc" id="L753">                nearbyNotificationCardView.setVisibility(View.GONE);</span>
+            }
+<span class="nc" id="L755">            removeFragment(mediaDetailPagerFragment);</span>
+<span class="nc" id="L756">            showFragment(contributionsListFragment, CONTRIBUTION_LIST_FRAGMENT_TAG, mediaDetailPagerFragment);</span>
+<span class="nc bnc" id="L757" title="All 2 branches missed.">            if(isUserProfile) {</span>
+                // Fragment is associated with ProfileActivity
+                // Enable ParentViewPager Scroll
+<span class="nc" id="L760">                ((ProfileActivity)getActivity()).setScroll(true);</span>
+            }else {
+<span class="nc" id="L762">                fetchCampaigns();</span>
+            }
+<span class="nc bnc" id="L764" title="All 2 branches missed.">            if (getActivity() instanceof MainActivity) {</span>
+                // Fragment is associated with MainActivity
+<span class="nc" id="L766">                ((BaseActivity) getActivity()).getSupportActionBar().setDisplayHomeAsUpEnabled(false);</span>
+<span class="nc" id="L767">                ((MainActivity) getActivity()).showTabs();</span>
+            }
+<span class="nc" id="L769">            return true;</span>
+        }
+<span class="nc" id="L771">        return false;</span>
+    }
+
+    // Getter for mediaDetailPagerFragment
+    public MediaDetailPagerFragment getMediaDetailPagerFragment() {
+<span class="nc" id="L776">        return mediaDetailPagerFragment;</span>
+    }
+
+
+    /**
+     * this function updates the number of contributions
+     */
+    void upDateUploadCount() {
+<span class="nc" id="L784">        WorkManager.getInstance(getContext())</span>
+<span class="nc" id="L785">            .getWorkInfosForUniqueWorkLiveData(UploadWorker.class.getSimpleName()).observe(</span>
+<span class="nc" id="L786">            getViewLifecycleOwner(), workInfos -&gt; {</span>
+<span class="nc bnc" id="L787" title="All 2 branches missed.">                if (workInfos.size() &gt; 0) {</span>
+<span class="nc" id="L788">                    setUploadCount();</span>
+                }
+<span class="nc" id="L790">            });</span>
+<span class="nc" id="L791">    }</span>
+
+
+    /**
+     * Reload media detail fragment once media is nominated
+     *
+     * @param index item position that has been nominated
+     */
+    @Override
+    public void refreshNominatedMedia(int index) {
+<span class="nc bnc" id="L801" title="All 4 branches missed.">        if(mediaDetailPagerFragment != null &amp;&amp; !contributionsListFragment.isVisible()) {</span>
+<span class="nc" id="L802">            removeFragment(mediaDetailPagerFragment);</span>
+<span class="nc" id="L803">            mediaDetailPagerFragment = MediaDetailPagerFragment.newInstance(false, true);</span>
+<span class="nc" id="L804">            mediaDetailPagerFragment.showImage(index);</span>
+<span class="nc" id="L805">            showMediaDetailPagerFragment();</span>
+        }
+<span class="nc" id="L807">    }</span>
+
+  // click listener to toggle description that means uses can press the limited connection
+  // banner and description will hide. Tap again to show description.
+<span class="nc" id="L811">  private View.OnClickListener toggleDescriptionListener = new View.OnClickListener() {</span>
+
+      @Override
+      public void onClick(View view) {
+<span class="nc" id="L815">          View view2 = limitedConnectionDescriptionTextView;</span>
+<span class="nc bnc" id="L816" title="All 2 branches missed.">          if (view2.getVisibility() == View.GONE) {</span>
+<span class="nc" id="L817">              view2.setVisibility(View.VISIBLE);</span>
+          } else {
+<span class="nc" id="L819">              view2.setVisibility(View.GONE);</span>
+          }
+<span class="nc" id="L821">      }</span>
+  };
+
+    /**
+     * When the device rotates, rotate the Nearby banner's compass arrow in tandem.
+     */
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+<span class="nc" id="L829">        float rotateDegree = Math.round(event.values[0]);</span>
+<span class="nc" id="L830">        nearbyNotificationCardView.rotateCompass(rotateDegree, direction);</span>
+<span class="nc" id="L831">    }</span>
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        // Nothing to do.
+<span class="nc" id="L836">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

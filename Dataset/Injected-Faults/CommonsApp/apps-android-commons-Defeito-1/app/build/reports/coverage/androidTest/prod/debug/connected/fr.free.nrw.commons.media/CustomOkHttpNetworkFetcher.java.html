@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CustomOkHttpNetworkFetcher.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.media</a> &gt; <span class="el_source">CustomOkHttpNetworkFetcher.java</span></div><h1>CustomOkHttpNetworkFetcher.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.media;
+
+import android.net.Uri;
+import android.os.Looper;
+import android.os.SystemClock;
+import androidx.annotation.Nullable;
+import com.facebook.imagepipeline.common.BytesRange;
+import com.facebook.imagepipeline.image.EncodedImage;
+import com.facebook.imagepipeline.producers.BaseNetworkFetcher;
+import com.facebook.imagepipeline.producers.BaseProducerContextCallbacks;
+import com.facebook.imagepipeline.producers.Consumer;
+import com.facebook.imagepipeline.producers.FetchState;
+import com.facebook.imagepipeline.producers.NetworkFetcher;
+import com.facebook.imagepipeline.producers.ProducerContext;
+import fr.free.nrw.commons.CommonsApplication;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.Executor;
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Singleton;
+import okhttp3.CacheControl;
+import okhttp3.Call;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+import timber.log.Timber;
+
+// Custom implementation of Fresco's Network fetcher to skip downloading of images when limited connection mode is enabled
+// https://github.com/facebook/fresco/blob/master/imagepipeline-backends/imagepipeline-okhttp3/src/main/java/com/facebook/imagepipeline/backends/okhttp3/OkHttpNetworkFetcher.java
+@Singleton
+public class CustomOkHttpNetworkFetcher
+    extends BaseNetworkFetcher&lt;CustomOkHttpNetworkFetcher.OkHttpNetworkFetchState&gt; {
+
+    private static final String QUEUE_TIME = &quot;queue_time&quot;;
+    private static final String FETCH_TIME = &quot;fetch_time&quot;;
+    private static final String TOTAL_TIME = &quot;total_time&quot;;
+    private static final String IMAGE_SIZE = &quot;image_size&quot;;
+    private final Call.Factory mCallFactory;
+    private final @Nullable
+    CacheControl mCacheControl;
+    private final Executor mCancellationExecutor;
+    private final JsonKvStore defaultKvStore;
+
+    /**
+     * @param okHttpClient client to use
+     */
+    @Inject
+    public CustomOkHttpNetworkFetcher(final OkHttpClient okHttpClient,
+        @Named(&quot;default_preferences&quot;) final JsonKvStore defaultKvStore) {
+<span class="fc" id="L54">        this(okHttpClient, okHttpClient.dispatcher().executorService(), defaultKvStore);</span>
+<span class="fc" id="L55">    }</span>
+
+    /**
+     * @param callFactory          custom {@link Call.Factory} for fetching image from the network
+     * @param cancellationExecutor executor on which fetching cancellation is performed if
+     *                             cancellation is requested from the UI Thread
+     */
+    public CustomOkHttpNetworkFetcher(final Call.Factory callFactory,
+        final Executor cancellationExecutor,
+        final JsonKvStore defaultKvStore) {
+<span class="fc" id="L65">        this(callFactory, cancellationExecutor, defaultKvStore, true);</span>
+<span class="fc" id="L66">    }</span>
+
+    /**
+     * @param callFactory          custom {@link Call.Factory} for fetching image from the network
+     * @param cancellationExecutor executor on which fetching cancellation is performed if
+     *                             cancellation is requested from the UI Thread
+     * @param disableOkHttpCache   true if network requests should not be cached by OkHttp
+     */
+    public CustomOkHttpNetworkFetcher(
+        final Call.Factory callFactory, final Executor cancellationExecutor,
+        final JsonKvStore defaultKvStore,
+<span class="fc" id="L77">        final boolean disableOkHttpCache) {</span>
+<span class="fc" id="L78">        this.defaultKvStore = defaultKvStore;</span>
+<span class="fc" id="L79">        mCallFactory = callFactory;</span>
+<span class="fc" id="L80">        mCancellationExecutor = cancellationExecutor;</span>
+<span class="pc bpc" id="L81" title="1 of 2 branches missed.">        mCacheControl = disableOkHttpCache ? new CacheControl.Builder().noStore().build() : null;</span>
+<span class="fc" id="L82">    }</span>
+
+    @Override
+    public OkHttpNetworkFetchState createFetchState(
+        final Consumer&lt;EncodedImage&gt; consumer, final ProducerContext context) {
+<span class="nc" id="L87">        return new OkHttpNetworkFetchState(consumer, context);</span>
+    }
+
+    @Override
+    public void fetch(
+        final OkHttpNetworkFetchState fetchState, final NetworkFetcher.Callback callback) {
+<span class="nc" id="L93">        fetchState.submitTime = SystemClock.elapsedRealtime();</span>
+<span class="nc" id="L94">        final Uri uri = fetchState.getUri();</span>
+
+        try {
+<span class="nc" id="L97">            if (defaultKvStore</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">                .getBoolean(CommonsApplication.IS_LIMITED_CONNECTION_MODE_ENABLED, false)) {</span>
+<span class="nc" id="L99">                Timber.d(&quot;Skipping loading of image as limited connection mode is enabled&quot;);</span>
+<span class="nc" id="L100">                callback.onFailure(</span>
+                    new Exception(&quot;Failing image request as limited connection mode is enabled&quot;));
+<span class="nc" id="L102">                return;</span>
+            }
+<span class="nc" id="L104">            final Request.Builder requestBuilder = new Request.Builder().url(uri.toString()).get();</span>
+
+<span class="nc bnc" id="L106" title="All 2 branches missed.">            if (mCacheControl != null) {</span>
+<span class="nc" id="L107">                requestBuilder.cacheControl(mCacheControl);</span>
+            }
+
+<span class="nc" id="L110">            final BytesRange bytesRange = fetchState.getContext().getImageRequest().getBytesRange();</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">            if (bytesRange != null) {</span>
+<span class="nc" id="L112">                requestBuilder.addHeader(&quot;Range&quot;, bytesRange.toHttpRangeHeaderValue());</span>
+            }
+
+<span class="nc" id="L115">            fetchWithRequest(fetchState, callback, requestBuilder.build());</span>
+<span class="nc" id="L116">        } catch (final Exception e) {</span>
+            // handle error while creating the request
+<span class="nc" id="L118">            callback.onFailure(e);</span>
+<span class="nc" id="L119">        }</span>
+<span class="nc" id="L120">    }</span>
+
+    @Override
+    public void onFetchCompletion(final OkHttpNetworkFetchState fetchState, final int byteSize) {
+<span class="nc" id="L124">        fetchState.fetchCompleteTime = SystemClock.elapsedRealtime();</span>
+<span class="nc" id="L125">    }</span>
+
+    @Override
+    public Map&lt;String, String&gt; getExtraMap(final OkHttpNetworkFetchState fetchState,
+        final int byteSize) {
+<span class="nc" id="L130">        final Map&lt;String, String&gt; extraMap = new HashMap&lt;&gt;(4);</span>
+<span class="nc" id="L131">        extraMap.put(QUEUE_TIME, Long.toString(fetchState.responseTime - fetchState.submitTime));</span>
+<span class="nc" id="L132">        extraMap</span>
+<span class="nc" id="L133">            .put(FETCH_TIME, Long.toString(fetchState.fetchCompleteTime - fetchState.responseTime));</span>
+<span class="nc" id="L134">        extraMap</span>
+<span class="nc" id="L135">            .put(TOTAL_TIME, Long.toString(fetchState.fetchCompleteTime - fetchState.submitTime));</span>
+<span class="nc" id="L136">        extraMap.put(IMAGE_SIZE, Integer.toString(byteSize));</span>
+<span class="nc" id="L137">        return extraMap;</span>
+    }
+
+    protected void fetchWithRequest(
+        final OkHttpNetworkFetchState fetchState,
+        final NetworkFetcher.Callback callback,
+        final Request request) {
+<span class="nc" id="L144">        final Call call = mCallFactory.newCall(request);</span>
+
+<span class="nc" id="L146">        fetchState</span>
+<span class="nc" id="L147">            .getContext()</span>
+<span class="nc" id="L148">            .addCallbacks(</span>
+<span class="nc" id="L149">                new BaseProducerContextCallbacks() {</span>
+                    @Override
+                    public void onCancellationRequested() {
+<span class="nc" id="L152">                        onFetchCancellationRequested(call);</span>
+<span class="nc" id="L153">                    }</span>
+                });
+
+<span class="nc" id="L156">        call.enqueue(</span>
+<span class="nc" id="L157">            new okhttp3.Callback() {</span>
+                @Override
+                public void onResponse(final Call call, final Response response) {
+<span class="nc" id="L160">                    onFetchResponse(fetchState, call, response, callback);</span>
+<span class="nc" id="L161">                }</span>
+
+                @Override
+                public void onFailure(final Call call, final IOException e) {
+<span class="nc" id="L165">                    handleException(call, e, callback);</span>
+<span class="nc" id="L166">                }</span>
+            });
+<span class="nc" id="L168">    }</span>
+
+    private void onFetchCancellationRequested(final Call call) {
+<span class="nc bnc" id="L171" title="All 2 branches missed.">        if (Looper.myLooper() != Looper.getMainLooper()) {</span>
+<span class="nc" id="L172">            call.cancel();</span>
+        } else {
+<span class="nc" id="L174">            mCancellationExecutor.execute(call::cancel);</span>
+        }
+<span class="nc" id="L176">    }</span>
+
+    private void onFetchResponse(final OkHttpNetworkFetchState fetchState, final Call call,
+        final Response response,
+        final NetworkFetcher.Callback callback) {
+<span class="nc" id="L181">        fetchState.responseTime = SystemClock.elapsedRealtime();</span>
+<span class="nc" id="L182">        try (final ResponseBody body = response.body()) {</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">            if (!response.isSuccessful()) {</span>
+<span class="nc" id="L184">                handleException(</span>
+                    call, new IOException(&quot;Unexpected HTTP code &quot; + response),
+                    callback);
+<span class="nc" id="L187">                return;</span>
+            }
+
+<span class="nc" id="L190">            final BytesRange responseRange =</span>
+<span class="nc" id="L191">                BytesRange.fromContentRangeHeader(response.header(&quot;Content-Range&quot;));</span>
+<span class="nc bnc" id="L192" title="All 6 branches missed.">            if (responseRange != null</span>
+                &amp;&amp; !(responseRange.from == 0
+                &amp;&amp; responseRange.to == BytesRange.TO_END_OF_CONTENT)) {
+                // Only treat as a partial image if the range is not all of the content
+<span class="nc" id="L196">                fetchState.setResponseBytesRange(responseRange);</span>
+<span class="nc" id="L197">                fetchState.setOnNewResultStatusFlags(Consumer.IS_PARTIAL_RESULT);</span>
+            }
+
+<span class="nc" id="L200">            long contentLength = body.contentLength();</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">            if (contentLength &lt; 0) {</span>
+<span class="nc" id="L202">                contentLength = 0;</span>
+            }
+<span class="nc" id="L204">            callback.onResponse(body.byteStream(), (int) contentLength);</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">        } catch (final Exception e) {</span>
+<span class="nc" id="L206">            handleException(call, e, callback);</span>
+<span class="nc" id="L207">        }</span>
+<span class="nc" id="L208">    }</span>
+
+    /**
+     * Handles exceptions.
+     *
+     * &lt;p&gt;OkHttp notifies callers of cancellations via an IOException. If IOException is caught
+     * after request cancellation, then the exception is interpreted as successful cancellation and
+     * onCancellation is called. Otherwise onFailure is called.
+     */
+    private void handleException(final Call call, final Exception e, final Callback callback) {
+<span class="nc bnc" id="L218" title="All 2 branches missed.">        if (call.isCanceled()) {</span>
+<span class="nc" id="L219">            callback.onCancellation();</span>
+        } else {
+<span class="nc" id="L221">            callback.onFailure(e);</span>
+        }
+<span class="nc" id="L223">    }</span>
+
+    public static class OkHttpNetworkFetchState extends FetchState {
+
+        public long submitTime;
+        public long responseTime;
+        public long fetchCompleteTime;
+
+        public OkHttpNetworkFetchState(
+            final Consumer&lt;EncodedImage&gt; consumer, final ProducerContext producerContext) {
+<span class="nc" id="L233">            super(consumer, producerContext);</span>
+<span class="nc" id="L234">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

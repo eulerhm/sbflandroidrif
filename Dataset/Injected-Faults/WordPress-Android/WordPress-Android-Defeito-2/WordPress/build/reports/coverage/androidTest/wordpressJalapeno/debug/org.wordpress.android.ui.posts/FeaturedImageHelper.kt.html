@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FeaturedImageHelper.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts</a> &gt; <span class="el_source">FeaturedImageHelper.kt</span></div><h1>FeaturedImageHelper.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts
+
+import android.net.Uri
+import android.text.TextUtils
+import dagger.Reusable
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.MediaActionBuilder
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.MediaModel.MediaUploadState
+import org.wordpress.android.fluxc.model.PostImmutableModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.MediaStore
+import org.wordpress.android.fluxc.store.MediaStore.CancelMediaPayload
+import org.wordpress.android.fluxc.store.UploadStore
+import org.wordpress.android.ui.reader.utils.ReaderUtilsWrapper
+import org.wordpress.android.ui.uploads.UploadServiceFacade
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.FluxCUtilsWrapper
+import org.wordpress.android.util.SiteUtilsWrapper
+import org.wordpress.android.util.StringUtils
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.viewmodel.ResourceProvider
+import java.util.ArrayList
+import javax.inject.Inject
+
+const val EMPTY_LOCAL_POST_ID = -1
+
+/**
+ * Helper class for separating logic related to FeaturedImage upload.
+ *
+ * This class is not testable at the moment, since it uses Static methods and Android dependencies.
+ * However, it at least separates this piece of business logic from the view layer.
+ */
+<span class="nc" id="L37">@Reusable</span>
+<span class="nc" id="L38">class FeaturedImageHelper @Inject constructor(</span>
+<span class="nc" id="L39">    private val uploadStore: UploadStore,</span>
+<span class="nc" id="L40">    private val mediaStore: MediaStore,</span>
+<span class="nc" id="L41">    private val uploadServiceFacade: UploadServiceFacade,</span>
+<span class="nc" id="L42">    private val resourceProvider: ResourceProvider,</span>
+<span class="nc" id="L43">    private val readerUtilsWrapper: ReaderUtilsWrapper,</span>
+<span class="nc" id="L44">    private val fluxCUtilsWrapper: FluxCUtilsWrapper,</span>
+<span class="nc" id="L45">    private val siteUtilsWrapper: SiteUtilsWrapper,</span>
+<span class="nc" id="L46">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L47">    private val analyticsTrackerWrapper: AnalyticsTrackerWrapper</span>
+) {
+    fun getFailedFeaturedImageUpload(post: PostImmutableModel): MediaModel? {
+<span class="nc" id="L50">        val failedMediaForPost = uploadStore.getFailedMediaForPost(post)</span>
+<span class="nc bnc" id="L51" title="All 2 branches missed.">        for (item in failedMediaForPost) {</span>
+<span class="nc bnc" id="L52" title="All 4 branches missed.">            if (item != null &amp;&amp; item.markedLocallyAsFeatured) {</span>
+<span class="nc" id="L53">                return item</span>
+            }
+        }
+<span class="nc" id="L56">        return null</span>
+    }
+
+    fun retryFeaturedImageUpload(
+        site: SiteModel,
+        post: PostImmutableModel
+    ): MediaModel? {
+<span class="nc" id="L63">        val mediaModel = getFailedFeaturedImageUpload(post)</span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">        if (mediaModel != null) {</span>
+<span class="nc" id="L65">            uploadServiceFacade.cancelFinalNotification(post)</span>
+<span class="nc" id="L66">            uploadServiceFacade.cancelFinalNotificationForMedia(site)</span>
+<span class="nc" id="L67">            mediaModel.setUploadState(MediaUploadState.QUEUED)</span>
+<span class="nc" id="L68">            dispatcher.dispatch(MediaActionBuilder.newUpdateMediaAction(mediaModel))</span>
+<span class="nc" id="L69">            startUploadService(mediaModel)</span>
+
+<span class="nc" id="L71">            trackFeaturedImageEvent(TrackableEvent.IMAGE_UPLOAD_RETRY_CLICKED, post.id)</span>
+        }
+<span class="nc" id="L73">        return mediaModel</span>
+    }
+
+    private fun startUploadService(media: MediaModel) {
+<span class="nc" id="L77">        val mediaList = ArrayList&lt;MediaModel&gt;()</span>
+<span class="nc" id="L78">        mediaList.add(media)</span>
+<span class="nc" id="L79">        uploadServiceFacade.uploadMedia(mediaList)</span>
+<span class="nc" id="L80">    }</span>
+
+    fun queueFeaturedImageForUpload(
+        localPostId: Int,
+        site: SiteModel,
+        uri: Uri,
+        mimeType: String?
+    ): EnqueueFeaturedImageResult {
+<span class="nc bnc" id="L88" title="All 2 branches missed.">        val media = fluxCUtilsWrapper.mediaModelFromLocalUri(uri, mimeType, site.id)</span>
+<span class="nc" id="L89">                ?: return EnqueueFeaturedImageResult.FILE_NOT_FOUND</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        if (localPostId != EMPTY_LOCAL_POST_ID) {</span>
+<span class="nc" id="L91">            media.localPostId = localPostId</span>
+        } else {
+<span class="nc" id="L93">            AppLog.e(T.MEDIA, &quot;Upload featured image can't be invoked without a valid local post id.&quot;)</span>
+<span class="nc" id="L94">            return EnqueueFeaturedImageResult.INVALID_POST_ID</span>
+        }
+<span class="nc" id="L96">        media.markedLocallyAsFeatured = true</span>
+
+<span class="nc" id="L98">        dispatcher.dispatch(MediaActionBuilder.newUpdateMediaAction(media))</span>
+<span class="nc" id="L99">        startUploadService(media)</span>
+<span class="nc" id="L100">        return EnqueueFeaturedImageResult.SUCCESS</span>
+    }
+
+    fun queueFeaturedImageForUpload(
+        localPostId: Int,
+        media: MediaModel
+    ): EnqueueFeaturedImageResult {
+<span class="nc bnc" id="L107" title="All 2 branches missed.">        if (localPostId != EMPTY_LOCAL_POST_ID) {</span>
+<span class="nc" id="L108">            media.localPostId = localPostId</span>
+        } else {
+<span class="nc" id="L110">            AppLog.e(T.MEDIA, &quot;Upload featured image can't be invoked without a valid local post id.&quot;)</span>
+<span class="nc" id="L111">            return EnqueueFeaturedImageResult.INVALID_POST_ID</span>
+        }
+<span class="nc" id="L113">        media.markedLocallyAsFeatured = true</span>
+
+<span class="nc" id="L115">        dispatcher.dispatch(MediaActionBuilder.newUpdateMediaAction(media))</span>
+<span class="nc" id="L116">        startUploadService(media)</span>
+<span class="nc" id="L117">        return EnqueueFeaturedImageResult.SUCCESS</span>
+    }
+
+    fun cancelFeaturedImageUpload(
+        site: SiteModel,
+        post: PostImmutableModel,
+        cancelFailedOnly: Boolean
+    ) {
+<span class="nc" id="L125">        var mediaModel: MediaModel? = getFailedFeaturedImageUpload(post)</span>
+<span class="nc bnc" id="L126" title="All 4 branches missed.">        if (!cancelFailedOnly &amp;&amp; mediaModel == null) {</span>
+<span class="nc" id="L127">            mediaModel = uploadServiceFacade.getPendingOrInProgressFeaturedImageUploadForPost(post)</span>
+        }
+<span class="nc bnc" id="L129" title="All 2 branches missed.">        if (mediaModel != null) {</span>
+<span class="nc" id="L130">            val payload = CancelMediaPayload(site, mediaModel, true)</span>
+<span class="nc" id="L131">            dispatcher.dispatch(MediaActionBuilder.newCancelMediaUploadAction(payload))</span>
+<span class="nc" id="L132">            uploadServiceFacade.cancelFinalNotification(post)</span>
+<span class="nc" id="L133">            uploadServiceFacade.cancelFinalNotificationForMedia(site)</span>
+
+<span class="nc" id="L135">            trackFeaturedImageEvent(TrackableEvent.IMAGE_UPLOAD_CANCELED, post.id)</span>
+        }
+<span class="nc" id="L137">    }</span>
+
+    fun createCurrentFeaturedImageState(site: SiteModel, post: PostImmutableModel): FeaturedImageData {
+<span class="nc" id="L140">        var uploadModel: MediaModel? = uploadServiceFacade.getPendingOrInProgressFeaturedImageUploadForPost(post)</span>
+<span class="nc bnc" id="L141" title="All 2 branches missed.">        if (uploadModel != null) {</span>
+<span class="nc" id="L142">            return FeaturedImageData(FeaturedImageState.IMAGE_UPLOAD_IN_PROGRESS, uploadModel.filePath)</span>
+        }
+<span class="nc" id="L144">        uploadModel = getFailedFeaturedImageUpload(post)</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">        if (uploadModel != null) {</span>
+<span class="nc" id="L146">            return FeaturedImageData(FeaturedImageState.IMAGE_UPLOAD_FAILED, uploadModel.filePath)</span>
+        }
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (!post.hasFeaturedImage()) {</span>
+<span class="nc" id="L149">            return FeaturedImageData(FeaturedImageState.IMAGE_EMPTY, null)</span>
+        }
+
+<span class="nc bnc" id="L152" title="All 2 branches missed.">        val media = mediaStore.getSiteMediaWithId(site, post.featuredImageId) ?: return FeaturedImageData(</span>
+<span class="nc" id="L153">                FeaturedImageState.IMAGE_EMPTY,</span>
+<span class="nc" id="L154">                null</span>
+        )
+
+        // Get max width/height for photon thumbnail - we load a smaller image so it's loaded quickly
+<span class="nc" id="L158">        val maxDimen = resourceProvider.getDimensionPixelSize(R.dimen.post_settings_featured_image_height_max)</span>
+
+<span class="nc" id="L160">        val mediaUri = StringUtils.notNullStr(</span>
+<span class="nc bnc" id="L161" title="All 4 branches missed.">                if (site.isSelfHostedAdmin || TextUtils.isEmpty(media.thumbnailUrl)) {</span>
+<span class="nc" id="L162">                    media.url</span>
+                } else {
+<span class="nc" id="L164">                    media.thumbnailUrl</span>
+                }
+        )
+
+<span class="nc bnc" id="L168" title="All 2 branches missed.">        val photonUrl = if (site.isSelfHostedAdmin) {</span>
+<span class="nc" id="L169">            mediaUri</span>
+        } else {
+<span class="nc" id="L171">            readerUtilsWrapper.getResizedImageUrl(</span>
+<span class="nc" id="L172">                    mediaUri,</span>
+<span class="nc" id="L173">                    maxDimen,</span>
+<span class="nc" id="L174">                    maxDimen,</span>
+<span class="nc" id="L175">                    siteUtilsWrapper.getAccessibilityInfoFromSite(site)</span>
+            )
+        }
+<span class="nc" id="L178">        return FeaturedImageData(FeaturedImageState.REMOTE_IMAGE_LOADING, photonUrl)</span>
+    }
+
+    fun trackFeaturedImageEvent(
+        event: TrackableEvent,
+        postId: Int
+<span class="nc" id="L184">    ) = analyticsTrackerWrapper.track(event.label, mapOf(POST_ID_KEY to postId))</span>
+
+<span class="nc" id="L186">    data class FeaturedImageData(val uiState: FeaturedImageState, val mediaUri: String?)</span>
+
+<span class="nc" id="L188">    enum class FeaturedImageState(</span>
+<span class="nc" id="L189">        val buttonVisible: Boolean = false,</span>
+<span class="nc" id="L190">        val imageViewVisible: Boolean = false,</span>
+<span class="nc" id="L191">        val localImageViewVisible: Boolean = false,</span>
+<span class="nc" id="L192">        val progressOverlayVisible: Boolean = false,</span>
+<span class="nc" id="L193">        val retryOverlayVisible: Boolean = false</span>
+    ) {
+<span class="nc" id="L195">        IMAGE_EMPTY(buttonVisible = true),</span>
+<span class="nc" id="L196">        REMOTE_IMAGE_LOADING(localImageViewVisible = true, imageViewVisible = true),</span>
+<span class="nc" id="L197">        REMOTE_IMAGE_SET(imageViewVisible = true),</span>
+<span class="nc" id="L198">        IMAGE_UPLOAD_IN_PROGRESS(localImageViewVisible = true, progressOverlayVisible = true),</span>
+<span class="nc" id="L199">        IMAGE_UPLOAD_FAILED(localImageViewVisible = true, retryOverlayVisible = true);</span>
+<span class="nc" id="L200">    }</span>
+
+    enum class EnqueueFeaturedImageResult {
+<span class="nc" id="L203">        FILE_NOT_FOUND, INVALID_POST_ID, SUCCESS</span>
+    }
+
+<span class="nc" id="L206">    enum class TrackableEvent(val label: Stat) {</span>
+<span class="nc" id="L207">        IMAGE_SET_CLICKED(Stat.FEATURED_IMAGE_SET_CLICKED_POST_SETTINGS),</span>
+<span class="nc" id="L208">        IMAGE_PICKED_POST_SETTINGS(Stat.FEATURED_IMAGE_PICKED_POST_SETTINGS),</span>
+<span class="nc" id="L209">        IMAGE_PICKED_GUTENBERG_EDITOR(Stat.FEATURED_IMAGE_PICKED_GUTENBERG_EDITOR),</span>
+<span class="nc" id="L210">        IMAGE_REMOVED_GUTENBERG_EDITOR(Stat.FEATURED_IMAGE_REMOVED_GUTENBERG_EDITOR),</span>
+<span class="nc" id="L211">        IMAGE_UPLOAD_CANCELED(Stat.FEATURED_IMAGE_UPLOAD_CANCELED_POST_SETTINGS),</span>
+<span class="nc" id="L212">        IMAGE_UPLOAD_RETRY_CLICKED(Stat.FEATURED_IMAGE_UPLOAD_RETRY_CLICKED_POST_SETTINGS),</span>
+<span class="nc" id="L213">        IMAGE_REMOVE_CLICKED(Stat.FEATURED_IMAGE_REMOVE_CLICKED_POST_SETTINGS)</span>
+    }
+
+    companion object {
+        private const val POST_ID_KEY = &quot;post_id&quot;
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

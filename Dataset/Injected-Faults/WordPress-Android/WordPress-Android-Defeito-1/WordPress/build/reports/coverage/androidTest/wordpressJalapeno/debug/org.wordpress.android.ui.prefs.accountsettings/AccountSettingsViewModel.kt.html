@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AccountSettingsViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.prefs.accountsettings</a> &gt; <span class="el_source">AccountSettingsViewModel.kt</span></div><h1>AccountSettingsViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.prefs.accountsettings
+
+import android.text.TextUtils
+import androidx.lifecycle.viewModelScope
+import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.store.AccountStore.AccountError
+import org.wordpress.android.fluxc.store.AccountStore.AccountErrorType.SETTINGS_FETCH_GENERIC_ERROR
+import org.wordpress.android.fluxc.store.AccountStore.AccountErrorType.SETTINGS_FETCH_REAUTHORIZATION_REQUIRED_ERROR
+import org.wordpress.android.fluxc.store.AccountStore.AccountErrorType.SETTINGS_POST_ERROR
+import org.wordpress.android.fluxc.store.AccountStore.OnAccountChanged
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.prefs.accountsettings.usecase.FetchAccountSettingsUseCase
+import org.wordpress.android.ui.prefs.accountsettings.usecase.GetAccountUseCase
+import org.wordpress.android.ui.prefs.accountsettings.usecase.GetSitesUseCase
+import org.wordpress.android.ui.prefs.accountsettings.usecase.PushAccountSettingsUseCase
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringResWithParams
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.viewmodel.ResourceProvider
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+const val ONE_SITE = 1
+
+<span class="nc" id="L37">class AccountSettingsViewModel @Inject constructor(</span>
+<span class="nc" id="L38">    private val resourceProvider: ResourceProvider,</span>
+    networkUtilsWrapper: NetworkUtilsWrapper,
+<span class="nc" id="L40">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L41">    private val fetchAccountSettingsUseCase: FetchAccountSettingsUseCase,</span>
+<span class="nc" id="L42">    private val pushAccountSettingsUseCase: PushAccountSettingsUseCase,</span>
+<span class="nc" id="L43">    private val getAccountUseCase: GetAccountUseCase,</span>
+<span class="nc" id="L44">    private val getSitesUseCase: GetSitesUseCase,</span>
+<span class="nc" id="L45">    private val optimisticUpdateHandler: AccountSettingsOptimisticUpdateHandler</span>
+<span class="nc" id="L46">) : ScopedViewModel(mainDispatcher) {</span>
+    private var fetchNewSettingsJob: Job? = null
+<span class="nc" id="L48">    private var _accountSettingsUiState = MutableStateFlow(getAccountSettingsUiState(true))</span>
+<span class="nc" id="L49">    val accountSettingsUiState: StateFlow&lt;AccountSettingsUiState&gt; = _accountSettingsUiState.asStateFlow()</span>
+
+<span class="nc" id="L51">    init {</span>
+<span class="nc" id="L52">        viewModelScope.launch {</span>
+<span class="nc" id="L53">            updatePrimarySiteSettingsUiState()</span>
+<span class="nc" id="L54">        }</span>
+<span class="nc bnc" id="L55" title="All 2 branches missed.">        if (networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L56">            fetchNewSettingsJob = viewModelScope.launch {</span>
+<span class="nc" id="L57">                val onAccountChanged = fetchAccountSettingsUseCase.fetchNewSettings()</span>
+<span class="nc bnc" id="L58" title="All 2 branches missed.">                if (onAccountChanged.isError) {</span>
+<span class="nc" id="L59">                    handleError(onAccountChanged.error)</span>
+                }
+<span class="nc" id="L61">                updateAccountSettingsUiState()</span>
+<span class="nc" id="L62">            }</span>
+        }
+<span class="nc" id="L64">    }</span>
+
+<span class="nc" id="L66">    private fun getAccountSettingsUiState(isInitial: Boolean = false): AccountSettingsUiState {</span>
+<span class="nc" id="L67">        val account = getAccountUseCase.account</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">        val siteViewModels = if (isInitial) null</span>
+<span class="nc" id="L69">        else _accountSettingsUiState.value.primarySiteSettingsUiState.sites</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">        val showChangePasswordProgressDialog = if (isInitial) false</span>
+<span class="nc" id="L71">        else _accountSettingsUiState.value.changePasswordSettingsUiState.showChangePasswordProgressDialog</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">        val primarySiteViewModel = siteViewModels</span>
+<span class="nc bnc" id="L73" title="All 4 branches missed.">                ?.firstOrNull { it.siteId == account.primarySiteId }</span>
+<span class="nc" id="L74">        val uistate = AccountSettingsUiState(</span>
+<span class="nc" id="L75">                userNameSettingsUiState = UserNameSettingsUiState(</span>
+<span class="nc" id="L76">                        account.userName,</span>
+<span class="nc" id="L77">                        account.displayName,</span>
+<span class="nc" id="L78">                        account.usernameCanBeChanged</span>
+                ),
+<span class="nc" id="L80">                emailSettingsUiState = EmailSettingsUiState(</span>
+<span class="nc" id="L81">                        account.email,</span>
+<span class="nc" id="L82">                        account.newEmail,</span>
+<span class="nc" id="L83">                        account.pendingEmailChange</span>
+<span class="nc" id="L84">                ) { cancelPendingEmailChange() },</span>
+<span class="nc" id="L85">                primarySiteSettingsUiState = PrimarySiteSettingsUiState(</span>
+<span class="nc" id="L86">                        primarySiteViewModel,</span>
+<span class="nc" id="L87">                        siteViewModels</span>
+                ),
+<span class="nc" id="L89">                webAddressSettingsUiState = WebAddressSettingsUiState(account.webAddress),</span>
+<span class="nc" id="L90">                changePasswordSettingsUiState = ChangePasswordSettingsUiState(showChangePasswordProgressDialog),</span>
+<span class="nc" id="L91">                error = null</span>
+        )
+<span class="nc" id="L93">        return optimisticUpdateHandler.applyOptimisticallyChangedPreferences(uistate)</span>
+    }
+
+<span class="nc" id="L96">    private suspend fun updatePrimarySiteSettingsUiState() {</span>
+<span class="nc" id="L97">        val siteViewModels = getSitesUseCase.get().map {</span>
+<span class="nc" id="L98">            SiteViewModel(SiteUtils.getSiteNameOrHomeURL(it), it.siteId, SiteUtils.getHomeURLOrHostName(it))</span>
+        }
+<span class="nc" id="L100">        _accountSettingsUiState.update { state -&gt;</span>
+<span class="nc" id="L101">            state.copy(</span>
+<span class="nc" id="L102">                    primarySiteSettingsUiState = PrimarySiteSettingsUiState(</span>
+<span class="nc bnc" id="L103" title="All 4 branches missed.">                            siteViewModels.firstOrNull { it.siteId == getAccountUseCase.account.primarySiteId },</span>
+<span class="nc" id="L104">                            siteViewModels</span>
+                    )
+            )
+        }
+<span class="nc" id="L108">    }</span>
+
+    private fun cancelPendingEmailChange() {
+<span class="nc" id="L111">        onAccountSettingsChange { pushAccountSettingsUseCase.cancelPendingEmailChange() }</span>
+<span class="nc" id="L112">    }</span>
+
+    fun onUsernameChangeConfirmedFromServer(userName: String) {
+<span class="nc" id="L115">        _accountSettingsUiState.update {</span>
+<span class="nc" id="L116">            it.copy(</span>
+                    userNameSettingsUiState =
+<span class="nc" id="L118">                    it.userNameSettingsUiState.copy(</span>
+<span class="nc" id="L119">                            userName = userName,</span>
+<span class="nc" id="L120">                            showUserNameConfirmedSnackBar = true</span>
+                    )
+            )
+        }
+<span class="nc" id="L124">    }</span>
+
+    fun onPrimarySiteChanged(siteRemoteId: Long) {
+<span class="nc" id="L127">        val addOptimisticUpdate = optimisticUpdateHandler.update(PRIMARYSITE_PREFERENCE_KEY, siteRemoteId.toString())</span>
+<span class="nc" id="L128">        val removeOptimisticUpdate = optimisticUpdateHandler.removeFirstChange(PRIMARYSITE_PREFERENCE_KEY)</span>
+<span class="nc" id="L129">        onAccountSettingsChange(addOptimisticUpdate, removeOptimisticUpdate) {</span>
+<span class="nc" id="L130">            pushAccountSettingsUseCase.updatePrimaryBlog(siteRemoteId.toString())</span>
+        }
+<span class="nc" id="L132">    }</span>
+
+    fun onEmailChanged(newEmail: String) {
+<span class="nc" id="L135">        val addOptimisticUpdate = optimisticUpdateHandler.update(EMAIL_PREFERENCE_KEY, newEmail)</span>
+<span class="nc" id="L136">        val removeOptimisticUpdate = optimisticUpdateHandler.removeFirstChange(EMAIL_PREFERENCE_KEY)</span>
+<span class="nc" id="L137">        onAccountSettingsChange(addOptimisticUpdate, removeOptimisticUpdate) {</span>
+<span class="nc" id="L138">            pushAccountSettingsUseCase.updateEmail(newEmail)</span>
+        }
+<span class="nc" id="L140">    }</span>
+
+    fun onWebAddressChanged(newWebAddress: String) {
+<span class="nc" id="L143">        val addOptimisticUpdate = optimisticUpdateHandler.update(WEBADDRESS_PREFERENCE_KEY, newWebAddress)</span>
+<span class="nc" id="L144">        val removeOptimisticUpdate = optimisticUpdateHandler.removeFirstChange(WEBADDRESS_PREFERENCE_KEY)</span>
+<span class="nc" id="L145">        onAccountSettingsChange(addOptimisticUpdate, removeOptimisticUpdate) {</span>
+<span class="nc" id="L146">            pushAccountSettingsUseCase.updateWebAddress(newWebAddress)</span>
+        }
+<span class="nc" id="L148">    }</span>
+
+    fun onPasswordChanged(newPassword: String) {
+<span class="nc" id="L151">        showChangePasswordDialog(true)</span>
+<span class="nc" id="L152">        onAccountSettingsChange { pushAccountSettingsUseCase.updatePassword(newPassword) }</span>
+<span class="nc" id="L153">        showChangePasswordDialog(false)</span>
+<span class="nc" id="L154">    }</span>
+
+    private fun showChangePasswordDialog(show: Boolean) {
+<span class="nc" id="L157">        _accountSettingsUiState.update {</span>
+<span class="nc" id="L158">            it.copy(</span>
+<span class="nc" id="L159">                    changePasswordSettingsUiState = it.changePasswordSettingsUiState.copy(</span>
+<span class="nc" id="L160">                            showChangePasswordProgressDialog = show</span>
+                    )
+            )
+        }
+<span class="nc" id="L164">    }</span>
+
+<span class="nc" id="L166">    private fun onAccountSettingsChange(</span>
+<span class="nc" id="L167">        addOptimisticUpdate: (() -&gt; Unit)? = null,</span>
+<span class="nc" id="L168">        removeOptimisticUpdate: (() -&gt; Unit)? = null,</span>
+        updateAccountSettings: suspend () -&gt; OnAccountChanged
+    ) {
+<span class="nc bnc" id="L171" title="All 2 branches missed.">        addOptimisticUpdate?.let {</span>
+<span class="nc" id="L172">            it.invoke()</span>
+<span class="nc" id="L173">            updateAccountSettingsUiState()</span>
+<span class="nc" id="L174">        }</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">        fetchNewSettingsJob?.cancel()</span>
+<span class="nc" id="L176">        viewModelScope.launch {</span>
+<span class="nc" id="L177">            val onAccountChangedEvent = updateAccountSettings.invoke()</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">            removeOptimisticUpdate?.invoke()</span>
+<span class="nc" id="L179">            updateAccountSettingsUiState()</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">            if (onAccountChangedEvent.isError) {</span>
+<span class="nc" id="L181">                handleError(onAccountChangedEvent.error)</span>
+            }
+<span class="nc" id="L183">        }</span>
+<span class="nc" id="L184">    }</span>
+
+    private fun updateAccountSettingsUiState() {
+<span class="nc" id="L187">        _accountSettingsUiState.value = getAccountSettingsUiState()</span>
+<span class="nc" id="L188">    }</span>
+
+    private fun handleError(accountError: AccountError) {
+<span class="nc bnc" id="L191" title="All 6 branches missed.">        val errorMessage = when (accountError.type) {</span>
+<span class="nc" id="L192">            SETTINGS_FETCH_GENERIC_ERROR -&gt; resourceProvider.getString(R.string.error_fetch_account_settings)</span>
+<span class="nc" id="L193">            SETTINGS_FETCH_REAUTHORIZATION_REQUIRED_ERROR -&gt; resourceProvider.getString(R.string.error_disabled_apis)</span>
+            SETTINGS_POST_ERROR -&gt; {
+<span class="nc bnc" id="L195" title="All 2 branches missed.">                if (!TextUtils.isEmpty(accountError.message)) accountError.message else resourceProvider.getString(</span>
+<span class="nc" id="L196">                        R.string.error_post_account_settings</span>
+                )
+            }
+<span class="nc" id="L199">            else -&gt; resourceProvider.getString(R.string.error_post_account_settings)</span>
+        }
+<span class="nc" id="L201">        updateErrorUiState(errorMessage)</span>
+<span class="nc" id="L202">    }</span>
+
+    private fun updateErrorUiState(errorMessage: String?) {
+<span class="nc" id="L205">        _accountSettingsUiState.update {</span>
+<span class="nc" id="L206">            it.copy(error = errorMessage)</span>
+        }
+<span class="nc" id="L208">    }</span>
+
+    fun onToastShown(toastMessage: String) {
+<span class="nc bnc" id="L211" title="All 2 branches missed.">        if (_accountSettingsUiState.value.error.equals(toastMessage)) {</span>
+<span class="nc" id="L212">            updateErrorUiState(null)</span>
+        }
+<span class="nc" id="L214">    }</span>
+
+<span class="nc" id="L216">    data class UserNameSettingsUiState(</span>
+<span class="nc" id="L217">        val userName: String,</span>
+<span class="nc" id="L218">        val displayName: String,</span>
+<span class="nc" id="L219">        val canUserNameBeChanged: Boolean,</span>
+<span class="nc" id="L220">        val showUserNameConfirmedSnackBar: Boolean = false</span>
+    ) {
+        val newUserChangeConfirmedSnackBarMessageHolder
+<span class="nc" id="L223">            get() = SnackbarMessageHolder(</span>
+<span class="nc" id="L224">                    message = UiStringResWithParams(</span>
+<span class="nc" id="L225">                            R.string.settings_username_changer_toast_content,</span>
+<span class="nc" id="L226">                            listOf(UiStringText(userName))</span>
+                    ),
+<span class="nc" id="L228">                    duration = Snackbar.LENGTH_LONG</span>
+<span class="nc" id="L229">            )</span>
+<span class="nc" id="L230">    }</span>
+
+<span class="nc" id="L232">    data class EmailSettingsUiState(</span>
+<span class="nc" id="L233">        val email: String,</span>
+<span class="nc" id="L234">        val newEmail: String? = null,</span>
+<span class="nc" id="L235">        val hasPendingEmailChange: Boolean = false,</span>
+<span class="nc" id="L236">        val onCancelEmailChange: () -&gt; Unit</span>
+    ) {
+        val emailVerificationMsgSnackBarMessageHolder
+<span class="nc" id="L239">            get() = SnackbarMessageHolder(</span>
+<span class="nc" id="L240">                    message = UiStringResWithParams(</span>
+<span class="nc" id="L241">                            R.string.pending_email_change_snackbar,</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">                            listOf(UiStringText(newEmail ?: &quot;&quot;))</span>
+                    ),
+<span class="nc" id="L244">                    buttonTitle = UiStringRes(R.string.button_discard),</span>
+<span class="nc" id="L245">                    buttonAction = { onCancelEmailChange() },</span>
+<span class="nc" id="L246">                    duration = Snackbar.LENGTH_INDEFINITE</span>
+<span class="nc" id="L247">            )</span>
+<span class="nc" id="L248">    }</span>
+
+<span class="nc" id="L250">    data class SiteViewModel(val siteName: String, val siteId: Long, val homeURLOrHostName: String)</span>
+
+<span class="nc" id="L252">    data class PrimarySiteSettingsUiState(val primarySite: SiteViewModel? = null, val sites: List&lt;SiteViewModel&gt;?) {</span>
+        val siteNames
+<span class="nc bnc" id="L254" title="All 2 branches missed.">            get() = sites?.map { it.siteName }?.toTypedArray()</span>
+
+        val siteIds
+<span class="nc bnc" id="L257" title="All 2 branches missed.">            get() = sites?.map { it.siteId.toString() }?.toTypedArray()</span>
+
+        val homeURLOrHostNames
+<span class="nc bnc" id="L260" title="All 2 branches missed.">            get() = sites?.map { it.homeURLOrHostName }?.toTypedArray()</span>
+<span class="nc" id="L261">    }</span>
+
+<span class="nc" id="L263">    data class WebAddressSettingsUiState(val webAddress: String)</span>
+
+<span class="nc" id="L265">    data class ChangePasswordSettingsUiState(val showChangePasswordProgressDialog: Boolean)</span>
+
+<span class="nc" id="L267">    data class AccountSettingsUiState(</span>
+<span class="nc" id="L268">        val userNameSettingsUiState: UserNameSettingsUiState,</span>
+<span class="nc" id="L269">        val emailSettingsUiState: EmailSettingsUiState,</span>
+<span class="nc" id="L270">        val primarySiteSettingsUiState: PrimarySiteSettingsUiState,</span>
+<span class="nc" id="L271">        val webAddressSettingsUiState: WebAddressSettingsUiState,</span>
+<span class="nc" id="L272">        val changePasswordSettingsUiState: ChangePasswordSettingsUiState,</span>
+<span class="nc" id="L273">        val error: String?</span>
+    )
+
+    override fun onCleared() {
+<span class="nc" id="L277">        pushAccountSettingsUseCase.onCleared()</span>
+<span class="nc" id="L278">        super.onCleared()</span>
+<span class="nc" id="L279">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

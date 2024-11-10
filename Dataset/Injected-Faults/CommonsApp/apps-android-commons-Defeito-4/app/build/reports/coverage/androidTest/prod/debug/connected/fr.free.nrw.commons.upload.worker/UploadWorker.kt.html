@@ -1,0 +1,611 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UploadWorker.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.upload.worker</a> &gt; <span class="el_source">UploadWorker.kt</span></div><h1>UploadWorker.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.upload.worker
+
+import android.annotation.SuppressLint
+import android.app.Notification
+import android.app.PendingIntent
+import android.app.TaskStackBuilder
+import android.content.Context
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.work.CoroutineWorker
+import androidx.work.Data
+import androidx.work.WorkerParameters
+import androidx.multidex.BuildConfig
+import androidx.work.ForegroundInfo
+import dagger.android.ContributesAndroidInjector
+import fr.free.nrw.commons.CommonsApplication
+import fr.free.nrw.commons.Media
+import fr.free.nrw.commons.R
+import fr.free.nrw.commons.auth.SessionManager
+import fr.free.nrw.commons.contributions.ChunkInfo
+import fr.free.nrw.commons.contributions.Contribution
+import fr.free.nrw.commons.contributions.ContributionDao
+import fr.free.nrw.commons.contributions.MainActivity
+import fr.free.nrw.commons.customselector.database.UploadedStatus
+import fr.free.nrw.commons.customselector.database.UploadedStatusDao
+import fr.free.nrw.commons.di.ApplicationlessInjection
+import fr.free.nrw.commons.media.MediaClient
+import fr.free.nrw.commons.theme.BaseActivity
+import fr.free.nrw.commons.upload.StashUploadResult
+import fr.free.nrw.commons.upload.FileUtilsWrapper
+import fr.free.nrw.commons.upload.StashUploadState
+import fr.free.nrw.commons.upload.UploadClient
+import fr.free.nrw.commons.upload.UploadResult
+import fr.free.nrw.commons.wikidata.WikidataEditService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import timber.log.Timber
+import java.net.SocketTimeoutException
+import java.util.*
+import java.util.regex.Pattern
+import javax.inject.Inject
+import kotlin.collections.ArrayList
+
+<span class="nc" id="L52">class UploadWorker(var appContext: Context, workerParams: WorkerParameters) :</span>
+<span class="nc" id="L53">    CoroutineWorker(appContext, workerParams) {</span>
+
+    private var notificationManager: NotificationManagerCompat? = null
+
+    @Inject
+<span class="nc bnc" id="L58" title="All 2 branches missed.">    lateinit var wikidataEditService: WikidataEditService</span>
+
+    @Inject
+<span class="nc bnc" id="L61" title="All 2 branches missed.">    lateinit var sessionManager: SessionManager</span>
+
+    @Inject
+<span class="nc bnc" id="L64" title="All 2 branches missed.">    lateinit var contributionDao: ContributionDao</span>
+
+    @Inject
+<span class="nc bnc" id="L67" title="All 2 branches missed.">    lateinit var uploadedStatusDao: UploadedStatusDao</span>
+
+    @Inject
+<span class="nc bnc" id="L70" title="All 2 branches missed.">    lateinit var uploadClient: UploadClient</span>
+
+    @Inject
+<span class="nc bnc" id="L73" title="All 2 branches missed.">    lateinit var mediaClient: MediaClient</span>
+
+    @Inject
+<span class="nc bnc" id="L76" title="All 2 branches missed.">    lateinit var fileUtilsWrapper: FileUtilsWrapper</span>
+
+<span class="nc" id="L78">    private val PROCESSING_UPLOADS_NOTIFICATION_TAG = BuildConfig.APPLICATION_ID + &quot; : upload_tag&quot;</span>
+
+<span class="nc" id="L80">    private val PROCESSING_UPLOADS_NOTIFICATION_ID = 101</span>
+
+
+    //Attributes of the current-upload notification
+<span class="nc" id="L84">    private var currentNotificationID: Int = -1// lateinit is not allowed with primitives</span>
+    private lateinit var currentNotificationTag: String
+    private var curentNotification: NotificationCompat.Builder
+
+<span class="nc" id="L88">    private val statesToProcess= ArrayList&lt;Int&gt;()</span>
+
+    private val STASH_ERROR_CODES = Arrays
+<span class="nc" id="L91">        .asList(</span>
+<span class="nc" id="L92">            &quot;uploadstash-file-not-found&quot;,</span>
+<span class="nc" id="L93">            &quot;stashfailed&quot;,</span>
+<span class="nc" id="L94">            &quot;verification-error&quot;,</span>
+<span class="nc" id="L95">            &quot;chunk-too-small&quot;</span>
+        )
+
+<span class="nc" id="L98">    init {</span>
+        ApplicationlessInjection
+<span class="nc" id="L100">            .getInstance(appContext)</span>
+<span class="nc" id="L101">            .commonsApplicationComponent</span>
+<span class="nc" id="L102">            .inject(this)</span>
+<span class="nc" id="L103">        curentNotification =</span>
+<span class="nc" id="L104">            getNotificationBuilder(CommonsApplication.NOTIFICATION_CHANNEL_ID_ALL)!!</span>
+
+<span class="nc" id="L106">        statesToProcess.add(Contribution.STATE_QUEUED)</span>
+<span class="nc" id="L107">        statesToProcess.add(Contribution.STATE_QUEUED_LIMITED_CONNECTION_MODE)</span>
+<span class="nc" id="L108">    }</span>
+
+    @dagger.Module
+    interface Module {
+        @ContributesAndroidInjector
+        fun worker(): UploadWorker
+    }
+
+<span class="nc" id="L116">    open inner class NotificationUpdateProgressListener(</span>
+<span class="nc" id="L117">        private var notificationFinishingTitle: String?,</span>
+<span class="nc" id="L118">        var contribution: Contribution?</span>
+    ) {
+
+        fun onProgress(transferred: Long, total: Long) {
+<span class="nc bnc" id="L122" title="All 2 branches missed.">            if (transferred == total) {</span>
+                // Completed!
+<span class="nc" id="L124">                curentNotification.setContentTitle(notificationFinishingTitle)</span>
+<span class="nc" id="L125">                    .setProgress(0, 100, true)</span>
+            } else {
+<span class="nc" id="L127">                curentNotification</span>
+<span class="nc" id="L128">                    .setProgress(</span>
+<span class="nc" id="L129">                        100,</span>
+<span class="nc" id="L130">                        (transferred.toDouble() / total.toDouble() * 100).toInt(),</span>
+<span class="nc" id="L131">                        false</span>
+                    )
+            }
+<span class="nc bnc" id="L134" title="All 2 branches missed.">            notificationManager?.cancel(PROCESSING_UPLOADS_NOTIFICATION_TAG, PROCESSING_UPLOADS_NOTIFICATION_ID)</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">            notificationManager?.notify(</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">                currentNotificationTag,</span>
+<span class="nc" id="L137">                currentNotificationID,</span>
+<span class="nc" id="L138">                curentNotification.build()!!</span>
+            )
+<span class="nc" id="L140">            contribution!!.transferred = transferred</span>
+<span class="nc" id="L141">            contributionDao.update(contribution).blockingAwait()</span>
+<span class="nc" id="L142">        }</span>
+
+        open fun onChunkUploaded(contribution: Contribution, chunkInfo: ChunkInfo?) {
+<span class="nc" id="L145">            contribution.chunkInfo = chunkInfo</span>
+<span class="nc" id="L146">            contributionDao.update(contribution).blockingAwait()</span>
+<span class="nc" id="L147">        }</span>
+    }
+
+    private fun getNotificationBuilder(channelId: String): NotificationCompat.Builder? {
+<span class="nc" id="L151">        return NotificationCompat.Builder(appContext, channelId)</span>
+<span class="nc" id="L152">            .setAutoCancel(true)</span>
+<span class="nc" id="L153">            .setSmallIcon(R.drawable.ic_launcher)</span>
+<span class="nc" id="L154">            .setLargeIcon(</span>
+<span class="nc" id="L155">                BitmapFactory.decodeResource(</span>
+<span class="nc" id="L156">                    appContext.resources,</span>
+<span class="nc" id="L157">                    R.drawable.ic_launcher</span>
+                )
+            )
+<span class="nc" id="L160">            .setAutoCancel(true)</span>
+<span class="nc" id="L161">            .setOnlyAlertOnce(true)</span>
+<span class="nc" id="L162">            .setProgress(100, 0, true)</span>
+<span class="nc" id="L163">            .setOngoing(true)</span>
+    }
+
+<span class="nc" id="L166">    override suspend fun doWork(): Result {</span>
+<span class="nc" id="L167">        var countUpload = 0</span>
+        // Start a foreground service
+<span class="nc" id="L169">        setForeground(createForegroundInfo())</span>
+<span class="nc" id="L170">        notificationManager = NotificationManagerCompat.from(appContext)</span>
+<span class="nc" id="L171">        val processingUploads = getNotificationBuilder(</span>
+<span class="nc" id="L172">            CommonsApplication.NOTIFICATION_CHANNEL_ID_ALL</span>
+<span class="nc" id="L173">        )!!</span>
+<span class="nc" id="L174">        withContext(Dispatchers.IO) {</span>
+            /*
+                queuedContributions receives the results from a one-shot query.
+                This means that once the list has been fetched from the database,
+                it does not get updated even if some changes (insertions, deletions, etc.)
+                are made to the contribution table afterwards.
+
+                Related issues (fixed):
+                https://github.com/commons-app/apps-android-commons/issues/5136
+                https://github.com/commons-app/apps-android-commons/issues/5346
+             */
+<span class="nc" id="L185">            val queuedContributions = contributionDao.getContribution(statesToProcess)</span>
+<span class="nc" id="L186">                .blockingGet()</span>
+            //Showing initial notification for the number of uploads being processed
+
+<span class="nc" id="L189">            Timber.e(&quot;Queued Contributions: &quot; + queuedContributions.size)</span>
+
+<span class="nc" id="L191">            processingUploads.setContentTitle(appContext.getString(R.string.starting_uploads))</span>
+<span class="nc" id="L192">            processingUploads.setContentText(</span>
+<span class="nc" id="L193">                appContext.resources.getQuantityString(</span>
+<span class="nc" id="L194">                        R.plurals.starting_multiple_uploads,</span>
+<span class="nc" id="L195">                        queuedContributions.size,</span>
+<span class="nc" id="L196">                        queuedContributions.size</span>
+                    )
+            )
+<span class="nc bnc" id="L199" title="All 2 branches missed.">            notificationManager?.notify(</span>
+<span class="nc" id="L200">                PROCESSING_UPLOADS_NOTIFICATION_TAG,</span>
+<span class="nc" id="L201">                PROCESSING_UPLOADS_NOTIFICATION_ID,</span>
+<span class="nc" id="L202">                processingUploads.build()</span>
+            )
+
+            /**
+             * To avoid race condition when multiple of these workers are working, assign this state
+            so that the next one does not process these contribution again
+             */
+<span class="nc" id="L209">            queuedContributions.forEach {</span>
+<span class="nc" id="L210">                it.state = Contribution.STATE_IN_PROGRESS</span>
+<span class="nc" id="L211">                contributionDao.saveSynchronous(it)</span>
+<span class="nc" id="L212">            }</span>
+
+<span class="nc" id="L214">            queuedContributions.asFlow().map { contribution -&gt;</span>
+                // Upload the contribution if it has not been cancelled by the user
+                if (!CommonsApplication.cancelledUploads.contains(contribution.pageId)) {
+                    /**
+                     * If the limited connection mode is on, lets iterate through the queued
+                     * contributions
+                     * and set the state as STATE_QUEUED_LIMITED_CONNECTION_MODE ,
+                     * otherwise proceed with the upload
+                     */
+                    if (isLimitedConnectionModeEnabled()) {
+                        if (contribution.state == Contribution.STATE_QUEUED) {
+                            contribution.state = Contribution.STATE_QUEUED_LIMITED_CONNECTION_MODE
+                            contributionDao.saveSynchronous(contribution)
+                        }
+                    } else {
+                        contribution.transferred = 0
+                        contribution.state = Contribution.STATE_IN_PROGRESS
+                        contributionDao.saveSynchronous(contribution)
+                        setProgressAsync(Data.Builder().putInt(&quot;progress&quot;, countUpload).build())
+                        countUpload++
+                        uploadContribution(contribution = contribution)
+                    }
+                } else {
+                    /* We can remove the cancelled upload from the hashset
+                       as this contribution will not be processed again
+                     */
+                    removeUploadFromInMemoryHashSet(contribution)
+                }
+<span class="nc" id="L242">            }.collect()</span>
+
+            //Dismiss the global notification
+<span class="nc bnc" id="L245" title="All 2 branches missed.">            notificationManager?.cancel(</span>
+<span class="nc" id="L246">                PROCESSING_UPLOADS_NOTIFICATION_TAG,</span>
+<span class="nc" id="L247">                PROCESSING_UPLOADS_NOTIFICATION_ID</span>
+            )
+        }
+        // Trigger WorkManager to process any new contributions that may have been added to the queue
+<span class="nc bnc" id="L251" title="All 2 branches missed.">        val updatedContributionQueue = withContext(Dispatchers.IO) {</span>
+<span class="nc" id="L252">            contributionDao.getContribution(statesToProcess).blockingGet()</span>
+        }
+<span class="nc bnc" id="L254" title="All 4 branches missed.">        if (updatedContributionQueue.isNotEmpty()) {</span>
+<span class="nc" id="L255">            return Result.retry()</span>
+        }
+
+<span class="nc" id="L258">        return Result.success()</span>
+    }
+
+    /**
+     * Removes the processed contribution from the cancelledUploads in-memory hashset
+     */
+    private fun removeUploadFromInMemoryHashSet(contribution: Contribution) {
+<span class="nc" id="L265">        CommonsApplication.cancelledUploads.remove(contribution.pageId)</span>
+<span class="nc" id="L266">    }</span>
+
+    /**
+     * Create new notification for foreground service
+     */
+    private fun createForegroundInfo(): ForegroundInfo {
+<span class="nc" id="L272">        return ForegroundInfo(</span>
+<span class="nc" id="L273">            1,</span>
+<span class="nc" id="L274">            createNotificationForForegroundService()</span>
+        )
+    }
+
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+<span class="nc" id="L279">        return createForegroundInfo()</span>
+    }
+    private fun createNotificationForForegroundService(): Notification {
+        // TODO: Improve notification for foreground service
+<span class="nc" id="L283">        return getNotificationBuilder(</span>
+<span class="nc" id="L284">            CommonsApplication.NOTIFICATION_CHANNEL_ID_ALL)!!</span>
+<span class="nc" id="L285">            .setContentTitle(appContext.getString(R.string.upload_in_progress))</span>
+<span class="nc" id="L286">            .build()</span>
+    }
+    /**
+     * Returns true is the limited connection mode is enabled
+     */
+    private fun isLimitedConnectionModeEnabled(): Boolean {
+<span class="nc" id="L292">        return sessionManager.getPreference(CommonsApplication.IS_LIMITED_CONNECTION_MODE_ENABLED)</span>
+    }
+
+    /**
+     * Upload the contribution
+     * @param contribution
+     */
+    @SuppressLint(&quot;StringFormatInvalid&quot;)
+    private suspend fun uploadContribution(contribution: Contribution) {
+<span class="nc bnc" id="L301" title="All 4 branches missed.">        if (contribution.localUri == null || contribution.localUri.path == null) {</span>
+<span class="nc" id="L302">            Timber.e(&quot;&quot;&quot;upload: ${contribution.media.filename} failed, file path is null&quot;&quot;&quot;)</span>
+        }
+
+<span class="nc" id="L305">        val media = contribution.media</span>
+<span class="nc" id="L306">        val displayTitle = contribution.media.displayTitle</span>
+
+<span class="nc" id="L308">        currentNotificationTag = contribution.localUri.toString()</span>
+<span class="nc" id="L309">        currentNotificationID =</span>
+<span class="nc" id="L310">            (contribution.localUri.toString() + contribution.media.filename).hashCode()</span>
+
+<span class="nc" id="L312">        curentNotification</span>
+<span class="nc" id="L313">        getNotificationBuilder(CommonsApplication.NOTIFICATION_CHANNEL_ID_ALL)!!</span>
+<span class="nc" id="L314">        curentNotification.setContentTitle(</span>
+<span class="nc" id="L315">            appContext.getString(</span>
+<span class="nc" id="L316">                R.string.upload_progress_notification_title_start,</span>
+<span class="nc" id="L317">                displayTitle</span>
+            )
+        )
+
+<span class="nc bnc" id="L321" title="All 2 branches missed.">        notificationManager?.notify(</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">            currentNotificationTag,</span>
+<span class="nc" id="L323">            currentNotificationID,</span>
+<span class="nc" id="L324">            curentNotification.build()!!</span>
+        )
+
+<span class="nc" id="L327">        val filename = media.filename</span>
+
+<span class="nc" id="L329">        val notificationProgressUpdater = NotificationUpdateProgressListener(</span>
+<span class="nc" id="L330">            appContext.getString(</span>
+<span class="nc" id="L331">                R.string.upload_progress_notification_title_finishing,</span>
+<span class="nc" id="L332">                displayTitle</span>
+            ),
+<span class="nc" id="L334">            contribution</span>
+        )
+
+<span class="nc" id="L337">        try {</span>
+            //Upload the file to stash
+<span class="nc" id="L339">            val stashUploadResult = uploadClient.uploadFileToStash(</span>
+<span class="nc" id="L340">                appContext, filename, contribution, notificationProgressUpdater</span>
+<span class="nc" id="L341">            ).onErrorReturn{</span>
+<span class="nc" id="L342">                return@onErrorReturn StashUploadResult(StashUploadState.FAILED,fileKey = null)</span>
+<span class="nc" id="L343">            }.blockingSingle()</span>
+
+<span class="nc bnc" id="L345" title="All 3 branches missed.">            when (stashUploadResult.state) {</span>
+                StashUploadState.SUCCESS -&gt; {
+                    //If the stash upload succeeds
+<span class="nc" id="L348">                    Timber.d(&quot;Upload to stash success for fileName: $filename&quot;)</span>
+<span class="nc" id="L349">                    Timber.d(&quot;Ensure uniqueness of filename&quot;);</span>
+<span class="nc" id="L350">                    val uniqueFileName = findUniqueFileName(filename!!)</span>
+
+<span class="nc" id="L352">                    try {</span>
+                        //Upload the file from stash
+<span class="nc" id="L354">                        val uploadResult = uploadClient.uploadFileFromStash(</span>
+<span class="nc" id="L355">                            contribution, uniqueFileName, stashUploadResult.fileKey</span>
+<span class="nc" id="L356">                        ).onErrorReturn {</span>
+<span class="nc" id="L357">                            return@onErrorReturn null</span>
+<span class="nc" id="L358">                        }.blockingSingle()</span>
+
+<span class="nc bnc" id="L360" title="All 4 branches missed.">                        if (null != uploadResult &amp;&amp; uploadResult.isSuccessful()) {</span>
+<span class="nc" id="L361">                            Timber.d(</span>
+<span class="nc" id="L362">                                &quot;Stash Upload success..proceeding to make wikidata edit&quot;</span>
+                            )
+
+<span class="nc" id="L365">                            wikidataEditService.addDepictionsAndCaptions(uploadResult, contribution)</span>
+<span class="nc" id="L366">                                .blockingSubscribe();</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">                            if(contribution.wikidataPlace==null){</span>
+<span class="nc" id="L368">                                Timber.d(</span>
+<span class="nc" id="L369">                                    &quot;WikiDataEdit not required, upload success&quot;</span>
+                                )
+<span class="nc" id="L371">                                saveCompletedContribution(contribution,uploadResult)</span>
+                            }else{
+<span class="nc" id="L373">                                Timber.d(</span>
+<span class="nc" id="L374">                                    &quot;WikiDataEdit not required, making wikidata edit&quot;</span>
+                                )
+<span class="nc" id="L376">                                makeWikiDataEdit(uploadResult, contribution)</span>
+                            }
+<span class="nc" id="L378">                            showSuccessNotification(contribution)</span>
+
+                        } else {
+<span class="nc" id="L381">                            Timber.e(&quot;Stash Upload failed&quot;)</span>
+<span class="nc" id="L382">                            showFailedNotification(contribution)</span>
+<span class="nc" id="L383">                            contribution.state = Contribution.STATE_FAILED</span>
+<span class="nc" id="L384">                            contribution.chunkInfo = null</span>
+<span class="nc" id="L385">                            contributionDao.save(contribution).blockingAwait()</span>
+
+                        }
+<span class="nc" id="L388">                    }catch (exception : Exception){</span>
+<span class="nc" id="L389">                        Timber.e(exception)</span>
+<span class="nc" id="L390">                        Timber.e(&quot;Upload from stash failed for contribution : $filename&quot;)</span>
+<span class="nc" id="L391">                        showFailedNotification(contribution)</span>
+<span class="nc" id="L392">                        contribution.state=Contribution.STATE_FAILED</span>
+<span class="nc" id="L393">                        contributionDao.saveSynchronous(contribution)</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">                        if (STASH_ERROR_CODES.contains(exception.message)) {</span>
+<span class="nc" id="L395">                            clearChunks(contribution)</span>
+                        }
+                    }
+                }
+                StashUploadState.PAUSED -&gt; {
+<span class="nc" id="L400">                    showPausedNotification(contribution)</span>
+<span class="nc" id="L401">                    contribution.state = Contribution.STATE_PAUSED</span>
+<span class="nc" id="L402">                    contributionDao.saveSynchronous(contribution)</span>
+                }
+                else -&gt; {
+<span class="nc" id="L405">                    Timber.e(&quot;&quot;&quot;upload file to stash failed with status: ${stashUploadResult.state}&quot;&quot;&quot;)</span>
+<span class="nc" id="L406">                    showFailedNotification(contribution)</span>
+<span class="nc" id="L407">                    contribution.state = Contribution.STATE_FAILED</span>
+<span class="nc" id="L408">                    contribution.chunkInfo = null</span>
+<span class="nc" id="L409">                    contributionDao.saveSynchronous(contribution)</span>
+                }
+            }
+<span class="nc" id="L412">        }catch (exception: Exception){</span>
+<span class="nc" id="L413">            Timber.e(exception)</span>
+<span class="nc" id="L414">            Timber.e(&quot;Stash upload failed for contribution: $filename&quot;)</span>
+<span class="nc" id="L415">            showFailedNotification(contribution)</span>
+<span class="nc" id="L416">            contribution.state=Contribution.STATE_FAILED</span>
+<span class="nc" id="L417">            clearChunks(contribution)</span>
+        }
+<span class="nc" id="L419">    }</span>
+
+    private fun clearChunks(contribution: Contribution) {
+<span class="nc" id="L422">        contribution.chunkInfo=null</span>
+<span class="nc" id="L423">        contributionDao.saveSynchronous(contribution)</span>
+<span class="nc" id="L424">    }</span>
+
+    /**
+     * Make the WikiData Edit, if applicable
+     */
+    private suspend fun makeWikiDataEdit(uploadResult: UploadResult, contribution: Contribution) {
+<span class="nc" id="L430">        val wikiDataPlace = contribution.wikidataPlace</span>
+<span class="nc bnc" id="L431" title="All 4 branches missed.">        if (wikiDataPlace != null &amp;&amp; wikiDataPlace.imageValue == null) {</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">            if (!contribution.hasInvalidLocation()) {</span>
+<span class="nc" id="L433">                var revisionID: Long?=null</span>
+<span class="nc" id="L434">                try {</span>
+<span class="nc" id="L435">                    revisionID = wikidataEditService.createClaim(</span>
+<span class="nc" id="L436">                        wikiDataPlace, uploadResult.filename,</span>
+<span class="nc" id="L437">                        contribution.media.captions</span>
+                    )
+<span class="nc bnc" id="L439" title="All 2 branches missed.">                    if (null != revisionID) {</span>
+<span class="nc" id="L440">                        showSuccessNotification(contribution)</span>
+                    }
+<span class="nc" id="L442">                }catch (exception: Exception){</span>
+<span class="nc" id="L443">                    Timber.e(exception)</span>
+                }
+
+<span class="nc bnc" id="L446" title="All 2 branches missed.">                withContext(Dispatchers.Main) {</span>
+<span class="nc" id="L447">                    wikidataEditService.handleImageClaimResult(</span>
+<span class="nc" id="L448">                        contribution.wikidataPlace,</span>
+<span class="nc" id="L449">                        revisionID</span>
+                    )
+<span class="nc" id="L451">                }</span>
+            } else {
+<span class="nc bnc" id="L453" title="All 2 branches missed.">                withContext(Dispatchers.Main) {</span>
+<span class="nc" id="L454">                    wikidataEditService.handleImageClaimResult(</span>
+<span class="nc" id="L455">                        contribution.wikidataPlace, null</span>
+                    )
+<span class="nc" id="L457">                }</span>
+            }
+        }
+<span class="nc" id="L460">        saveCompletedContribution(contribution, uploadResult)</span>
+<span class="nc" id="L461">    }</span>
+
+    private fun saveCompletedContribution(contribution: Contribution, uploadResult: UploadResult) {
+<span class="nc" id="L464">        val contributionFromUpload = mediaClient.getMedia(&quot;File:&quot; + uploadResult.filename)</span>
+<span class="nc" id="L465">            .map { media: Media? -&gt; contribution.completeWith(media!!) }</span>
+<span class="nc" id="L466">            .blockingGet()</span>
+<span class="nc" id="L467">        contributionFromUpload.dateModified=Date()</span>
+<span class="nc" id="L468">        contributionDao.deleteAndSaveContribution(contribution, contributionFromUpload)</span>
+
+        // Upload success, save to uploaded status.
+<span class="nc" id="L471">        saveIntoUploadedStatus(contribution)</span>
+<span class="nc" id="L472">    }</span>
+
+    /**
+     * Save to uploadedStatusDao.
+     */
+    private fun saveIntoUploadedStatus(contribution: Contribution) {
+<span class="nc bnc" id="L478" title="All 2 branches missed.">        contribution.contentUri?.let {</span>
+<span class="nc" id="L479">            val imageSha1 = contribution.imageSHA1.toString()</span>
+<span class="nc bnc" id="L480" title="All 2 branches missed.">            val modifiedSha1 = fileUtilsWrapper.getSHA1(fileUtilsWrapper.getFileInputStream(contribution.localUri?.path))</span>
+<span class="nc" id="L481">            MainScope().launch {</span>
+<span class="nc" id="L482">                uploadedStatusDao.insertUploaded(</span>
+<span class="nc" id="L483">                    UploadedStatus(</span>
+<span class="nc" id="L484">                        imageSha1,</span>
+<span class="nc" id="L485">                        modifiedSha1,</span>
+<span class="nc" id="L486">                        imageSha1 == modifiedSha1,</span>
+<span class="nc" id="L487">                        true</span>
+                    )
+                );
+<span class="nc" id="L490">            }</span>
+        }
+<span class="nc" id="L492">    }</span>
+
+    private fun findUniqueFileName(fileName: String): String {
+        var sequenceFileName: String?
+<span class="nc" id="L496">        var sequenceNumber = 1</span>
+<span class="nc" id="L497">        while (true) {</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">            sequenceFileName = if (sequenceNumber == 1) {</span>
+<span class="nc" id="L499">                fileName</span>
+            } else {
+<span class="nc bnc" id="L501" title="All 2 branches missed.">                if (fileName.indexOf('.') == -1) {</span>
+<span class="nc" id="L502">                    &quot;$fileName $sequenceNumber&quot;</span>
+                } else {
+<span class="nc" id="L504">                    val regex =</span>
+<span class="nc" id="L505">                        Pattern.compile(&quot;^(.*)(\\..+?)$&quot;)</span>
+<span class="nc" id="L506">                    val regexMatcher = regex.matcher(fileName)</span>
+<span class="nc" id="L507">                    regexMatcher.replaceAll(&quot;$1 $sequenceNumber$2&quot;)</span>
+                }
+            }
+<span class="nc" id="L510">            if (!mediaClient.checkPageExistsUsingTitle(</span>
+<span class="nc" id="L511">                    String.format(</span>
+<span class="nc" id="L512">                        &quot;File:%s&quot;,</span>
+<span class="nc" id="L513">                        sequenceFileName</span>
+                    )
+                )
+<span class="nc bnc" id="L516" title="All 2 branches missed.">                    .blockingGet()</span>
+            ) {
+<span class="nc" id="L518">                break</span>
+            }
+<span class="nc" id="L520">            sequenceNumber++</span>
+        }
+<span class="nc" id="L522">        return sequenceFileName!!</span>
+    }
+
+    /**
+     * Notify that the current upload has succeeded
+     * @param contribution
+     */
+    @SuppressLint(&quot;StringFormatInvalid&quot;)
+    private fun showSuccessNotification(contribution: Contribution) {
+<span class="nc" id="L531">        val displayTitle = contribution.media.displayTitle</span>
+<span class="nc" id="L532">        contribution.state=Contribution.STATE_COMPLETED</span>
+<span class="nc" id="L533">        curentNotification.setContentTitle(</span>
+<span class="nc" id="L534">            appContext.getString(</span>
+<span class="nc" id="L535">                R.string.upload_completed_notification_title,</span>
+<span class="nc" id="L536">                displayTitle</span>
+            )
+        )
+<span class="nc" id="L539">            .setContentText(appContext.getString(R.string.upload_completed_notification_text))</span>
+<span class="nc" id="L540">            .setProgress(0, 0, false)</span>
+<span class="nc" id="L541">            .setOngoing(false)</span>
+<span class="nc bnc" id="L542" title="All 2 branches missed.">        notificationManager?.notify(</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">            currentNotificationTag, currentNotificationID,</span>
+<span class="nc" id="L544">            curentNotification.build()</span>
+        )
+<span class="nc" id="L546">    }</span>
+
+    /**
+     * Notify that the current upload has failed
+     * @param contribution
+     */
+    @SuppressLint(&quot;StringFormatInvalid&quot;)
+    private fun showFailedNotification(contribution: Contribution) {
+<span class="nc" id="L554">        val displayTitle = contribution.media.displayTitle</span>
+<span class="nc" id="L555">        curentNotification.setContentIntent(getPendingIntent(MainActivity::class.java))</span>
+<span class="nc" id="L556">        curentNotification.setContentTitle(</span>
+<span class="nc" id="L557">            appContext.getString(</span>
+<span class="nc" id="L558">                R.string.upload_failed_notification_title,</span>
+<span class="nc" id="L559">                displayTitle</span>
+            )
+        )
+<span class="nc" id="L562">            .setContentText(appContext.getString(R.string.upload_failed_notification_subtitle))</span>
+<span class="nc" id="L563">            .setProgress(0, 0, false)</span>
+<span class="nc" id="L564">            .setOngoing(false)</span>
+<span class="nc bnc" id="L565" title="All 2 branches missed.">        notificationManager?.notify(</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">            currentNotificationTag, currentNotificationID,</span>
+<span class="nc" id="L567">            curentNotification.build()</span>
+        )
+<span class="nc" id="L569">    }</span>
+
+    /**
+     * Notify that the current upload is paused
+     * @param contribution
+     */
+    private fun showPausedNotification(contribution: Contribution) {
+<span class="nc" id="L576">        val displayTitle = contribution.media.displayTitle</span>
+<span class="nc" id="L577">        curentNotification.setContentTitle(</span>
+<span class="nc" id="L578">            appContext.getString(</span>
+<span class="nc" id="L579">                R.string.upload_paused_notification_title,</span>
+<span class="nc" id="L580">                displayTitle</span>
+            )
+        )
+<span class="nc" id="L583">            .setContentText(appContext.getString(R.string.upload_paused_notification_subtitle))</span>
+<span class="nc" id="L584">            .setProgress(0, 0, false)</span>
+<span class="nc" id="L585">            .setOngoing(false)</span>
+<span class="nc" id="L586">        notificationManager!!.notify(</span>
+<span class="nc bnc" id="L587" title="All 2 branches missed.">            currentNotificationTag, currentNotificationID,</span>
+<span class="nc" id="L588">            curentNotification.build()</span>
+        )
+<span class="nc" id="L590">    }</span>
+
+    /**
+     * Method used to get Pending intent for opening different screen after clicking on notification
+     * @param toClass
+     */
+    private fun getPendingIntent(toClass:Class&lt;out BaseActivity&gt;):PendingIntent
+    {
+<span class="nc" id="L598">        val intent = Intent(appContext,toClass)</span>
+<span class="nc" id="L599">        return TaskStackBuilder.create(appContext).run {</span>
+<span class="nc" id="L600">             addNextIntentWithParentStack(intent)</span>
+<span class="nc bnc" id="L601" title="All 2 branches missed.">             if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.M) {</span>
+<span class="nc" id="L602">                 getPendingIntent(0,</span>
+<span class="nc" id="L603">                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)</span>
+             } else {
+<span class="nc" id="L605">                 getPendingIntent(0, PendingIntent.FLAG_UPDATE_CURRENT)</span>
+             }
+         };
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

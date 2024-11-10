@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SnackbarSequencer.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.util</a> &gt; <span class="el_source">SnackbarSequencer.kt</span></div><h1>SnackbarSequencer.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.util
+
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.utils.UiHelpers
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.widgets.WPSnackbarWrapper
+import java.lang.ref.SoftReference
+import java.util.LinkedList
+import java.util.Queue
+import javax.inject.Inject
+import javax.inject.Named
+import javax.inject.Singleton
+import kotlin.coroutines.CoroutineContext
+
+const val QUEUE_SIZE_LIMIT: Int = 5
+
+<span class="fc" id="L26">@Singleton</span>
+<span class="fc" id="L27">class SnackbarSequencer @Inject constructor(</span>
+<span class="fc" id="L28">    private val uiHelper: UiHelpers,</span>
+<span class="fc" id="L29">    private val wpSnackbarWrapper: WPSnackbarWrapper,</span>
+<span class="fc" id="L30">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher</span>
+) : CoroutineScope {
+<span class="fc" id="L32">    private var job: Job = Job()</span>
+
+<span class="fc" id="L34">    private val snackBarQueue: Queue&lt;SnackbarItem&gt; = LinkedList()</span>
+
+    private var lastSnackBarReference: SoftReference&lt;Snackbar?&gt;? = null
+
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L39">        get() = mainDispatcher + job</span>
+
+    fun enqueue(item: SnackbarItem) {
+        // This needs to be run on a single thread or synchronized - we are accessing a critical zone (`snackBarQueue`)
+<span class="nc" id="L43">        launch {</span>
+<span class="nc" id="L44">            AppLog.d(T.UTILS, &quot;SnackbarSequencer &gt; New item added&quot;)</span>
+<span class="nc bnc" id="L45" title="All 2 branches missed.">            if (snackBarQueue.size == QUEUE_SIZE_LIMIT) {</span>
+<span class="nc" id="L46">                snackBarQueue.remove()</span>
+            }
+<span class="nc" id="L48">            snackBarQueue.add(item)</span>
+<span class="nc bnc" id="L49" title="All 2 branches missed.">            if (snackBarQueue.size == 1) {</span>
+<span class="nc" id="L50">                AppLog.d(T.UTILS, &quot;SnackbarSequencer &gt; invoking start()&quot;)</span>
+<span class="nc" id="L51">                start()</span>
+            }
+<span class="nc" id="L53">        }</span>
+<span class="nc" id="L54">    }</span>
+
+    private suspend fun start() {
+<span class="nc" id="L57">        while (true) {</span>
+<span class="nc" id="L58">            val item = snackBarQueue.peek()</span>
+
+<span class="nc bnc" id="L60" title="All 8 branches missed.">            val unwrappedContext = item?.info?.view?.get()?.context</span>
+
+<span class="nc" id="L62">            val context = when (unwrappedContext) {</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">                is Activity -&gt; unwrappedContext</span>
+<span class="nc bnc" id="L64" title="All 4 branches missed.">                is ContextWrapper -&gt; unwrappedContext.baseContext</span>
+<span class="nc" id="L65">                else -&gt; null</span>
+            } as? Activity
+
+<span class="nc bnc" id="L68" title="All 4 branches missed.">            if (context != null &amp;&amp; isContextAlive(context)) {</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">                prepareSnackBar(context, item)?.show()</span>
+<span class="nc" id="L70">                AppLog.d(T.UTILS, &quot;SnackbarSequencer &gt; before delay&quot;)</span>
+                /**
+                 * Delay showing the next snackbar only if the current snack bar is important.
+                 * For more details on adding a delay at this point, see
+                 * https://github.com/wordpress-mobile/WordPress-Android/pull/10856#issuecomment-604452148
+                 * https://issuetracker.google.com/issues/37069975
+                 */
+<span class="nc bnc" id="L77" title="All 6 branches missed.">                if (item?.info?.isImportant == true) delay(item.getSnackbarDurationMs())</span>
+<span class="nc" id="L78">                AppLog.d(T.UTILS, &quot;SnackbarSequencer &gt; after delay&quot;)</span>
+            } else {
+<span class="nc" id="L80">                AppLog.d(</span>
+<span class="nc" id="L81">                        T.UTILS,</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">                        &quot;SnackbarSequencer &gt; start context was ${if (context == null) &quot;null&quot; else &quot;not alive&quot;}&quot;</span>
+                )
+            }
+<span class="nc bnc" id="L85" title="All 2 branches missed.">            if (snackBarQueue.peek() == item) {</span>
+<span class="nc" id="L86">                AppLog.d(T.UTILS, &quot;SnackbarSequencer &gt; item removed from the queue&quot;)</span>
+<span class="nc" id="L87">                snackBarQueue.remove()</span>
+            }
+<span class="nc bnc" id="L89" title="All 2 branches missed.">            if (snackBarQueue.isEmpty()) {</span>
+<span class="nc" id="L90">                AppLog.d(T.UTILS, &quot;SnackbarSequencer &gt; finishing start()&quot;)</span>
+<span class="nc" id="L91">                return</span>
+            }
+        }
+    }
+
+    private fun isContextAlive(activity: Activity): Boolean {
+<span class="nc bnc" id="L97" title="All 2 branches missed.">        return !activity.isFinishing</span>
+    }
+
+    private fun prepareSnackBar(context: Context, item: SnackbarItem): Snackbar? {
+<span class="nc bnc" id="L101" title="All 2 branches missed.">        return item.info.view.get()?.let { view -&gt;</span>
+<span class="nc" id="L102">            val message = uiHelper.getTextOfUiString(context, item.info.textRes)</span>
+
+<span class="nc" id="L104">            val snackbar = wpSnackbarWrapper.make(view, message, item.info.duration)</span>
+
+<span class="nc" id="L106">            lastSnackBarReference = SoftReference(snackbar)</span>
+
+<span class="nc bnc" id="L108" title="All 2 branches missed.">            item.action?.let { actionInfo -&gt;</span>
+<span class="nc" id="L109">                snackbar.setAction(</span>
+<span class="nc" id="L110">                        uiHelper.getTextOfUiString(context, actionInfo.textRes),</span>
+<span class="nc" id="L111">                        actionInfo.clickListener.get()</span>
+                )
+            }
+
+<span class="nc bnc" id="L115" title="All 2 branches missed.">            item.dismissCallback.get()?.let {</span>
+<span class="nc" id="L116">                snackbar.addCallback(item.snackbarCallback)</span>
+            }
+
+<span class="nc" id="L119">            AppLog.d(T.UTILS, &quot;SnackbarSequencer &gt; prepareSnackBar message [$message]&quot;)</span>
+
+<span class="nc" id="L121">            return snackbar</span>
+<span class="nc" id="L122">        } ?: null.also {</span>
+<span class="nc" id="L123">            AppLog.e(T.UTILS, &quot;SnackbarSequencer &gt; prepareSnackBar Unexpected null view&quot;)</span>
+<span class="nc" id="L124">        }</span>
+    }
+
+    fun dismissLastSnackbar() {
+<span class="nc bnc" id="L128" title="All 4 branches missed.">        lastSnackBarReference?.get()?.dismiss()</span>
+<span class="nc" id="L129">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

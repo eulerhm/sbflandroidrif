@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SuggestionActivity.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.suggestion</a> &gt; <span class="el_source">SuggestionActivity.kt</span></div><h1>SuggestionActivity.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.suggestion
+
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Intent
+import android.database.DataSetObserver
+import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
+import org.greenrobot.eventbus.EventBus
+import org.greenrobot.eventbus.Subscribe
+import org.wordpress.android.R
+import org.wordpress.android.WordPress
+import org.wordpress.android.databinding.SuggestUsersActivityBinding
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.networking.ConnectionChangeReceiver.ConnectionChangeEvent
+import org.wordpress.android.ui.LocaleAwareActivity
+import org.wordpress.android.ui.suggestion.FinishAttempt.NotExactlyOneAvailable
+import org.wordpress.android.ui.suggestion.FinishAttempt.OnlyOneAvailable
+import org.wordpress.android.ui.suggestion.adapters.SuggestionAdapter
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.ToastUtils
+import org.wordpress.android.widgets.SuggestionAutoCompleteText
+import javax.inject.Inject
+
+<span class="nc" id="L29">class SuggestionActivity : LocaleAwareActivity() {</span>
+    private var suggestionAdapter: SuggestionAdapter? = null
+    private var siteId: Long? = null
+<span class="nc bnc" id="L32" title="All 2 branches missed.">    @Inject lateinit var viewModel: SuggestionViewModel</span>
+    private lateinit var binding: SuggestUsersActivityBinding
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+<span class="nc" id="L36">        super.onCreate(savedInstanceState)</span>
+<span class="nc bnc" id="L37" title="All 2 branches missed.">        (application as WordPress).component().inject(this)</span>
+<span class="nc" id="L38">        with(SuggestUsersActivityBinding.inflate(layoutInflater)) {</span>
+<span class="nc" id="L39">            setContentView(root)</span>
+<span class="nc" id="L40">            binding = this</span>
+<span class="nc" id="L41">        }</span>
+
+<span class="nc bnc" id="L43" title="All 2 branches missed.">        val siteModel = intent.getSerializableExtra(INTENT_KEY_SITE_MODEL) as? SiteModel</span>
+<span class="nc bnc" id="L44" title="All 2 branches missed.">        val suggestionType = intent.getSerializableExtra(INTENT_KEY_SUGGESTION_TYPE) as? SuggestionType</span>
+<span class="nc" id="L45">        when {</span>
+<span class="nc bnc" id="L46" title="All 2 branches missed.">            siteModel == null -&gt; abortDueToMissingIntentExtra(INTENT_KEY_SITE_MODEL)</span>
+<span class="nc bnc" id="L47" title="All 2 branches missed.">            suggestionType == null -&gt; abortDueToMissingIntentExtra(INTENT_KEY_SUGGESTION_TYPE)</span>
+<span class="nc" id="L48">            else -&gt; initializeActivity(siteModel, suggestionType)</span>
+        }
+<span class="nc" id="L50">    }</span>
+
+    private fun abortDueToMissingIntentExtra(key: String) {
+<span class="nc" id="L53">        val message = &quot;${this.javaClass.simpleName} started without $key. Finishing Activity.&quot;</span>
+<span class="nc" id="L54">        AppLog.e(T.EDITOR, message)</span>
+<span class="nc" id="L55">        finish()</span>
+<span class="nc" id="L56">    }</span>
+
+    override fun onBackPressed() {
+<span class="nc" id="L59">        viewModel.trackExit(false)</span>
+<span class="nc" id="L60">        super.onBackPressed()</span>
+<span class="nc" id="L61">    }</span>
+
+    private fun initializeActivity(siteModel: SiteModel, suggestionType: SuggestionType) {
+<span class="nc" id="L64">        siteId = siteModel.siteId</span>
+<span class="nc" id="L65">        viewModel.init(suggestionType, siteModel).let { supportsSuggestions -&gt;</span>
+<span class="nc bnc" id="L66" title="All 2 branches missed.">            if (!supportsSuggestions) {</span>
+<span class="nc" id="L67">                finish()</span>
+<span class="nc" id="L68">                return</span>
+            }
+<span class="nc" id="L70">        }</span>
+
+<span class="nc" id="L72">        initializeSuggestionAdapter()</span>
+
+        // The previous activity is visible &quot;behind&quot; this Activity if the list of Suggestions does not fill
+        // the entire screen. If the user taps a part of the screen showing the still-visible previous
+        // Activity, then finish this Activity and return the user to the previous Activity.
+<span class="nc bnc" id="L77" title="All 2 branches missed.">        binding.rootView.setOnClickListener {</span>
+<span class="nc" id="L78">            viewModel.trackExit(false)</span>
+<span class="nc" id="L79">            finish()</span>
+<span class="nc" id="L80">        }</span>
+
+<span class="nc bnc" id="L82" title="All 2 branches missed.">        binding.autocompleteText.apply {</span>
+<span class="nc" id="L83">            initializeWithPrefix(viewModel.suggestionPrefix)</span>
+<span class="nc" id="L84">            setOnItemClickListener { _, _, position, _ -&gt;</span>
+<span class="nc bnc" id="L85" title="All 4 branches missed.">                val suggestionUserId = suggestionAdapter?.getItem(position)?.value</span>
+<span class="nc" id="L86">                finishWithValue(suggestionUserId)</span>
+<span class="nc" id="L87">            }</span>
+
+<span class="nc" id="L89">            setOnKeyListener { _, keyCode, event -&gt;</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">                if (event.action == KeyEvent.ACTION_UP) {</span>
+<span class="nc bnc" id="L91" title="All 2 branches missed.">                    if (keyCode == KeyEvent.KEYCODE_ENTER) {</span>
+<span class="nc" id="L92">                        exitIfOnlyOneMatchingUser()</span>
+<span class="nc" id="L93">                        return@setOnKeyListener true</span>
+                    }
+                }
+<span class="nc" id="L96">                false</span>
+            }
+
+<span class="nc" id="L99">            setOnEditorActionListener { _, actionId, _ -&gt;</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">                if (actionId == EditorInfo.IME_ACTION_DONE) {</span>
+<span class="nc" id="L101">                    exitIfOnlyOneMatchingUser()</span>
+<span class="nc" id="L102">                    true</span>
+                } else {
+<span class="nc" id="L104">                    false</span>
+                }
+            }
+
+<span class="nc" id="L108">            setOnFocusChangeListener { _, _ -&gt;</span>
+                // The purpose of this Activity is to allow the user to select a user, so we want
+                // the dropdown to always be visible.
+<span class="nc" id="L111">                post { showDropDown() }</span>
+<span class="nc" id="L112">            }</span>
+
+<span class="nc" id="L114">            viewModel.suggestionPrefix.let { prefix -&gt;</span>
+
+                // Ensure the text always starts with appropriate prefix
+<span class="nc" id="L117">                addTextChangedListener(object : TextWatcher {</span>
+<span class="nc" id="L118">                    var matchesPrefixBeforeChanged: Boolean? = null</span>
+
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+<span class="nc bnc" id="L121" title="All 6 branches missed.">                        matchesPrefixBeforeChanged = s?.let { it.length == 1 &amp;&amp; it[0] == prefix }</span>
+<span class="nc" id="L122">                    }</span>
+
+<span class="nc" id="L124">                    override fun afterTextChanged(s: Editable?) {}</span>
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+<span class="nc bnc" id="L126" title="All 2 branches missed.">                        if (s == null) {</span>
+<span class="nc" id="L127">                            return</span>
+<span class="nc bnc" id="L128" title="All 6 branches missed.">                        } else if (s.isEmpty() &amp;&amp; matchesPrefixBeforeChanged == true) {</span>
+                            // Tapping delete when only the prefix is shown exits the suggestions UI
+<span class="nc" id="L130">                            viewModel.trackExit(false)</span>
+<span class="nc" id="L131">                            finish()</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">                        } else if (s.startsWith(&quot;$prefix &quot;)) {</span>
+                            // Tapping the space key directly after the prefix exits the suggestions UI
+<span class="nc" id="L134">                            finishWithValue(&quot;&quot;, false)</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">                        } else if (!s.startsWith(prefix)) {</span>
+                            // Re-insert prefix if it was deleted
+<span class="nc" id="L137">                            val string = &quot;$prefix$s&quot;</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">                            binding.autocompleteText.setText(string)</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">                            binding.autocompleteText.setSelection(1)</span>
+<span class="nc" id="L140">                            showDropDown()</span>
+                        }
+<span class="nc" id="L142">                        matchesPrefixBeforeChanged = null</span>
+<span class="nc" id="L143">                    }</span>
+                })
+
+<span class="nc bnc" id="L146" title="All 4 branches missed.">                if (text.isEmpty()) {</span>
+<span class="nc" id="L147">                    setText(&quot;$prefix&quot;)</span>
+<span class="nc" id="L148">                    setSelection(1)</span>
+                }
+<span class="nc" id="L150">            }</span>
+
+<span class="nc" id="L152">            updateEmptyView()</span>
+<span class="nc" id="L153">            post { requestFocus() }</span>
+<span class="nc" id="L154">            showDropdownOnTouch()</span>
+<span class="nc" id="L155">        }</span>
+
+<span class="nc" id="L157">        viewModel.suggestionData.observe(this, { suggestionResult -&gt;</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">            suggestionAdapter?.suggestionList = suggestionResult.suggestions</span>
+
+            // Calling forceFiltering is needed to force the suggestions list to always
+            // immediately refresh when there is new data
+<span class="nc bnc" id="L162" title="All 4 branches missed.">            binding.autocompleteText.forceFiltering(binding.autocompleteText.text)</span>
+
+            // Ensure that the suggestions list is displayed wth the new data. This is particularly needed when
+            // suggestion list was empty before the new data was received, otherwise the no-longer-empty
+            // suggestion list will not display when it is updated. Wrapping this in the isAttachedToWindow
+            // check avoids a crash if the suggestions are loaded when the view is not attached.
+<span class="nc bnc" id="L168" title="All 4 branches missed.">            if (binding.autocompleteText.isAttachedToWindow) {</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">                binding.autocompleteText.showDropDown()</span>
+            }
+
+<span class="nc" id="L172">            updateEmptyView()</span>
+<span class="nc" id="L173">        })</span>
+<span class="nc" id="L174">    }</span>
+
+    private fun exitIfOnlyOneMatchingUser() {
+<span class="nc" id="L177">        when (val finishAttempt = viewModel.onAttemptToFinish(</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">                suggestionAdapter?.filteredSuggestions,</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">                binding.autocompleteText.text.toString()</span>
+        )) {
+<span class="nc bnc" id="L181" title="All 2 branches missed.">            is OnlyOneAvailable -&gt; {</span>
+<span class="nc" id="L182">                finishWithValue(finishAttempt.onlySelectedValue)</span>
+            }
+<span class="nc bnc" id="L184" title="All 2 branches missed.">            is NotExactlyOneAvailable -&gt; {</span>
+<span class="nc" id="L185">                ToastUtils.showToast(this@SuggestionActivity, finishAttempt.errorMessage)</span>
+            }
+        }
+<span class="nc" id="L188">    }</span>
+
+    @SuppressLint(&quot;ClickableViewAccessibility&quot;)
+    private fun SuggestionAutoCompleteText.showDropdownOnTouch() {
+<span class="nc" id="L192">        setOnTouchListener { _, _ -&gt;</span>
+            // Prevent touching the view from dismissing the suggestion list if it's not empty
+<span class="nc bnc" id="L194" title="All 2 branches missed.">            if (!adapter.isEmpty) {</span>
+<span class="nc" id="L195">                showDropDown()</span>
+            }
+<span class="nc" id="L197">            false</span>
+        }
+<span class="nc" id="L199">    }</span>
+
+    override fun finish() {
+<span class="nc" id="L202">        super.finish()</span>
+<span class="nc" id="L203">        overridePendingTransition(R.anim.do_nothing, R.anim.do_nothing)</span>
+<span class="nc" id="L204">    }</span>
+
+<span class="nc" id="L206">    private fun finishWithValue(value: String?, withSuggestion: Boolean = true) {</span>
+<span class="nc" id="L207">        viewModel.trackExit(withSuggestion)</span>
+
+<span class="nc" id="L209">        setResult(Activity.RESULT_OK, Intent().apply {</span>
+<span class="nc" id="L210">            putExtra(SELECTED_VALUE, value)</span>
+<span class="nc" id="L211">        })</span>
+<span class="nc" id="L212">        finish()</span>
+<span class="nc" id="L213">    }</span>
+
+    private fun initializeSuggestionAdapter() {
+<span class="nc" id="L216">        suggestionAdapter = SuggestionAdapter(this, viewModel.suggestionPrefix).apply {</span>
+<span class="nc" id="L217">            setBackgroundColorAttr(R.attr.colorGutenbergBackground)</span>
+
+<span class="nc" id="L219">            registerDataSetObserver(object : DataSetObserver() {</span>
+                override fun onChanged() {
+<span class="nc" id="L221">                    updateEmptyView()</span>
+<span class="nc" id="L222">                }</span>
+
+                override fun onInvalidated() {
+<span class="nc" id="L225">                    updateEmptyView()</span>
+<span class="nc" id="L226">                }</span>
+            })
+<span class="nc" id="L228">        }</span>
+
+<span class="nc bnc" id="L230" title="All 2 branches missed.">        binding.autocompleteText.setAdapter(suggestionAdapter)</span>
+<span class="nc" id="L231">    }</span>
+
+    private fun updateEmptyView() {
+<span class="nc bnc" id="L234" title="All 2 branches missed.">        binding.emptyView.apply {</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">            val (newText, newVisibility) = viewModel.getEmptyViewState(suggestionAdapter?.filteredSuggestions)</span>
+<span class="nc" id="L236">            text = newText</span>
+<span class="nc" id="L237">            visibility = newVisibility</span>
+<span class="nc" id="L238">        }</span>
+<span class="nc" id="L239">    }</span>
+
+    override fun onResume() {
+<span class="nc" id="L242">        super.onResume()</span>
+<span class="nc" id="L243">        EventBus.getDefault().register(this)</span>
+<span class="nc bnc" id="L244" title="All 4 branches missed.">        if (binding.autocompleteText.isAttachedToWindow) {</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">            binding.autocompleteText.showDropDown()</span>
+        }
+<span class="nc" id="L247">    }</span>
+
+    override fun onPause() {
+<span class="nc" id="L250">        EventBus.getDefault().unregister(this)</span>
+<span class="nc" id="L251">        super.onPause()</span>
+<span class="nc" id="L252">    }</span>
+
+    @Subscribe
+    fun onEventMainThread(event: ConnectionChangeEvent) {
+<span class="nc" id="L256">        viewModel.onConnectionChanged(event)</span>
+<span class="nc" id="L257">        updateEmptyView()</span>
+<span class="nc" id="L258">    }</span>
+
+    companion object {
+        const val SELECTED_VALUE = &quot;SELECTED_VALUE&quot;
+
+        const val INTENT_KEY_SUGGESTION_TYPE = &quot;INTENT_KEY_SUGGESTION_TYPE&quot;
+        const val INTENT_KEY_SITE_MODEL = &quot;INTENT_KEY_SITE_MODEL&quot;
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

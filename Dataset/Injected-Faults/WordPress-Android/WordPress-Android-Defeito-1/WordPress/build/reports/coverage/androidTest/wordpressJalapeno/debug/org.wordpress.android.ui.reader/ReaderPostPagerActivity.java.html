@@ -1,0 +1,1022 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderPostPagerActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader</a> &gt; <span class="el_source">ReaderPostPagerActivity.java</span></div><h1>ReaderPostPagerActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Parcelable;
+import android.text.TextUtils;
+import android.util.SparseArray;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ProgressBar;
+
+import androidx.annotation.NonNull;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentStatePagerAdapter;
+import androidx.viewpager.widget.ViewPager;
+
+import org.greenrobot.eventbus.EventBus;
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.datasets.ReaderPostTable;
+import org.wordpress.android.datasets.wrappers.ReaderPostTableWrapper;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.model.PostModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.PostStore;
+import org.wordpress.android.fluxc.store.PostStore.OnPostUploaded;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.models.ReaderPost;
+import org.wordpress.android.models.ReaderTag;
+import org.wordpress.android.ui.ActivityLauncher;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.ui.RequestCodes;
+import org.wordpress.android.ui.WPLaunchActivity;
+import org.wordpress.android.ui.deeplinks.DeepLinkNavigator.NavigateAction.OpenInReader;
+import org.wordpress.android.ui.deeplinks.DeepLinkTrackingUtils;
+import org.wordpress.android.ui.mysite.SelectedSiteRepository;
+import org.wordpress.android.ui.posts.EditPostActivity;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.ui.reader.ReaderTypes.ReaderPostListType;
+import org.wordpress.android.ui.reader.actions.ReaderActions;
+import org.wordpress.android.ui.reader.actions.ReaderPostActions;
+import org.wordpress.android.ui.reader.models.ReaderBlogIdPostId;
+import org.wordpress.android.ui.reader.models.ReaderBlogIdPostIdList;
+import org.wordpress.android.ui.reader.services.post.ReaderPostServiceStarter;
+import org.wordpress.android.ui.reader.tracker.ReaderTracker;
+import org.wordpress.android.ui.reader.tracker.ReaderTrackerType;
+import org.wordpress.android.ui.reader.utils.ReaderPostSeenStatusWrapper;
+import org.wordpress.android.ui.uploads.UploadActionUseCase;
+import org.wordpress.android.ui.uploads.UploadUtils;
+import org.wordpress.android.ui.uploads.UploadUtilsWrapper;
+import org.wordpress.android.util.ActivityUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.UriWrapper;
+import org.wordpress.android.util.UrlUtilsWrapper;
+import org.wordpress.android.util.analytics.AnalyticsUtilsWrapper;
+import org.wordpress.android.util.config.SeenUnseenWithCounterFeatureConfig;
+import org.wordpress.android.widgets.WPSwipeSnackbar;
+import org.wordpress.android.widgets.WPViewPager;
+import org.wordpress.android.widgets.WPViewPagerTransformer;
+
+import java.io.Serializable;
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
+import java.util.HashSet;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.inject.Inject;
+
+/*
+ * shows reader post detail fragments in a ViewPager - primarily used for easy swiping between
+ * posts with a specific tag or in a specific blog, but can also be used to show a single
+ * post detail.
+ *
+ * It also displays intercepted WordPress.com URls in the following forms
+ *
+ * http[s]://wordpress.com/read/blogs/{blogId}/posts/{postId}
+ * http[s]://wordpress.com/read/feeds/{feedId}/posts/{feedItemId}
+ * http[s]://{username}.wordpress.com/{year}/{month}/{day}/{postSlug}
+ *
+ * Will also handle jumping to the comments section, liking a commend and liking a post directly
+ */
+<span class="nc" id="L95">public class ReaderPostPagerActivity extends LocaleAwareActivity {</span>
+    /**
+     * Type of URL intercepted
+     */
+<span class="nc" id="L99">    private enum InterceptType {</span>
+<span class="nc" id="L100">        READER_BLOG,</span>
+<span class="nc" id="L101">        READER_FEED,</span>
+<span class="nc" id="L102">        WPCOM_POST_SLUG</span>
+    }
+
+    /**
+     * operation to perform automatically when opened via deeplinking
+     */
+<span class="nc" id="L108">    public enum DirectOperation {</span>
+<span class="nc" id="L109">        COMMENT_JUMP,</span>
+<span class="nc" id="L110">        COMMENT_REPLY,</span>
+<span class="nc" id="L111">        COMMENT_LIKE,</span>
+<span class="nc" id="L112">        POST_LIKE,</span>
+    }
+
+    private WPViewPager mViewPager;
+    private ProgressBar mProgress;
+
+    private ReaderTag mCurrentTag;
+    private boolean mIsFeed;
+    private long mBlogId;
+    private long mPostId;
+    private int mCommentId;
+    private DirectOperation mDirectOperation;
+    private String mInterceptedUri;
+<span class="nc" id="L125">    private int mLastSelectedPosition = -1;</span>
+    private ReaderPostListType mPostListType;
+
+    private boolean mPostSlugsResolutionUnderway;
+    private boolean mIsRequestingMorePosts;
+    private boolean mIsSinglePostView;
+    private boolean mIsRelatedPostView;
+
+    private boolean mBackFromLogin;
+
+<span class="nc" id="L135">    private final HashSet&lt;Integer&gt; mTrackedPositions = new HashSet&lt;&gt;();</span>
+
+    @Inject SiteStore mSiteStore;
+    @Inject ReaderTracker mReaderTracker;
+    @Inject AnalyticsUtilsWrapper mAnalyticsUtilsWrapper;
+    @Inject ReaderPostTableWrapper mReaderPostTableWrapper;
+    @Inject PostStore mPostStore;
+    @Inject Dispatcher mDispatcher;
+    @Inject UploadActionUseCase mUploadActionUseCase;
+    @Inject UploadUtilsWrapper mUploadUtilsWrapper;
+    @Inject ReaderPostSeenStatusWrapper mPostSeenStatusWrapper;
+    @Inject SeenUnseenWithCounterFeatureConfig mSeenUnseenWithCounterFeatureConfig;
+    @Inject UrlUtilsWrapper mUrlUtilsWrapper;
+    @Inject DeepLinkTrackingUtils mDeepLinkTrackingUtils;
+    @Inject SelectedSiteRepository mSelectedSiteRepository;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L153">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L154">        ((WordPress) getApplication()).component().inject(this);</span>
+
+<span class="nc" id="L156">        setContentView(R.layout.reader_activity_post_pager);</span>
+
+<span class="nc" id="L158">        mViewPager = findViewById(R.id.viewpager);</span>
+<span class="nc" id="L159">        mProgress = findViewById(R.id.progress_loading);</span>
+
+<span class="nc bnc" id="L161" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L162">            mIsFeed = savedInstanceState.getBoolean(ReaderConstants.ARG_IS_FEED);</span>
+<span class="nc" id="L163">            mBlogId = savedInstanceState.getLong(ReaderConstants.ARG_BLOG_ID);</span>
+<span class="nc" id="L164">            mPostId = savedInstanceState.getLong(ReaderConstants.ARG_POST_ID);</span>
+<span class="nc" id="L165">            mDirectOperation = (DirectOperation) savedInstanceState</span>
+<span class="nc" id="L166">                    .getSerializable(ReaderConstants.ARG_DIRECT_OPERATION);</span>
+<span class="nc" id="L167">            mCommentId = savedInstanceState.getInt(ReaderConstants.ARG_COMMENT_ID);</span>
+<span class="nc" id="L168">            mIsSinglePostView = savedInstanceState.getBoolean(ReaderConstants.ARG_IS_SINGLE_POST);</span>
+<span class="nc" id="L169">            mIsRelatedPostView = savedInstanceState.getBoolean(ReaderConstants.ARG_IS_RELATED_POST);</span>
+<span class="nc" id="L170">            mInterceptedUri = savedInstanceState.getString(ReaderConstants.ARG_INTERCEPTED_URI);</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">            if (savedInstanceState.containsKey(ReaderConstants.ARG_POST_LIST_TYPE)) {</span>
+<span class="nc" id="L172">                mPostListType =</span>
+<span class="nc" id="L173">                        (ReaderPostListType) savedInstanceState.getSerializable(ReaderConstants.ARG_POST_LIST_TYPE);</span>
+            }
+<span class="nc bnc" id="L175" title="All 2 branches missed.">            if (savedInstanceState.containsKey(ReaderConstants.ARG_TAG)) {</span>
+<span class="nc" id="L176">                mCurrentTag = (ReaderTag) savedInstanceState.getSerializable(ReaderConstants.ARG_TAG);</span>
+            }
+<span class="nc" id="L178">            mPostSlugsResolutionUnderway =</span>
+<span class="nc" id="L179">                    savedInstanceState.getBoolean(ReaderConstants.KEY_POST_SLUGS_RESOLUTION_UNDERWAY);</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">            if (savedInstanceState.containsKey(ReaderConstants.KEY_TRACKED_POSITIONS)) {</span>
+<span class="nc" id="L181">                Serializable positions = savedInstanceState.getSerializable(ReaderConstants.KEY_TRACKED_POSITIONS);</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">                if (positions instanceof HashSet) {</span>
+<span class="nc" id="L183">                    mTrackedPositions.addAll((HashSet&lt;Integer&gt;) positions);</span>
+                }
+<span class="nc" id="L185">            }</span>
+        } else {
+<span class="nc" id="L187">            mIsFeed = getIntent().getBooleanExtra(ReaderConstants.ARG_IS_FEED, false);</span>
+<span class="nc" id="L188">            mBlogId = getIntent().getLongExtra(ReaderConstants.ARG_BLOG_ID, 0);</span>
+<span class="nc" id="L189">            mPostId = getIntent().getLongExtra(ReaderConstants.ARG_POST_ID, 0);</span>
+<span class="nc" id="L190">            mDirectOperation = (DirectOperation) getIntent()</span>
+<span class="nc" id="L191">                    .getSerializableExtra(ReaderConstants.ARG_DIRECT_OPERATION);</span>
+<span class="nc" id="L192">            mCommentId = getIntent().getIntExtra(ReaderConstants.ARG_COMMENT_ID, 0);</span>
+<span class="nc" id="L193">            mIsSinglePostView = getIntent().getBooleanExtra(ReaderConstants.ARG_IS_SINGLE_POST, false);</span>
+<span class="nc" id="L194">            mIsRelatedPostView = getIntent().getBooleanExtra(ReaderConstants.ARG_IS_RELATED_POST, false);</span>
+<span class="nc" id="L195">            mInterceptedUri = getIntent().getStringExtra(ReaderConstants.ARG_INTERCEPTED_URI);</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">            if (getIntent().hasExtra(ReaderConstants.ARG_POST_LIST_TYPE)) {</span>
+<span class="nc" id="L197">                mPostListType =</span>
+<span class="nc" id="L198">                        (ReaderPostListType) getIntent().getSerializableExtra(ReaderConstants.ARG_POST_LIST_TYPE);</span>
+            }
+<span class="nc bnc" id="L200" title="All 2 branches missed.">            if (getIntent().hasExtra(ReaderConstants.ARG_TAG)) {</span>
+<span class="nc" id="L201">                mCurrentTag = (ReaderTag) getIntent().getSerializableExtra(ReaderConstants.ARG_TAG);</span>
+            }
+        }
+
+<span class="nc bnc" id="L205" title="All 2 branches missed.">        if (mPostListType == null) {</span>
+<span class="nc" id="L206">            mPostListType = ReaderPostListType.TAG_FOLLOWED;</span>
+        }
+
+<span class="nc" id="L209">        mViewPager.addOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {</span>
+            @Override
+            public void onPageSelected(int position) {
+<span class="nc" id="L212">                super.onPageSelected(position);</span>
+<span class="nc" id="L213">                trackPostAtPositionIfNeeded(position);</span>
+
+<span class="nc bnc" id="L215" title="All 4 branches missed.">                if (mLastSelectedPosition &gt; -1 &amp;&amp; mLastSelectedPosition != position) {</span>
+                    // pause the previous web view - important because otherwise embedded content
+                    // will continue to play
+<span class="nc" id="L218">                    ReaderPostDetailFragment lastFragment = getDetailFragmentAtPosition(mLastSelectedPosition);</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">                    if (lastFragment != null) {</span>
+<span class="nc" id="L220">                        lastFragment.pauseWebView();</span>
+                    }
+                }
+
+                // resume the newly active webView if it was previously paused
+<span class="nc" id="L225">                ReaderPostDetailFragment thisFragment = getDetailFragmentAtPosition(position);</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">                if (thisFragment != null) {</span>
+<span class="nc" id="L227">                    thisFragment.resumeWebViewIfPaused();</span>
+                }
+
+<span class="nc" id="L230">                mLastSelectedPosition = position;</span>
+<span class="nc" id="L231">            }</span>
+        });
+
+<span class="nc" id="L234">        mViewPager.setPageTransformer(</span>
+                false,
+                new WPViewPagerTransformer(WPViewPagerTransformer.TransformType.SLIDE_OVER)
+        );
+<span class="nc" id="L238">    }</span>
+
+    private void handleDeepLinking() {
+<span class="nc" id="L241">        String action = getIntent().getAction();</span>
+<span class="nc" id="L242">        Uri uri = getIntent().getData();</span>
+
+<span class="nc" id="L244">        String host = &quot;&quot;;</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">        if (uri != null) {</span>
+<span class="nc" id="L246">            host = uri.getHost();</span>
+        }
+
+
+<span class="nc bnc" id="L250" title="All 2 branches missed.">        if (uri == null) {</span>
+<span class="nc" id="L251">            mReaderTracker.trackDeepLink(AnalyticsTracker.Stat.DEEP_LINKED, action, host, uri);</span>
+            // invalid uri so, just show the entry screen
+<span class="nc" id="L253">            Intent intent = new Intent(this, WPLaunchActivity.class);</span>
+<span class="nc" id="L254">            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);</span>
+<span class="nc" id="L255">            startActivity(intent);</span>
+<span class="nc" id="L256">            finish();</span>
+<span class="nc" id="L257">            return;</span>
+        }
+
+<span class="nc" id="L260">        InterceptType interceptType = InterceptType.READER_BLOG;</span>
+<span class="nc" id="L261">        String blogIdentifier = null; // can be an id or a slug</span>
+<span class="nc" id="L262">        String postIdentifier = null; // can be an id or a slug</span>
+
+<span class="nc" id="L264">        mInterceptedUri = uri.toString();</span>
+
+<span class="nc" id="L266">        List&lt;String&gt; segments = uri.getPathSegments();</span>
+
+        // Handled URLs look like this: http[s]://wordpress.com/read/feeds/{feedId}/posts/{feedItemId}
+        // with the first segment being 'read'.
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        if (segments != null) {</span>
+            // Builds stripped URI for tracking purposes
+<span class="nc" id="L272">            UriWrapper wrappedUri = new UriWrapper(uri);</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">            if (segments.get(0).equals(&quot;read&quot;)) {</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">                if (segments.size() &gt; 2) {</span>
+<span class="nc" id="L275">                    blogIdentifier = segments.get(2);</span>
+
+<span class="nc bnc" id="L277" title="All 2 branches missed.">                    if (segments.get(1).equals(&quot;blogs&quot;)) {</span>
+<span class="nc" id="L278">                        interceptType = InterceptType.READER_BLOG;</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">                    } else if (segments.get(1).equals(&quot;feeds&quot;)) {</span>
+<span class="nc" id="L280">                        interceptType = InterceptType.READER_FEED;</span>
+<span class="nc" id="L281">                        mIsFeed = true;</span>
+                    }
+                }
+
+<span class="nc bnc" id="L285" title="All 4 branches missed.">                if (segments.size() &gt; 4 &amp;&amp; segments.get(3).equals(&quot;posts&quot;)) {</span>
+<span class="nc" id="L286">                    postIdentifier = segments.get(4);</span>
+                }
+
+<span class="nc" id="L289">                parseFragment(uri);</span>
+<span class="nc" id="L290">                mDeepLinkTrackingUtils.track(action, new OpenInReader(wrappedUri), wrappedUri);</span>
+<span class="nc" id="L291">                showPost(interceptType, blogIdentifier, postIdentifier);</span>
+<span class="nc" id="L292">                return;</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">            } else if (segments.size() &gt;= 4) {</span>
+<span class="nc" id="L294">                blogIdentifier = uri.getHost();</span>
+                try {
+<span class="nc" id="L296">                    postIdentifier = URLEncoder.encode(segments.get(3), &quot;UTF-8&quot;);</span>
+<span class="nc" id="L297">                } catch (UnsupportedEncodingException e) {</span>
+<span class="nc" id="L298">                    AppLog.e(AppLog.T.READER, e);</span>
+<span class="nc" id="L299">                    ToastUtils.showToast(this, R.string.error_generic);</span>
+<span class="nc" id="L300">                }</span>
+
+<span class="nc" id="L302">                parseFragment(uri);</span>
+<span class="nc" id="L303">                detectLike(uri);</span>
+
+<span class="nc" id="L305">                interceptType = InterceptType.WPCOM_POST_SLUG;</span>
+<span class="nc" id="L306">                mDeepLinkTrackingUtils.track(action, new OpenInReader(wrappedUri), wrappedUri);</span>
+<span class="nc" id="L307">                showPost(interceptType, blogIdentifier, postIdentifier);</span>
+<span class="nc" id="L308">                return;</span>
+            }
+        }
+
+        // at this point, just show the entry screen
+<span class="nc" id="L313">        Intent intent = new Intent(this, WPLaunchActivity.class);</span>
+<span class="nc" id="L314">        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);</span>
+<span class="nc" id="L315">        startActivity(intent);</span>
+<span class="nc" id="L316">    }</span>
+
+    private void showPost(@NonNull InterceptType interceptType, final String blogIdentifier, final String
+            postIdentifier) {
+<span class="nc bnc" id="L320" title="All 4 branches missed.">        if (!TextUtils.isEmpty(blogIdentifier) &amp;&amp; !TextUtils.isEmpty(postIdentifier)) {</span>
+<span class="nc" id="L321">            mIsSinglePostView = true;</span>
+<span class="nc" id="L322">            mIsRelatedPostView = false;</span>
+
+<span class="nc bnc" id="L324" title="All 4 branches missed.">            switch (interceptType) {</span>
+                case READER_BLOG:
+<span class="nc bnc" id="L326" title="All 2 branches missed.">                    if (parseIds(blogIdentifier, postIdentifier)) {</span>
+<span class="nc" id="L327">                        mReaderTracker.trackBlogPost(</span>
+                                AnalyticsTracker.Stat.READER_BLOG_POST_INTERCEPTED,
+                                mBlogId,
+                                mPostId
+                        );
+                        // IDs have now been set so, let ReaderPostPagerActivity normally display the post
+                    } else {
+<span class="nc" id="L334">                        ToastUtils.showToast(this, R.string.error_generic);</span>
+                    }
+<span class="nc" id="L336">                    break;</span>
+                case READER_FEED:
+<span class="nc bnc" id="L338" title="All 2 branches missed.">                    if (parseIds(blogIdentifier, postIdentifier)) {</span>
+<span class="nc" id="L339">                        mReaderTracker.trackFeedPost(</span>
+                                AnalyticsTracker.Stat.READER_FEED_POST_INTERCEPTED,
+                                mBlogId,
+                                mPostId
+                        );
+                        // IDs have now been set so, let ReaderPostPagerActivity normally display the post
+                    } else {
+<span class="nc" id="L346">                        ToastUtils.showToast(this, R.string.error_generic);</span>
+                    }
+<span class="nc" id="L348">                    break;</span>
+                case WPCOM_POST_SLUG:
+<span class="nc" id="L350">                    mReaderTracker.trackBlogPost(</span>
+                            AnalyticsTracker.Stat.READER_WPCOM_BLOG_POST_INTERCEPTED,
+                            blogIdentifier,
+                            postIdentifier,
+                            mCommentId
+                    );
+
+                    // try to get the post from the local db
+<span class="nc" id="L358">                    ReaderPost post = ReaderPostTable.getBlogPost(blogIdentifier, postIdentifier, true);</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">                    if (post != null) {</span>
+                        // set the IDs and let ReaderPostPagerActivity normally display the post
+<span class="nc" id="L361">                        mBlogId = post.blogId;</span>
+<span class="nc" id="L362">                        mPostId = post.postId;</span>
+                    } else {
+                        // not stored locally, so request it
+<span class="nc" id="L365">                        ReaderPostActions.requestBlogPost(</span>
+                                blogIdentifier, postIdentifier,
+<span class="nc" id="L367">                                new ReaderActions.OnRequestListener&lt;String&gt;() {</span>
+                                    @Override
+                                    public void onSuccess(String blogUrl) {
+<span class="nc" id="L370">                                        mPostSlugsResolutionUnderway = false;</span>
+
+                                        // the scheme is removed to match the query pattern in ReaderPostTable
+                                        // .getBlogPost
+<span class="nc" id="L374">                                        String primaryBlogIdentifier = mUrlUtilsWrapper.removeScheme(blogUrl);</span>
+
+                                        // getBlogPost utilizes the primaryBlogIdentifier instead of blogIdentifier
+                                        // since
+                                        // the custom and *.wordpress.com domains need to be used interchangeably since
+                                        // they can both be used as the primary domain when identifying the blog_url
+                                        // in the ReaderPostTable query.
+<span class="nc" id="L381">                                        ReaderPost post =</span>
+<span class="nc" id="L382">                                                ReaderPostTable.getBlogPost(primaryBlogIdentifier, postIdentifier,</span>
+                                                        true);
+<span class="nc bnc" id="L384" title="All 2 branches missed.">                                        ReaderEvents.PostSlugsRequestCompleted slugsResolved = (post != null)</span>
+<span class="nc" id="L385">                                                ? new ReaderEvents.PostSlugsRequestCompleted(200, post.blogId,</span>
+                                                post.postId)
+<span class="nc" id="L387">                                                : new ReaderEvents.PostSlugsRequestCompleted(200, 0, 0);</span>
+                                        // notify that the slug resolution request has completed
+<span class="nc" id="L389">                                        EventBus.getDefault().post(slugsResolved);</span>
+
+                                        // post wasn't available locally earlier so, track it now
+<span class="nc bnc" id="L392" title="All 2 branches missed.">                                        if (post != null) {</span>
+<span class="nc" id="L393">                                            trackPost(post.blogId, post.postId);</span>
+                                        }
+<span class="nc" id="L395">                                    }</span>
+
+                                    @Override
+                                    public void onFailure(int statusCode) {
+<span class="nc" id="L399">                                        mPostSlugsResolutionUnderway = false;</span>
+                                        // notify that the slug resolution request has completed
+<span class="nc" id="L401">                                        EventBus.getDefault()</span>
+<span class="nc" id="L402">                                                .post(new ReaderEvents.PostSlugsRequestCompleted(statusCode, 0, 0));</span>
+<span class="nc" id="L403">                                    }</span>
+                                });
+<span class="nc" id="L405">                        mPostSlugsResolutionUnderway = true;</span>
+                    }
+
+<span class="nc" id="L408">                    break;</span>
+            }
+        } else {
+<span class="nc" id="L411">            ToastUtils.showToast(this, R.string.error_generic);</span>
+        }
+<span class="nc" id="L413">    }</span>
+
+    private boolean parseIds(String blogIdentifier, String postIdentifier) {
+        try {
+<span class="nc" id="L417">            mBlogId = Long.parseLong(blogIdentifier);</span>
+<span class="nc" id="L418">            mPostId = Long.parseLong(postIdentifier);</span>
+<span class="nc" id="L419">        } catch (NumberFormatException e) {</span>
+<span class="nc" id="L420">            AppLog.e(AppLog.T.READER, e);</span>
+<span class="nc" id="L421">            return false;</span>
+<span class="nc" id="L422">        }</span>
+
+<span class="nc" id="L424">        return true;</span>
+    }
+
+    /**
+     * Parse the URL fragment and interpret it as an operation to perform. For example, a &quot;#comments&quot; fragment is
+     * interpreted as a direct jump into the comments section of the post.
+     *
+     * @param uri the full URI input, including the fragment
+     */
+    private void parseFragment(Uri uri) {
+        // default to do-nothing w.r.t. comments
+<span class="nc" id="L435">        mDirectOperation = null;</span>
+
+<span class="nc bnc" id="L437" title="All 4 branches missed.">        if (uri == null || uri.getFragment() == null) {</span>
+<span class="nc" id="L438">            return;</span>
+        }
+
+<span class="nc" id="L441">        final String fragment = uri.getFragment();</span>
+
+<span class="nc" id="L443">        final Pattern fragmentCommentsPattern = Pattern.compile(&quot;comments&quot;, Pattern.CASE_INSENSITIVE);</span>
+<span class="nc" id="L444">        final Pattern fragmentCommentIdPattern = Pattern.compile(&quot;comment-(\\d+)&quot;, Pattern.CASE_INSENSITIVE);</span>
+<span class="nc" id="L445">        final Pattern fragmentRespondPattern = Pattern.compile(&quot;respond&quot;, Pattern.CASE_INSENSITIVE);</span>
+
+        // check for the general &quot;#comments&quot; fragment to jump to the comments section
+<span class="nc" id="L448">        Matcher commentsMatcher = fragmentCommentsPattern.matcher(fragment);</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">        if (commentsMatcher.matches()) {</span>
+<span class="nc" id="L450">            mDirectOperation = DirectOperation.COMMENT_JUMP;</span>
+<span class="nc" id="L451">            mCommentId = 0;</span>
+<span class="nc" id="L452">            return;</span>
+        }
+
+        // check for the &quot;#respond&quot; fragment to jump to the reply box
+<span class="nc" id="L456">        Matcher respondMatcher = fragmentRespondPattern.matcher(fragment);</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">        if (respondMatcher.matches()) {</span>
+<span class="nc" id="L458">            mDirectOperation = DirectOperation.COMMENT_REPLY;</span>
+
+            // check whether we are to reply to a specific comment
+<span class="nc" id="L461">            final String replyToCommentId = uri.getQueryParameter(&quot;replytocom&quot;);</span>
+<span class="nc bnc" id="L462" title="All 2 branches missed.">            if (replyToCommentId != null) {</span>
+                try {
+<span class="nc" id="L464">                    mCommentId = Integer.parseInt(replyToCommentId);</span>
+<span class="nc" id="L465">                } catch (NumberFormatException e) {</span>
+<span class="nc" id="L466">                    AppLog.e(AppLog.T.UTILS, &quot;replytocom cannot be converted to int&quot; + replyToCommentId, e);</span>
+<span class="nc" id="L467">                }</span>
+            }
+
+<span class="nc" id="L470">            return;</span>
+        }
+
+        // check for the &quot;#comment-xyz&quot; fragment to jump to a specific comment
+<span class="nc" id="L474">        Matcher commentIdMatcher = fragmentCommentIdPattern.matcher(fragment);</span>
+<span class="nc bnc" id="L475" title="All 4 branches missed.">        if (commentIdMatcher.find() &amp;&amp; commentIdMatcher.groupCount() &gt; 0) {</span>
+<span class="nc" id="L476">            mCommentId = Integer.valueOf(commentIdMatcher.group(1));</span>
+<span class="nc" id="L477">            mDirectOperation = DirectOperation.COMMENT_JUMP;</span>
+        }
+<span class="nc" id="L479">    }</span>
+
+    /**
+     * Parse the URL query parameters and detect attempt to like a post or a comment
+     *
+     * @param uri the full URI input, including the query parameters
+     */
+    private void detectLike(Uri uri) {
+        // check whether we are to like something
+<span class="nc" id="L488">        final boolean doLike = &quot;1&quot;.equals(uri.getQueryParameter(&quot;like&quot;));</span>
+<span class="nc" id="L489">        final String likeActor = uri.getQueryParameter(&quot;like_actor&quot;);</span>
+
+<span class="nc bnc" id="L491" title="All 6 branches missed.">        if (doLike &amp;&amp; likeActor != null &amp;&amp; likeActor.trim().length() &gt; 0) {</span>
+<span class="nc" id="L492">            mDirectOperation = DirectOperation.POST_LIKE;</span>
+
+            // check whether we are to like a specific comment
+<span class="nc" id="L495">            final String likeCommentId = uri.getQueryParameter(&quot;commentid&quot;);</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">            if (likeCommentId != null) {</span>
+                try {
+<span class="nc" id="L498">                    mCommentId = Integer.parseInt(likeCommentId);</span>
+<span class="nc" id="L499">                    mDirectOperation = DirectOperation.COMMENT_LIKE;</span>
+<span class="nc" id="L500">                } catch (NumberFormatException e) {</span>
+<span class="nc" id="L501">                    AppLog.e(AppLog.T.UTILS, &quot;commentid cannot be converted to int&quot; + likeCommentId, e);</span>
+<span class="nc" id="L502">                }</span>
+            }
+        }
+<span class="nc" id="L505">    }</span>
+
+    @Override
+    protected void onResume() {
+<span class="nc" id="L509">        super.onResume();</span>
+<span class="nc" id="L510">        AppLog.d(T.READER, &quot;TRACK READER ReaderPostPagerActivity &gt; START Count&quot;);</span>
+<span class="nc" id="L511">        mReaderTracker.start(ReaderTrackerType.PAGED_POST);</span>
+<span class="nc" id="L512">        EventBus.getDefault().register(this);</span>
+
+        // We register the dispatcher in order to receive the OnPostUploaded event and show the snackbar
+<span class="nc" id="L515">        mDispatcher.register(this);</span>
+
+<span class="nc bnc" id="L517" title="All 4 branches missed.">        if (!hasPagerAdapter() || mBackFromLogin) {</span>
+<span class="nc bnc" id="L518" title="All 2 branches missed.">            if (ActivityUtils.isDeepLinking(getIntent()) || ReaderConstants.ACTION_VIEW_POST</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">                    .equals(getIntent().getAction())) {</span>
+<span class="nc" id="L520">                handleDeepLinking();</span>
+            }
+
+<span class="nc" id="L523">            loadPosts(mBlogId, mPostId);</span>
+
+            // clear up the back-from-login flag anyway
+<span class="nc" id="L526">            mBackFromLogin = false;</span>
+        }
+<span class="nc" id="L528">    }</span>
+
+    @Override
+    protected void onPause() {
+<span class="nc" id="L532">        super.onPause();</span>
+<span class="nc" id="L533">        AppLog.d(T.READER, &quot;TRACK READER ReaderPostPagerActivity &gt; STOP Count&quot;);</span>
+<span class="nc" id="L534">        mReaderTracker.stop(ReaderTrackerType.PAGED_POST);</span>
+<span class="nc" id="L535">        EventBus.getDefault().unregister(this);</span>
+<span class="nc" id="L536">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L537">    }</span>
+
+    @Override
+    public boolean onOptionsItemSelected(final MenuItem item) {
+<span class="nc bnc" id="L541" title="All 2 branches missed.">        if (item.getItemId() == android.R.id.home) {</span>
+<span class="nc" id="L542">            finish();</span>
+<span class="nc" id="L543">            return true;</span>
+        }
+<span class="nc" id="L545">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    @SuppressWarnings(&quot;BooleanMethodIsAlwaysInverted&quot;)
+    private boolean hasPagerAdapter() {
+<span class="nc bnc" id="L550" title="All 4 branches missed.">        return (mViewPager != null &amp;&amp; mViewPager.getAdapter() != null);</span>
+    }
+
+    private PostPagerAdapter getPagerAdapter() {
+<span class="nc bnc" id="L554" title="All 4 branches missed.">        if (mViewPager != null &amp;&amp; mViewPager.getAdapter() != null) {</span>
+<span class="nc" id="L555">            return (PostPagerAdapter) mViewPager.getAdapter();</span>
+        } else {
+<span class="nc" id="L557">            return null;</span>
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+<span class="nc" id="L563">        outState.putBoolean(ReaderConstants.ARG_IS_SINGLE_POST, mIsSinglePostView);</span>
+<span class="nc" id="L564">        outState.putBoolean(ReaderConstants.ARG_IS_RELATED_POST, mIsRelatedPostView);</span>
+<span class="nc" id="L565">        outState.putString(ReaderConstants.ARG_INTERCEPTED_URI, mInterceptedUri);</span>
+
+<span class="nc" id="L567">        outState.putSerializable(ReaderConstants.ARG_DIRECT_OPERATION, mDirectOperation);</span>
+<span class="nc" id="L568">        outState.putInt(ReaderConstants.ARG_COMMENT_ID, mCommentId);</span>
+
+<span class="nc bnc" id="L570" title="All 2 branches missed.">        if (hasCurrentTag()) {</span>
+<span class="nc" id="L571">            outState.putSerializable(ReaderConstants.ARG_TAG, getCurrentTag());</span>
+        }
+<span class="nc bnc" id="L573" title="All 2 branches missed.">        if (getPostListType() != null) {</span>
+<span class="nc" id="L574">            outState.putSerializable(ReaderConstants.ARG_POST_LIST_TYPE, getPostListType());</span>
+        }
+
+<span class="nc" id="L577">        ReaderBlogIdPostId id = getAdapterCurrentBlogIdPostId();</span>
+<span class="nc bnc" id="L578" title="All 2 branches missed.">        if (id != null) {</span>
+<span class="nc" id="L579">            outState.putLong(ReaderConstants.ARG_BLOG_ID, id.getBlogId());</span>
+<span class="nc" id="L580">            outState.putLong(ReaderConstants.ARG_POST_ID, id.getPostId());</span>
+        }
+
+<span class="nc" id="L583">        outState.putBoolean(ReaderConstants.KEY_POST_SLUGS_RESOLUTION_UNDERWAY, mPostSlugsResolutionUnderway);</span>
+
+<span class="nc bnc" id="L585" title="All 2 branches missed.">        if (mTrackedPositions.size() &gt; 0) {</span>
+<span class="nc" id="L586">            outState.putSerializable(ReaderConstants.KEY_TRACKED_POSITIONS, mTrackedPositions);</span>
+        }
+
+<span class="nc" id="L589">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L590">    }</span>
+
+    private ReaderBlogIdPostId getAdapterCurrentBlogIdPostId() {
+<span class="nc" id="L593">        PostPagerAdapter adapter = getPagerAdapter();</span>
+<span class="nc bnc" id="L594" title="All 2 branches missed.">        if (adapter == null) {</span>
+<span class="nc" id="L595">            return null;</span>
+        }
+<span class="nc" id="L597">        return adapter.getCurrentBlogIdPostId();</span>
+    }
+
+    private ReaderBlogIdPostId getAdapterBlogIdPostIdAtPosition(int position) {
+<span class="nc" id="L601">        PostPagerAdapter adapter = getPagerAdapter();</span>
+<span class="nc bnc" id="L602" title="All 2 branches missed.">        if (adapter == null) {</span>
+<span class="nc" id="L603">            return null;</span>
+        }
+<span class="nc" id="L605">        return adapter.getBlogIdPostIdAtPosition(position);</span>
+    }
+
+    @Override
+    public void onBackPressed() {
+<span class="nc" id="L610">        ReaderPostDetailFragment fragment = getActiveDetailFragment();</span>
+<span class="nc bnc" id="L611" title="All 4 branches missed.">        if (fragment != null &amp;&amp; fragment.isCustomViewShowing()) {</span>
+            // if full screen video is showing, hide the custom view rather than navigate back
+<span class="nc" id="L613">            fragment.hideCustomView();</span>
+        } else {
+<span class="nc bnc" id="L615" title="All 4 branches missed.">            if (fragment != null &amp;&amp; fragment.goBackInPostHistory()) {</span>
+                // noop - fragment moved back to a previous post
+            } else {
+<span class="nc" id="L618">                super.onBackPressed();</span>
+            }
+        }
+<span class="nc" id="L621">    }</span>
+
+    /*
+     * perform analytics tracking and bump the page view for the post at the passed position
+     * if it hasn't already been done
+     */
+    private void trackPostAtPositionIfNeeded(int position) {
+<span class="nc bnc" id="L628" title="All 4 branches missed.">        if (!hasPagerAdapter() || mTrackedPositions.contains(position)) {</span>
+<span class="nc" id="L629">            return;</span>
+        }
+
+<span class="nc" id="L632">        ReaderBlogIdPostId idPair = getAdapterBlogIdPostIdAtPosition(position);</span>
+<span class="nc bnc" id="L633" title="All 2 branches missed.">        if (idPair == null) {</span>
+<span class="nc" id="L634">            return;</span>
+        }
+
+<span class="nc" id="L637">        AppLog.d(AppLog.T.READER, &quot;reader pager &gt; tracking post at position &quot; + position);</span>
+<span class="nc" id="L638">        mTrackedPositions.add(position);</span>
+
+<span class="nc" id="L640">        trackPost(idPair.getBlogId(), idPair.getPostId());</span>
+<span class="nc" id="L641">    }</span>
+
+    /*
+     * perform analytics tracking and bump the page view for the post
+     */
+    private void trackPost(long blogId, long postId) {
+        // bump the page view
+<span class="nc" id="L648">        ReaderPostActions.bumpPageViewForPost(mSiteStore, blogId, postId);</span>
+
+<span class="nc bnc" id="L650" title="All 2 branches missed.">        if (mSeenUnseenWithCounterFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L651">            ReaderPost currentPost = ReaderPostTable.getBlogPost(blogId, postId, true);</span>
+<span class="nc bnc" id="L652" title="All 2 branches missed.">            if (currentPost != null) {</span>
+<span class="nc" id="L653">                mPostSeenStatusWrapper.markPostAsSeenSilently(currentPost);</span>
+            }
+        }
+
+        // analytics tracking
+<span class="nc" id="L658">        mReaderTracker.trackPost(</span>
+                AnalyticsTracker.Stat.READER_ARTICLE_OPENED,
+<span class="nc" id="L660">                mReaderPostTableWrapper.getBlogPost(blogId, postId, true)</span>
+        );
+<span class="nc" id="L662">    }</span>
+
+    /*
+     * loads the blogId/postId pairs used to populate the pager adapter - passed blogId/postId will
+     * be made active after loading unless gotoNext=true, in which case the post after the passed
+     * one will be made active
+     */
+    private void loadPosts(final long blogId, final long postId) {
+<span class="nc" id="L670">        new Thread() {</span>
+            @Override
+            public void run() {
+                final ReaderBlogIdPostIdList idList;
+<span class="nc bnc" id="L674" title="All 2 branches missed.">                if (mIsSinglePostView) {</span>
+<span class="nc" id="L675">                    idList = new ReaderBlogIdPostIdList();</span>
+<span class="nc" id="L676">                    idList.add(new ReaderBlogIdPostId(blogId, postId));</span>
+                } else {
+<span class="nc" id="L678">                    int maxPosts = ReaderConstants.READER_MAX_POSTS_TO_DISPLAY;</span>
+<span class="nc bnc" id="L679" title="All 3 branches missed.">                    switch (getPostListType()) {</span>
+                        case TAG_FOLLOWED:
+                        case TAG_PREVIEW:
+<span class="nc" id="L682">                            idList = ReaderPostTable.getBlogIdPostIdsWithTag(getCurrentTag(), maxPosts);</span>
+<span class="nc" id="L683">                            break;</span>
+                        case BLOG_PREVIEW:
+<span class="nc" id="L685">                            idList = ReaderPostTable.getBlogIdPostIdsInBlog(blogId, maxPosts);</span>
+<span class="nc" id="L686">                            break;</span>
+                        case SEARCH_RESULTS:
+                        default:
+<span class="nc" id="L689">                            return;</span>
+                    }
+                }
+
+<span class="nc" id="L693">                final int currentPosition = mViewPager.getCurrentItem();</span>
+<span class="nc" id="L694">                final int newPosition = idList.indexOf(blogId, postId);</span>
+
+<span class="nc" id="L696">                runOnUiThread(() -&gt; {</span>
+<span class="nc bnc" id="L697" title="All 2 branches missed.">                    if (isFinishing()) {</span>
+<span class="nc" id="L698">                        return;</span>
+                    }
+
+<span class="nc" id="L701">                    AppLog.d(T.READER, &quot;reader pager &gt; creating adapter&quot;);</span>
+<span class="nc" id="L702">                    PostPagerAdapter adapter =</span>
+<span class="nc" id="L703">                            new PostPagerAdapter(getSupportFragmentManager(), idList);</span>
+<span class="nc" id="L704">                    mViewPager.setAdapter(adapter);</span>
+<span class="nc bnc" id="L705" title="All 2 branches missed.">                    if (adapter.isValidPosition(newPosition)) {</span>
+<span class="nc" id="L706">                        mViewPager.setCurrentItem(newPosition);</span>
+<span class="nc" id="L707">                        trackPostAtPositionIfNeeded(newPosition);</span>
+<span class="nc bnc" id="L708" title="All 2 branches missed.">                    } else if (adapter.isValidPosition(currentPosition)) {</span>
+<span class="nc" id="L709">                        mViewPager.setCurrentItem(currentPosition);</span>
+<span class="nc" id="L710">                        trackPostAtPositionIfNeeded(currentPosition);</span>
+                    }
+
+                    // let the user know they can swipe between posts
+<span class="nc bnc" id="L714" title="All 4 branches missed.">                    if (adapter.getCount() &gt; 1 &amp;&amp; !AppPrefs.isReaderSwipeToNavigateShown()) {</span>
+<span class="nc" id="L715">                        WPSwipeSnackbar.show(mViewPager);</span>
+<span class="nc" id="L716">                        AppPrefs.setReaderSwipeToNavigateShown(true);</span>
+                    }
+<span class="nc" id="L718">                });</span>
+<span class="nc" id="L719">            }</span>
+<span class="nc" id="L720">        }.start();</span>
+<span class="nc" id="L721">    }</span>
+
+    private ReaderTag getCurrentTag() {
+<span class="nc" id="L724">        return mCurrentTag;</span>
+    }
+
+    private boolean hasCurrentTag() {
+<span class="nc bnc" id="L728" title="All 2 branches missed.">        return mCurrentTag != null;</span>
+    }
+
+    private ReaderPostListType getPostListType() {
+<span class="nc" id="L732">        return mPostListType;</span>
+    }
+
+    private Fragment getActivePagerFragment() {
+<span class="nc" id="L736">        PostPagerAdapter adapter = getPagerAdapter();</span>
+<span class="nc bnc" id="L737" title="All 2 branches missed.">        if (adapter == null) {</span>
+<span class="nc" id="L738">            return null;</span>
+        }
+<span class="nc" id="L740">        return adapter.getActiveFragment();</span>
+    }
+
+    private ReaderPostDetailFragment getActiveDetailFragment() {
+<span class="nc" id="L744">        Fragment fragment = getActivePagerFragment();</span>
+<span class="nc bnc" id="L745" title="All 2 branches missed.">        if (fragment instanceof ReaderPostDetailFragment) {</span>
+<span class="nc" id="L746">            return (ReaderPostDetailFragment) fragment;</span>
+        } else {
+<span class="nc" id="L748">            return null;</span>
+        }
+    }
+
+    private Fragment getPagerFragmentAtPosition(int position) {
+<span class="nc" id="L753">        PostPagerAdapter adapter = getPagerAdapter();</span>
+<span class="nc bnc" id="L754" title="All 2 branches missed.">        if (adapter == null) {</span>
+<span class="nc" id="L755">            return null;</span>
+        }
+<span class="nc" id="L757">        return adapter.getFragmentAtPosition(position);</span>
+    }
+
+    private ReaderPostDetailFragment getDetailFragmentAtPosition(int position) {
+<span class="nc" id="L761">        Fragment fragment = getPagerFragmentAtPosition(position);</span>
+<span class="nc bnc" id="L762" title="All 2 branches missed.">        if (fragment instanceof ReaderPostDetailFragment) {</span>
+<span class="nc" id="L763">            return (ReaderPostDetailFragment) fragment;</span>
+        } else {
+<span class="nc" id="L765">            return null;</span>
+        }
+    }
+
+    /*
+     * called when user scrolls towards the last posts - requests older posts with the
+     * current tag or in the current blog
+     */
+    private void requestMorePosts() {
+<span class="nc bnc" id="L774" title="All 2 branches missed.">        if (mIsRequestingMorePosts) {</span>
+<span class="nc" id="L775">            return;</span>
+        }
+
+<span class="nc" id="L778">        AppLog.d(AppLog.T.READER, &quot;reader pager &gt; requesting older posts&quot;);</span>
+<span class="nc bnc" id="L779" title="All 3 branches missed.">        switch (getPostListType()) {</span>
+            case TAG_PREVIEW:
+            case TAG_FOLLOWED:
+<span class="nc" id="L782">                ReaderPostServiceStarter.startServiceForTag(</span>
+                        this,
+<span class="nc" id="L784">                        getCurrentTag(),</span>
+                        ReaderPostServiceStarter.UpdateAction.REQUEST_OLDER);
+<span class="nc" id="L786">                break;</span>
+
+            case BLOG_PREVIEW:
+<span class="nc" id="L789">                ReaderPostServiceStarter.startServiceForBlog(</span>
+                        this,
+                        mBlogId,
+                        ReaderPostServiceStarter.UpdateAction.REQUEST_OLDER);
+<span class="nc" id="L793">                break;</span>
+            case SEARCH_RESULTS:
+                break;
+        }
+<span class="nc" id="L797">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(ReaderEvents.UpdatePostsStarted event) {
+<span class="nc bnc" id="L802" title="All 2 branches missed.">        if (isFinishing()) {</span>
+<span class="nc" id="L803">            return;</span>
+        }
+
+<span class="nc" id="L806">        mIsRequestingMorePosts = true;</span>
+<span class="nc" id="L807">        mProgress.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L808">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(ReaderEvents.UpdatePostsEnded event) {
+<span class="nc bnc" id="L813" title="All 2 branches missed.">        if (isFinishing()) {</span>
+<span class="nc" id="L814">            return;</span>
+        }
+
+<span class="nc" id="L817">        PostPagerAdapter adapter = getPagerAdapter();</span>
+<span class="nc bnc" id="L818" title="All 2 branches missed.">        if (adapter == null) {</span>
+<span class="nc" id="L819">            return;</span>
+        }
+
+<span class="nc" id="L822">        mIsRequestingMorePosts = false;</span>
+<span class="nc" id="L823">        mProgress.setVisibility(View.GONE);</span>
+
+<span class="nc bnc" id="L825" title="All 2 branches missed.">        if (event.getResult() == ReaderActions.UpdateResult.HAS_NEW) {</span>
+<span class="nc" id="L826">            AppLog.d(AppLog.T.READER, &quot;reader pager &gt; older posts received&quot;);</span>
+            // remember which post to keep active
+<span class="nc" id="L828">            ReaderBlogIdPostId id = adapter.getCurrentBlogIdPostId();</span>
+<span class="nc bnc" id="L829" title="All 2 branches missed.">            long blogId = (id != null ? id.getBlogId() : 0);</span>
+<span class="nc bnc" id="L830" title="All 2 branches missed.">            long postId = (id != null ? id.getPostId() : 0);</span>
+<span class="nc" id="L831">            loadPosts(blogId, postId);</span>
+<span class="nc" id="L832">        } else {</span>
+<span class="nc" id="L833">            AppLog.d(AppLog.T.READER, &quot;reader pager &gt; all posts loaded&quot;);</span>
+<span class="nc" id="L834">            adapter.mAllPostsLoaded = true;</span>
+        }
+<span class="nc" id="L836">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(ReaderEvents.DoSignIn event) {
+<span class="nc bnc" id="L841" title="All 2 branches missed.">        if (isFinishing()) {</span>
+<span class="nc" id="L842">            return;</span>
+        }
+
+<span class="nc" id="L845">        mReaderTracker.trackUri(AnalyticsTracker.Stat.READER_SIGN_IN_INITIATED, mInterceptedUri);</span>
+<span class="nc" id="L846">        ActivityLauncher.loginWithoutMagicLink(this);</span>
+<span class="nc" id="L847">    }</span>
+
+    /**
+     * pager adapter containing post detail fragments
+     **/
+    private class PostPagerAdapter extends FragmentStatePagerAdapter {
+        private final ReaderBlogIdPostIdList mIdList;
+        private boolean mAllPostsLoaded;
+
+        // this is used to retain created fragments so we can access them in
+        // getFragmentAtPosition() - necessary because the pager provides no
+        // built-in way to do this - note that destroyItem() removes fragments
+        // from this map when they're removed from the adapter, so this doesn't
+        // retain *every* fragment
+<span class="nc" id="L861">        private final SparseArray&lt;Fragment&gt; mFragmentMap = new SparseArray&lt;&gt;();</span>
+
+<span class="nc" id="L863">        @SuppressLint(&quot;WrongConstant&quot;) PostPagerAdapter(FragmentManager fm, ReaderBlogIdPostIdList ids) {</span>
+<span class="nc" id="L864">            super(fm, BEHAVIOR_RESUME_ONLY_CURRENT_FRAGMENT);</span>
+<span class="nc" id="L865">            mIdList = (ReaderBlogIdPostIdList) ids.clone();</span>
+<span class="nc" id="L866">        }</span>
+
+        @Override
+        public void restoreState(Parcelable state, ClassLoader loader) {
+            // work around &quot;Fragement no longer exists for key&quot; Android bug
+            // by catching the IllegalStateException
+            // https://code.google.com/p/android/issues/detail?id=42601
+            try {
+<span class="nc" id="L874">                AppLog.d(AppLog.T.READER, &quot;reader pager &gt; adapter restoreState&quot;);</span>
+<span class="nc" id="L875">                super.restoreState(state, loader);</span>
+<span class="nc" id="L876">            } catch (IllegalStateException e) {</span>
+<span class="nc" id="L877">                AppLog.e(AppLog.T.READER, e);</span>
+<span class="nc" id="L878">            }</span>
+<span class="nc" id="L879">        }</span>
+
+        @Override
+        public Parcelable saveState() {
+<span class="nc" id="L883">            AppLog.d(AppLog.T.READER, &quot;reader pager &gt; adapter saveState&quot;);</span>
+<span class="nc" id="L884">            return super.saveState();</span>
+        }
+
+        private boolean canRequestMostPosts() {
+<span class="nc bnc" id="L888" title="All 2 branches missed.">            return !mAllPostsLoaded</span>
+<span class="nc bnc" id="L889" title="All 4 branches missed.">                   &amp;&amp; !mIsSinglePostView</span>
+<span class="nc bnc" id="L890" title="All 2 branches missed.">                   &amp;&amp; (mIdList != null &amp;&amp; mIdList.size() &lt; ReaderConstants.READER_MAX_POSTS_TO_DISPLAY)</span>
+<span class="nc bnc" id="L891" title="All 2 branches missed.">                   &amp;&amp; NetworkUtils.isNetworkAvailable(ReaderPostPagerActivity.this);</span>
+        }
+
+        boolean isValidPosition(int position) {
+<span class="nc bnc" id="L895" title="All 4 branches missed.">            return (position &gt;= 0 &amp;&amp; position &lt; getCount());</span>
+        }
+
+        @Override
+        public int getCount() {
+<span class="nc" id="L900">            return mIdList.size();</span>
+        }
+
+        @Override
+        public Fragment getItem(int position) {
+<span class="nc bnc" id="L905" title="All 4 branches missed.">            if ((position == getCount() - 1) &amp;&amp; canRequestMostPosts()) {</span>
+<span class="nc" id="L906">                requestMorePosts();</span>
+            }
+
+<span class="nc" id="L909">            return ReaderPostDetailFragment.Companion.newInstance(</span>
+<span class="nc" id="L910">                    mIsFeed,</span>
+<span class="nc" id="L911">                    mIdList.get(position).getBlogId(),</span>
+<span class="nc" id="L912">                    mIdList.get(position).getPostId(),</span>
+<span class="nc" id="L913">                    mDirectOperation,</span>
+<span class="nc" id="L914">                    mCommentId,</span>
+<span class="nc" id="L915">                    mIsRelatedPostView,</span>
+<span class="nc" id="L916">                    mInterceptedUri,</span>
+<span class="nc" id="L917">                    getPostListType(),</span>
+<span class="nc" id="L918">                    mPostSlugsResolutionUnderway);</span>
+        }
+
+        @Override
+        public @NonNull Object instantiateItem(ViewGroup container, int position) {
+<span class="nc" id="L923">            Object item = super.instantiateItem(container, position);</span>
+<span class="nc bnc" id="L924" title="All 2 branches missed.">            if (item instanceof Fragment) {</span>
+<span class="nc" id="L925">                mFragmentMap.put(position, (Fragment) item);</span>
+            }
+<span class="nc" id="L927">            return item;</span>
+        }
+
+        @Override
+        public void destroyItem(ViewGroup container, int position, Object object) {
+<span class="nc" id="L932">            mFragmentMap.remove(position);</span>
+<span class="nc" id="L933">            super.destroyItem(container, position, object);</span>
+<span class="nc" id="L934">        }</span>
+
+        private Fragment getActiveFragment() {
+<span class="nc" id="L937">            return getFragmentAtPosition(mViewPager.getCurrentItem());</span>
+        }
+
+        private Fragment getFragmentAtPosition(int position) {
+<span class="nc bnc" id="L941" title="All 2 branches missed.">            if (isValidPosition(position)) {</span>
+<span class="nc" id="L942">                return mFragmentMap.get(position);</span>
+            } else {
+<span class="nc" id="L944">                return null;</span>
+            }
+        }
+
+        private ReaderBlogIdPostId getCurrentBlogIdPostId() {
+<span class="nc" id="L949">            return getBlogIdPostIdAtPosition(mViewPager.getCurrentItem());</span>
+        }
+
+        ReaderBlogIdPostId getBlogIdPostIdAtPosition(int position) {
+<span class="nc bnc" id="L953" title="All 2 branches missed.">            if (isValidPosition(position)) {</span>
+<span class="nc" id="L954">                return mIdList.get(position);</span>
+            } else {
+<span class="nc" id="L956">                return null;</span>
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+<span class="nc" id="L963">        super.onActivityResult(requestCode, resultCode, data);</span>
+
+<span class="nc bnc" id="L965" title="All 4 branches missed.">        switch (requestCode) {</span>
+            case RequestCodes.EDIT_POST:
+<span class="nc bnc" id="L967" title="All 6 branches missed.">                if (resultCode != Activity.RESULT_OK || data == null || isFinishing()) {</span>
+<span class="nc" id="L968">                    return;</span>
+                }
+<span class="nc" id="L970">                int localId = data.getIntExtra(EditPostActivity.EXTRA_POST_LOCAL_ID, 0);</span>
+<span class="nc" id="L971">                final SiteModel site = (SiteModel) data.getSerializableExtra(WordPress.SITE);</span>
+<span class="nc" id="L972">                final PostModel post = mPostStore.getPostByLocalPostId(localId);</span>
+
+<span class="nc bnc" id="L974" title="All 2 branches missed.">                if (EditPostActivity.checkToRestart(data)) {</span>
+<span class="nc" id="L975">                    ActivityLauncher.editPostOrPageForResult(data, ReaderPostPagerActivity.this, site,</span>
+<span class="nc" id="L976">                            data.getIntExtra(EditPostActivity.EXTRA_POST_LOCAL_ID, 0));</span>
+
+                    // a restart will happen so, no need to continue here
+<span class="nc" id="L979">                    break;</span>
+                }
+
+<span class="nc bnc" id="L982" title="All 4 branches missed.">                if (site != null &amp;&amp; post != null) {</span>
+<span class="nc" id="L983">                    mUploadUtilsWrapper.handleEditPostResultSnackbars(</span>
+                            this,
+<span class="nc" id="L985">                            findViewById(R.id.coordinator),</span>
+                            data,
+                            post,
+                            site,
+<span class="nc" id="L989">                            mUploadActionUseCase.getUploadAction(post),</span>
+<span class="nc" id="L990">                            v -&gt; UploadUtils.publishPost(ReaderPostPagerActivity.this, post, site, mDispatcher));</span>
+                }
+                break;
+            case RequestCodes.DO_LOGIN:
+<span class="nc bnc" id="L994" title="All 2 branches missed.">                if (resultCode == Activity.RESULT_OK) {</span>
+<span class="nc" id="L995">                    mBackFromLogin = true;</span>
+                }
+                break;
+            case RequestCodes.NO_REBLOG_SITE:
+<span class="nc bnc" id="L999" title="All 2 branches missed.">                if (resultCode == Activity.RESULT_OK) {</span>
+<span class="nc" id="L1000">                    finish(); // Finish activity to make My Site page visible</span>
+                }
+                break;
+        }
+<span class="nc" id="L1004">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onPostUploaded(OnPostUploaded event) {
+<span class="nc" id="L1009">        SiteModel site = mSiteStore.getSiteByLocalId(mSelectedSiteRepository.getSelectedSiteLocalId());</span>
+<span class="nc bnc" id="L1010" title="All 4 branches missed.">        if (site != null &amp;&amp; event.post != null) {</span>
+<span class="nc" id="L1011">            mUploadUtilsWrapper.onPostUploadedSnackbarHandler(</span>
+                    this,
+<span class="nc" id="L1013">                    findViewById(R.id.coordinator),</span>
+<span class="nc" id="L1014">                    event.isError(),</span>
+                    event.isFirstTimePublish,
+                    event.post,
+                    null,
+                    site);
+        }
+<span class="nc" id="L1020">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

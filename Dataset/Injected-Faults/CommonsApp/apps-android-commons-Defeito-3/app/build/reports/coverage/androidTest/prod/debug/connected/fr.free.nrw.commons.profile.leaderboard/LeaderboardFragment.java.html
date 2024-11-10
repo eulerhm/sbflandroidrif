@@ -1,0 +1,371 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>LeaderboardFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.profile.leaderboard</a> &gt; <span class="el_source">LeaderboardFragment.java</span></div><h1>LeaderboardFragment.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.profile.leaderboard;
+
+import static fr.free.nrw.commons.profile.leaderboard.LeaderboardConstants.LOADED;
+import static fr.free.nrw.commons.profile.leaderboard.LeaderboardConstants.LOADING;
+import static fr.free.nrw.commons.profile.leaderboard.LeaderboardConstants.PAGE_SIZE;
+import static fr.free.nrw.commons.profile.leaderboard.LeaderboardConstants.START_OFFSET;
+
+import android.accounts.Account;
+import android.content.Context;
+import android.os.Bundle;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.AdapterView.OnItemSelectedListener;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.ProgressBar;
+import android.widget.Spinner;
+import android.widget.Toast;
+import androidx.annotation.Nullable;
+import androidx.lifecycle.ViewModelProvider;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.MergeAdapter;
+import androidx.recyclerview.widget.RecyclerView;
+import butterknife.BindView;
+import butterknife.ButterKnife;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.auth.SessionManager;
+import fr.free.nrw.commons.di.CommonsDaggerSupportFragment;
+import fr.free.nrw.commons.mwapi.OkHttpJsonApiClient;
+import fr.free.nrw.commons.profile.ProfileActivity;
+import fr.free.nrw.commons.utils.ConfigUtils;
+import fr.free.nrw.commons.utils.ViewUtil;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.CompositeDisposable;
+import io.reactivex.schedulers.Schedulers;
+import java.util.Objects;
+import javax.inject.Inject;
+import timber.log.Timber;
+
+/**
+ * This class extends the CommonsDaggerSupportFragment and creates leaderboard fragment
+ */
+<span class="nc" id="L45">public class LeaderboardFragment extends CommonsDaggerSupportFragment {</span>
+
+    @BindView(R.id.leaderboard_list)
+    RecyclerView leaderboardListRecyclerView;
+
+    @BindView(R.id.progressBar)
+    ProgressBar progressBar;
+
+    @BindView(R.id.category_spinner)
+    Spinner categorySpinner;
+
+    @BindView(R.id.duration_spinner)
+    Spinner durationSpinner;
+
+    @BindView(R.id.scroll)
+    Button scrollButton;
+
+    @Inject
+    SessionManager sessionManager;
+
+    @Inject
+    OkHttpJsonApiClient okHttpJsonApiClient;
+
+    @Inject
+    ViewModelFactory viewModelFactory;
+
+    /**
+     * View model for the paged leaderboard list
+     */
+    private LeaderboardListViewModel viewModel;
+
+    /**
+     * Composite disposable for API call
+     */
+<span class="nc" id="L79">    private CompositeDisposable compositeDisposable = new CompositeDisposable();</span>
+
+    /**
+     * Duration of the leaderboard API
+     */
+    private String duration;
+
+    /**
+     * Category of the Leaderboard API
+     */
+    private String category;
+
+    /**
+     * Page size of the leaderboard API
+     */
+<span class="nc" id="L94">    private int limit = PAGE_SIZE;</span>
+
+    /**
+     * offset for the leaderboard API
+     */
+<span class="nc" id="L99">    private int offset = START_OFFSET;</span>
+
+    /**
+     * Set initial User Rank to 0
+     */
+    private int userRank;
+
+    /**
+     * This variable represents if user wants to scroll to his rank or not
+     */
+    private boolean scrollToRank;
+
+    private String userName;
+
+    @Override
+    public void onCreate(@Nullable final Bundle savedInstanceState) {
+<span class="nc" id="L115">        super.onCreate(savedInstanceState);</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">        if (getArguments() != null) {</span>
+<span class="nc" id="L117">            userName = getArguments().getString(ProfileActivity.KEY_USERNAME);</span>
+        }
+<span class="nc" id="L119">    }</span>
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+<span class="nc" id="L123">        View rootView = inflater.inflate(R.layout.fragment_leaderboard, container, false);</span>
+<span class="nc" id="L124">        ButterKnife.bind(this, rootView);</span>
+
+<span class="nc" id="L126">        hideLayouts();</span>
+
+        // Leaderboard currently unimplemented in Beta flavor. Skip all API calls and disable menu
+<span class="nc bnc" id="L129" title="All 2 branches missed.">        if(ConfigUtils.isBetaFlavour()) {</span>
+<span class="nc" id="L130">            progressBar.setVisibility(View.GONE);</span>
+<span class="nc" id="L131">            scrollButton.setVisibility(View.GONE);</span>
+<span class="nc" id="L132">            return rootView;</span>
+        }
+
+<span class="nc" id="L135">        progressBar.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L136">        setSpinners();</span>
+
+        /**
+         * This array is for the duration filter, we have three filters weekly, yearly and all-time
+         * each filter have a key and value pair, the value represents the param of the API
+         */
+<span class="nc" id="L142">        String[] durationValues = getContext().getResources().getStringArray(R.array.leaderboard_duration_values);</span>
+
+        /**
+         * This array is for the category filter, we have three filters upload, used and nearby
+         * each filter have a key and value pair, the value represents the param of the API
+         */
+<span class="nc" id="L148">        String[] categoryValues = getContext().getResources().getStringArray(R.array.leaderboard_category_values);</span>
+
+<span class="nc" id="L150">        duration = durationValues[0];</span>
+<span class="nc" id="L151">        category = categoryValues[0];</span>
+
+<span class="nc" id="L153">        setLeaderboard(duration, category, limit, offset);</span>
+
+<span class="nc" id="L155">        durationSpinner.setOnItemSelectedListener(new OnItemSelectedListener() {</span>
+            @Override
+            public void onItemSelected(AdapterView&lt;?&gt; adapterView, View view, int i, long l) {
+
+<span class="nc" id="L159">                duration = durationValues[durationSpinner.getSelectedItemPosition()];</span>
+<span class="nc" id="L160">                refreshLeaderboard();</span>
+<span class="nc" id="L161">            }</span>
+
+            @Override
+            public void onNothingSelected(AdapterView&lt;?&gt; adapterView) {
+<span class="nc" id="L165">            }</span>
+        });
+
+<span class="nc" id="L168">        categorySpinner.setOnItemSelectedListener(new OnItemSelectedListener() {</span>
+            @Override
+            public void onItemSelected(AdapterView&lt;?&gt; adapterView, View view, int i, long l) {
+<span class="nc" id="L171">                category = categoryValues[categorySpinner.getSelectedItemPosition()];</span>
+<span class="nc" id="L172">                refreshLeaderboard();</span>
+<span class="nc" id="L173">            }</span>
+
+            @Override
+            public void onNothingSelected(AdapterView&lt;?&gt; adapterView) {
+<span class="nc" id="L177">            }</span>
+        });
+
+
+<span class="nc" id="L181">            scrollButton.setOnClickListener(view -&gt; scrollToUserRank());</span>
+
+
+<span class="nc" id="L184">        return rootView;</span>
+    }
+
+    @Override
+    public void setMenuVisibility(boolean visible) {
+<span class="nc" id="L189">        super.setMenuVisibility(visible);</span>
+
+        // Whenever this fragment is revealed in a menu,
+        // notify Beta users the page data is unavailable
+<span class="nc bnc" id="L193" title="All 4 branches missed.">        if(ConfigUtils.isBetaFlavour() &amp;&amp; visible) {</span>
+<span class="nc" id="L194">            Context ctx = null;</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">            if(getContext() != null) {</span>
+<span class="nc" id="L196">                ctx = getContext();</span>
+<span class="nc bnc" id="L197" title="All 4 branches missed.">            } else if(getView() != null &amp;&amp; getView().getContext() != null) {</span>
+<span class="nc" id="L198">                ctx = getView().getContext();</span>
+            }
+<span class="nc bnc" id="L200" title="All 2 branches missed.">            if(ctx != null) {</span>
+<span class="nc" id="L201">                Toast.makeText(ctx,</span>
+                    R.string.leaderboard_unavailable_beta,
+<span class="nc" id="L203">                    Toast.LENGTH_LONG).show();</span>
+            }
+        }
+<span class="nc" id="L206">    }</span>
+
+    /**
+     * Refreshes the leaderboard list
+     */
+    private void refreshLeaderboard() {
+<span class="nc" id="L212">        scrollToRank = false;</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">        if (viewModel != null) {</span>
+<span class="nc" id="L214">            viewModel.refresh(duration, category, limit, offset);</span>
+<span class="nc" id="L215">            setLeaderboard(duration, category, limit, offset);</span>
+        }
+<span class="nc" id="L217">    }</span>
+
+    /**
+     * Performs Auto Scroll to the User's Rank
+     * We use userRank+1 to load one extra user and prevent overlapping of my rank button
+     * If you are viewing the leaderboard below userRank, it scrolls to the user rank at the top
+     */
+    private void scrollToUserRank() {
+
+<span class="nc bnc" id="L226" title="All 2 branches missed.">        if(userRank==0){</span>
+<span class="nc" id="L227">            Toast.makeText(getContext(),R.string.no_achievements_yet,Toast.LENGTH_SHORT).show();</span>
+        }else {
+<span class="nc bnc" id="L229" title="All 2 branches missed.">            if (Objects.requireNonNull(leaderboardListRecyclerView.getAdapter()).getItemCount()</span>
+                &gt; userRank + 1) {
+<span class="nc" id="L231">                leaderboardListRecyclerView.smoothScrollToPosition(userRank + 1);</span>
+            } else {
+<span class="nc bnc" id="L233" title="All 2 branches missed.">                if (viewModel != null) {</span>
+<span class="nc" id="L234">                    viewModel.refresh(duration, category, userRank + 1, 0);</span>
+<span class="nc" id="L235">                    setLeaderboard(duration, category, userRank + 1, 0);</span>
+<span class="nc" id="L236">                    scrollToRank = true;</span>
+                }
+            }
+        }
+              
+<span class="nc" id="L241">    }</span>
+
+    /**
+     * Set the spinners for the leaderboard filters
+     */
+    private void setSpinners() {
+<span class="nc" id="L247">        ArrayAdapter&lt;CharSequence&gt; categoryAdapter = ArrayAdapter.createFromResource(getContext(),</span>
+            R.array.leaderboard_categories, android.R.layout.simple_spinner_item);
+<span class="nc" id="L249">        categoryAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);</span>
+<span class="nc" id="L250">        categorySpinner.setAdapter(categoryAdapter);</span>
+
+<span class="nc" id="L252">        ArrayAdapter&lt;CharSequence&gt; durationAdapter = ArrayAdapter.createFromResource(getContext(),</span>
+            R.array.leaderboard_durations, android.R.layout.simple_spinner_item);
+<span class="nc" id="L254">        durationAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);</span>
+<span class="nc" id="L255">        durationSpinner.setAdapter(durationAdapter);</span>
+<span class="nc" id="L256">    }</span>
+
+    /**
+     * To call the API to get results
+     * which then sets the views using setLeaderboardUser method
+     */
+    private void setLeaderboard(String duration, String category, int limit, int offset) {
+<span class="nc bnc" id="L263" title="All 2 branches missed.">        if (checkAccount()) {</span>
+            try {
+<span class="nc" id="L265">                compositeDisposable.add(okHttpJsonApiClient</span>
+<span class="nc" id="L266">                    .getLeaderboard(Objects.requireNonNull(userName),</span>
+                        duration, category, null, null)
+<span class="nc" id="L268">                    .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L269">                    .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L270">                    .subscribe(</span>
+                        response -&gt; {
+<span class="nc bnc" id="L272" title="All 4 branches missed.">                            if (response != null &amp;&amp; response.getStatus() == 200) {</span>
+<span class="nc" id="L273">                                userRank = response.getRank();</span>
+<span class="nc" id="L274">                                setViews(response, duration, category, limit, offset);</span>
+                            }
+<span class="nc" id="L276">                        },</span>
+                        t -&gt; {
+<span class="nc" id="L278">                            Timber.e(t, &quot;Fetching leaderboard statistics failed&quot;);</span>
+<span class="nc" id="L279">                            onError();</span>
+<span class="nc" id="L280">                        }</span>
+                    ));
+            }
+<span class="nc" id="L283">            catch (Exception e){</span>
+<span class="nc" id="L284">                Timber.d(e+&quot;success&quot;);</span>
+<span class="nc" id="L285">            }</span>
+        }
+<span class="nc" id="L287">    }</span>
+
+    /**
+     * Set the views
+     * @param response Leaderboard Response Object
+     */
+    private void setViews(LeaderboardResponse response, String duration, String category, int limit, int offset) {
+<span class="nc" id="L294">        viewModel = new ViewModelProvider(this, viewModelFactory).get(LeaderboardListViewModel.class);</span>
+<span class="nc" id="L295">        viewModel.setParams(duration, category, limit, offset);</span>
+<span class="nc" id="L296">        LeaderboardListAdapter leaderboardListAdapter = new LeaderboardListAdapter();</span>
+<span class="nc" id="L297">        UserDetailAdapter userDetailAdapter= new UserDetailAdapter(response);</span>
+<span class="nc" id="L298">        MergeAdapter mergeAdapter = new MergeAdapter(userDetailAdapter, leaderboardListAdapter);</span>
+<span class="nc" id="L299">        LinearLayoutManager linearLayoutManager = new LinearLayoutManager(getContext());</span>
+<span class="nc" id="L300">        leaderboardListRecyclerView.setLayoutManager(linearLayoutManager);</span>
+<span class="nc" id="L301">        leaderboardListRecyclerView.setAdapter(mergeAdapter);</span>
+<span class="nc" id="L302">        viewModel.getListLiveData().observe(getViewLifecycleOwner(), leaderboardListAdapter::submitList);</span>
+<span class="nc" id="L303">        viewModel.getProgressLoadStatus().observe(getViewLifecycleOwner(), status -&gt; {</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">            if (Objects.requireNonNull(status).equalsIgnoreCase(LOADING)) {</span>
+<span class="nc" id="L305">                showProgressBar();</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">            } else if (status.equalsIgnoreCase(LOADED)) {</span>
+<span class="nc" id="L307">                hideProgressBar();</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">                if (scrollToRank) {</span>
+<span class="nc" id="L309">                    leaderboardListRecyclerView.smoothScrollToPosition(userRank + 1);</span>
+                }
+            }
+<span class="nc" id="L312">        });</span>
+<span class="nc" id="L313">    }</span>
+
+    /**
+     * to hide progressbar
+     */
+    private void hideProgressBar() {
+<span class="nc bnc" id="L319" title="All 2 branches missed.">        if (progressBar != null) {</span>
+<span class="nc" id="L320">            progressBar.setVisibility(View.GONE);</span>
+<span class="nc" id="L321">            categorySpinner.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L322">            durationSpinner.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L323">            scrollButton.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L324">            leaderboardListRecyclerView.setVisibility(View.VISIBLE);</span>
+        }
+<span class="nc" id="L326">    }</span>
+
+    /**
+     * to show progressbar
+     */
+    private void showProgressBar() {
+<span class="nc bnc" id="L332" title="All 2 branches missed.">        if (progressBar != null) {</span>
+<span class="nc" id="L333">            progressBar.setVisibility(View.VISIBLE);</span>
+        }
+<span class="nc" id="L335">        scrollButton.setVisibility(View.INVISIBLE);</span>
+<span class="nc" id="L336">    }</span>
+
+    /**
+     * used to hide the layouts while fetching results from api
+     */
+    private void hideLayouts(){
+<span class="nc" id="L342">        categorySpinner.setVisibility(View.INVISIBLE);</span>
+<span class="nc" id="L343">        durationSpinner.setVisibility(View.INVISIBLE);</span>
+<span class="nc" id="L344">        leaderboardListRecyclerView.setVisibility(View.INVISIBLE);</span>
+<span class="nc" id="L345">    }</span>
+
+    /**
+     * check to ensure that user is logged in
+     * @return
+     */
+    private boolean checkAccount(){
+<span class="nc" id="L352">        Account currentAccount = sessionManager.getCurrentAccount();</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">        if (currentAccount == null) {</span>
+<span class="nc" id="L354">            Timber.d(&quot;Current account is null&quot;);</span>
+<span class="nc" id="L355">            ViewUtil.showLongToast(getActivity(), getResources().getString(R.string.user_not_logged_in));</span>
+<span class="nc" id="L356">            sessionManager.forceLogin(getActivity());</span>
+<span class="nc" id="L357">            return false;</span>
+        }
+<span class="nc" id="L359">        return true;</span>
+    }
+
+    /**
+     * Shows a generic error toast when error occurs while loading leaderboard
+     */
+    private void onError() {
+<span class="nc" id="L366">        ViewUtil.showLongToast(getActivity(), getResources().getString(R.string.error_occurred));</span>
+<span class="nc" id="L367">        progressBar.setVisibility(View.GONE);</span>
+<span class="nc" id="L368">    }</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

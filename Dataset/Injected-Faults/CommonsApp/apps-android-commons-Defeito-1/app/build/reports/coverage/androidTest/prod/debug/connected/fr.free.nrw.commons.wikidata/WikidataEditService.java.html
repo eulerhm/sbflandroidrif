@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WikidataEditService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.wikidata</a> &gt; <span class="el_source">WikidataEditService.java</span></div><h1>WikidataEditService.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.wikidata;
+
+
+import static fr.free.nrw.commons.media.MediaClientKt.PAGE_ID_PREFIX;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import androidx.annotation.Nullable;
+import com.google.gson.Gson;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.contributions.Contribution;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.upload.UploadResult;
+import fr.free.nrw.commons.upload.WikidataItem;
+import fr.free.nrw.commons.upload.WikidataPlace;
+import fr.free.nrw.commons.utils.ConfigUtils;
+import fr.free.nrw.commons.utils.ViewUtil;
+import io.reactivex.Observable;
+import io.reactivex.schedulers.Schedulers;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Singleton;
+import org.wikipedia.dataclient.mwapi.MwPostResponse;
+import org.wikipedia.wikidata.DataValue;
+import org.wikipedia.wikidata.DataValue.ValueString;
+import org.wikipedia.wikidata.EditClaim;
+import org.wikipedia.wikidata.Snak_partial;
+import org.wikipedia.wikidata.Statement_partial;
+import org.wikipedia.wikidata.WikiBaseMonolingualTextValue;
+import timber.log.Timber;
+
+/**
+ * This class is meant to handle the Wikidata edits made through the app It will talk with MediaWiki
+ * Apis to make the necessary calls, log the edits and fire listeners on successful edits
+ */
+@Singleton
+public class WikidataEditService {
+
+    public static final String COMMONS_APP_TAG = &quot;wikimedia-commons-app&quot;;
+
+    private final Context context;
+    private final WikidataEditListener wikidataEditListener;
+    private final JsonKvStore directKvStore;
+    private final WikiBaseClient wikiBaseClient;
+    private final WikidataClient wikidataClient;
+    private final Gson gson;
+
+    @Inject
+    public WikidataEditService(final Context context,
+        final WikidataEditListener wikidataEditListener,
+        @Named(&quot;default_preferences&quot;) final JsonKvStore directKvStore,
+        final WikiBaseClient wikiBaseClient,
+<span class="nc" id="L60">        final WikidataClient wikidataClient, final Gson gson) {</span>
+<span class="nc" id="L61">        this.context = context;</span>
+<span class="nc" id="L62">        this.wikidataEditListener = wikidataEditListener;</span>
+<span class="nc" id="L63">        this.directKvStore = directKvStore;</span>
+<span class="nc" id="L64">        this.wikiBaseClient = wikiBaseClient;</span>
+<span class="nc" id="L65">        this.wikidataClient = wikidataClient;</span>
+<span class="nc" id="L66">        this.gson = gson;</span>
+<span class="nc" id="L67">    }</span>
+
+    /**
+     * Edits the wikibase entity by adding DEPICTS property. Adding DEPICTS property requires call
+     * to the wikibase API to set tag against the entity.
+     */
+    @SuppressLint(&quot;CheckResult&quot;)
+    private Observable&lt;Boolean&gt; addDepictsProperty(final String fileEntityId,
+        final List&lt;String&gt; depictedItems) {
+
+<span class="nc" id="L77">        final EditClaim data = editClaim(</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">            ConfigUtils.isBetaFlavour() ? Collections.singletonList(&quot;Q10&quot;)</span>
+                // Wikipedia:Sandbox (Q10)
+<span class="nc" id="L80">                : depictedItems</span>
+        );
+
+<span class="nc" id="L83">        return wikiBaseClient.postEditEntity(PAGE_ID_PREFIX + fileEntityId, gson.toJson(data))</span>
+<span class="nc" id="L84">            .doOnNext(success -&gt; {</span>
+<span class="nc bnc" id="L85" title="All 2 branches missed.">                if (success) {</span>
+<span class="nc" id="L86">                    Timber.d(&quot;DEPICTS property was set successfully for %s&quot;, fileEntityId);</span>
+                } else {
+<span class="nc" id="L88">                    Timber.d(&quot;Unable to set DEPICTS property for %s&quot;, fileEntityId);</span>
+                }
+<span class="nc" id="L90">            })</span>
+<span class="nc" id="L91">            .doOnError(throwable -&gt; {</span>
+<span class="nc" id="L92">                Timber.e(throwable, &quot;Error occurred while setting DEPICTS property&quot;);</span>
+<span class="nc" id="L93">                ViewUtil.showLongToast(context, throwable.toString());</span>
+<span class="nc" id="L94">            })</span>
+<span class="nc" id="L95">            .subscribeOn(Schedulers.io());</span>
+    }
+
+    /**
+     * Takes depicts ID as a parameter and create a uploadable data with the Id
+     * and send the data for POST operation
+     *
+     * @param filename name of the file
+     * @param depictedItems ID of the selected depict item
+     * @return Observable&lt;Boolean&gt;
+     */
+    @SuppressLint(&quot;CheckResult&quot;)
+    public Observable&lt;Boolean&gt; updateDepictsProperty(final String filename,
+        final List&lt;String&gt; depictedItems) {
+
+<span class="nc" id="L110">        final EditClaim data = editClaim(</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">            ConfigUtils.isBetaFlavour() ? Collections.singletonList(&quot;Q10&quot;)</span>
+                // Wikipedia:Sandbox (Q10)
+<span class="nc" id="L113">                : depictedItems</span>
+        );
+
+<span class="nc" id="L116">        return wikiBaseClient.postEditEntityByFilename(filename,</span>
+<span class="nc" id="L117">            gson.toJson(data))</span>
+<span class="nc" id="L118">            .doOnNext(success -&gt; {</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">                if (success) {</span>
+<span class="nc" id="L120">                    Timber.d(&quot;DEPICTS property was set successfully for %s&quot;, filename);</span>
+                } else {
+<span class="nc" id="L122">                    Timber.d(&quot;Unable to set DEPICTS property for %s&quot;, filename);</span>
+                }
+<span class="nc" id="L124">            })</span>
+<span class="nc" id="L125">            .doOnError(throwable -&gt; {</span>
+<span class="nc" id="L126">                Timber.e(throwable, &quot;Error occurred while setting DEPICTS property&quot;);</span>
+<span class="nc" id="L127">                ViewUtil.showLongToast(context, throwable.toString());</span>
+<span class="nc" id="L128">            })</span>
+<span class="nc" id="L129">            .subscribeOn(Schedulers.io());</span>
+    }
+
+    private EditClaim editClaim(final List&lt;String&gt; entityIds) {
+<span class="nc" id="L133">        return EditClaim.from(entityIds, WikidataProperties.DEPICTS.getPropertyName());</span>
+    }
+
+    /**
+     * Show a success toast when the edit is made successfully
+     */
+    private void showSuccessToast(final String wikiItemName) {
+<span class="nc" id="L140">        final String successStringTemplate = context.getString(R.string.successful_wikidata_edit);</span>
+        final String successMessage = String
+<span class="nc" id="L142">            .format(Locale.getDefault(), successStringTemplate, wikiItemName);</span>
+<span class="nc" id="L143">        ViewUtil.showLongToast(context, successMessage);</span>
+<span class="nc" id="L144">    }</span>
+
+    /**
+     * Adds label to Wikidata using the fileEntityId and the edit token, obtained from
+     * csrfTokenClient
+     *
+     * @param fileEntityId
+     * @return
+     */
+
+    @SuppressLint(&quot;CheckResult&quot;)
+    private Observable&lt;Boolean&gt; addCaption(final long fileEntityId, final String languageCode,
+        final String captionValue) {
+<span class="nc" id="L157">        return wikiBaseClient.addLabelstoWikidata(fileEntityId, languageCode, captionValue)</span>
+<span class="nc" id="L158">            .doOnNext(mwPostResponse -&gt; onAddCaptionResponse(fileEntityId, mwPostResponse))</span>
+<span class="nc" id="L159">            .doOnError(throwable -&gt; {</span>
+<span class="nc" id="L160">                Timber.e(throwable, &quot;Error occurred while setting Captions&quot;);</span>
+<span class="nc" id="L161">                ViewUtil.showLongToast(context, context.getString(R.string.wikidata_edit_failure));</span>
+<span class="nc" id="L162">            })</span>
+<span class="nc bnc" id="L163" title="All 2 branches missed.">            .map(mwPostResponse -&gt; mwPostResponse != null);</span>
+    }
+
+    private void onAddCaptionResponse(Long fileEntityId, MwPostResponse response) {
+<span class="nc bnc" id="L167" title="All 2 branches missed.">        if (response != null) {</span>
+<span class="nc" id="L168">            Timber.d(&quot;Caption successfully set, revision id = %s&quot;, response);</span>
+        } else {
+<span class="nc" id="L170">            Timber.d(&quot;Error occurred while setting Captions, fileEntityId = %s&quot;, fileEntityId);</span>
+        }
+<span class="nc" id="L172">    }</span>
+
+    public Long createClaim(@Nullable final WikidataPlace wikidataPlace, final String fileName,
+        final Map&lt;String, String&gt; captions) {
+<span class="nc bnc" id="L176" title="All 2 branches missed.">        if (!(directKvStore.getBoolean(&quot;Picture_Has_Correct_Location&quot;, true))) {</span>
+<span class="nc" id="L177">            Timber</span>
+<span class="nc" id="L178">                .d(&quot;Image location and nearby place location mismatched, so Wikidata item won't be edited&quot;);</span>
+<span class="nc" id="L179">            return null;</span>
+        }
+<span class="nc" id="L181">        return addImageAndMediaLegends(wikidataPlace, fileName, captions);</span>
+    }
+
+    public Long addImageAndMediaLegends(final WikidataItem wikidataItem, final String fileName,
+        final Map&lt;String, String&gt; captions) {
+<span class="nc" id="L186">        final Snak_partial p18 = new Snak_partial(&quot;value&quot;,</span>
+<span class="nc" id="L187">            WikidataProperties.IMAGE.getPropertyName(),</span>
+<span class="nc" id="L188">            new ValueString(fileName.replace(&quot;File:&quot;, &quot;&quot;)));</span>
+
+<span class="nc" id="L190">        final List&lt;Snak_partial&gt; snaks = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">        for (final Map.Entry&lt;String, String&gt; entry : captions.entrySet()) {</span>
+<span class="nc" id="L192">            snaks.add(new Snak_partial(&quot;value&quot;,</span>
+<span class="nc" id="L193">                WikidataProperties.MEDIA_LEGENDS.getPropertyName(), new DataValue.MonoLingualText(</span>
+<span class="nc" id="L194">                new WikiBaseMonolingualTextValue(entry.getValue(), entry.getKey()))));</span>
+<span class="nc" id="L195">        }</span>
+
+<span class="nc" id="L197">        final String id = wikidataItem.getId() + &quot;$&quot; + UUID.randomUUID().toString();</span>
+<span class="nc" id="L198">        final Statement_partial claim = new Statement_partial(p18, &quot;statement&quot;, &quot;normal&quot;, id,</span>
+<span class="nc" id="L199">            Collections.singletonMap(WikidataProperties.MEDIA_LEGENDS.getPropertyName(), snaks),</span>
+<span class="nc" id="L200">            Arrays.asList(WikidataProperties.MEDIA_LEGENDS.getPropertyName()));</span>
+
+<span class="nc" id="L202">        return wikidataClient.setClaim(claim, COMMONS_APP_TAG).blockingSingle();</span>
+    }
+
+    public void handleImageClaimResult(final WikidataItem wikidataItem, final Long revisionId) {
+<span class="nc bnc" id="L206" title="All 2 branches missed.">        if (revisionId != null) {</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">            if (wikidataEditListener != null) {</span>
+<span class="nc" id="L208">                wikidataEditListener.onSuccessfulWikidataEdit();</span>
+            }
+<span class="nc" id="L210">            showSuccessToast(wikidataItem.getName());</span>
+        } else {
+<span class="nc" id="L212">            Timber.d(&quot;Unable to make wiki data edit for entity %s&quot;, wikidataItem);</span>
+<span class="nc" id="L213">            ViewUtil.showLongToast(context, context.getString(R.string.wikidata_edit_failure));</span>
+        }
+<span class="nc" id="L215">    }</span>
+
+    public Observable addDepictionsAndCaptions(final UploadResult uploadResult,
+        final Contribution contribution) {
+<span class="nc" id="L219">        return wikiBaseClient.getFileEntityId(uploadResult)</span>
+<span class="nc" id="L220">            .doOnError(throwable -&gt; {</span>
+<span class="nc" id="L221">                Timber</span>
+<span class="nc" id="L222">                    .e(throwable, &quot;Error occurred while getting EntityID to set DEPICTS property&quot;);</span>
+<span class="nc" id="L223">                ViewUtil.showLongToast(context, context.getString(R.string.wikidata_edit_failure));</span>
+<span class="nc" id="L224">            })</span>
+<span class="nc" id="L225">            .switchMap(fileEntityId -&gt; {</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">                    if (fileEntityId != null) {</span>
+<span class="nc" id="L227">                        Timber.d(&quot;EntityId for image was received successfully: %s&quot;, fileEntityId);</span>
+<span class="nc" id="L228">                        return Observable.concat(</span>
+<span class="nc" id="L229">                            depictionEdits(contribution, fileEntityId),</span>
+<span class="nc" id="L230">                            captionEdits(contribution, fileEntityId)</span>
+                        );
+                    } else {
+<span class="nc" id="L233">                        Timber.d(&quot;Error acquiring EntityId for image: %s&quot;, uploadResult);</span>
+<span class="nc" id="L234">                        return Observable.empty();</span>
+                    }
+                }
+            );
+    }
+
+    private Observable&lt;Boolean&gt; captionEdits(Contribution contribution, Long fileEntityId) {
+<span class="nc" id="L241">        return Observable.fromIterable(contribution.getMedia().getCaptions().entrySet())</span>
+<span class="nc" id="L242">            .concatMap(entry -&gt; addCaption(fileEntityId, entry.getKey(), entry.getValue()));</span>
+    }
+
+    private Observable&lt;Boolean&gt; depictionEdits(Contribution contribution, Long fileEntityId) {
+<span class="nc" id="L246">        final List&lt;String&gt; depictIDs = new ArrayList&lt;&gt;();</span>
+        for (final WikidataItem wikidataItem :
+<span class="nc bnc" id="L248" title="All 2 branches missed.">            contribution.getDepictedItems()) {</span>
+<span class="nc" id="L249">            depictIDs.add(wikidataItem.getId());</span>
+<span class="nc" id="L250">        }</span>
+<span class="nc" id="L251">        return addDepictsProperty(fileEntityId.toString(), depictIDs);</span>
+    }
+}
+
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

@@ -1,0 +1,365 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.viewmodels</a> &gt; <span class="el_source">ReaderViewModel.kt</span></div><h1>ReaderViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.viewmodels
+
+import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import org.greenrobot.eventbus.EventBus
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode.MAIN
+import org.wordpress.android.BuildConfig
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.QuickStartStore
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartTask
+import org.wordpress.android.models.ReaderTag
+import org.wordpress.android.models.ReaderTagList
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.mysite.SelectedSiteRepository
+import org.wordpress.android.ui.mysite.cards.quickstart.QuickStartRepository
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.quickstart.QuickStartEvent
+import org.wordpress.android.ui.reader.ReaderEvents
+import org.wordpress.android.ui.reader.tracker.ReaderTab
+import org.wordpress.android.ui.reader.tracker.ReaderTracker
+import org.wordpress.android.ui.reader.tracker.ReaderTrackerType.MAIN_READER
+import org.wordpress.android.ui.reader.usecases.LoadReaderTabsUseCase
+import org.wordpress.android.ui.reader.utils.DateProvider
+import org.wordpress.android.ui.reader.viewmodels.ReaderViewModel.ReaderUiState.ContentUiState
+import org.wordpress.android.ui.reader.viewmodels.ReaderViewModel.ReaderUiState.ContentUiState.MenuItemUiState
+import org.wordpress.android.ui.reader.viewmodels.ReaderViewModel.ReaderUiState.ContentUiState.TabUiState
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.SnackbarSequencer
+import org.wordpress.android.util.distinct
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+const val UPDATE_TAGS_THRESHOLD = 1000 * 60 * 60 // 1 hr
+const val TRACK_TAB_CHANGED_THROTTLE = 100L
+
+<span class="nc" id="L48">class ReaderViewModel @Inject constructor(</span>
+<span class="nc" id="L49">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L50">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L51">    private val appPrefsWrapper: AppPrefsWrapper,</span>
+<span class="nc" id="L52">    private val dateProvider: DateProvider,</span>
+<span class="nc" id="L53">    private val loadReaderTabsUseCase: LoadReaderTabsUseCase,</span>
+<span class="nc" id="L54">    private val readerTracker: ReaderTracker,</span>
+<span class="nc" id="L55">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L56">    private val quickStartRepository: QuickStartRepository,</span>
+<span class="nc" id="L57">    private val selectedSiteRepository: SelectedSiteRepository,</span>
+<span class="nc" id="L58">    private val snackbarSequencer: SnackbarSequencer</span>
+        // todo: annnmarie removed this private val getFollowedTagsUseCase: GetFollowedTagsUseCase
+<span class="nc" id="L60">) : ScopedViewModel(mainDispatcher) {</span>
+    private var initialized: Boolean = false
+    private var wasPaused: Boolean = false
+    private var trackReaderTabJob: Job? = null
+    private var isQuickStartPromptShown: Boolean = false
+
+<span class="nc" id="L66">    private val _uiState = MutableLiveData&lt;ReaderUiState&gt;()</span>
+<span class="nc" id="L67">    val uiState: LiveData&lt;ReaderUiState&gt; = _uiState.distinct()</span>
+
+<span class="nc" id="L69">    private val _updateTags = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L70">    val updateTags: LiveData&lt;Event&lt;Unit&gt;&gt; = _updateTags</span>
+
+<span class="nc" id="L72">    private val _selectTab = MutableLiveData&lt;Event&lt;TabNavigation&gt;&gt;()</span>
+<span class="nc" id="L73">    val selectTab: LiveData&lt;Event&lt;TabNavigation&gt;&gt; = _selectTab</span>
+
+<span class="nc" id="L75">    private val _showSearch = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L76">    val showSearch: LiveData&lt;Event&lt;Unit&gt;&gt; = _showSearch</span>
+
+<span class="nc" id="L78">    private val _showSettings = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L79">    val showSettings: LiveData&lt;Event&lt;Unit&gt;&gt; = _showSettings</span>
+
+<span class="nc" id="L81">    private val _showReaderInterests = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L82">    val showReaderInterests: LiveData&lt;Event&lt;Unit&gt;&gt; = _showReaderInterests</span>
+
+<span class="nc" id="L84">    private val _closeReaderInterests = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L85">    val closeReaderInterests: LiveData&lt;Event&lt;Unit&gt;&gt; = _closeReaderInterests</span>
+
+<span class="nc" id="L87">    private val _quickStartPromptEvent = MutableLiveData&lt;Event&lt;QuickStartReaderPrompt&gt;&gt;()</span>
+<span class="nc" id="L88">    val quickStartPromptEvent = _quickStartPromptEvent as LiveData&lt;Event&lt;QuickStartReaderPrompt&gt;&gt;</span>
+
+<span class="nc" id="L90">    init {</span>
+<span class="nc" id="L91">        EventBus.getDefault().register(this)</span>
+<span class="nc" id="L92">    }</span>
+
+    fun start() {
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (tagsRequireUpdate()) _updateTags.value = Event(Unit)</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">        if (initialized) return</span>
+<span class="nc" id="L97">        loadTabs()</span>
+<span class="nc" id="L98">    }</span>
+
+    private fun loadTabs() {
+<span class="nc" id="L101">        launch {</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">            val currentContentUiState = _uiState.value as? ContentUiState</span>
+<span class="nc" id="L103">            val tagList = loadReaderTabsUseCase.loadTabs()</span>
+<span class="nc bnc" id="L104" title="All 4 branches missed.">            if (tagList.isNotEmpty()) {</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                _uiState.value = ContentUiState(</span>
+<span class="nc" id="L106">                        tagList.map { TabUiState(label = UiStringText(it.label)) },</span>
+<span class="nc" id="L107">                        tagList,</span>
+<span class="nc bnc" id="L108" title="All 6 branches missed.">                        shouldUpdateViewPager = currentContentUiState?.readerTagList?.equals(tagList) == false,</span>
+<span class="nc" id="L109">                        searchMenuItemUiState = MenuItemUiState(isVisible = isSearchSupported()),</span>
+<span class="nc" id="L110">                        settingsMenuItemUiState = MenuItemUiState(</span>
+<span class="nc" id="L111">                                isVisible = isSettingsSupported(),</span>
+                                showQuickStartFocusPoint =
+<span class="nc bnc" id="L113" title="All 4 branches missed.">                                currentContentUiState?.settingsMenuItemUiState?.showQuickStartFocusPoint ?: false</span>
+                        )
+                )
+<span class="nc bnc" id="L116" title="All 2 branches missed.">                if (!initialized) {</span>
+<span class="nc" id="L117">                    initialized = true</span>
+<span class="nc" id="L118">                    initializeTabSelection(tagList)</span>
+                }
+            }
+<span class="nc" id="L121">        }</span>
+<span class="nc" id="L122">    }</span>
+
+    private suspend fun initializeTabSelection(tagList: ReaderTagList) {
+<span class="nc bnc" id="L125" title="All 2 branches missed.">        withContext(bgDispatcher) {</span>
+<span class="nc" id="L126">            val selectTab = { it: ReaderTag -&gt;</span>
+<span class="nc" id="L127">                val index = tagList.indexOf(it)</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">                if (index != -1) {</span>
+<span class="nc" id="L129">                    _selectTab.postValue(Event(TabNavigation(index, smoothAnimation = false)))</span>
+                }
+<span class="nc" id="L131">            }</span>
+<span class="nc bnc" id="L132" title="All 4 branches missed.">            appPrefsWrapper.getReaderTag()?.let {</span>
+<span class="nc" id="L133">                selectTab.invoke(it)</span>
+<span class="nc bnc" id="L134" title="All 6 branches missed.">            } ?: tagList.find { it.isDefaultSelectedTab() }?.let {</span>
+<span class="nc" id="L135">                selectTab.invoke(it)</span>
+<span class="nc" id="L136">            }</span>
+        }
+<span class="nc" id="L138">    }</span>
+
+    fun onTagChanged(selectedTag: ReaderTag?) {
+<span class="nc bnc" id="L141" title="All 2 branches missed.">        selectedTag?.let {</span>
+<span class="nc" id="L142">            trackReaderTabShownIfNecessary(it)</span>
+<span class="nc" id="L143">        }</span>
+        // Store most recently selected tab so we can restore the selection after restart
+<span class="nc" id="L145">        appPrefsWrapper.setReaderTag(selectedTag)</span>
+<span class="nc" id="L146">    }</span>
+
+    fun onCloseReaderInterests() {
+<span class="nc" id="L149">        _closeReaderInterests.value = Event(Unit)</span>
+<span class="nc" id="L150">    }</span>
+
+    fun onShowReaderInterests() {
+<span class="nc" id="L153">        _showReaderInterests.value = Event(Unit)</span>
+<span class="nc" id="L154">    }</span>
+
+<span class="nc" id="L156">    sealed class ReaderUiState(</span>
+<span class="nc" id="L157">        open val searchMenuItemUiState: MenuItemUiState,</span>
+<span class="nc" id="L158">        open val settingsMenuItemUiState: MenuItemUiState,</span>
+<span class="nc" id="L159">        val appBarExpanded: Boolean = false,</span>
+<span class="nc" id="L160">        val tabLayoutVisible: Boolean = false</span>
+    ) {
+<span class="nc" id="L162">        data class ContentUiState(</span>
+<span class="nc" id="L163">            val tabUiStates: List&lt;TabUiState&gt;,</span>
+<span class="nc" id="L164">            val readerTagList: ReaderTagList,</span>
+<span class="nc" id="L165">            val shouldUpdateViewPager: Boolean,</span>
+<span class="nc" id="L166">            override val searchMenuItemUiState: MenuItemUiState,</span>
+<span class="nc" id="L167">            override val settingsMenuItemUiState: MenuItemUiState</span>
+<span class="nc" id="L168">        ) : ReaderUiState(</span>
+<span class="nc" id="L169">                searchMenuItemUiState = searchMenuItemUiState,</span>
+<span class="nc" id="L170">                settingsMenuItemUiState = settingsMenuItemUiState,</span>
+<span class="nc" id="L171">                appBarExpanded = true,</span>
+<span class="nc" id="L172">                tabLayoutVisible = true</span>
+        ) {
+<span class="nc" id="L174">            data class TabUiState(</span>
+<span class="nc" id="L175">                val label: UiString</span>
+            )
+
+<span class="nc" id="L178">            data class MenuItemUiState(</span>
+<span class="nc" id="L179">                val isVisible: Boolean,</span>
+<span class="nc" id="L180">                val showQuickStartFocusPoint: Boolean = false</span>
+<span class="nc" id="L181">            )</span>
+        }
+<span class="nc" id="L183">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L186">        super.onCleared()</span>
+<span class="nc" id="L187">        EventBus.getDefault().unregister(this)</span>
+<span class="nc" id="L188">    }</span>
+
+    private fun tagsRequireUpdate(): Boolean {
+<span class="nc" id="L191">        val lastUpdated = appPrefsWrapper.readerTagsUpdatedTimestamp</span>
+<span class="nc" id="L192">        val now = dateProvider.getCurrentDate().time</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        return now - lastUpdated &gt; UPDATE_TAGS_THRESHOLD</span>
+    }
+
+    fun selectedTabChange(tag: ReaderTag) {
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        uiState.value?.let {</span>
+<span class="nc" id="L198">            val currentUiState = it as ContentUiState</span>
+<span class="nc" id="L199">            val position = currentUiState.readerTagList.indexOfTagName(tag.tagSlug)</span>
+<span class="nc" id="L200">            _selectTab.postValue(Event(TabNavigation(position, smoothAnimation = true)))</span>
+<span class="nc" id="L201">        }</span>
+<span class="nc" id="L202">    }</span>
+
+    fun bookmarkTabRequested() {
+<span class="nc bnc" id="L205" title="All 12 branches missed.">        (_uiState.value as? ContentUiState)?.readerTagList?.find { it.isBookmarked }?.let {</span>
+<span class="nc" id="L206">            selectedTabChange(it)</span>
+<span class="nc" id="L207">        }</span>
+<span class="nc" id="L208">    }</span>
+
+    fun onSearchActionClicked() {
+<span class="nc bnc" id="L211" title="All 2 branches missed.">        if (isSearchSupported()) {</span>
+<span class="nc" id="L212">            _showSearch.value = Event(Unit)</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">        } else if (BuildConfig.DEBUG) {</span>
+<span class="nc" id="L214">            throw IllegalStateException(&quot;Search should be hidden when isSearchSupported returns false.&quot;)</span>
+        }
+<span class="nc" id="L216">    }</span>
+
+    fun onSettingsActionClicked() {
+<span class="nc bnc" id="L219" title="All 2 branches missed.">        if (isSettingsSupported()) {</span>
+<span class="nc" id="L220">            completeQuickStartFollowSiteTaskIfNeeded()</span>
+<span class="nc" id="L221">            _showSettings.value = Event(Unit)</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">        } else if (BuildConfig.DEBUG) {</span>
+<span class="nc" id="L223">            throw IllegalStateException(&quot;Settings should be hidden when isSettingsSupported returns false.&quot;)</span>
+        }
+<span class="nc" id="L225">    }</span>
+
+<span class="nc" id="L227">    private fun ReaderTag.isDefaultSelectedTab(): Boolean = this.isDiscover</span>
+
+    @Subscribe(threadMode = MAIN)
+    fun onTagsUpdated(event: ReaderEvents.FollowedTagsChanged) {
+<span class="nc" id="L231">        loadTabs()</span>
+<span class="nc" id="L232">    }</span>
+
+    fun onScreenInForeground() {
+<span class="nc" id="L235">        readerTracker.start(MAIN_READER)</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        appPrefsWrapper.getReaderTag()?.let {</span>
+<span class="nc" id="L237">            trackReaderTabShownIfNecessary(it)</span>
+<span class="nc" id="L238">        }</span>
+<span class="nc" id="L239">    }</span>
+
+    fun onScreenInBackground(isChangingConfigurations: Boolean) {
+<span class="nc" id="L242">        readerTracker.stop(MAIN_READER)</span>
+<span class="nc" id="L243">        wasPaused = true</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">        if (!isChangingConfigurations) {</span>
+<span class="nc" id="L245">            hideQuickStartFocusPointIfNeeded()</span>
+<span class="nc" id="L246">            dismissQuickStartSnackbarIfNeeded()</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">            if (quickStartRepository.isPendingTask(getFollowSiteTask())) {</span>
+<span class="nc" id="L248">                quickStartRepository.clearPendingTask()</span>
+            }
+        }
+<span class="nc" id="L251">    }</span>
+
+<span class="nc" id="L253">    private fun isSearchSupported() = accountStore.hasAccessToken()</span>
+
+<span class="nc" id="L255">    private fun isSettingsSupported() = accountStore.hasAccessToken()</span>
+
+    private fun trackReaderTabShownIfNecessary(it: ReaderTag) {
+<span class="nc bnc" id="L258" title="All 2 branches missed.">        trackReaderTabJob?.cancel()</span>
+<span class="nc" id="L259">        trackReaderTabJob = launch {</span>
+            // we need to add this throttle as it takes a few ms to select the last selected tab after app restart
+<span class="nc" id="L261">            delay(TRACK_TAB_CHANGED_THROTTLE)</span>
+<span class="nc" id="L262">            readerTracker.trackReaderTabIfNecessary(ReaderTab.transformTagToTab(it))</span>
+<span class="nc" id="L263">        }</span>
+<span class="nc" id="L264">    }</span>
+
+    /* QUICK START */
+
+    fun onQuickStartPromptDismissed() {
+<span class="nc" id="L269">        isQuickStartPromptShown = false</span>
+<span class="nc" id="L270">    }</span>
+
+    fun onQuickStartEventReceived(event: QuickStartEvent) {
+<span class="nc bnc" id="L273" title="All 2 branches missed.">        if (event.task == getFollowSiteTask()) checkAndStartQuickStartFollowSiteTaskNextStep()</span>
+<span class="nc" id="L274">    }</span>
+
+    private fun checkAndStartQuickStartFollowSiteTaskNextStep() {
+<span class="nc bnc" id="L277" title="All 4 branches missed.">        val isDiscover = appPrefsWrapper.getReaderTag()?.isDiscover == true</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">        if (isDiscover) {</span>
+<span class="nc" id="L279">            startQuickStartFollowSiteTaskDiscoverTabStep()</span>
+        } else {
+<span class="nc" id="L281">            autoSwitchToDiscoverTab()</span>
+        }
+<span class="nc" id="L283">    }</span>
+
+    private fun autoSwitchToDiscoverTab() {
+<span class="nc" id="L286">        launch {</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">            if (!initialized) delay(QUICK_START_DISCOVER_TAB_STEP_DELAY)</span>
+<span class="nc bnc" id="L288" title="All 12 branches missed.">            (_uiState.value as? ContentUiState)?.readerTagList?.find { it.isDiscover }?.let {</span>
+<span class="nc" id="L289">                selectedTabChange(it)</span>
+<span class="nc" id="L290">            }</span>
+<span class="nc" id="L291">            startQuickStartFollowSiteTaskDiscoverTabStep()</span>
+<span class="nc" id="L292">        }</span>
+<span class="nc" id="L293">    }</span>
+
+    private fun startQuickStartFollowSiteTaskDiscoverTabStep() {
+<span class="nc bnc" id="L296" title="All 2 branches missed.">        val shortMessagePrompt = if (isSettingsSupported()) {</span>
+<span class="nc" id="L297">            R.string.quick_start_dialog_follow_sites_message_short_discover_and_settings</span>
+        } else {
+<span class="nc" id="L299">            R.string.quick_start_dialog_follow_sites_message_short_discover</span>
+        }
+<span class="nc" id="L301">        isQuickStartPromptShown = true</span>
+<span class="nc" id="L302">        _quickStartPromptEvent.value = Event(</span>
+<span class="nc" id="L303">                QuickStartReaderPrompt(</span>
+<span class="nc" id="L304">                        getFollowSiteTask(),</span>
+<span class="nc" id="L305">                        shortMessagePrompt,</span>
+<span class="nc" id="L306">                        R.drawable.ic_cog_white_24dp</span>
+                )
+        )
+<span class="nc" id="L309">        updateContentUiState(showQuickStartFocusPoint = isSettingsSupported())</span>
+<span class="nc" id="L310">    }</span>
+
+    fun completeQuickStartFollowSiteTaskIfNeeded() {
+<span class="nc bnc" id="L313" title="All 2 branches missed.">        if (quickStartRepository.isPendingTask(getFollowSiteTask())) {</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">            selectedSiteRepository.getSelectedSite()?.let {</span>
+<span class="nc" id="L315">                hideQuickStartFocusPointIfNeeded()</span>
+<span class="nc" id="L316">                quickStartRepository.completeTask(getFollowSiteTask())</span>
+<span class="nc" id="L317">            }</span>
+        }
+<span class="nc" id="L319">    }</span>
+
+    fun dismissQuickStartSnackbarIfNeeded() {
+<span class="nc bnc" id="L322" title="All 2 branches missed.">        if (isQuickStartPromptShown) snackbarSequencer.dismissLastSnackbar()</span>
+<span class="nc" id="L323">        isQuickStartPromptShown = false</span>
+<span class="nc" id="L324">    }</span>
+
+    private fun hideQuickStartFocusPointIfNeeded() {
+<span class="nc bnc" id="L327" title="All 2 branches missed.">        val currentUiState = _uiState.value as? ContentUiState</span>
+<span class="nc bnc" id="L328" title="All 8 branches missed.">        if (currentUiState?.settingsMenuItemUiState?.showQuickStartFocusPoint == true) {</span>
+<span class="nc" id="L329">            updateContentUiState(showQuickStartFocusPoint = false)</span>
+        }
+<span class="nc" id="L331">    }</span>
+
+    private fun getFollowSiteTask() =
+<span class="nc" id="L334">        quickStartRepository.quickStartType.getTaskFromString(QuickStartStore.QUICK_START_FOLLOW_SITE_LABEL)</span>
+
+    private fun updateContentUiState(
+        showQuickStartFocusPoint: Boolean
+    ) {
+<span class="nc bnc" id="L339" title="All 2 branches missed.">        val currentUiState = _uiState.value as? ContentUiState</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">        currentUiState?.let {</span>
+<span class="nc" id="L341">            _uiState.value = currentUiState.copy(</span>
+<span class="nc" id="L342">                    settingsMenuItemUiState = it.settingsMenuItemUiState.copy(</span>
+<span class="nc" id="L343">                            isVisible = isSettingsSupported(),</span>
+<span class="nc" id="L344">                            showQuickStartFocusPoint = showQuickStartFocusPoint</span>
+                    ),
+<span class="nc" id="L346">                    shouldUpdateViewPager = false</span>
+            )
+<span class="nc" id="L348">        }</span>
+<span class="nc" id="L349">    }</span>
+
+<span class="nc" id="L351">    data class QuickStartReaderPrompt(</span>
+<span class="nc" id="L352">        val task: QuickStartTask,</span>
+<span class="nc" id="L353">        @StringRes val shortMessagePrompt: Int,</span>
+<span class="nc" id="L354">        @DrawableRes val iconId: Int,</span>
+<span class="nc" id="L355">        val duration: Int = QUICK_START_PROMPT_DURATION</span>
+<span class="nc" id="L356">    )</span>
+
+    companion object {
+        private const val QUICK_START_DISCOVER_TAB_STEP_DELAY = 2000L
+        private const val QUICK_START_PROMPT_DURATION = 5000
+    }
+}
+
+<span class="nc" id="L364">data class TabNavigation(val position: Int, val smoothAnimation: Boolean)</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

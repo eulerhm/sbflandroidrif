@@ -1,0 +1,606 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderPostRenderer.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader</a> &gt; <span class="el_source">ReaderPostRenderer.java</span></div><h1>ReaderPostRenderer.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader;
+
+import android.annotation.SuppressLint;
+import android.net.Uri;
+import android.os.Handler;
+
+import org.jsoup.Jsoup;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.models.ReaderPost;
+import org.wordpress.android.models.ReaderPostDiscoverData;
+import org.wordpress.android.ui.reader.utils.ImageSizeMap;
+import org.wordpress.android.ui.reader.utils.ImageSizeMap.ImageSize;
+import org.wordpress.android.ui.reader.utils.ReaderEmbedScanner;
+import org.wordpress.android.ui.reader.utils.ReaderHtmlUtils;
+import org.wordpress.android.ui.reader.utils.ReaderIframeScanner;
+import org.wordpress.android.ui.reader.utils.ReaderImageScanner;
+import org.wordpress.android.ui.reader.utils.ReaderUtils;
+import org.wordpress.android.ui.reader.views.ReaderWebView;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.DisplayUtils;
+import org.wordpress.android.util.StringUtils;
+
+import java.lang.ref.WeakReference;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Random;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * generates and displays the HTML for post detail content - main purpose is to assign the
+ * height/width attributes on image tags to (1) avoid the webView resizing as images are
+ * loaded, and (2) avoid requesting images at a size larger than the display
+ * &lt;p&gt;
+ * important to note that displayed images rely on dp rather than px sizes due to the
+ * fact that WebView &quot;converts CSS pixel values to density-independent pixel values&quot;
+ * http://developer.android.com/guide/webapps/targeting.html
+ */
+public class ReaderPostRenderer {
+    private final ReaderResourceVars mResourceVars;
+    private final ReaderPost mPost;
+    private final int mMinFullSizeWidthDp;
+    private final int mMinMidSizeWidthDp;
+    private final WeakReference&lt;ReaderWebView&gt; mWeakWebView;
+
+    private StringBuilder mRenderBuilder;
+    private String mRenderedHtml;
+    private ImageSizeMap mAttachmentSizes;
+    private ReaderCssProvider mCssProvider;
+
+    @SuppressLint(&quot;SetJavaScriptEnabled&quot;)
+<span class="nc" id="L54">    public ReaderPostRenderer(ReaderWebView webView, ReaderPost post, ReaderCssProvider cssProvider) {</span>
+<span class="nc bnc" id="L55" title="All 2 branches missed.">        if (webView == null) {</span>
+<span class="nc" id="L56">            throw new IllegalArgumentException(&quot;ReaderPostRenderer requires a webView&quot;);</span>
+        }
+<span class="nc bnc" id="L58" title="All 2 branches missed.">        if (post == null) {</span>
+<span class="nc" id="L59">            throw new IllegalArgumentException(&quot;ReaderPostRenderer requires a post&quot;);</span>
+        }
+
+<span class="nc" id="L62">        mPost = post;</span>
+<span class="nc" id="L63">        mWeakWebView = new WeakReference&lt;&gt;(webView);</span>
+<span class="nc" id="L64">        mResourceVars = new ReaderResourceVars(webView.getContext());</span>
+<span class="nc" id="L65">        mCssProvider = cssProvider;</span>
+
+<span class="nc" id="L67">        mMinFullSizeWidthDp = pxToDp(mResourceVars.mFullSizeImageWidthPx / 3);</span>
+<span class="nc" id="L68">        mMinMidSizeWidthDp = mMinFullSizeWidthDp / 2;</span>
+
+        // enable JavaScript in the webView, otherwise videos and other embedded content won't
+        // work - note that the content is scrubbed on the backend so this is considered safe
+<span class="nc" id="L72">        webView.getSettings().setJavaScriptEnabled(true);</span>
+<span class="nc" id="L73">    }</span>
+
+    public void beginRender() {
+<span class="nc" id="L76">        final Handler handler = new Handler();</span>
+<span class="nc" id="L77">        mRenderBuilder = new StringBuilder(getPostContent());</span>
+
+<span class="nc" id="L79">        new Thread() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L82">                final boolean hasTiledGallery = hasTiledGallery(mRenderBuilder.toString());</span>
+
+<span class="nc bnc" id="L84" title="All 4 branches missed.">                if (!(hasTiledGallery &amp;&amp; mResourceVars.mIsWideDisplay)) {</span>
+<span class="nc" id="L85">                    resizeImages();</span>
+                }
+
+<span class="nc" id="L88">                resizeIframes();</span>
+
+                // Get the set of JS scripts to inject in our Webview to support some specific Embeds.
+<span class="nc" id="L91">                Set&lt;String&gt; jsToInject = injectJSForSpecificEmbedSupport();</span>
+
+<span class="nc" id="L93">                final String htmlContent =</span>
+<span class="nc" id="L94">                        formatPostContentForWebView(</span>
+<span class="nc" id="L95">                                mRenderBuilder.toString(),</span>
+                                jsToInject,
+                                hasTiledGallery,
+<span class="nc" id="L98">                                mResourceVars.mIsWideDisplay);</span>
+
+<span class="nc" id="L100">                mRenderBuilder = null;</span>
+<span class="nc" id="L101">                handler.post(new Runnable() {</span>
+                    @Override
+                    public void run() {
+<span class="nc" id="L104">                        renderHtmlContent(htmlContent);</span>
+<span class="nc" id="L105">                    }</span>
+                });
+<span class="nc" id="L107">            }</span>
+<span class="nc" id="L108">        }.start();</span>
+<span class="nc" id="L109">    }</span>
+
+    public static boolean hasTiledGallery(String text) {
+        // determine whether a tiled-gallery exists in the content
+<span class="nc" id="L113">        return Pattern.compile(&quot;tiled-gallery[\\s\&quot;']&quot;).matcher(text).find();</span>
+    }
+
+    /*
+     * scan the content for images and make sure they're correctly sized for the device
+     */
+    private void resizeImages() {
+<span class="nc" id="L120">        ReaderHtmlUtils.HtmlScannerListener imageListener = new ReaderHtmlUtils.HtmlScannerListener() {</span>
+            @Override
+            public void onTagFound(String imageTag, String imageUrl) {
+                // Exceptions which should keep their original tag attributes
+<span class="nc bnc" id="L124" title="All 4 branches missed.">                if (imageUrl.contains(&quot;wpcom-smileys&quot;) || imageTag.contains(&quot;wp-story&quot;)) {</span>
+<span class="nc" id="L125">                    return;</span>
+                }
+<span class="nc" id="L127">                replaceImageTag(imageTag, imageUrl);</span>
+<span class="nc" id="L128">            }</span>
+        };
+<span class="nc" id="L130">        String content = mRenderBuilder.toString();</span>
+<span class="nc" id="L131">        ReaderImageScanner scanner = new ReaderImageScanner(content, mPost.isPrivate);</span>
+<span class="nc" id="L132">        scanner.beginScan(imageListener);</span>
+<span class="nc" id="L133">    }</span>
+
+    /*
+     * scan the content for iframes and make sure they're correctly sized for the device
+     */
+    private void resizeIframes() {
+<span class="nc" id="L139">        ReaderHtmlUtils.HtmlScannerListener iframeListener = new ReaderHtmlUtils.HtmlScannerListener() {</span>
+            @Override
+            public void onTagFound(String tag, String src) {
+<span class="nc" id="L142">                replaceIframeTag(tag, src);</span>
+<span class="nc" id="L143">            }</span>
+        };
+<span class="nc" id="L145">        String content = mRenderBuilder.toString();</span>
+<span class="nc" id="L146">        ReaderIframeScanner scanner = new ReaderIframeScanner(content);</span>
+<span class="nc" id="L147">        scanner.beginScan(iframeListener);</span>
+<span class="nc" id="L148">    }</span>
+
+    private Set&lt;String&gt; injectJSForSpecificEmbedSupport() {
+<span class="nc" id="L151">        final Set&lt;String&gt; jsToInject = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L152">        ReaderHtmlUtils.HtmlScannerListener embedListener = new ReaderHtmlUtils.HtmlScannerListener() {</span>
+            @Override
+            public void onTagFound(String tag, String src) {
+<span class="nc" id="L155">                jsToInject.add(src);</span>
+<span class="nc" id="L156">            }</span>
+        };
+<span class="nc" id="L158">        String content = mRenderBuilder.toString();</span>
+<span class="nc" id="L159">        ReaderEmbedScanner scanner = new ReaderEmbedScanner(content);</span>
+<span class="nc" id="L160">        scanner.beginScan(embedListener);</span>
+<span class="nc" id="L161">        return jsToInject;</span>
+    }
+
+    /*
+     * called once the content is ready to be rendered in the webView
+     */
+    private void renderHtmlContent(final String htmlContent) {
+<span class="nc" id="L168">        mRenderedHtml = htmlContent;</span>
+
+        // make sure webView is still valid (containing fragment may have been detached)
+<span class="nc" id="L171">        ReaderWebView webView = mWeakWebView.get();</span>
+<span class="nc bnc" id="L172" title="All 6 branches missed.">        if (webView == null || webView.getContext() == null || webView.isDestroyed()) {</span>
+<span class="nc" id="L173">            AppLog.w(AppLog.T.READER, &quot;reader renderer &gt; webView invalid&quot;);</span>
+<span class="nc" id="L174">            return;</span>
+        }
+
+        // IMPORTANT: use loadDataWithBaseURL() since loadData() may fail
+        // https://code.google.com/p/android/issues/detail?id=4401
+        // also important to use null as the baseUrl since onPageFinished
+        // doesn't appear to fire when it's set to an actual url
+<span class="nc" id="L181">        webView.loadDataWithBaseURL(null, htmlContent, &quot;text/html&quot;, &quot;UTF-8&quot;, null);</span>
+<span class="nc" id="L182">    }</span>
+
+    /*
+     * called when image scanner finds an image, tries to replace the image tag with one that
+     * has height &amp; width attributes set correctly for the current display, if that fails
+     * replaces it with one that has our 'size-none' class
+     */
+    private void replaceImageTag(final String imageTag, final String imageUrl) {
+<span class="nc" id="L190">        ImageSize origSize = getImageSize(imageTag, imageUrl);</span>
+<span class="nc bnc" id="L191" title="All 4 branches missed.">        boolean hasWidth = (origSize != null &amp;&amp; origSize.width &gt; 0);</span>
+<span class="nc bnc" id="L192" title="All 4 branches missed.">        boolean isFullSize = hasWidth &amp;&amp; (origSize.width &gt;= mMinFullSizeWidthDp);</span>
+<span class="nc bnc" id="L193" title="All 6 branches missed.">        boolean isMidSize = hasWidth</span>
+                            &amp;&amp; (origSize.width &gt;= mMinMidSizeWidthDp)
+                            &amp;&amp; (origSize.width &lt; mMinFullSizeWidthDp);
+
+        final String newImageTag;
+<span class="nc bnc" id="L198" title="All 2 branches missed.">        if (isFullSize) {</span>
+<span class="nc" id="L199">            newImageTag = makeFullSizeImageTag(imageUrl, origSize.width, origSize.height);</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        } else if (isMidSize) {</span>
+<span class="nc" id="L201">            newImageTag = makeImageTag(imageUrl, origSize.width, origSize.height, &quot;size-medium&quot;);</span>
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        } else if (hasWidth) {</span>
+<span class="nc" id="L203">            newImageTag = makeImageTag(imageUrl, origSize.width, origSize.height, &quot;size-none&quot;);</span>
+        } else {
+<span class="nc" id="L205">            newImageTag = &quot;&lt;img class='size-none' src='&quot; + imageUrl + &quot;' /&gt;&quot;;</span>
+        }
+
+<span class="nc" id="L208">        int start = mRenderBuilder.indexOf(imageTag);</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        if (start == -1) {</span>
+<span class="nc" id="L210">            AppLog.w(AppLog.T.READER, &quot;reader renderer &gt; image not found in builder&quot;);</span>
+<span class="nc" id="L211">            return;</span>
+        }
+
+<span class="nc" id="L214">        mRenderBuilder.replace(start, start + imageTag.length(), newImageTag);</span>
+<span class="nc" id="L215">    }</span>
+
+    private String makeImageTag(final String imageUrl, int width, int height, final String imageClass) {
+<span class="nc" id="L218">        String newImageUrl = ReaderUtils.getResizedImageUrl(imageUrl, width, height, mPost.isPrivate,</span>
+                false); // don't use atomic proxy for WebView images
+<span class="nc bnc" id="L220" title="All 2 branches missed.">        if (height &gt; 0) {</span>
+<span class="nc" id="L221">            return &quot;&lt;img class='&quot; + imageClass + &quot;'&quot;</span>
+                   + &quot; src='&quot; + newImageUrl + &quot;'&quot;
+<span class="nc" id="L223">                   + &quot; width='&quot; + pxToDp(width) + &quot;'&quot;</span>
+<span class="nc" id="L224">                   + &quot; height='&quot; + pxToDp(height) + &quot;' /&gt;&quot;;</span>
+        } else {
+<span class="nc" id="L226">            return &quot;&lt;img class='&quot; + imageClass + &quot;'&quot;</span>
+                   + &quot;src='&quot; + newImageUrl + &quot;'&quot;
+<span class="nc" id="L228">                   + &quot; width='&quot; + pxToDp(width) + &quot;' /&gt;&quot;;</span>
+        }
+    }
+
+    private String makeFullSizeImageTag(final String imageUrl, int width, int height) {
+        int newWidth;
+        int newHeight;
+<span class="nc bnc" id="L235" title="All 4 branches missed.">        if (width &gt; 0 &amp;&amp; height &gt; 0) {</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">            if (height &gt; width) {</span>
+                //noinspection SuspiciousNameCombination
+<span class="nc" id="L238">                newHeight = mResourceVars.mFullSizeImageWidthPx;</span>
+<span class="nc" id="L239">                float ratio = ((float) width / (float) height);</span>
+<span class="nc" id="L240">                newWidth = (int) (newHeight * ratio);</span>
+<span class="nc" id="L241">            } else {</span>
+<span class="nc" id="L242">                float ratio = ((float) height / (float) width);</span>
+<span class="nc" id="L243">                newWidth = mResourceVars.mFullSizeImageWidthPx;</span>
+<span class="nc" id="L244">                newHeight = (int) (newWidth * ratio);</span>
+<span class="nc" id="L245">            }</span>
+        } else {
+<span class="nc" id="L247">            newWidth = mResourceVars.mFullSizeImageWidthPx;</span>
+<span class="nc" id="L248">            newHeight = 0;</span>
+        }
+
+<span class="nc" id="L251">        return makeImageTag(imageUrl, newWidth, newHeight, &quot;size-full&quot;);</span>
+    }
+
+    /*
+     * returns the basic content of the post tweaked for use here
+     */
+    private String getPostContent() {
+<span class="nc bnc" id="L258" title="All 2 branches missed.">        String content = mPost.shouldShowExcerpt() ? mPost.getExcerpt() : mPost.getText();</span>
+<span class="nc" id="L259">        content = removeInlineStyles(content);</span>
+
+        // some content (such as Vimeo embeds) don't have &quot;http:&quot; before links
+<span class="nc" id="L262">        content = content.replace(&quot;src=\&quot;//&quot;, &quot;src=\&quot;http://&quot;);</span>
+
+        // if this is a Discover post, add a link which shows the blog preview
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (mPost.isDiscoverPost()) {</span>
+<span class="nc" id="L266">            ReaderPostDiscoverData discoverData = mPost.getDiscoverData();</span>
+<span class="nc bnc" id="L267" title="All 6 branches missed.">            if (discoverData != null &amp;&amp; discoverData.getBlogId() != 0 &amp;&amp; discoverData.hasBlogName()) {</span>
+<span class="nc" id="L268">                String label = String.format(</span>
+<span class="nc" id="L269">                        WordPress.getContext().getString(R.string.reader_discover_visit_blog),</span>
+<span class="nc" id="L270">                        discoverData.getBlogName());</span>
+<span class="nc" id="L271">                String url = ReaderUtils.makeBlogPreviewUrl(discoverData.getBlogId());</span>
+
+<span class="nc" id="L273">                String htmlDiscover = &quot;&lt;div id='discover'&gt;&quot;</span>
+                                      + &quot;&lt;a href='&quot; + url + &quot;'&gt;&quot; + label + &quot;&lt;/a&gt;&quot;
+                                      + &quot;&lt;/div&gt;&quot;;
+<span class="nc" id="L276">                content += htmlDiscover;</span>
+            }
+        }
+
+<span class="nc" id="L280">        return content;</span>
+    }
+
+    /*
+     * Strips inline styles from post content
+     */
+    private String removeInlineStyles(String content) {
+<span class="nc bnc" id="L287" title="All 2 branches missed.">        if (content.length() == 0) {</span>
+<span class="nc" id="L288">            return content;</span>
+        }
+
+        try {
+<span class="nc" id="L292">            return Jsoup.parseBodyFragment(content)</span>
+<span class="nc" id="L293">                   .getAllElements()</span>
+<span class="nc" id="L294">                   .removeAttr(&quot;style&quot;)</span>
+<span class="nc" id="L295">                   .select(&quot;body&quot;)</span>
+<span class="nc" id="L296">                   .html();</span>
+<span class="nc" id="L297">        } catch (Exception e) {</span>
+<span class="nc" id="L298">            return content;</span>
+        }
+    }
+
+    /*
+     * returns the HTML that was last rendered, will be null prior to rendering
+     */
+    String getRenderedHtml() {
+<span class="nc" id="L306">        return mRenderedHtml;</span>
+    }
+
+    /*
+     * replace the passed iframe tag with one that's correctly sized for the device
+     */
+    private void replaceIframeTag(final String tag, final String src) {
+<span class="nc" id="L313">        int width = ReaderHtmlUtils.getWidthAttrValue(tag);</span>
+<span class="nc" id="L314">        int height = ReaderHtmlUtils.getHeightAttrValue(tag);</span>
+
+        int newHeight;
+        int newWidth;
+<span class="nc bnc" id="L318" title="All 4 branches missed.">        if (width &gt; 0 &amp;&amp; height &gt; 0) {</span>
+<span class="nc" id="L319">            float ratio = ((float) height / (float) width);</span>
+<span class="nc" id="L320">            newWidth = mResourceVars.mVideoWidthPx;</span>
+<span class="nc" id="L321">            newHeight = (int) (newWidth * ratio);</span>
+<span class="nc" id="L322">        } else {</span>
+<span class="nc" id="L323">            newWidth = mResourceVars.mVideoWidthPx;</span>
+<span class="nc" id="L324">            newHeight = mResourceVars.mVideoHeightPx;</span>
+        }
+
+<span class="nc" id="L327">        String newTag = &quot;&lt;iframe src='&quot; + src + &quot;'&quot;</span>
+                        + &quot; frameborder='0' allowfullscreen='true' allowtransparency='true'&quot;
+<span class="nc" id="L329">                        + &quot; width='&quot; + pxToDp(newWidth) + &quot;'&quot;</span>
+<span class="nc" id="L330">                        + &quot; height='&quot; + pxToDp(newHeight) + &quot;' /&gt;&quot;;</span>
+
+<span class="nc" id="L332">        int start = mRenderBuilder.indexOf(tag);</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">        if (start == -1) {</span>
+<span class="nc" id="L334">            AppLog.w(AppLog.T.READER, &quot;reader renderer &gt; iframe not found in builder&quot;);</span>
+<span class="nc" id="L335">            return;</span>
+        }
+
+<span class="nc" id="L338">        mRenderBuilder.replace(start, start + tag.length(), newTag);</span>
+<span class="nc" id="L339">    }</span>
+
+    /*
+     * returns the full content, including CSS, that will be shown in the WebView for this post
+     */
+    private String formatPostContentForWebView(final String content, final Set&lt;String&gt; jsToInject,
+                                               boolean hasTiledGallery, boolean isWideDisplay) {
+<span class="nc bnc" id="L346" title="All 4 branches missed.">        final boolean renderAsTiledGallery = hasTiledGallery &amp;&amp; isWideDisplay;</span>
+
+        // unique CSS class assigned to the gallery elements for easy selection
+<span class="nc" id="L349">        final String galleryOnlyClass = &quot;gallery-only-class&quot; + new Random().nextInt(1000);</span>
+
+        @SuppressWarnings(&quot;StringBufferReplaceableByString&quot;)
+<span class="nc" id="L352">        StringBuilder sbHtml = new StringBuilder(&quot;&lt;!DOCTYPE html&gt;&lt;html&gt;&lt;head&gt;&lt;meta charset='UTF-8' /&gt;&quot;);</span>
+
+        // title isn't necessary, but it's invalid html5 without one
+<span class="nc" id="L355">        sbHtml.append(&quot;&lt;title&gt;Reader Post&lt;/title&gt;&quot;)</span>
+<span class="nc" id="L356">              .append(&quot;&lt;link rel=\&quot;stylesheet\&quot; type=\&quot;text/css\&quot;\n&quot;</span>
+<span class="nc" id="L357">                      + &quot;          href=\&quot;&quot; + mCssProvider.getCssUrl() + &quot;\&quot;&gt;&quot;);</span>
+        // https://developers.google.com/chrome/mobile/docs/webview/pixelperfect
+<span class="nc" id="L359">        sbHtml.append(&quot;&lt;meta name='viewport' content='width=device-width, initial-scale=1'&gt;&quot;)</span>
+<span class="nc" id="L360">              .append(&quot;&lt;style type='text/css'&gt;&quot;);</span>
+<span class="nc" id="L361">        appendMappedColors(sbHtml);</span>
+              // force font style
+<span class="nc" id="L363">        sbHtml.append(&quot; body.reader-full-post__story-content { font-family: 'Noto Serif', serif; font-weight: 400; &quot;)</span>
+<span class="nc" id="L364">              .append(&quot;font-size: 16px; margin: 0px; padding: 0px; }&quot;)</span>
+<span class="nc" id="L365">              .append(&quot; p, div, li { line-height: 1.6em; font-size: 100%; }&quot;)</span>
+<span class="nc" id="L366">              .append(&quot; body, p, div { max-width: 100% !important; word-wrap: break-word; }&quot;)</span>
+              // set line-height, font-size but not for .tiled-gallery divs when rendering as tiled
+              // gallery as those will be handled with the .tiled-gallery rules bellow.
+<span class="nc bnc" id="L369" title="All 2 branches missed.">              .append(&quot; p, div&quot; + (renderAsTiledGallery ? &quot;:not(.&quot; + galleryOnlyClass + &quot;)&quot; : &quot;&quot;)</span>
+                      + &quot;, li { line-height: 1.6em; font-size: 100%; }&quot;)
+<span class="nc" id="L371">              .append(&quot; h1, h2, h3 { line-height: 1.6em; }&quot;)</span>
+              // Counteract pre-defined height/width styles, expect for:
+              // 1. Story blocks, which set their own mobile-friendly size we shouldn't override.
+              // 2. The tiled-gallery divs when rendering as tiled gallery, as those will be handled
+              // with the .tiled-gallery rules below.
+<span class="nc bnc" id="L376" title="All 2 branches missed.">              .append(&quot; p, div:not(.wp-story-container.*)&quot; + (renderAsTiledGallery ? &quot;:not(.tiled-gallery.*)&quot; : &quot;&quot;)</span>
+                      + &quot;, dl, table { width: auto !important; height: auto !important; }&quot;)
+              // make sure long strings don't force the user to scroll horizontally
+<span class="nc" id="L379">              .append(&quot; body, p, div, a { word-wrap: break-word; }&quot;)</span>
+              // change horizontal line color
+<span class="nc" id="L381">              .append(&quot; .reader-full-post__story-content hr { background-color: transparent; &quot;)</span>
+<span class="nc" id="L382">              .append(&quot;border-color: var(--color-neutral-50); }&quot;)</span>
+              // use a consistent top/bottom margin for paragraphs, with no top margin for the first one
+<span class="nc" id="L384">              .append(&quot; p { margin-top: &quot;).append(mResourceVars.mMarginMediumPx).append(&quot;px;&quot;)</span>
+<span class="nc" id="L385">              .append(&quot; margin-bottom: &quot;).append(mResourceVars.mMarginMediumPx).append(&quot;px; }&quot;)</span>
+<span class="nc" id="L386">              .append(&quot; p:first-child { margin-top: 0px; }&quot;)</span>
+              // add background color, fontsize and padding to pre blocks, and wrap the text
+              // so the user can see full block.
+<span class="nc" id="L389">              .append(&quot; pre { word-wrap: break-word; white-space: pre-wrap; &quot;)</span>
+<span class="nc" id="L390">              .append(&quot; background-color: var(--color-neutral-20);&quot;)</span>
+<span class="nc" id="L391">              .append(&quot; padding: &quot;).append(mResourceVars.mMarginMediumPx).append(&quot;px; &quot;)</span>
+<span class="nc" id="L392">              .append(&quot; line-height: 1.2em; font-size: 14px; }&quot;)</span>
+              // add a left border to blockquotes
+<span class="nc" id="L394">              .append(&quot; .reader-full-post__story-content blockquote { color: var(--color-neutral-0); &quot;)</span>
+<span class="nc" id="L395">              .append(&quot; padding-left: 32px; &quot;)</span>
+<span class="nc" id="L396">              .append(&quot; margin-left: 0px; &quot;)</span>
+<span class="nc" id="L397">              .append(&quot; border-left: 3px solid var(--color-neutral-50); }&quot;)</span>
+              // show links in the same color they are elsewhere in the app
+<span class="nc" id="L399">              .append(&quot; a { text-decoration: none; color: var(--main-link-color); }&quot;)</span>
+              // make sure images aren't wider than the display, strictly enforced for images without size
+<span class="nc" id="L401">              .append(&quot; img { max-width: 100%; width: auto; height: auto; }&quot;)</span>
+<span class="nc" id="L402">              .append(&quot; img.size-none { max-width: 100% !important; height: auto !important; }&quot;)</span>
+              // center large/medium images, provide a small bottom margin, and add a background color
+              // so the user sees something while they're loading
+<span class="nc" id="L405">              .append(&quot; img.size-full, img.size-large, img.size-medium {&quot;)</span>
+<span class="nc" id="L406">              .append(&quot; display: block; margin-left: auto; margin-right: auto;&quot;)</span>
+<span class="nc" id="L407">              .append(&quot; background-color: var(--color-neutral-0);&quot;)</span>
+<span class="nc" id="L408">              .append(&quot; margin-bottom: &quot;).append(mResourceVars.mMarginMediumPx).append(&quot;px; }&quot;);</span>
+
+<span class="nc bnc" id="L410" title="All 2 branches missed.">        if (renderAsTiledGallery) {</span>
+            // tiled-gallery related styles
+<span class="nc" id="L412">            sbHtml</span>
+<span class="nc" id="L413">                    .append(&quot;.tiled-gallery {&quot;)</span>
+<span class="nc" id="L414">                    .append(&quot; clear:both;&quot;)</span>
+<span class="nc" id="L415">                    .append(&quot; overflow:hidden;}&quot;)</span>
+<span class="nc" id="L416">                    .append(&quot;.tiled-gallery img {&quot;)</span>
+<span class="nc" id="L417">                    .append(&quot; margin:2px !important;}&quot;)</span>
+<span class="nc" id="L418">                    .append(&quot;.tiled-gallery .gallery-group {&quot;)</span>
+<span class="nc" id="L419">                    .append(&quot; float:left;&quot;)</span>
+<span class="nc" id="L420">                    .append(&quot; position:relative;}&quot;)</span>
+<span class="nc" id="L421">                    .append(&quot;.tiled-gallery .tiled-gallery-item {&quot;)</span>
+<span class="nc" id="L422">                    .append(&quot; float:left;&quot;)</span>
+<span class="nc" id="L423">                    .append(&quot; margin:0;&quot;)</span>
+<span class="nc" id="L424">                    .append(&quot; position:relative;&quot;)</span>
+<span class="nc" id="L425">                    .append(&quot; width:inherit;}&quot;)</span>
+<span class="nc" id="L426">                    .append(&quot;.tiled-gallery .gallery-row {&quot;)</span>
+<span class="nc" id="L427">                    .append(&quot; position: relative;&quot;)</span>
+<span class="nc" id="L428">                    .append(&quot; left: 50%;&quot;)</span>
+<span class="nc" id="L429">                    .append(&quot; -webkit-transform: translateX(-50%);&quot;)</span>
+<span class="nc" id="L430">                    .append(&quot; -moz-transform: translateX(-50%);&quot;)</span>
+<span class="nc" id="L431">                    .append(&quot; transform: translateX(-50%);&quot;)</span>
+<span class="nc" id="L432">                    .append(&quot; overflow:hidden;}&quot;)</span>
+<span class="nc" id="L433">                    .append(&quot;.tiled-gallery .tiled-gallery-item a {&quot;)</span>
+<span class="nc" id="L434">                    .append(&quot; background:transparent;&quot;)</span>
+<span class="nc" id="L435">                    .append(&quot; border:none;&quot;)</span>
+<span class="nc" id="L436">                    .append(&quot; color:inherit;&quot;)</span>
+<span class="nc" id="L437">                    .append(&quot; margin:0;&quot;)</span>
+<span class="nc" id="L438">                    .append(&quot; padding:0;&quot;)</span>
+<span class="nc" id="L439">                    .append(&quot; text-decoration:none;&quot;)</span>
+<span class="nc" id="L440">                    .append(&quot; width:auto;}&quot;)</span>
+<span class="nc" id="L441">                    .append(&quot;.tiled-gallery .tiled-gallery-item img,&quot;)</span>
+<span class="nc" id="L442">                    .append(&quot;.tiled-gallery .tiled-gallery-item img:hover {&quot;)</span>
+<span class="nc" id="L443">                    .append(&quot; background:none;&quot;)</span>
+<span class="nc" id="L444">                    .append(&quot; border:none;&quot;)</span>
+<span class="nc" id="L445">                    .append(&quot; box-shadow:none;&quot;)</span>
+<span class="nc" id="L446">                    .append(&quot; max-width:100%;&quot;)</span>
+<span class="nc" id="L447">                    .append(&quot; padding:0;&quot;)</span>
+<span class="nc" id="L448">                    .append(&quot; vertical-align:middle;}&quot;)</span>
+<span class="nc" id="L449">                    .append(&quot;.tiled-gallery-caption {&quot;)</span>
+<span class="nc" id="L450">                    .append(&quot; background:#eee;&quot;)</span>
+<span class="nc" id="L451">                    .append(&quot; background:rgba( 255,255,255,0.8 );&quot;)</span>
+<span class="nc" id="L452">                    .append(&quot; color:#333;&quot;)</span>
+<span class="nc" id="L453">                    .append(&quot; font-size:13px;&quot;)</span>
+<span class="nc" id="L454">                    .append(&quot; font-weight:400;&quot;)</span>
+<span class="nc" id="L455">                    .append(&quot; overflow:hidden;&quot;)</span>
+<span class="nc" id="L456">                    .append(&quot; padding:10px 0;&quot;)</span>
+<span class="nc" id="L457">                    .append(&quot; position:absolute;&quot;)</span>
+<span class="nc" id="L458">                    .append(&quot; bottom:0;&quot;)</span>
+<span class="nc" id="L459">                    .append(&quot; text-indent:10px;&quot;)</span>
+<span class="nc" id="L460">                    .append(&quot; text-overflow:ellipsis;&quot;)</span>
+<span class="nc" id="L461">                    .append(&quot; width:100%;&quot;)</span>
+<span class="nc" id="L462">                    .append(&quot; white-space:nowrap;}&quot;)</span>
+<span class="nc" id="L463">                    .append(&quot;.tiled-gallery .tiled-gallery-item-small .tiled-gallery-caption {&quot;)</span>
+<span class="nc" id="L464">                    .append(&quot; font-size:11px;}&quot;)</span>
+<span class="nc" id="L465">                    .append(&quot;.widget-gallery .tiled-gallery-unresized {&quot;)</span>
+<span class="nc" id="L466">                    .append(&quot; visibility:hidden;&quot;)</span>
+<span class="nc" id="L467">                    .append(&quot; height:0px;&quot;)</span>
+<span class="nc" id="L468">                    .append(&quot; overflow:hidden;}&quot;)</span>
+<span class="nc" id="L469">                    .append(&quot;.tiled-gallery .tiled-gallery-item img.grayscale {&quot;)</span>
+<span class="nc" id="L470">                    .append(&quot; position:absolute;&quot;)</span>
+<span class="nc" id="L471">                    .append(&quot; left:0;&quot;)</span>
+<span class="nc" id="L472">                    .append(&quot; top:0;}&quot;)</span>
+<span class="nc" id="L473">                    .append(&quot;.tiled-gallery .tiled-gallery-item img.grayscale:hover {&quot;)</span>
+<span class="nc" id="L474">                    .append(&quot; opacity:0;}&quot;)</span>
+<span class="nc" id="L475">                    .append(&quot;.tiled-gallery.type-circle .tiled-gallery-item img {&quot;)</span>
+<span class="nc" id="L476">                    .append(&quot; border-radius:50% !important;}&quot;)</span>
+<span class="nc" id="L477">                    .append(&quot;.tiled-gallery.type-circle .tiled-gallery-caption {&quot;)</span>
+<span class="nc" id="L478">                    .append(&quot; display:none;&quot;)</span>
+<span class="nc" id="L479">                    .append(&quot; opacity:0;}&quot;);</span>
+        }
+
+        // see http://codex.wordpress.org/CSS#WordPress_Generated_Classes
+<span class="nc" id="L483">        sbHtml</span>
+<span class="nc" id="L484">                .append(&quot; .wp-caption img { margin-top: 0px; margin-bottom: 0px; }&quot;)</span>
+<span class="nc" id="L485">                .append(&quot; .wp-caption .wp-caption-text {&quot;)</span>
+<span class="nc" id="L486">                .append(&quot; font-size: smaller; line-height: 1.2em; margin: 0px;&quot;)</span>
+<span class="nc" id="L487">                .append(&quot; text-align: center;&quot;)</span>
+<span class="nc" id="L488">                .append(&quot; padding: &quot;).append(mResourceVars.mMarginMediumPx).append(&quot;px; &quot;)</span>
+<span class="nc" id="L489">                .append(&quot; color: var(--color-neutral-0); }&quot;)</span>
+                // attribution for Discover posts
+<span class="nc" id="L491">                .append(&quot; div#discover { &quot;)</span>
+<span class="nc" id="L492">                .append(&quot; margin-top: &quot;).append(mResourceVars.mMarginMediumPx).append(&quot;px;&quot;)</span>
+<span class="nc" id="L493">                .append(&quot; font-family: sans-serif;&quot;)</span>
+<span class="nc" id="L494">                .append(&quot; }&quot;)</span>
+                // horizontally center iframes
+<span class="nc" id="L496">                .append(&quot; iframe { display: block; margin: 0 auto; }&quot;)</span>
+                // hide forms, form-related elements, legacy RSS sharing links and other ad-related content
+                // http://bit.ly/2FUTvsP
+<span class="nc" id="L499">                .append(&quot; form, input, select, button textarea { display: none; }&quot;)</span>
+<span class="nc" id="L500">                .append(&quot; div.feedflare { display: none; }&quot;)</span>
+<span class="nc" id="L501">                .append(&quot; .sharedaddy, .jp-relatedposts, .mc4wp-form, .wpcnt, &quot;)</span>
+<span class="nc" id="L502">                .append(&quot; .OUTBRAIN, .adsbygoogle { display: none; }&quot;)</span>
+<span class="nc" id="L503">                .append(&quot; figure { display: block; margin-inline-start: 0px; margin-inline-end: 0px; }&quot;)</span>
+<span class="nc" id="L504">                .append(&quot;&lt;/style&gt;&quot;);</span>
+
+        // add a custom CSS class to (any) tiled gallery elements to make them easier selectable for various rules
+<span class="nc" id="L507">        final List&lt;String&gt; classAmendRegexes = Arrays.asList(</span>
+                &quot;(tiled-gallery) ([\\s\&quot;\'])&quot;,
+                &quot;(gallery-row) ([\\s\&quot;'])&quot;,
+                &quot;(gallery-group) ([\\s\&quot;'])&quot;,
+                &quot;(tiled-gallery-item) ([\\s\&quot;'])&quot;);
+<span class="nc" id="L512">        String contentCustomised = content;</span>
+
+        // removes background-color property from original content
+<span class="nc" id="L515">        contentCustomised = contentCustomised.replaceAll(&quot;\\s*(background-color)\\s*:\\s*.+?\\s*;\\s*&quot;, &quot;&quot;);</span>
+
+<span class="nc bnc" id="L517" title="All 2 branches missed.">        for (String classToAmend : classAmendRegexes) {</span>
+<span class="nc" id="L518">            contentCustomised = contentCustomised.replaceAll(classToAmend, &quot;$1 &quot; + galleryOnlyClass + &quot;$2&quot;);</span>
+<span class="nc" id="L519">        }</span>
+
+<span class="nc bnc" id="L521" title="All 2 branches missed.">        for (String jsUrl : jsToInject) {</span>
+<span class="nc" id="L522">            sbHtml.append(&quot;&lt;script src=\&quot;&quot;).append(jsUrl).append(&quot;\&quot; type=\&quot;text/javascript\&quot; async&gt;&lt;/script&gt;&quot;);</span>
+<span class="nc" id="L523">        }</span>
+
+<span class="nc" id="L525">        sbHtml.append(&quot;&lt;/head&gt;&lt;body class=\&quot;reader-full-post reader-full-post__story-content\&quot;&gt;&quot;)</span>
+<span class="nc" id="L526">              .append(contentCustomised)</span>
+<span class="nc" id="L527">              .append(&quot;&lt;/body&gt;&lt;/html&gt;&quot;);</span>
+
+<span class="nc" id="L529">        return sbHtml.toString();</span>
+    }
+
+    private void appendMappedColors(StringBuilder sb) {
+<span class="nc" id="L533">        sb.append(&quot; :root { &quot;)</span>
+<span class="nc" id="L534">          .append(&quot;--color-text: &quot;).append(mResourceVars.mTextColor).append(&quot;; &quot;)</span>
+<span class="nc" id="L535">          .append(&quot;--color-neutral-70: &quot;).append(mResourceVars.mTextColor).append(&quot;; &quot;)</span>
+<span class="nc" id="L536">          .append(&quot;--color-neutral-0: &quot;).append(mResourceVars.mGreyMediumDarkStr).append(&quot;; &quot;)</span>
+<span class="nc" id="L537">          .append(&quot;--color-neutral-50: &quot;).append(mResourceVars.mGreyLightStr).append(&quot;; &quot;)</span>
+<span class="nc" id="L538">          .append(&quot;--color-neutral-20: &quot;).append(mResourceVars.mGreyExtraLightStr).append(&quot;; &quot;)</span>
+<span class="nc" id="L539">          .append(&quot;--main-link-color: &quot;).append(mResourceVars.mLinkColorStr).append(&quot;; &quot;)</span>
+<span class="nc" id="L540">          .append(&quot;--color-neutral-10: &quot;).append(mResourceVars.mGreyDisabledStr).append(&quot;; &quot;)</span>
+<span class="nc" id="L541">          .append(&quot;} &quot;);</span>
+<span class="nc" id="L542">    }</span>
+
+    private ImageSize getImageSize(final String imageTag, final String imageUrl) {
+<span class="nc" id="L545">        ImageSize size = getImageSizeFromAttachments(imageUrl);</span>
+<span class="nc bnc" id="L546" title="All 4 branches missed.">        if (size == null &amp;&amp; imageTag.contains(&quot;data-orig-size=&quot;)) {</span>
+<span class="nc" id="L547">            size = getImageOriginalSizeFromAttributes(imageTag);</span>
+        }
+<span class="nc bnc" id="L549" title="All 4 branches missed.">        if (size == null &amp;&amp; imageUrl.contains(&quot;?&quot;)) {</span>
+<span class="nc" id="L550">            size = getImageSizeFromQueryParams(imageUrl);</span>
+        }
+<span class="nc bnc" id="L552" title="All 4 branches missed.">        if (size == null &amp;&amp; imageTag.contains(&quot;width=&quot;)) {</span>
+<span class="nc" id="L553">            size = getImageSizeFromAttributes(imageTag);</span>
+        }
+<span class="nc" id="L555">        return size;</span>
+    }
+
+    private ImageSize getImageSizeFromAttachments(final String imageUrl) {
+<span class="nc bnc" id="L559" title="All 2 branches missed.">        if (mAttachmentSizes == null) {</span>
+<span class="nc" id="L560">            mAttachmentSizes = new ImageSizeMap(mPost.getText(), mPost.getAttachmentsJson());</span>
+        }
+<span class="nc" id="L562">        return mAttachmentSizes.getImageSize(imageUrl);</span>
+    }
+
+    private ImageSize getImageSizeFromQueryParams(final String imageUrl) {
+<span class="nc bnc" id="L566" title="All 2 branches missed.">        if (imageUrl.contains(&quot;w=&quot;)) {</span>
+<span class="nc" id="L567">            Uri uri = Uri.parse(imageUrl.replace(&quot;&amp;#038;&quot;, &quot;&amp;&quot;));</span>
+<span class="nc" id="L568">            return new ImageSize(</span>
+<span class="nc" id="L569">                    StringUtils.stringToInt(uri.getQueryParameter(&quot;w&quot;)),</span>
+<span class="nc" id="L570">                    StringUtils.stringToInt(uri.getQueryParameter(&quot;h&quot;)));</span>
+<span class="nc bnc" id="L571" title="All 2 branches missed.">        } else if (imageUrl.contains(&quot;resize=&quot;)) {</span>
+<span class="nc" id="L572">            Uri uri = Uri.parse(imageUrl.replace(&quot;&amp;#038;&quot;, &quot;&amp;&quot;));</span>
+<span class="nc" id="L573">            String param = uri.getQueryParameter(&quot;resize&quot;);</span>
+<span class="nc bnc" id="L574" title="All 2 branches missed.">            if (param != null) {</span>
+<span class="nc" id="L575">                String[] sizes = param.split(&quot;,&quot;);</span>
+<span class="nc bnc" id="L576" title="All 2 branches missed.">                if (sizes.length == 2) {</span>
+<span class="nc" id="L577">                    return new ImageSize(</span>
+<span class="nc" id="L578">                            StringUtils.stringToInt(sizes[0]),</span>
+<span class="nc" id="L579">                            StringUtils.stringToInt(sizes[1]));</span>
+                }
+            }
+        }
+
+<span class="nc" id="L584">        return null;</span>
+    }
+
+    private ImageSize getImageOriginalSizeFromAttributes(final String imageTag) {
+<span class="nc" id="L588">        return new ImageSize(</span>
+<span class="nc" id="L589">                ReaderHtmlUtils.getOriginalWidthAttrValue(imageTag),</span>
+<span class="nc" id="L590">                ReaderHtmlUtils.getOriginalHeightAttrValue(imageTag));</span>
+    }
+
+    private ImageSize getImageSizeFromAttributes(final String imageTag) {
+<span class="nc" id="L594">        return new ImageSize(</span>
+<span class="nc" id="L595">                ReaderHtmlUtils.getWidthAttrValue(imageTag),</span>
+<span class="nc" id="L596">                ReaderHtmlUtils.getHeightAttrValue(imageTag));</span>
+    }
+
+    private int pxToDp(int px) {
+<span class="nc bnc" id="L600" title="All 2 branches missed.">        if (px == 0) {</span>
+<span class="nc" id="L601">            return 0;</span>
+        }
+<span class="nc" id="L603">        return DisplayUtils.pxToDp(WordPress.getContext(), px);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

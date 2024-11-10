@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderCommentActions.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.actions</a> &gt; <span class="el_source">ReaderCommentActions.java</span></div><h1>ReaderCommentActions.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.actions;
+
+import android.text.TextUtils;
+
+import com.android.volley.VolleyError;
+import com.wordpress.rest.RestRequest;
+
+import org.greenrobot.eventbus.EventBus;
+import org.json.JSONObject;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.datasets.ReaderCommentTable;
+import org.wordpress.android.datasets.ReaderLikeTable;
+import org.wordpress.android.datasets.ReaderPostTable;
+import org.wordpress.android.datasets.ReaderUserTable;
+import org.wordpress.android.fluxc.model.CommentStatus;
+import org.wordpress.android.models.ReaderComment;
+import org.wordpress.android.models.ReaderPost;
+import org.wordpress.android.models.ReaderUser;
+import org.wordpress.android.ui.reader.ReaderEvents;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.DateTimeUtils;
+import org.wordpress.android.util.JSONUtils;
+import org.wordpress.android.util.VolleyUtils;
+
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+
+<span class="nc" id="L30">public class ReaderCommentActions {</span>
+    /*
+     * used by post detail to generate a temporary &quot;fake&quot; comment id (see below)
+     */
+    public static long generateFakeCommentId() {
+<span class="nc" id="L35">        return System.currentTimeMillis();</span>
+    }
+
+    /*
+     * add the passed comment text to the passed post - caller must pass a unique &quot;fake&quot; comment id
+     * to give the comment that's generated locally
+     */
+    public static ReaderComment submitPostComment(final ReaderPost post,
+                                                  final long fakeCommentId,
+                                                  final String commentText,
+                                                  final long replyToCommentId,
+                                                  final ReaderActions.CommentActionListener actionListener,
+                                                  final long wpComUserId) {
+<span class="nc bnc" id="L48" title="All 4 branches missed.">        if (post == null || TextUtils.isEmpty(commentText)) {</span>
+<span class="nc" id="L49">            return null;</span>
+        }
+
+        // determine which page this new comment should be assigned to
+        final int pageNumber;
+<span class="nc bnc" id="L54" title="All 2 branches missed.">        if (replyToCommentId != 0) {</span>
+<span class="nc" id="L55">            pageNumber = ReaderCommentTable.getPageNumberForComment(post.blogId, post.postId, replyToCommentId);</span>
+        } else {
+<span class="nc" id="L57">            pageNumber = ReaderCommentTable.getLastPageNumberForPost(post.blogId, post.postId);</span>
+        }
+
+        // create a &quot;fake&quot; comment that's added to the db so it can be shown right away - will be
+        // replaced with actual comment if it succeeds to be posted, or deleted if comment fails
+        // to be posted
+<span class="nc" id="L63">        ReaderComment newComment = new ReaderComment();</span>
+<span class="nc" id="L64">        newComment.commentId = fakeCommentId;</span>
+<span class="nc" id="L65">        newComment.postId = post.postId;</span>
+<span class="nc" id="L66">        newComment.blogId = post.blogId;</span>
+<span class="nc" id="L67">        newComment.parentId = replyToCommentId;</span>
+<span class="nc" id="L68">        newComment.pageNumber = pageNumber;</span>
+<span class="nc" id="L69">        newComment.setStatus(CommentStatus.APPROVED.toString());</span>
+<span class="nc" id="L70">        newComment.setText(commentText);</span>
+
+<span class="nc" id="L72">        Date dtPublished = new Date();</span>
+<span class="nc" id="L73">        newComment.setPublished(DateTimeUtils.iso8601UTCFromDate(dtPublished));</span>
+<span class="nc" id="L74">        newComment.timestamp = dtPublished.getTime();</span>
+
+<span class="nc" id="L76">        ReaderUser currentUser = ReaderUserTable.getCurrentUser(wpComUserId);</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">        if (currentUser != null) {</span>
+<span class="nc" id="L78">            newComment.setAuthorAvatar(currentUser.getAvatarUrl());</span>
+<span class="nc" id="L79">            newComment.setAuthorName(currentUser.getDisplayName());</span>
+        }
+
+<span class="nc" id="L82">        ReaderCommentTable.addOrUpdateComment(newComment);</span>
+
+        // different endpoint depending on whether the new comment is a reply to another comment
+        final String path;
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        if (replyToCommentId == 0) {</span>
+<span class="nc" id="L87">            path = &quot;sites/&quot; + post.blogId + &quot;/posts/&quot; + post.postId + &quot;/replies/new&quot;;</span>
+        } else {
+<span class="nc" id="L89">            path = &quot;sites/&quot; + post.blogId + &quot;/comments/&quot; + Long.toString(replyToCommentId) + &quot;/replies/new&quot;;</span>
+        }
+
+<span class="nc" id="L92">        Map&lt;String, String&gt; params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L93">        params.put(&quot;content&quot;, commentText);</span>
+
+<span class="nc" id="L95">        RestRequest.Listener listener = new RestRequest.Listener() {</span>
+            @Override
+            public void onResponse(JSONObject jsonObject) {
+<span class="nc" id="L98">                ReaderCommentTable.deleteComment(post, fakeCommentId);</span>
+<span class="nc" id="L99">                AppLog.i(T.READER, &quot;comment succeeded&quot;);</span>
+<span class="nc" id="L100">                ReaderComment newComment = ReaderComment.fromJson(jsonObject, post.blogId);</span>
+<span class="nc" id="L101">                newComment.pageNumber = pageNumber;</span>
+<span class="nc" id="L102">                ReaderCommentTable.addOrUpdateComment(newComment);</span>
+<span class="nc" id="L103">                ReaderPostTable.incNumCommentsForPost(post.blogId, post.postId);</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">                if (actionListener != null) {</span>
+<span class="nc" id="L105">                    actionListener.onActionResult(true, newComment);</span>
+                }
+<span class="nc" id="L107">            }</span>
+        };
+<span class="nc" id="L109">        RestRequest.ErrorListener errorListener = new RestRequest.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError volleyError) {
+<span class="nc" id="L112">                ReaderCommentTable.deleteComment(post, fakeCommentId);</span>
+<span class="nc" id="L113">                AppLog.w(T.READER, &quot;comment failed&quot;);</span>
+<span class="nc" id="L114">                AppLog.e(T.READER, volleyError);</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">                if (actionListener != null) {</span>
+<span class="nc" id="L116">                    actionListener.onActionResult(false, null);</span>
+                }
+<span class="nc" id="L118">            }</span>
+        };
+
+<span class="nc" id="L121">        AppLog.i(T.READER, &quot;submitting comment&quot;);</span>
+<span class="nc" id="L122">        WordPress.getRestClientUtilsV1_1().post(path, params, null, listener, errorListener);</span>
+
+<span class="nc" id="L124">        return newComment;</span>
+    }
+
+    /*
+     * like or unlike the passed comment
+     */
+    public static boolean performLikeAction(final ReaderComment comment, boolean isAskingToLike,
+                                            final long wpComUserId) {
+<span class="nc bnc" id="L132" title="All 2 branches missed.">        if (comment == null) {</span>
+<span class="nc" id="L133">            return false;</span>
+        }
+
+        // make sure like status is changing
+<span class="nc" id="L137">        boolean isCurrentlyLiked = ReaderCommentTable.isCommentLikedByCurrentUser(comment);</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">        if (isCurrentlyLiked == isAskingToLike) {</span>
+<span class="nc" id="L139">            AppLog.w(T.READER, &quot;comment like unchanged&quot;);</span>
+<span class="nc" id="L140">            return false;</span>
+        }
+
+        // update like status and like count in local db
+<span class="nc bnc" id="L144" title="All 2 branches missed.">        int newNumLikes = (isAskingToLike ? comment.numLikes + 1 : comment.numLikes - 1);</span>
+<span class="nc" id="L145">        ReaderCommentTable.setLikesForComment(comment, newNumLikes, isAskingToLike);</span>
+<span class="nc" id="L146">        ReaderLikeTable.setCurrentUserLikesComment(comment, isAskingToLike, wpComUserId);</span>
+
+        // sites/$site/comments/$comment_ID/likes/new
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        final String actionName = isAskingToLike ? &quot;like&quot; : &quot;unlike&quot;;</span>
+<span class="nc" id="L150">        String path = &quot;sites/&quot; + comment.blogId + &quot;/comments/&quot; + comment.commentId + &quot;/likes/&quot;;</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        if (isAskingToLike) {</span>
+<span class="nc" id="L152">            path += &quot;new&quot;;</span>
+        } else {
+<span class="nc" id="L154">            path += &quot;mine/delete&quot;;</span>
+        }
+
+<span class="nc" id="L157">        RestRequest.Listener listener = new RestRequest.Listener() {</span>
+            @Override
+            public void onResponse(JSONObject jsonObject) {
+<span class="nc bnc" id="L160" title="All 4 branches missed.">                boolean success = (jsonObject != null &amp;&amp; JSONUtils.getBool(jsonObject, &quot;success&quot;));</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">                if (success) {</span>
+<span class="nc" id="L162">                    AppLog.d(T.READER, String.format(&quot;comment %s succeeded&quot;, actionName));</span>
+                } else {
+<span class="nc" id="L164">                    AppLog.w(T.READER, String.format(&quot;comment %s failed&quot;, actionName));</span>
+<span class="nc" id="L165">                    ReaderCommentTable.setLikesForComment(comment, comment.numLikes, comment.isLikedByCurrentUser);</span>
+<span class="nc" id="L166">                    ReaderLikeTable.setCurrentUserLikesComment(comment, comment.isLikedByCurrentUser, wpComUserId);</span>
+                }
+<span class="nc" id="L168">            }</span>
+        };
+
+<span class="nc" id="L171">        RestRequest.ErrorListener errorListener = new RestRequest.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError volleyError) {
+<span class="nc" id="L174">                String error = VolleyUtils.errStringFromVolleyError(volleyError);</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                if (TextUtils.isEmpty(error)) {</span>
+<span class="nc" id="L176">                    AppLog.w(T.READER, String.format(&quot;comment %s failed&quot;, actionName));</span>
+                } else {
+<span class="nc" id="L178">                    AppLog.w(T.READER, String.format(&quot;comment %s failed (%s)&quot;, actionName, error));</span>
+                }
+<span class="nc" id="L180">                AppLog.e(T.READER, volleyError);</span>
+<span class="nc" id="L181">                ReaderCommentTable.setLikesForComment(comment, comment.numLikes, comment.isLikedByCurrentUser);</span>
+<span class="nc" id="L182">                ReaderLikeTable.setCurrentUserLikesComment(comment, comment.isLikedByCurrentUser, wpComUserId);</span>
+<span class="nc" id="L183">            }</span>
+        };
+
+<span class="nc" id="L186">        WordPress.getRestClientUtilsV1_1().post(path, listener, errorListener);</span>
+<span class="nc" id="L187">        return true;</span>
+    }
+
+    public static void moderateComment(final ReaderComment comment, final CommentStatus newStatus) {
+<span class="nc bnc" id="L191" title="All 2 branches missed.">        if (comment == null) {</span>
+<span class="nc" id="L192">            return;</span>
+        }
+
+<span class="nc" id="L195">        Map&lt;String, String&gt; params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L196">        params.put(&quot;content&quot;, comment.getText());</span>
+<span class="nc" id="L197">        params.put(&quot;date&quot;, comment.getPublished());</span>
+<span class="nc" id="L198">        params.put(&quot;status&quot;, newStatus.toString());</span>
+
+<span class="nc" id="L200">        final String path = &quot;sites/&quot; + comment.blogId + &quot;/comments/&quot; + comment.commentId;</span>
+
+<span class="nc" id="L202">        RestRequest.Listener listener = jsonObject -&gt; {</span>
+<span class="nc" id="L203">            ReaderComment newComment = ReaderComment.fromJson(jsonObject, comment.blogId);</span>
+<span class="nc" id="L204">            ReaderCommentTable.addOrUpdateComment(newComment);</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">            if (CommentStatus.fromString(newComment.getStatus()) != CommentStatus.APPROVED) {</span>
+<span class="nc" id="L206">                ReaderPostTable.decrementNumCommentsForPost(comment.blogId, comment.postId);</span>
+            }
+<span class="nc" id="L208">            EventBus.getDefault().post(new ReaderEvents.CommentModerated(true, comment.commentId));</span>
+<span class="nc" id="L209">        };</span>
+<span class="nc" id="L210">        RestRequest.ErrorListener errorListener = volleyError -&gt; {</span>
+<span class="nc" id="L211">            AppLog.w(T.READER, &quot;comment moderation failed&quot;);</span>
+<span class="nc" id="L212">            AppLog.e(T.READER, volleyError);</span>
+<span class="nc" id="L213">            EventBus.getDefault().post(new ReaderEvents.CommentModerated(false, comment.commentId));</span>
+<span class="nc" id="L214">        };</span>
+
+<span class="nc" id="L216">        AppLog.i(T.READER, &quot;moderating comment&quot;);</span>
+<span class="nc" id="L217">        WordPress.getRestClientUtilsV1_1().post(path, params, null, listener, errorListener);</span>
+<span class="nc" id="L218">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

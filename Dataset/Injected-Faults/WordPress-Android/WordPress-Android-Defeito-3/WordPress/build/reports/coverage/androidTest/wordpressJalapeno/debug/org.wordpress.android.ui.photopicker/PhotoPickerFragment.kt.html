@@ -1,0 +1,482 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PhotoPickerFragment.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.photopicker</a> &gt; <span class="el_source">PhotoPickerFragment.kt</span></div><h1>PhotoPickerFragment.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.photopicker
+
+import android.Manifest.permission
+import android.net.Uri
+import android.os.Bundle
+import android.os.Parcelable
+import android.text.Html
+import android.view.View
+import android.widget.PopupMenu
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AlertDialog.Builder
+import androidx.appcompat.app.AppCompatActivity
+import androidx.fragment.app.Fragment
+import androidx.lifecycle.Observer
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import androidx.recyclerview.widget.GridLayoutManager
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import org.wordpress.android.R
+import org.wordpress.android.WordPress
+import org.wordpress.android.databinding.PhotoPickerFragmentBinding
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.ui.ActivityLauncher
+import org.wordpress.android.ui.media.MediaBrowserActivity
+import org.wordpress.android.ui.media.MediaBrowserType
+import org.wordpress.android.ui.media.MediaPreviewActivity
+import org.wordpress.android.ui.mediapicker.MediaPickerViewModel.ProgressDialogUiModel
+import org.wordpress.android.ui.mediapicker.MediaPickerViewModel.ProgressDialogUiModel.Visible
+import org.wordpress.android.ui.photopicker.PhotoPickerFragment.PhotoPickerIcon.WP_MEDIA
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.ActionModeUiModel
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.BottomBarUiModel
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.BottomBarUiModel.BottomBar.INSERT_EDIT
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.BottomBarUiModel.BottomBar.MEDIA_SOURCE
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.BottomBarUiModel.BottomBar.NONE
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.FabUiModel
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.PermissionsRequested.CAMERA
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.PermissionsRequested.STORAGE
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.PhotoListUiModel
+import org.wordpress.android.ui.photopicker.PhotoPickerViewModel.SoftAskViewUiModel
+import org.wordpress.android.util.AccessibilityUtils
+import org.wordpress.android.util.AniUtils
+import org.wordpress.android.util.AniUtils.Duration.MEDIUM
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T.POSTS
+import org.wordpress.android.util.DisplayUtils
+import org.wordpress.android.util.UriWrapper
+import org.wordpress.android.util.ViewWrapper
+import org.wordpress.android.util.WPMediaUtils
+import org.wordpress.android.util.WPPermissionUtils
+import org.wordpress.android.util.image.ImageManager
+import org.wordpress.android.viewmodel.observeEvent
+import javax.inject.Inject
+
+@Deprecated(
+        &quot;This class is being refactored, if you implement any change, please also update &quot; +
+                &quot;{@link org.wordpress.android.ui.mediapicker.MediaPickerFragment}&quot;
+)
+<span class="nc" id="L58">class PhotoPickerFragment : Fragment(R.layout.photo_picker_fragment) {</span>
+<span class="nc" id="L59">    enum class PhotoPickerIcon(private val mRequiresUploadPermission: Boolean) {</span>
+<span class="nc" id="L60">        ANDROID_CHOOSE_PHOTO(true),</span>
+<span class="nc" id="L61">        ANDROID_CHOOSE_VIDEO(true),</span>
+<span class="nc" id="L62">        ANDROID_CAPTURE_PHOTO(true),</span>
+<span class="nc" id="L63">        ANDROID_CAPTURE_VIDEO(true),</span>
+<span class="nc" id="L64">        ANDROID_CHOOSE_PHOTO_OR_VIDEO(true),</span>
+<span class="nc" id="L65">        WP_MEDIA(false),</span>
+<span class="nc" id="L66">        STOCK_MEDIA(true),</span>
+<span class="nc" id="L67">        GIF(true),</span>
+<span class="nc" id="L68">        WP_STORIES_CAPTURE(true);</span>
+
+        fun requiresUploadPermission(): Boolean {
+<span class="nc" id="L71">            return mRequiresUploadPermission</span>
+        }
+    }
+
+    /*
+     * parent activity must implement this listener
+     */
+    interface PhotoPickerListener {
+        fun onPhotoPickerMediaChosen(uriList: List&lt;Uri&gt;)
+        fun onPhotoPickerIconClicked(icon: PhotoPickerIcon, allowMultipleSelection: Boolean)
+    }
+
+    private var listener: PhotoPickerListener? = null
+
+<span class="nc bnc" id="L85" title="All 2 branches missed.">    @Inject lateinit var imageManager: ImageManager</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">    @Inject lateinit var viewModelFactory: ViewModelProvider.Factory</span>
+    private lateinit var viewModel: PhotoPickerViewModel
+    private var binding: PhotoPickerFragmentBinding? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+<span class="nc" id="L91">        super.onCreate(savedInstanceState)</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">        (requireActivity().application as WordPress).component().inject(this)</span>
+<span class="nc" id="L93">        viewModel = ViewModelProvider(this, viewModelFactory).get(PhotoPickerViewModel::class.java)</span>
+<span class="nc" id="L94">    }</span>
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+<span class="nc" id="L97">        super.onViewCreated(view, savedInstanceState)</span>
+
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        val browserType = requireArguments().getSerializable(MediaBrowserActivity.ARG_BROWSER_TYPE) as MediaBrowserType</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">        val site = requireArguments().getSerializable(WordPress.SITE) as? SiteModel</span>
+<span class="nc" id="L101">        var selectedIds: List&lt;Long&gt;? = null</span>
+<span class="nc" id="L102">        var lastTappedIcon: PhotoPickerIcon? = null</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L104">            val savedLastTappedIconName = savedInstanceState.getString(KEY_LAST_TAPPED_ICON)</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">            lastTappedIcon = savedLastTappedIconName?.let { PhotoPickerIcon.valueOf(it) }</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">            if (savedInstanceState.containsKey(KEY_SELECTED_POSITIONS)) {</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">                selectedIds = savedInstanceState.getLongArray(KEY_SELECTED_POSITIONS)?.toList()</span>
+            }
+        }
+<span class="nc" id="L110">        with(PhotoPickerFragmentBinding.bind(view)) {</span>
+<span class="nc" id="L111">            binding = this</span>
+<span class="nc" id="L112">            recycler.setEmptyView(actionableEmptyView)</span>
+<span class="nc" id="L113">            recycler.setHasFixedSize(true)</span>
+
+<span class="nc" id="L115">            val layoutManager = GridLayoutManager(</span>
+<span class="nc" id="L116">                    activity,</span>
+<span class="nc" id="L117">                    NUM_COLUMNS</span>
+            )
+
+<span class="nc bnc" id="L120" title="All 4 branches missed.">            savedInstanceState?.getParcelable&lt;Parcelable&gt;(KEY_LIST_STATE)?.let {</span>
+<span class="nc" id="L121">                layoutManager.onRestoreInstanceState(it)</span>
+<span class="nc" id="L122">            }</span>
+
+<span class="nc" id="L124">            recycler.layoutManager = layoutManager</span>
+
+<span class="nc" id="L126">            var isShowingActionMode = false</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">            viewModel.uiState.observe(viewLifecycleOwner, Observer {</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">                it?.let { uiState -&gt;</span>
+<span class="nc" id="L129">                    setupPhotoList(uiState.photoListUiModel)</span>
+<span class="nc" id="L130">                    setupBottomBar(uiState.bottomBarUiModel)</span>
+<span class="nc" id="L131">                    setupSoftAskView(uiState.softAskViewUiModel)</span>
+<span class="nc bnc" id="L132" title="All 4 branches missed.">                    if (uiState.actionModeUiModel is ActionModeUiModel.Visible &amp;&amp; !isShowingActionMode) {</span>
+<span class="nc" id="L133">                        isShowingActionMode = true</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">                        (activity as AppCompatActivity).startSupportActionMode(</span>
+<span class="nc" id="L135">                                PhotoPickerActionModeCallback(</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">                                        viewModel</span>
+                                )
+                        )
+<span class="nc bnc" id="L139" title="All 4 branches missed.">                    } else if (uiState.actionModeUiModel is ActionModeUiModel.Hidden &amp;&amp; isShowingActionMode) {</span>
+<span class="nc" id="L140">                        isShowingActionMode = false</span>
+                    }
+<span class="nc" id="L142">                    setupFab(uiState.fabUiModel)</span>
+<span class="nc" id="L143">                }</span>
+<span class="nc" id="L144">            })</span>
+
+<span class="nc bnc" id="L146" title="All 2 branches missed.">            viewModel.onNavigateToPreview.observeEvent(viewLifecycleOwner, { uri -&gt;</span>
+<span class="nc" id="L147">                MediaPreviewActivity.showPreview(</span>
+<span class="nc" id="L148">                        requireContext(),</span>
+<span class="nc" id="L149">                        null,</span>
+<span class="nc" id="L150">                        uri.toString()</span>
+                )
+<span class="nc" id="L152">                AccessibilityUtils.setActionModeDoneButtonContentDescription(activity, getString(R.string.cancel))</span>
+<span class="nc" id="L153">            })</span>
+
+<span class="nc bnc" id="L155" title="All 2 branches missed.">            viewModel.onInsert.observeEvent(viewLifecycleOwner, { selectedUris -&gt;</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">                listener?.onPhotoPickerMediaChosen(selectedUris.map { it.uri })</span>
+<span class="nc" id="L157">            })</span>
+
+<span class="nc bnc" id="L159" title="All 2 branches missed.">            viewModel.onIconClicked.observeEvent(viewLifecycleOwner, { (icon, allowMultipleSelection) -&gt;</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">                listener?.onPhotoPickerIconClicked(icon, allowMultipleSelection)</span>
+<span class="nc" id="L161">            })</span>
+
+<span class="nc bnc" id="L163" title="All 2 branches missed.">            viewModel.onShowPopupMenu.observeEvent(viewLifecycleOwner, { uiModel -&gt;</span>
+<span class="nc" id="L164">                val popup = PopupMenu(activity, uiModel.view.view)</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">                for (popupMenuItem in uiModel.items) {</span>
+<span class="nc" id="L166">                    val item = popup.menu</span>
+<span class="nc" id="L167">                            .add(popupMenuItem.title.stringRes)</span>
+<span class="nc" id="L168">                    item.setOnMenuItemClickListener {</span>
+<span class="nc" id="L169">                        popupMenuItem.action()</span>
+<span class="nc" id="L170">                        true</span>
+                    }
+                }
+<span class="nc" id="L173">                popup.show()</span>
+<span class="nc" id="L174">            })</span>
+
+<span class="nc bnc" id="L176" title="All 2 branches missed.">            viewModel.onPermissionsRequested.observeEvent(viewLifecycleOwner, {</span>
+<span class="nc bnc" id="L177" title="All 3 branches missed.">                when (it) {</span>
+<span class="nc" id="L178">                    CAMERA -&gt; requestCameraPermission()</span>
+<span class="nc" id="L179">                    STORAGE -&gt; requestStoragePermission()</span>
+                }
+<span class="nc" id="L181">            })</span>
+
+<span class="nc" id="L183">            setupProgressDialog()</span>
+
+<span class="nc bnc" id="L185" title="All 2 branches missed.">            viewModel.start(selectedIds, browserType, lastTappedIcon, site)</span>
+<span class="nc" id="L186">        }</span>
+<span class="nc" id="L187">    }</span>
+
+    override fun onDestroyView() {
+<span class="nc" id="L190">        super.onDestroyView()</span>
+<span class="nc" id="L191">        binding = null</span>
+<span class="nc" id="L192">    }</span>
+
+    private fun PhotoPickerFragmentBinding.setupSoftAskView(uiModel: SoftAskViewUiModel) {
+<span class="nc" id="L195">        when (uiModel) {</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">            is SoftAskViewUiModel.Visible -&gt; {</span>
+<span class="nc" id="L197">                softAskView.title.text = Html.fromHtml(uiModel.label)</span>
+<span class="nc" id="L198">                softAskView.button.setText(uiModel.allowId.stringRes)</span>
+<span class="nc" id="L199">                softAskView.button.setOnClickListener {</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">                    if (uiModel.isAlwaysDenied) {</span>
+<span class="nc" id="L201">                        WPPermissionUtils.showAppSettings(requireActivity())</span>
+                    } else {
+<span class="nc" id="L203">                        requestStoragePermission()</span>
+                    }
+<span class="nc" id="L205">                }</span>
+<span class="nc" id="L206">                softAskView.visibility = View.VISIBLE</span>
+            }
+<span class="nc bnc" id="L208" title="All 2 branches missed.">            is SoftAskViewUiModel.Hidden -&gt; {</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">                if (softAskView.visibility == View.VISIBLE) {</span>
+<span class="nc" id="L210">                    AniUtils.fadeOut(softAskView, MEDIUM)</span>
+                }
+            }
+        }
+<span class="nc" id="L214">    }</span>
+
+    private fun PhotoPickerFragmentBinding.setupPhotoList(uiModel: PhotoListUiModel) {
+<span class="nc bnc" id="L217" title="All 2 branches missed.">        if (uiModel is PhotoListUiModel.Data) {</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">            if (recycler.adapter == null) {</span>
+<span class="nc" id="L219">                recycler.adapter = PhotoPickerAdapter(</span>
+<span class="nc" id="L220">                        imageManager,</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">                        viewModel.viewModelScope</span>
+                )
+            }
+<span class="nc bnc" id="L224" title="All 2 branches missed.">            val adapter = recycler.adapter as PhotoPickerAdapter</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">            val recyclerViewState = recycler.layoutManager?.onSaveInstanceState()</span>
+<span class="nc" id="L226">            adapter.loadData(uiModel.items)</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">            recycler.layoutManager?.onRestoreInstanceState(recyclerViewState)</span>
+        }
+<span class="nc" id="L229">    }</span>
+
+    private fun PhotoPickerFragmentBinding.setupFab(fabUiModel: FabUiModel) {
+<span class="nc bnc" id="L232" title="All 2 branches missed.">        if (fabUiModel.show) {</span>
+<span class="nc" id="L233">            wpStoriesTakePicture.visibility = View.VISIBLE</span>
+<span class="nc" id="L234">            wpStoriesTakePicture.setOnClickListener {</span>
+<span class="nc" id="L235">                fabUiModel.action()</span>
+<span class="nc" id="L236">            }</span>
+        } else {
+<span class="nc" id="L238">            wpStoriesTakePicture.visibility = View.GONE</span>
+        }
+<span class="nc" id="L240">    }</span>
+
+    private fun PhotoPickerFragmentBinding.setupBottomBar(uiModel: BottomBarUiModel) {
+<span class="nc bnc" id="L243" title="All 2 branches missed.">        if (!canShowMediaSourceBottomBar(uiModel.hideMediaBottomBarInPortrait)) {</span>
+<span class="nc" id="L244">            hideBottomBar(containerMediaSourceBar)</span>
+        } else {
+<span class="nc bnc" id="L246" title="All 2 branches missed.">            if (!uiModel.showCameraButton) {</span>
+<span class="nc" id="L247">                iconCamera.visibility = View.GONE</span>
+            } else {
+<span class="nc" id="L249">                iconCamera.setOnClickListener {</span>
+<span class="nc bnc" id="L250" title="All 2 branches missed.">                    viewModel.onCameraClicked(ViewWrapper(it))</span>
+<span class="nc" id="L251">                }</span>
+            }
+<span class="nc" id="L253">            iconPicker.setOnClickListener {</span>
+<span class="nc" id="L254">                        uiModel.onIconPickerClicked(ViewWrapper(it))</span>
+<span class="nc" id="L255">                    }</span>
+
+<span class="nc bnc" id="L257" title="All 2 branches missed.">            if (uiModel.showWPMediaIcon) {</span>
+<span class="nc" id="L258">                iconWpmedia.setOnClickListener {</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">                    viewModel.clickIcon(WP_MEDIA)</span>
+<span class="nc" id="L260">                }</span>
+            } else {
+<span class="nc" id="L262">                iconWpmedia.visibility = View.GONE</span>
+            }
+        }
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (uiModel.canShowInsertEditBottomBar) {</span>
+<span class="nc" id="L266">            textEdit</span>
+<span class="nc" id="L267">                    .setOnClickListener {</span>
+<span class="nc" id="L268">                        val inputData = WPMediaUtils.createListOfEditImageInputData(</span>
+<span class="nc" id="L269">                                requireContext(),</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">                                viewModel.selectedURIs().map { it.uri }</span>
+                        )
+<span class="nc" id="L272">                        ActivityLauncher.openImageEditor(activity, inputData)</span>
+<span class="nc" id="L273">                    }</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">            textInsert.setOnClickListener { viewModel.performInsertAction() }</span>
+        }
+<span class="nc bnc" id="L276" title="All 2 branches missed.">        val editTextVisible = if (uiModel.insertEditTextBarVisible) View.VISIBLE else View.GONE</span>
+<span class="nc" id="L277">        textEdit.visibility = editTextVisible</span>
+<span class="nc bnc" id="L278" title="All 4 branches missed.">        when (uiModel.type) {</span>
+            INSERT_EDIT -&gt; {
+<span class="nc" id="L280">                hideBottomBar(containerMediaSourceBar)</span>
+<span class="nc" id="L281">                showBottomBar(containerInsertEditBar)</span>
+            }
+            MEDIA_SOURCE -&gt; {
+<span class="nc bnc" id="L284" title="All 2 branches missed.">                if (canShowMediaSourceBottomBar(uiModel.hideMediaBottomBarInPortrait)) {</span>
+<span class="nc" id="L285">                    showBottomBar(containerMediaSourceBar)</span>
+                } else {
+<span class="nc" id="L287">                    hideBottomBar(containerMediaSourceBar)</span>
+                }
+<span class="nc" id="L289">                hideBottomBar(containerInsertEditBar)</span>
+            }
+            NONE -&gt; {
+<span class="nc" id="L292">                hideBottomBar(containerInsertEditBar)</span>
+<span class="nc" id="L293">                hideBottomBar(containerMediaSourceBar)</span>
+            }
+        }
+<span class="nc" id="L296">    }</span>
+
+    private fun setupProgressDialog() {
+<span class="nc" id="L299">        var progressDialog: AlertDialog? = null</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">        viewModel.uiState.observe(viewLifecycleOwner, Observer {</span>
+<span class="nc bnc" id="L301" title="All 4 branches missed.">            it?.progressDialogUiModel?.apply {</span>
+<span class="nc" id="L302">                when (this) {</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                    is Visible -&gt; {</span>
+<span class="nc bnc" id="L304" title="All 8 branches missed.">                        if (progressDialog == null || progressDialog?.isShowing == false) {</span>
+<span class="nc" id="L305">                            val builder: Builder = MaterialAlertDialogBuilder(requireContext())</span>
+<span class="nc" id="L306">                            builder.setTitle(this.title)</span>
+<span class="nc" id="L307">                            builder.setView(R.layout.media_picker_progress_dialog)</span>
+<span class="nc" id="L308">                            builder.setNegativeButton(</span>
+<span class="nc" id="L309">                                    R.string.cancel</span>
+<span class="nc" id="L310">                            ) { _, _ -&gt; this.cancelAction() }</span>
+<span class="nc" id="L311">                            builder.setCancelable(false)</span>
+<span class="nc" id="L312">                            progressDialog = builder.show()</span>
+                        }
+                    }
+<span class="nc bnc" id="L315" title="All 2 branches missed.">                    ProgressDialogUiModel.Hidden -&gt; {</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">                        progressDialog?.let { dialog -&gt;</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">                            if (dialog.isShowing) {</span>
+<span class="nc" id="L318">                                dialog.dismiss()</span>
+                            }
+<span class="nc" id="L320">                        }</span>
+                    }
+                }
+<span class="nc" id="L323">            }</span>
+<span class="nc" id="L324">        })</span>
+<span class="nc" id="L325">    }</span>
+
+    private fun canShowMediaSourceBottomBar(
+        hideMediaBottomBarInPortrait: Boolean
+    ): Boolean {
+<span class="nc bnc" id="L330" title="All 4 branches missed.">        return !hideMediaBottomBarInPortrait || DisplayUtils.isLandscape(activity)</span>
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+<span class="nc" id="L334">        super.onSaveInstanceState(outState)</span>
+<span class="nc" id="L335">        outState.putString(</span>
+<span class="nc" id="L336">                KEY_LAST_TAPPED_ICON,</span>
+<span class="nc bnc" id="L337" title="All 4 branches missed.">                viewModel.lastTappedIcon?.name</span>
+        )
+<span class="nc bnc" id="L339" title="All 2 branches missed.">        val selectedIds = viewModel.selectedIds.value</span>
+<span class="nc bnc" id="L340" title="All 6 branches missed.">        if (selectedIds != null &amp;&amp; selectedIds.isNotEmpty()) {</span>
+<span class="nc" id="L341">            outState.putLongArray(KEY_SELECTED_POSITIONS, selectedIds.toLongArray())</span>
+        }
+<span class="nc bnc" id="L343" title="All 2 branches missed.">        binding!!.recycler.layoutManager?.let {</span>
+<span class="nc" id="L344">            outState.putParcelable(KEY_LIST_STATE, it.onSaveInstanceState())</span>
+<span class="nc" id="L345">        }</span>
+<span class="nc" id="L346">    }</span>
+
+    override fun onResume() {
+<span class="nc" id="L349">        super.onResume()</span>
+<span class="nc" id="L350">        checkStoragePermission()</span>
+<span class="nc" id="L351">    }</span>
+
+    fun performActionOrShowPopup(view: View) {
+<span class="nc bnc" id="L354" title="All 2 branches missed.">        viewModel.performActionOrShowPopup(ViewWrapper(view))</span>
+<span class="nc" id="L355">    }</span>
+
+    fun showCameraPopupMenu(view: View) {
+<span class="nc bnc" id="L358" title="All 2 branches missed.">        viewModel.showCameraPopupMenu(ViewWrapper(view))</span>
+<span class="nc" id="L359">    }</span>
+
+    fun setPhotoPickerListener(listener: PhotoPickerListener?) {
+<span class="nc" id="L362">        this.listener = listener</span>
+<span class="nc" id="L363">    }</span>
+
+    private fun showBottomBar(bottomBar: View) {
+<span class="nc bnc" id="L366" title="All 2 branches missed.">        if (!isBottomBarShowing(bottomBar)) {</span>
+<span class="nc" id="L367">            AniUtils.animateBottomBar(bottomBar, true)</span>
+        }
+<span class="nc" id="L369">    }</span>
+
+    private fun hideBottomBar(bottomBar: View) {
+<span class="nc bnc" id="L372" title="All 2 branches missed.">        if (isBottomBarShowing(bottomBar)) {</span>
+<span class="nc" id="L373">            AniUtils.animateBottomBar(bottomBar, false)</span>
+        }
+<span class="nc" id="L375">    }</span>
+
+    private fun isBottomBarShowing(bottomBar: View): Boolean {
+<span class="nc bnc" id="L378" title="All 2 branches missed.">        return bottomBar.visibility == View.VISIBLE</span>
+    }
+
+    /*
+     * similar to the above but only repopulates if changes are detected
+     */
+    fun refresh() {
+<span class="nc bnc" id="L385" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L386">            AppLog.w(</span>
+<span class="nc" id="L387">                    POSTS,</span>
+<span class="nc" id="L388">                    &quot;Photo picker &gt; can't refresh when not added&quot;</span>
+            )
+<span class="nc" id="L390">            return</span>
+        }
+<span class="nc bnc" id="L392" title="All 2 branches missed.">        viewModel.refreshData(false)</span>
+<span class="nc" id="L393">    }</span>
+
+    private val isStoragePermissionAlwaysDenied: Boolean
+<span class="nc" id="L396">        get() = WPPermissionUtils.isPermissionAlwaysDenied(</span>
+<span class="nc" id="L397">                requireActivity(), permission.WRITE_EXTERNAL_STORAGE</span>
+<span class="nc" id="L398">        )</span>
+
+    /*
+     * load the photos if we have the necessary permission, otherwise show the &quot;soft ask&quot; view
+     * which asks the user to allow the permission
+     */
+    private fun checkStoragePermission() {
+<span class="nc bnc" id="L405" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L406">            return</span>
+        }
+<span class="nc bnc" id="L408" title="All 2 branches missed.">        viewModel.checkStoragePermission(isStoragePermissionAlwaysDenied)</span>
+<span class="nc" id="L409">    }</span>
+
+    private fun requestStoragePermission() {
+<span class="nc" id="L412">        val permissions = arrayOf(permission.WRITE_EXTERNAL_STORAGE)</span>
+<span class="nc" id="L413">        requestPermissions(</span>
+<span class="nc" id="L414">                permissions, WPPermissionUtils.PHOTO_PICKER_STORAGE_PERMISSION_REQUEST_CODE</span>
+        )
+<span class="nc" id="L416">    }</span>
+
+    private fun requestCameraPermission() {
+        // in addition to CAMERA permission we also need a storage permission, to store media from the camera
+<span class="nc" id="L420">        val permissions = arrayOf(</span>
+<span class="nc" id="L421">                permission.CAMERA,</span>
+<span class="nc" id="L422">                permission.WRITE_EXTERNAL_STORAGE</span>
+        )
+<span class="nc" id="L424">        requestPermissions(permissions, WPPermissionUtils.PHOTO_PICKER_CAMERA_PERMISSION_REQUEST_CODE)</span>
+<span class="nc" id="L425">    }</span>
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array&lt;String&gt;,
+        grantResults: IntArray
+    ) {
+<span class="nc bnc" id="L432" title="All 2 branches missed.">        val checkForAlwaysDenied = requestCode == WPPermissionUtils.PHOTO_PICKER_CAMERA_PERMISSION_REQUEST_CODE</span>
+<span class="nc" id="L433">        val allGranted = WPPermissionUtils.setPermissionListAsked(</span>
+<span class="nc" id="L434">                requireActivity(), requestCode, permissions, grantResults, checkForAlwaysDenied</span>
+        )
+<span class="nc bnc" id="L436" title="All 3 branches missed.">        when (requestCode) {</span>
+<span class="nc" id="L437">            WPPermissionUtils.PHOTO_PICKER_STORAGE_PERMISSION_REQUEST_CODE -&gt; checkStoragePermission()</span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">            WPPermissionUtils.PHOTO_PICKER_CAMERA_PERMISSION_REQUEST_CODE -&gt; if (allGranted) {</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">                viewModel.clickOnLastTappedIcon()</span>
+            }
+        }
+<span class="nc" id="L442">    }</span>
+
+    fun finishActionMode() {
+<span class="nc bnc" id="L445" title="All 2 branches missed.">        viewModel.clearSelection()</span>
+<span class="nc" id="L446">    }</span>
+
+    fun doIconClicked(wpMedia: PhotoPickerIcon) {
+<span class="nc bnc" id="L449" title="All 2 branches missed.">        viewModel.clickIcon(wpMedia)</span>
+<span class="nc" id="L450">    }</span>
+
+    fun urisSelectedFromSystemPicker(uris: List&lt;Uri&gt;) {
+<span class="nc bnc" id="L453" title="All 2 branches missed.">        viewModel.urisSelectedFromSystemPicker(uris.map { UriWrapper(it) })</span>
+<span class="nc" id="L454">    }</span>
+
+    fun mediaIdsSelectedFromWPMediaPicker(mediaIds: List&lt;Long&gt;) {
+<span class="nc bnc" id="L457" title="All 2 branches missed.">        viewModel.mediaIdsSelectedFromWPMediaPicker(mediaIds)</span>
+<span class="nc" id="L458">    }</span>
+
+    companion object {
+        private const val KEY_LAST_TAPPED_ICON = &quot;last_tapped_icon&quot;
+        private const val KEY_SELECTED_POSITIONS = &quot;selected_positions&quot;
+        private const val KEY_LIST_STATE = &quot;list_state&quot;
+        const val NUM_COLUMNS = 3
+        @JvmStatic fun newInstance(
+            listener: PhotoPickerListener,
+            browserType: MediaBrowserType,
+            site: SiteModel?
+        ): PhotoPickerFragment {
+<span class="nc" id="L470">            val args = Bundle()</span>
+<span class="nc" id="L471">            args.putSerializable(MediaBrowserActivity.ARG_BROWSER_TYPE, browserType)</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">            if (site != null) {</span>
+<span class="nc" id="L473">                args.putSerializable(WordPress.SITE, site)</span>
+            }
+<span class="nc" id="L475">            val fragment = PhotoPickerFragment()</span>
+<span class="nc" id="L476">            fragment.setPhotoPickerListener(listener)</span>
+<span class="nc" id="L477">            fragment.arguments = args</span>
+<span class="nc" id="L478">            return fragment</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,1003 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderPostDetailViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.viewmodels</a> &gt; <span class="el_source">ReaderPostDetailViewModel.kt</span></div><h1>ReaderPostDetailViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.viewmodels
+
+import androidx.annotation.AttrRes
+import androidx.annotation.VisibleForTesting
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode.MAIN
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.datasets.wrappers.ReaderCommentTableWrapper
+import org.wordpress.android.datasets.wrappers.ReaderPostTableWrapper
+import org.wordpress.android.fluxc.model.LikeModel
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.models.ReaderCommentList
+import org.wordpress.android.models.ReaderPost
+import org.wordpress.android.models.ReaderTagType.FOLLOWED
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.IO_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.avatars.TrainOfAvatarsItem
+import org.wordpress.android.ui.avatars.TrainOfAvatarsItem.AvatarItem
+import org.wordpress.android.ui.avatars.TrainOfAvatarsItem.TrailingLabelTextItem
+import org.wordpress.android.ui.engagement.AuthorName.AuthorNameString
+import org.wordpress.android.ui.engagement.EngagementUtils
+import org.wordpress.android.ui.engagement.GetLikesHandler
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.Failure
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.LikesData
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.Loading
+import org.wordpress.android.ui.engagement.GetLikesUseCase.LikeGroupFingerPrint
+import org.wordpress.android.ui.engagement.HeaderData
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.reader.ReaderConstants.READER_COMMENTS_TO_REQUEST_FOR_POST_SNIPPET
+import org.wordpress.android.ui.reader.ReaderEvents.UpdateCommentsEnded
+import org.wordpress.android.ui.reader.ReaderEvents.UpdateCommentsScenario.COMMENT_SNIPPET
+import org.wordpress.android.ui.reader.ReaderEvents.UpdateCommentsStarted
+import org.wordpress.android.ui.reader.ReaderPostDetailUiStateBuilder
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.CHANGED
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.FAILED
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.HAS_NEW
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.UNCHANGED
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ReplaceRelatedPostDetailsWithHistory
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowEngagedPeopleList
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowPostInWebView
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowPostsByTag
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowRelatedPostDetails
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowSitePickerForResult
+import org.wordpress.android.ui.reader.discover.ReaderPostActions
+import org.wordpress.android.ui.reader.discover.ReaderPostCardAction
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType.FOLLOW
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionsHandler
+import org.wordpress.android.ui.reader.discover.ReaderPostMoreButtonUiStateBuilder
+import org.wordpress.android.ui.reader.models.ReaderSimplePostList
+import org.wordpress.android.ui.reader.reblog.ReblogUseCase
+import org.wordpress.android.ui.reader.services.comment.wrapper.ReaderCommentServiceStarterWrapper
+import org.wordpress.android.ui.reader.tracker.ReaderTracker
+import org.wordpress.android.ui.reader.usecases.ReaderFetchPostUseCase
+import org.wordpress.android.ui.reader.usecases.ReaderFetchPostUseCase.FetchReaderPostState
+import org.wordpress.android.ui.reader.usecases.ReaderFetchRelatedPostsUseCase
+import org.wordpress.android.ui.reader.usecases.ReaderFetchRelatedPostsUseCase.FetchRelatedPostsState
+import org.wordpress.android.ui.reader.usecases.ReaderGetPostUseCase
+import org.wordpress.android.ui.reader.utils.ReaderUtilsWrapper
+import org.wordpress.android.ui.reader.viewmodels.ReaderPostDetailViewModel.CommentSnippetState.CommentSnippetData
+import org.wordpress.android.ui.reader.viewmodels.ReaderPostDetailViewModel.UiState.ErrorUiState
+import org.wordpress.android.ui.reader.viewmodels.ReaderPostDetailViewModel.UiState.LoadingUiState
+import org.wordpress.android.ui.reader.viewmodels.ReaderPostDetailViewModel.UiState.ReaderPostDetailsUiState
+import org.wordpress.android.ui.reader.views.uistates.CommentSnippetItemState
+import org.wordpress.android.ui.reader.views.uistates.ReaderPostDetailsHeaderViewUiState.ReaderPostDetailsHeaderUiState
+import org.wordpress.android.ui.utils.HtmlMessageUtils
+import org.wordpress.android.ui.utils.UiDimen
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.EventBusWrapper
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.WpUrlUtilsWrapper
+import org.wordpress.android.util.config.CommentsSnippetFeatureConfig
+import org.wordpress.android.util.config.LikesEnhancementsFeatureConfig
+import org.wordpress.android.util.map
+import org.wordpress.android.viewmodel.ContextProvider
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+@Suppress(&quot;LargeClass&quot;)
+<span class="nc" id="L100">class ReaderPostDetailViewModel @Inject constructor(</span>
+<span class="nc" id="L101">    private val readerPostCardActionsHandler: ReaderPostCardActionsHandler,</span>
+<span class="nc" id="L102">    private val readerUtilsWrapper: ReaderUtilsWrapper,</span>
+<span class="nc" id="L103">    private val readerPostTableWrapper: ReaderPostTableWrapper,</span>
+<span class="nc" id="L104">    private val readerPostMoreButtonUiStateBuilder: ReaderPostMoreButtonUiStateBuilder,</span>
+<span class="nc" id="L105">    private val postDetailUiStateBuilder: ReaderPostDetailUiStateBuilder,</span>
+<span class="nc" id="L106">    private val reblogUseCase: ReblogUseCase,</span>
+<span class="nc" id="L107">    private val readerFetchRelatedPostsUseCase: ReaderFetchRelatedPostsUseCase,</span>
+<span class="nc" id="L108">    private val readerGetPostUseCase: ReaderGetPostUseCase,</span>
+<span class="nc" id="L109">    private val readerFetchPostUseCase: ReaderFetchPostUseCase,</span>
+<span class="nc" id="L110">    private val siteStore: SiteStore,</span>
+<span class="nc" id="L111">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L112">    private val readerTracker: ReaderTracker,</span>
+<span class="nc" id="L113">    private val eventBusWrapper: EventBusWrapper,</span>
+<span class="nc" id="L114">    private val wpUrlUtilsWrapper: WpUrlUtilsWrapper,</span>
+<span class="nc" id="L115">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L116">    @Named(IO_THREAD) private val ioDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L117">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L118">    private val getLikesHandler: GetLikesHandler,</span>
+<span class="nc" id="L119">    private val likesEnhancementsFeatureConfig: LikesEnhancementsFeatureConfig,</span>
+<span class="nc" id="L120">    private val engagementUtils: EngagementUtils,</span>
+<span class="nc" id="L121">    private val htmlMessageUtils: HtmlMessageUtils,</span>
+<span class="nc" id="L122">    private val contextProvider: ContextProvider,</span>
+<span class="nc" id="L123">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L124">    private val commentsSnippetFeatureConfig: CommentsSnippetFeatureConfig,</span>
+<span class="nc" id="L125">    private val readerCommentTableWrapper: ReaderCommentTableWrapper,</span>
+<span class="nc" id="L126">    private val readerCommentServiceStarterWrapper: ReaderCommentServiceStarterWrapper</span>
+<span class="nc" id="L127">) : ScopedViewModel(mainDispatcher) {</span>
+    private var getLikesJob: Job? = null
+
+<span class="nc" id="L130">    private val _uiState = MediatorLiveData&lt;UiState&gt;()</span>
+<span class="nc" id="L131">    val uiState: LiveData&lt;UiState&gt; = _uiState</span>
+
+<span class="nc" id="L133">    private val _refreshPost = MediatorLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L134">    val refreshPost: LiveData&lt;Event&lt;Unit&gt;&gt; = _refreshPost</span>
+
+<span class="nc" id="L136">    private val _navigationEvents = MediatorLiveData&lt;Event&lt;ReaderNavigationEvents&gt;&gt;()</span>
+<span class="nc" id="L137">    val navigationEvents: LiveData&lt;Event&lt;ReaderNavigationEvents&gt;&gt; = _navigationEvents</span>
+
+<span class="nc" id="L139">    private val _snackbarEvents = MediatorLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L140">    val snackbarEvents: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _snackbarEvents</span>
+
+<span class="nc" id="L142">    private val _updateLikesState = MediatorLiveData&lt;GetLikesState&gt;()</span>
+<span class="nc" id="L143">    val likesUiState: LiveData&lt;TrainOfFacesUiState&gt; = _updateLikesState.map { state -&gt;</span>
+<span class="nc" id="L144">        buildLikersUiState(state)</span>
+    }
+
+<span class="nc" id="L147">    private val _commentSnippetState = MutableLiveData&lt;CommentSnippetState&gt;()</span>
+<span class="nc" id="L148">    val commentSnippetState: LiveData&lt;CommentSnippetUiState&gt; = _commentSnippetState.map { state -&gt;</span>
+<span class="nc" id="L149">        postDetailUiStateBuilder.buildCommentSnippetUiState(state, post, ::onCommentSnippetClicked)</span>
+    }
+
+    /**
+     * Post which is about to be reblogged after the user selects a target site.
+     */
+    private var pendingReblogPost: ReaderPost? = null
+
+    private var isStarted = false
+    private var isRelatedPost: Boolean = false
+
+<span class="nc" id="L160">    var isFeed: Boolean = false</span>
+<span class="nc" id="L161">    var interceptedUri: String? = null</span>
+
+<span class="nc" id="L163">    var post: ReaderPost? = null</span>
+    val hasPost: Boolean
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        get() = post != null</span>
+
+<span class="nc" id="L167">    private data class RenderedLikesData(val blogId: Long, val postId: Long, val numLikes: Int, val iLike: Boolean) {</span>
+        fun isMatchingPostLikeStatus(post: ReaderPost): Boolean {
+<span class="nc bnc" id="L169" title="All 4 branches missed.">            return blogId != post.blogId || postId != post.postId ||</span>
+<span class="nc bnc" id="L170" title="All 4 branches missed.">                    numLikes != post.numLikes || iLike != post.isLikedByCurrentUser</span>
+        }
+    }
+
+<span class="nc" id="L174">    private data class RenderedRepliesData(val blogId: Long?, val postId: Long?, val numReplies: Int?) {</span>
+        fun isMatchingPostCommentsStatus(blogId: Long, postId: Long, numReplies: Int): Boolean {
+<span class="nc bnc" id="L176" title="All 12 branches missed.">            return blogId != this.blogId || postId != this.postId || numReplies != this.numReplies</span>
+        }
+    }
+
+    private var lastRenderedLikesData: RenderedLikesData? = null
+    private var lastRenderedRepliesData: RenderedRepliesData? = null
+
+    private val shouldOfferSignIn: Boolean
+<span class="nc bnc" id="L184" title="All 4 branches missed.">        get() = wpUrlUtilsWrapper.isWordPressCom(interceptedUri) &amp;&amp; !accountStore.hasAccessToken()</span>
+
+<span class="nc" id="L186">    data class TrainOfFacesUiState(</span>
+<span class="nc" id="L187">        val showLikeFacesTrainContainer: Boolean,</span>
+<span class="nc" id="L188">        val showLoading: Boolean,</span>
+<span class="nc" id="L189">        val engageItemsList: List&lt;TrainOfAvatarsItem&gt;,</span>
+<span class="nc" id="L190">        val showEmptyState: Boolean,</span>
+<span class="nc" id="L191">        val emptyStateTitle: UiString? = null,</span>
+<span class="nc" id="L192">        val contentDescription: UiString,</span>
+<span class="nc" id="L193">        val goingToShowFaces: Boolean</span>
+<span class="nc" id="L194">    )</span>
+
+    sealed class CommentSnippetState {
+<span class="nc" id="L197">        object Loading : CommentSnippetState()</span>
+<span class="nc" id="L198">        data class Empty(</span>
+<span class="nc" id="L199">            val message: UiString</span>
+<span class="nc" id="L200">        ) : CommentSnippetState()</span>
+<span class="nc" id="L201">        data class Failure(</span>
+<span class="nc" id="L202">            val message: UiString</span>
+<span class="nc" id="L203">        ) : CommentSnippetState()</span>
+<span class="nc" id="L204">        data class CommentSnippetData(</span>
+<span class="nc" id="L205">            val comments: ReaderCommentList</span>
+<span class="nc" id="L206">        ) : CommentSnippetState()</span>
+    }
+
+<span class="nc" id="L209">    data class CommentSnippetUiState(</span>
+<span class="nc" id="L210">        val commentsNumber: Int,</span>
+<span class="nc" id="L211">        val showFollowConversation: Boolean,</span>
+<span class="nc" id="L212">        val snippetItems: List&lt;CommentSnippetItemState&gt;</span>
+    )
+
+<span class="nc" id="L215">    init {</span>
+<span class="nc" id="L216">        eventBusWrapper.register(readerFetchRelatedPostsUseCase)</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">        if (commentsSnippetFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L218">            eventBusWrapper.register(this)</span>
+        }
+<span class="nc" id="L220">    }</span>
+
+    fun start(isRelatedPost: Boolean, isFeed: Boolean, interceptedUri: String?) {
+<span class="nc bnc" id="L223" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L224">            return</span>
+        }
+<span class="nc" id="L226">        isStarted = true</span>
+<span class="nc" id="L227">        this.isRelatedPost = isRelatedPost</span>
+<span class="nc" id="L228">        this.isFeed = isFeed</span>
+<span class="nc" id="L229">        this.interceptedUri = interceptedUri</span>
+
+<span class="nc" id="L231">        init()</span>
+<span class="nc" id="L232">    }</span>
+
+    private fun init() {
+<span class="nc" id="L235">        readerPostCardActionsHandler.initScope(viewModelScope)</span>
+<span class="nc" id="L236">        _uiState.addSource(readerPostCardActionsHandler.followStatusUpdated) { data -&gt;</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">            val currentUiState: ReaderPostDetailsUiState? = (_uiState.value as? ReaderPostDetailsUiState)</span>
+
+<span class="nc bnc" id="L239" title="All 2 branches missed.">            currentUiState?.let {</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">                findPost(currentUiState.postId, currentUiState.blogId)?.let { post -&gt;</span>
+<span class="nc" id="L241">                    post.isFollowedByCurrentUser = data.following</span>
+<span class="nc" id="L242">                    updateFollowButtonUiState(</span>
+<span class="nc" id="L243">                            currentUiState = currentUiState,</span>
+<span class="nc" id="L244">                            isFollowed = post.isFollowedByCurrentUser</span>
+                    )
+<span class="nc" id="L246">                }</span>
+<span class="nc" id="L247">            }</span>
+<span class="nc" id="L248">        }</span>
+
+<span class="nc" id="L250">        _refreshPost.addSource(readerPostCardActionsHandler.refreshPosts) {</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">            val currentUiState: ReaderPostDetailsUiState? = (_uiState.value as? ReaderPostDetailsUiState)</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">            currentUiState?.let {</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">                findPost(currentUiState.postId, currentUiState.blogId)?.let { post -&gt;</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">                    if (likesEnhancementsFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L255">                        onRefreshLikersData(</span>
+<span class="nc" id="L256">                                post,</span>
+<span class="nc" id="L257">                                true</span>
+                        )
+                    }
+<span class="nc bnc" id="L260" title="All 2 branches missed.">                    if (commentsSnippetFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L261">                        onRefreshCommentsData(post.blogId, post.postId)</span>
+                    }
+<span class="nc" id="L263">                    updatePostActions(post)</span>
+<span class="nc" id="L264">                }</span>
+<span class="nc" id="L265">            }</span>
+<span class="nc" id="L266">        }</span>
+
+<span class="nc" id="L268">        _snackbarEvents.addSource(readerPostCardActionsHandler.snackbarEvents) { event -&gt;</span>
+<span class="nc" id="L269">            _snackbarEvents.value = event</span>
+<span class="nc" id="L270">        }</span>
+
+<span class="nc bnc" id="L272" title="All 2 branches missed.">        if (likesEnhancementsFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L273">            _snackbarEvents.addSource(getLikesHandler.snackbarEvents) { event -&gt;</span>
+<span class="nc" id="L274">                _snackbarEvents.value = event</span>
+<span class="nc" id="L275">            }</span>
+        }
+
+<span class="nc" id="L278">        _navigationEvents.addSource(readerPostCardActionsHandler.navigationEvents) { event -&gt;</span>
+<span class="nc" id="L279">            val target = event.peekContent()</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">            if (target is ShowSitePickerForResult) {</span>
+<span class="nc" id="L281">                pendingReblogPost = target.post</span>
+            }
+<span class="nc" id="L283">            _navigationEvents.value = event</span>
+<span class="nc" id="L284">        }</span>
+
+<span class="nc bnc" id="L286" title="All 2 branches missed.">        if (likesEnhancementsFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L287">            _updateLikesState.addSource(getLikesHandler.likesStatusUpdate) { state -&gt;</span>
+<span class="nc" id="L288">                _updateLikesState.value = state</span>
+<span class="nc" id="L289">            }</span>
+        }
+<span class="nc" id="L291">    }</span>
+
+    fun onRefreshCommentsData(blogId: Long, postId: Long) {
+<span class="nc bnc" id="L294" title="All 2 branches missed.">        if (!commentsSnippetFeatureConfig.isEnabled()) return</span>
+
+<span class="nc" id="L296">        val post = readerPostTableWrapper.getBlogPost(blogId, postId, true)</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        post?.let {</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">            if (!post.isExternal) {</span>
+<span class="nc bnc" id="L299" title="All 2 branches missed.">                val isRepliesDataChanged = lastRenderedRepliesData?.isMatchingPostCommentsStatus(</span>
+<span class="nc" id="L300">                        it.blogId,</span>
+<span class="nc" id="L301">                        it.postId,</span>
+<span class="nc" id="L302">                        it.numReplies</span>
+<span class="nc" id="L303">                ) ?: true</span>
+
+<span class="nc bnc" id="L305" title="All 2 branches missed.">                if (!isRepliesDataChanged) return</span>
+
+<span class="nc" id="L307">                readerCommentServiceStarterWrapper.startServiceForCommentSnippet(</span>
+<span class="nc" id="L308">                        contextProvider.getContext(),</span>
+<span class="nc" id="L309">                        blogId,</span>
+<span class="nc" id="L310">                        postId</span>
+                )
+            }
+<span class="nc" id="L313">        }</span>
+<span class="nc" id="L314">    }</span>
+
+<span class="nc" id="L316">    fun onRefreshLikersData(post: ReaderPost, isLikingAction: Boolean = false) {</span>
+        if (
+<span class="nc bnc" id="L318" title="All 2 branches missed.">                !likesEnhancementsFeatureConfig.isEnabled() ||</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">                readerUtilsWrapper.isExternalFeed(post.blogId, post.feedId)</span>
+        ) {
+<span class="nc" id="L321">            return</span>
+        }
+
+<span class="nc bnc" id="L324" title="All 2 branches missed.">        val isLikeDataChanged = lastRenderedLikesData?.isMatchingPostLikeStatus(post) ?: true</span>
+
+<span class="nc bnc" id="L326" title="All 2 branches missed.">        if (!isLikeDataChanged) return</span>
+
+<span class="nc" id="L328">        lastRenderedLikesData = RenderedLikesData(</span>
+<span class="nc" id="L329">                post.blogId,</span>
+<span class="nc" id="L330">                post.postId,</span>
+<span class="nc" id="L331">                post.numLikes,</span>
+<span class="nc" id="L332">                post.isLikedByCurrentUser</span>
+        )
+
+<span class="nc bnc" id="L335" title="All 2 branches missed.">        if (isLikingAction) {</span>
+<span class="nc" id="L336">            val state = _updateLikesState.value</span>
+
+<span class="nc bnc" id="L338" title="All 2 branches missed.">            state?.let {</span>
+<span class="nc" id="L339">                when (it) {</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">                    is Failure -&gt; _updateLikesState.value = it.copy(</span>
+<span class="nc" id="L341">                            iLike = post.isLikedByCurrentUser,</span>
+<span class="nc" id="L342">                            expectedNumLikes = post.numLikes</span>
+                    )
+<span class="nc bnc" id="L344" title="All 2 branches missed.">                    is LikesData -&gt; _updateLikesState.value = it.copy(</span>
+<span class="nc" id="L345">                            iLike = post.isLikedByCurrentUser,</span>
+<span class="nc" id="L346">                            expectedNumLikes = post.numLikes</span>
+                    )
+<span class="nc bnc" id="L348" title="All 2 branches missed.">                    Loading -&gt; {}</span>
+                }
+<span class="nc" id="L350">            }</span>
+        } else {
+<span class="nc bnc" id="L352" title="All 2 branches missed.">            getLikesJob?.cancel()</span>
+<span class="nc" id="L353">            getLikesJob = launch(bgDispatcher) {</span>
+<span class="nc" id="L354">                getLikesHandler.handleGetLikesForPost(</span>
+<span class="nc" id="L355">                        LikeGroupFingerPrint(</span>
+<span class="nc" id="L356">                                post.blogId,</span>
+<span class="nc" id="L357">                                post.postId,</span>
+<span class="nc" id="L358">                                post.numLikes</span>
+                        ),
+<span class="nc" id="L360">                        requestNextPage = false,</span>
+<span class="nc" id="L361">                        pageLength = MAX_NUM_LIKES_FACES_WITH_SELF</span>
+                )
+<span class="nc" id="L363">            }</span>
+        }
+<span class="nc" id="L365">    }</span>
+
+    fun onShowPost(blogId: Long, postId: Long) {
+<span class="nc" id="L368">        launch { getOrFetchReaderPost(blogId = blogId, postId = postId) }</span>
+<span class="nc" id="L369">    }</span>
+
+<span class="nc" id="L371">    private suspend fun getOrFetchReaderPost(blogId: Long, postId: Long) {</span>
+<span class="nc" id="L372">        getReaderPostFromDb(blogId = blogId, postId = postId)</span>
+<span class="nc bnc" id="L373" title="All 2 branches missed.">        if (post == null) {</span>
+<span class="nc" id="L374">            _uiState.value = LoadingUiState</span>
+<span class="nc" id="L375">            when (readerFetchPostUseCase.fetchPost(blogId = blogId, postId = postId, isFeed = isFeed)) {</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">                FetchReaderPostState.Success -&gt; {</span>
+<span class="nc" id="L377">                    getReaderPostFromDb(blogId, postId)</span>
+<span class="nc" id="L378">                    updatePostDetailsUi()</span>
+                }
+
+<span class="nc bnc" id="L381" title="All 2 branches missed.">                FetchReaderPostState.AlreadyRunning -&gt; {</span>
+<span class="nc" id="L382">                    AppLog.i(T.READER, &quot;reader post detail &gt; fetch post already running&quot;)</span>
+<span class="nc" id="L383">                    _uiState.value = ErrorUiState(null)</span>
+                }
+
+<span class="nc bnc" id="L386" title="All 2 branches missed.">                FetchReaderPostState.Failed.NoNetwork -&gt;</span>
+<span class="nc" id="L387">                    _uiState.value = ErrorUiState(UiStringRes(R.string.no_network_message))</span>
+
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                FetchReaderPostState.Failed.RequestFailed -&gt;</span>
+<span class="nc" id="L390">                    _uiState.value = ErrorUiState(UiStringRes(R.string.reader_err_get_post_generic))</span>
+
+<span class="nc bnc" id="L392" title="All 2 branches missed.">                FetchReaderPostState.Failed.NotAuthorised -&gt; trackAndUpdateNotAuthorisedErrorState()</span>
+
+<span class="nc bnc" id="L394" title="All 2 branches missed.">                FetchReaderPostState.Failed.PostNotFound -&gt;</span>
+<span class="nc" id="L395">                    _uiState.value = ErrorUiState(UiStringRes(R.string.reader_err_get_post_not_found))</span>
+            }
+        } else {
+<span class="nc" id="L398">            updatePostDetailsUi()</span>
+        }
+<span class="nc" id="L400">    }</span>
+
+    private suspend fun getReaderPostFromDb(blogId: Long, postId: Long) {
+<span class="nc" id="L403">        val (readerPost, isFeedPost) = readerGetPostUseCase.get(blogId = blogId, postId = postId, isFeed = this.isFeed)</span>
+<span class="nc" id="L404">        this.post = readerPost</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">        this.isFeed = isFeedPost</span>
+<span class="nc" id="L406">    }</span>
+
+    fun onNotAuthorisedRequestFailure() {
+<span class="nc" id="L409">        trackAndUpdateNotAuthorisedErrorState()</span>
+<span class="nc" id="L410">    }</span>
+
+    fun onMoreButtonClicked() {
+<span class="nc" id="L413">        changeMoreMenuVisibility(true)</span>
+<span class="nc" id="L414">    }</span>
+
+    fun onMoreMenuDismissed() {
+<span class="nc" id="L417">        changeMoreMenuVisibility(false)</span>
+<span class="nc" id="L418">    }</span>
+
+    fun onMoreMenuItemClicked(type: ReaderPostCardActionType) {
+<span class="nc bnc" id="L421" title="All 2 branches missed.">        val currentUiState = (_uiState.value as? ReaderPostDetailsUiState)</span>
+<span class="nc bnc" id="L422" title="All 2 branches missed.">        currentUiState?.let {</span>
+<span class="nc" id="L423">            onButtonClicked(currentUiState.postId, currentUiState.blogId, type)</span>
+<span class="nc" id="L424">        }</span>
+<span class="nc" id="L425">        changeMoreMenuVisibility(false)</span>
+<span class="nc" id="L426">    }</span>
+
+    private fun changeMoreMenuVisibility(show: Boolean) {
+<span class="nc bnc" id="L429" title="All 2 branches missed.">        val currentUiState = (_uiState.value as? ReaderPostDetailsUiState)</span>
+<span class="nc bnc" id="L430" title="All 2 branches missed.">        currentUiState?.let {</span>
+<span class="nc bnc" id="L431" title="All 2 branches missed.">            findPost(it.postId, it.blogId)?.let { post -&gt;</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">                val moreMenuItems = if (show) {</span>
+<span class="nc" id="L433">                    readerPostMoreButtonUiStateBuilder.buildMoreMenuItemsBlocking(</span>
+<span class="nc" id="L434">                            post, this@ReaderPostDetailViewModel::onButtonClicked</span>
+                    )
+                } else {
+<span class="nc" id="L437">                    null</span>
+                }
+
+<span class="nc" id="L440">                _uiState.value = it.copy(moreMenuItems = moreMenuItems)</span>
+<span class="nc" id="L441">            }</span>
+        }
+<span class="nc" id="L443">    }</span>
+
+    fun onFeaturedImageClicked(blogId: Long, featuredImageUrl: String) {
+<span class="nc" id="L446">        readerTracker.track(Stat.READER_ARTICLE_FEATURED_IMAGE_TAPPED)</span>
+<span class="nc" id="L447">        val site = siteStore.getSiteBySiteId(blogId)</span>
+<span class="nc" id="L448">        _navigationEvents.value = Event(</span>
+<span class="nc" id="L449">                ReaderNavigationEvents.ShowMediaPreview(site = site, featuredImage = featuredImageUrl)</span>
+        )
+<span class="nc" id="L451">    }</span>
+
+    fun onCommentSnippetClicked(postId: Long, blogId: Long) {
+<span class="nc bnc" id="L454" title="All 2 branches missed.">        if (!commentsSnippetFeatureConfig.isEnabled()) return</span>
+<span class="nc" id="L455">        onActionClicked(</span>
+<span class="nc" id="L456">                postId,</span>
+<span class="nc" id="L457">                blogId,</span>
+<span class="nc" id="L458">                ReaderPostCardActionType.COMMENTS,</span>
+<span class="nc" id="L459">                ReaderTracker.SOURCE_POST_DETAIL_COMMENT_SNIPPET</span>
+        )
+<span class="nc" id="L461">    }</span>
+
+    fun onButtonClicked(postId: Long, blogId: Long, type: ReaderPostCardActionType) {
+<span class="nc" id="L464">        onActionClicked(postId, blogId, type, ReaderTracker.SOURCE_POST_DETAIL)</span>
+<span class="nc" id="L465">    }</span>
+
+    private fun onActionClicked(postId: Long, blogId: Long, type: ReaderPostCardActionType, source: String) {
+<span class="nc" id="L468">        launch {</span>
+<span class="nc bnc" id="L469" title="All 2 branches missed.">            findPost(postId, blogId)?.let {</span>
+<span class="nc" id="L470">                readerPostCardActionsHandler.onAction(</span>
+<span class="nc" id="L471">                        it,</span>
+<span class="nc" id="L472">                        type,</span>
+<span class="nc" id="L473">                        isBookmarkList = false,</span>
+<span class="nc" id="L474">                        source = source</span>
+                )
+<span class="nc" id="L476">            }</span>
+<span class="nc" id="L477">        }</span>
+<span class="nc" id="L478">    }</span>
+
+    fun onReblogSiteSelected(siteLocalId: Int) {
+<span class="nc" id="L481">        launch {</span>
+<span class="nc" id="L482">            val state = reblogUseCase.onReblogSiteSelected(siteLocalId, pendingReblogPost)</span>
+<span class="nc" id="L483">            val navigationTarget = reblogUseCase.convertReblogStateToNavigationEvent(state)</span>
+<span class="nc bnc" id="L484" title="All 2 branches missed.">            if (navigationTarget != null) {</span>
+<span class="nc" id="L485">                _navigationEvents.value = Event(navigationTarget)</span>
+            } else {
+<span class="nc" id="L487">                _snackbarEvents.value = Event(SnackbarMessageHolder(UiStringRes(R.string.reader_reblog_error)))</span>
+            }
+<span class="nc" id="L489">            pendingReblogPost = null</span>
+<span class="nc" id="L490">        }</span>
+<span class="nc" id="L491">    }</span>
+
+    fun onUpdatePost(post: ReaderPost) {
+<span class="nc" id="L494">        _uiState.value = convertPostToUiState(post)</span>
+<span class="nc" id="L495">    }</span>
+
+    private fun onTagItemClicked(tagSlug: String) {
+<span class="nc bnc" id="L498" title="All 2 branches missed.">        launch(ioDispatcher) {</span>
+<span class="nc" id="L499">            val readerTag = readerUtilsWrapper.getTagFromTagName(tagSlug, FOLLOWED)</span>
+<span class="nc" id="L500">            _navigationEvents.postValue(Event(ShowPostsByTag(readerTag)))</span>
+<span class="nc" id="L501">        }</span>
+<span class="nc" id="L502">    }</span>
+
+    private fun onBlogSectionClicked(postId: Long, blogId: Long) {
+<span class="nc" id="L505">        launch {</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">            findPost(postId, blogId)?.let {</span>
+<span class="nc" id="L507">                readerPostCardActionsHandler.handleHeaderClicked(</span>
+<span class="nc" id="L508">                        blogId,</span>
+<span class="nc" id="L509">                        it.feedId,</span>
+<span class="nc" id="L510">                        it.isFollowedByCurrentUser</span>
+                )
+<span class="nc" id="L512">            }</span>
+<span class="nc" id="L513">        }</span>
+<span class="nc" id="L514">    }</span>
+
+    fun onVisitPostExcerptFooterClicked(postLink: String) {
+<span class="nc" id="L517">        _navigationEvents.value = Event(ReaderNavigationEvents.OpenUrl(url = postLink))</span>
+<span class="nc" id="L518">    }</span>
+
+    private fun onRelatedPostItemClicked(postId: Long, blogId: Long, isGlobal: Boolean) {
+<span class="nc" id="L521">        trackRelatedPostClickAction(postId, blogId, isGlobal)</span>
+<span class="nc bnc" id="L522" title="All 2 branches missed.">        _navigationEvents.value = if (isRelatedPost) {</span>
+<span class="nc" id="L523">            Event(ReplaceRelatedPostDetailsWithHistory(postId = postId, blogId = blogId, isGlobal = isGlobal))</span>
+        } else {
+<span class="nc" id="L525">            Event(ShowRelatedPostDetails(postId = postId, blogId = blogId))</span>
+        }
+<span class="nc" id="L527">    }</span>
+
+    fun onRelatedPostsRequested(sourcePost: ReaderPost) {
+        /* Related posts only available for wp.com */
+<span class="nc bnc" id="L531" title="All 2 branches missed.">        if (!sourcePost.isWP) return</span>
+
+<span class="nc" id="L533">        launch {</span>
+<span class="nc" id="L534">            when (val fetchRelatedPostsState = readerFetchRelatedPostsUseCase.fetchRelatedPosts(sourcePost)) {</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">                is FetchRelatedPostsState.AlreadyRunning,</span>
+<span class="nc bnc" id="L536" title="All 2 branches missed.">                is FetchRelatedPostsState.Failed.NoNetwork,</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">                is FetchRelatedPostsState.Failed.RequestFailed -&gt; Unit // Do Nothing</span>
+<span class="nc bnc" id="L538" title="All 2 branches missed.">                is FetchRelatedPostsState.Success -&gt; updateRelatedPostsUiState(sourcePost, fetchRelatedPostsState)</span>
+            }
+<span class="nc" id="L540">        }</span>
+<span class="nc" id="L541">    }</span>
+
+    private fun trackRelatedPostClickAction(postId: Long, blogId: Long, isGlobal: Boolean) {
+<span class="nc bnc" id="L544" title="All 2 branches missed.">        val stat = if (isGlobal) {</span>
+<span class="nc" id="L545">            AnalyticsTracker.Stat.READER_GLOBAL_RELATED_POST_CLICKED</span>
+        } else {
+<span class="nc" id="L547">            AnalyticsTracker.Stat.READER_LOCAL_RELATED_POST_CLICKED</span>
+        }
+<span class="nc" id="L549">        readerTracker.trackPost(stat, findPost(blogId, postId))</span>
+<span class="nc" id="L550">    }</span>
+
+    private fun findPost(postId: Long, blogId: Long): ReaderPost? {
+<span class="nc" id="L553">        return readerPostTableWrapper.getBlogPost(</span>
+<span class="nc" id="L554">                blogId,</span>
+<span class="nc" id="L555">                postId,</span>
+<span class="nc" id="L556">                true</span>
+        )
+    }
+
+    private fun convertPostToUiState(
+        post: ReaderPost
+    ): ReaderPostDetailsUiState {
+<span class="nc" id="L563">        return postDetailUiStateBuilder.mapPostToUiState(</span>
+<span class="nc" id="L564">                post = post,</span>
+<span class="nc" id="L565">                onButtonClicked = this@ReaderPostDetailViewModel::onButtonClicked,</span>
+<span class="nc" id="L566">                onBlogSectionClicked = this@ReaderPostDetailViewModel::onBlogSectionClicked,</span>
+<span class="nc" id="L567">                onFollowClicked = { onButtonClicked(post.postId, post.blogId, FOLLOW) },</span>
+<span class="nc" id="L568">                onTagItemClicked = this@ReaderPostDetailViewModel::onTagItemClicked</span>
+        )
+    }
+
+    private fun convertRelatedPostsToUiState(
+        sourcePost: ReaderPost,
+        relatedPosts: ReaderSimplePostList,
+        isGlobal: Boolean
+<span class="nc" id="L576">    ) = postDetailUiStateBuilder.mapRelatedPostsToUiState(</span>
+<span class="nc" id="L577">            sourcePost = sourcePost,</span>
+<span class="nc" id="L578">            relatedPosts = relatedPosts,</span>
+<span class="nc" id="L579">            isGlobal = isGlobal,</span>
+<span class="nc" id="L580">            onItemClicked = this@ReaderPostDetailViewModel::onRelatedPostItemClicked</span>
+<span class="nc" id="L581">    )</span>
+
+    private fun updatePostDetailsUi() {
+<span class="nc bnc" id="L584" title="All 2 branches missed.">        post?.let {</span>
+<span class="nc" id="L585">            readerTracker.trackPost(AnalyticsTracker.Stat.READER_ARTICLE_RENDERED, it)</span>
+<span class="nc" id="L586">            _navigationEvents.postValue(Event(ShowPostInWebView(it)))</span>
+<span class="nc" id="L587">            _uiState.value = convertPostToUiState(it)</span>
+<span class="nc" id="L588">        }</span>
+<span class="nc" id="L589">    }</span>
+
+    private fun updateFollowButtonUiState(
+        currentUiState: ReaderPostDetailsUiState,
+        isFollowed: Boolean
+    ) {
+<span class="nc" id="L595">        val updatedFollowButtonUiState = currentUiState</span>
+<span class="nc" id="L596">                .headerUiState</span>
+<span class="nc" id="L597">                .followButtonUiState</span>
+<span class="nc" id="L598">                .copy(isFollowed = isFollowed)</span>
+
+<span class="nc" id="L600">        val updatedHeaderUiState = currentUiState</span>
+<span class="nc" id="L601">                .headerUiState</span>
+<span class="nc" id="L602">                .copy(followButtonUiState = updatedFollowButtonUiState)</span>
+
+<span class="nc" id="L604">        _uiState.value = currentUiState.copy(headerUiState = updatedHeaderUiState)</span>
+<span class="nc" id="L605">    }</span>
+
+    private fun updatePostActions(post: ReaderPost) {
+<span class="nc bnc" id="L608" title="All 4 branches missed.">        (_uiState.value as? ReaderPostDetailsUiState)?.let {</span>
+<span class="nc" id="L609">            _uiState.value = it.copy(</span>
+<span class="nc" id="L610">                    actions = postDetailUiStateBuilder.buildPostActions(</span>
+<span class="nc" id="L611">                            post,</span>
+<span class="nc" id="L612">                            this@ReaderPostDetailViewModel::onButtonClicked</span>
+                    )
+            )
+<span class="nc" id="L615">        }</span>
+<span class="nc" id="L616">    }</span>
+
+    private fun updateRelatedPostsUiState(sourcePost: ReaderPost, state: FetchRelatedPostsState.Success) {
+<span class="nc bnc" id="L619" title="All 4 branches missed.">        (_uiState.value as? ReaderPostDetailsUiState)?.let {</span>
+<span class="nc" id="L620">            _uiState.value = it.copy(</span>
+<span class="nc" id="L621">                    localRelatedPosts = convertRelatedPostsToUiState(</span>
+<span class="nc" id="L622">                            sourcePost = sourcePost,</span>
+<span class="nc" id="L623">                            relatedPosts = state.localRelatedPosts,</span>
+<span class="nc" id="L624">                            isGlobal = false</span>
+                    ),
+<span class="nc" id="L626">                    globalRelatedPosts = convertRelatedPostsToUiState(</span>
+<span class="nc" id="L627">                            sourcePost = sourcePost,</span>
+<span class="nc" id="L628">                            relatedPosts = state.globalRelatedPosts,</span>
+<span class="nc" id="L629">                            isGlobal = true</span>
+                    )
+            )
+<span class="nc" id="L632">        }</span>
+<span class="nc" id="L633">    }</span>
+
+    private fun trackAndUpdateNotAuthorisedErrorState() {
+<span class="nc" id="L636">        trackNotAuthorisedState()</span>
+
+<span class="nc" id="L638">        _uiState.value = ErrorUiState(</span>
+<span class="nc" id="L639">                message = UiStringRes(getNotAuthorisedErrorMessageRes()),</span>
+<span class="nc" id="L640">                signInButtonVisibility = shouldOfferSignIn</span>
+        )
+<span class="nc" id="L642">    }</span>
+
+    private fun trackNotAuthorisedState() {
+<span class="nc bnc" id="L645" title="All 2 branches missed.">        if (shouldOfferSignIn) {</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">            post?.let { readerTracker.trackPost(AnalyticsTracker.Stat.READER_WPCOM_SIGN_IN_NEEDED, it) }</span>
+        }
+<span class="nc bnc" id="L648" title="All 2 branches missed.">        post?.let { readerTracker.trackPost(AnalyticsTracker.Stat.READER_USER_UNAUTHORIZED, it) }</span>
+<span class="nc" id="L649">    }</span>
+
+<span class="nc bnc" id="L651" title="All 2 branches missed.">    private fun getNotAuthorisedErrorMessageRes() = if (!shouldOfferSignIn) {</span>
+<span class="nc bnc" id="L652" title="All 2 branches missed.">        if (interceptedUri == null) {</span>
+<span class="nc" id="L653">            R.string.reader_err_get_post_not_authorized</span>
+        } else {
+<span class="nc" id="L655">            R.string.reader_err_get_post_not_authorized_fallback</span>
+        }
+    } else {
+<span class="nc bnc" id="L658" title="All 2 branches missed.">        if (interceptedUri == null) {</span>
+<span class="nc" id="L659">            R.string.reader_err_get_post_not_authorized_signin</span>
+        } else {
+<span class="nc" id="L661">            R.string.reader_err_get_post_not_authorized_signin_fallback</span>
+        }
+<span class="nc" id="L663">    }</span>
+
+    private fun buildLikersUiState(updateLikesState: GetLikesState?): TrainOfFacesUiState {
+<span class="nc" id="L666">        val (likers, numLikes, iLiked) = getLikersEssentials(updateLikesState)</span>
+
+<span class="nc" id="L668">        val showLoading = updateLikesState is Loading</span>
+<span class="nc" id="L669">        var showEmptyState = false</span>
+<span class="nc" id="L670">        var emptyStateTitle: UiString? = null</span>
+
+<span class="nc bnc" id="L672" title="All 4 branches missed.">        if (updateLikesState is Failure &amp;&amp; !showLoading) {</span>
+<span class="nc bnc" id="L673" title="All 2 branches missed.">            updateLikesState.emptyStateData?.let {</span>
+<span class="nc" id="L674">                showEmptyState = it.showEmptyState</span>
+<span class="nc" id="L675">                emptyStateTitle = it.title</span>
+<span class="nc" id="L676">            }</span>
+        }
+
+<span class="nc bnc" id="L679" title="All 2 branches missed.">        val showLikeFacesTrainContainer = post?.let {</span>
+<span class="nc bnc" id="L680" title="All 12 branches missed.">            it.isWP &amp;&amp; ((numLikes &gt; 0 &amp;&amp; (likers.isNotEmpty() || showEmptyState)) || showLoading)</span>
+<span class="nc" id="L681">        } ?: false</span>
+
+<span class="nc bnc" id="L683" title="All 2 branches missed.">        val engageItemsList = if (showLikeFacesTrainContainer) {</span>
+<span class="nc" id="L684">            likers + getLikersFacesText(showEmptyState, numLikes, iLiked)</span>
+        } else {
+<span class="nc" id="L686">            listOf()</span>
+        }
+
+<span class="nc bnc" id="L689" title="All 4 branches missed.">        val goingToShowFaces = showLikeFacesTrainContainer &amp;&amp; !showEmptyState</span>
+
+<span class="nc" id="L691">        val contentDescription = getContentDescription(goingToShowFaces, engageItemsList)</span>
+
+<span class="nc" id="L693">        return TrainOfFacesUiState(</span>
+<span class="nc" id="L694">                showLikeFacesTrainContainer = showLikeFacesTrainContainer,</span>
+<span class="nc" id="L695">                showLoading = showLoading,</span>
+<span class="nc" id="L696">                engageItemsList = engageItemsList,</span>
+<span class="nc" id="L697">                showEmptyState = showEmptyState,</span>
+<span class="nc" id="L698">                emptyStateTitle = emptyStateTitle,</span>
+<span class="nc" id="L699">                contentDescription = contentDescription,</span>
+<span class="nc" id="L700">                goingToShowFaces = goingToShowFaces</span>
+        )
+    }
+
+    private fun getContentDescription(
+        goingToShowFaces: Boolean,
+        items: List&lt;TrainOfAvatarsItem&gt;
+<span class="nc bnc" id="L707" title="All 2 branches missed.">    ) = if (goingToShowFaces) {</span>
+<span class="nc" id="L708">        when (val lastItem = items.lastOrNull()) {</span>
+<span class="nc bnc" id="L709" title="All 2 branches missed.">            is TrailingLabelTextItem -&gt; lastItem.text</span>
+<span class="nc bnc" id="L710" title="All 4 branches missed.">            is AvatarItem, null -&gt; UiStringText(&quot;&quot;)</span>
+        }
+    } else {
+<span class="nc" id="L713">        UiStringText(&quot;&quot;)</span>
+<span class="nc" id="L714">    }</span>
+
+    @Suppress(&quot;LongMethod&quot;)
+    private fun getLikersFacesText(showEmptyState: Boolean, numLikes: Int, iLiked: Boolean): List&lt;TrainOfAvatarsItem&gt; {
+<span class="nc" id="L718">        @AttrRes val labelColor = R.attr.wpColorOnSurfaceMedium</span>
+<span class="nc" id="L719">        return when {</span>
+<span class="nc bnc" id="L720" title="All 2 branches missed.">            showEmptyState -&gt; {</span>
+<span class="nc" id="L721">                listOf()</span>
+            }
+<span class="nc bnc" id="L723" title="All 4 branches missed.">            numLikes == 1 &amp;&amp; iLiked -&gt; {</span>
+<span class="nc" id="L724">                TrailingLabelTextItem(</span>
+<span class="nc" id="L725">                        UiStringText(</span>
+<span class="nc" id="L726">                                htmlMessageUtils.getHtmlMessageFromStringFormatResId(R.string.like_faces_you_like_text)</span>
+                        ),
+<span class="nc" id="L728">                        labelColor</span>
+<span class="nc" id="L729">                ).toList()</span>
+            }
+<span class="nc bnc" id="L731" title="All 4 branches missed.">            numLikes == 2 &amp;&amp; iLiked -&gt; {</span>
+<span class="nc" id="L732">                TrailingLabelTextItem(</span>
+<span class="nc" id="L733">                        UiStringText(</span>
+<span class="nc" id="L734">                                htmlMessageUtils.getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L735">                                        R.string.like_faces_you_plus_one_like_text</span>
+                                )
+                        ),
+<span class="nc" id="L738">                        labelColor</span>
+<span class="nc" id="L739">                ).toList()</span>
+            }
+<span class="nc bnc" id="L741" title="All 4 branches missed.">            numLikes &gt; 2 &amp;&amp; iLiked -&gt; {</span>
+<span class="nc" id="L742">                TrailingLabelTextItem(</span>
+<span class="nc" id="L743">                        UiStringText(</span>
+<span class="nc" id="L744">                                htmlMessageUtils.getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L745">                                        R.string.like_faces_you_plus_others_like_text,</span>
+<span class="nc" id="L746">                                        numLikes - 1</span>
+                                )
+                        ),
+<span class="nc" id="L749">                        labelColor</span>
+<span class="nc" id="L750">                ).toList()</span>
+            }
+<span class="nc bnc" id="L752" title="All 4 branches missed.">            numLikes == 1 &amp;&amp; !iLiked -&gt; {</span>
+<span class="nc" id="L753">                TrailingLabelTextItem(</span>
+<span class="nc" id="L754">                        UiStringText(</span>
+<span class="nc" id="L755">                                htmlMessageUtils.getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L756">                                        R.string.like_faces_one_blogger_likes_text</span>
+                                )
+                        ),
+<span class="nc" id="L759">                        labelColor</span>
+<span class="nc" id="L760">                ).toList()</span>
+            }
+<span class="nc bnc" id="L762" title="All 4 branches missed.">            numLikes &gt; 1 &amp;&amp; !iLiked -&gt; {</span>
+<span class="nc" id="L763">                TrailingLabelTextItem(</span>
+<span class="nc" id="L764">                        UiStringText(</span>
+<span class="nc" id="L765">                                htmlMessageUtils.getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L766">                                        R.string.like_faces_others_like_text,</span>
+<span class="nc" id="L767">                                        numLikes</span>
+                                )
+                        ),
+<span class="nc" id="L770">                        labelColor</span>
+<span class="nc" id="L771">                ).toList()</span>
+            }
+            else -&gt; {
+<span class="nc" id="L774">                listOf()</span>
+            }
+        }
+    }
+
+<span class="nc" id="L779">    private fun TrailingLabelTextItem.toList() = listOf(this)</span>
+
+    private fun getLikersEssentials(updateLikesState: GetLikesState?): Triple&lt;List&lt;TrainOfAvatarsItem&gt;, Int, Boolean&gt; {
+<span class="nc" id="L782">        return when (updateLikesState) {</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">            is LikesData -&gt; {</span>
+<span class="nc" id="L784">                val liked = isLikedByCurrentUser(updateLikesState.iLike)</span>
+<span class="nc" id="L785">                Triple(</span>
+<span class="nc" id="L786">                        engagementUtils.likesToTrainOfFaces(updateLikesState.likes.manageSelfLike(liked)),</span>
+<span class="nc" id="L787">                        updateLikesState.expectedNumLikes,</span>
+<span class="nc" id="L788">                        liked</span>
+                )
+            }
+<span class="nc bnc" id="L791" title="All 2 branches missed.">            is Failure -&gt; {</span>
+<span class="nc" id="L792">                val liked = isLikedByCurrentUser(updateLikesState.iLike)</span>
+<span class="nc" id="L793">                Triple(</span>
+<span class="nc" id="L794">                        engagementUtils.likesToTrainOfFaces(updateLikesState.cachedLikes.manageSelfLike(liked)),</span>
+<span class="nc" id="L795">                        updateLikesState.expectedNumLikes,</span>
+<span class="nc" id="L796">                        liked</span>
+                )
+            }
+<span class="nc bnc" id="L799" title="All 4 branches missed.">            Loading, null -&gt; Triple(listOf(), 0, false)</span>
+        }
+    }
+
+    private fun List&lt;LikeModel&gt;.manageSelfLike(iLiked: Boolean): List&lt;LikeModel&gt; {
+<span class="nc" id="L804">        return this.take(MAX_NUM_LIKES_FACES_WITH_SELF).filter {</span>
+<span class="nc bnc" id="L805" title="All 4 branches missed.">            it.likerId != accountStore.account.userId</span>
+<span class="nc" id="L806">        }.take(MAX_NUM_LIKES_FACES_WITHOUT_SELF).let { likersList -&gt;</span>
+<span class="nc bnc" id="L807" title="All 2 branches missed.">            if (iLiked) {</span>
+<span class="nc" id="L808">                likersList + LikeModel().apply {</span>
+<span class="nc" id="L809">                    likerId = accountStore.account.userId</span>
+<span class="nc" id="L810">                    likerAvatarUrl = accountStore.account.avatarUrl</span>
+<span class="nc" id="L811">                }</span>
+            } else {
+<span class="nc" id="L813">                likersList</span>
+            }
+        }
+    }
+
+    private fun isLikedByCurrentUser(iLiked: Boolean?): Boolean {
+<span class="nc bnc" id="L819" title="All 6 branches missed.">        return iLiked ?: post?.isLikedByCurrentUser ?: false</span>
+    }
+
+    fun onLikeFacesClicked() {
+<span class="nc bnc" id="L823" title="All 2 branches missed.">        post?.let { readerPost -&gt;</span>
+<span class="nc" id="L824">            _navigationEvents.value = Event(</span>
+<span class="nc" id="L825">                    ShowEngagedPeopleList(</span>
+<span class="nc" id="L826">                            readerPost.blogId,</span>
+<span class="nc" id="L827">                            readerPost.postId,</span>
+<span class="nc" id="L828">                            HeaderData(</span>
+<span class="nc" id="L829">                                    AuthorNameString(readerPost.authorName),</span>
+<span class="nc" id="L830">                                    readerPost.title,</span>
+<span class="nc" id="L831">                                    readerPost.postAvatar,</span>
+<span class="nc" id="L832">                                    readerPost.authorId,</span>
+<span class="nc" id="L833">                                    readerPost.authorBlogId,</span>
+<span class="nc" id="L834">                                    readerPost.authorBlogUrl,</span>
+<span class="nc bnc" id="L835" title="All 4 branches missed.">                                    lastRenderedLikesData?.numLikes ?: readerPost.numLikes</span>
+                            )
+                    )
+            )
+<span class="nc" id="L839">        }</span>
+<span class="nc" id="L840">    }</span>
+
+<span class="nc" id="L842">    sealed class UiState(</span>
+<span class="nc" id="L843">        val loadingVisible: Boolean = false,</span>
+<span class="nc" id="L844">        val errorVisible: Boolean = false</span>
+    ) {
+<span class="nc" id="L846">        object LoadingUiState : UiState(loadingVisible = true)</span>
+
+<span class="nc" id="L848">        data class ErrorUiState(</span>
+<span class="nc" id="L849">            val message: UiString?,</span>
+<span class="nc" id="L850">            val signInButtonVisibility: Boolean = false</span>
+<span class="nc" id="L851">        ) : UiState(errorVisible = true)</span>
+
+<span class="nc" id="L853">        data class ReaderPostDetailsUiState(</span>
+<span class="nc" id="L854">            val postId: Long,</span>
+<span class="nc" id="L855">            val blogId: Long,</span>
+<span class="nc" id="L856">            val featuredImageUiState: ReaderPostFeaturedImageUiState? = null,</span>
+<span class="nc" id="L857">            val headerUiState: ReaderPostDetailsHeaderUiState,</span>
+<span class="nc" id="L858">            val excerptFooterUiState: ExcerptFooterUiState?,</span>
+<span class="nc" id="L859">            val moreMenuItems: List&lt;ReaderPostCardAction&gt;? = null,</span>
+<span class="nc" id="L860">            val actions: ReaderPostActions,</span>
+<span class="nc" id="L861">            val localRelatedPosts: RelatedPostsUiState? = null,</span>
+<span class="nc" id="L862">            val globalRelatedPosts: RelatedPostsUiState? = null</span>
+<span class="nc" id="L863">        ) : UiState() {</span>
+<span class="nc" id="L864">            data class ReaderPostFeaturedImageUiState(val blogId: Long, val url: String? = null, val height: Int)</span>
+
+<span class="nc" id="L866">            data class ExcerptFooterUiState(val visitPostExcerptFooterLinkText: UiString? = null, val postLink: String?)</span>
+
+<span class="nc" id="L868">            data class RelatedPostsUiState(</span>
+<span class="nc" id="L869">                val cards: List&lt;ReaderRelatedPostUiState&gt;?,</span>
+<span class="nc" id="L870">                val isGlobal: Boolean,</span>
+<span class="nc" id="L871">                val headerLabel: UiString?,</span>
+<span class="nc" id="L872">                val railcarJsonStrings: List&lt;String?&gt;</span>
+            ) {
+<span class="nc" id="L874">                data class ReaderRelatedPostUiState(</span>
+<span class="nc" id="L875">                    val postId: Long,</span>
+<span class="nc" id="L876">                    val blogId: Long,</span>
+<span class="nc" id="L877">                    val isGlobal: Boolean,</span>
+<span class="nc" id="L878">                    val title: UiString?,</span>
+<span class="nc" id="L879">                    val excerpt: UiString?,</span>
+<span class="nc" id="L880">                    val featuredImageUrl: String?,</span>
+<span class="nc" id="L881">                    val featuredImageVisibility: Boolean,</span>
+<span class="nc" id="L882">                    val featuredImageCornerRadius: UiDimen,</span>
+<span class="nc" id="L883">                    val onItemClicked: (Long, Long, Boolean) -&gt; Unit</span>
+                )
+            }
+<span class="nc" id="L886">        }</span>
+<span class="nc" id="L887">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = MAIN)
+    fun onEventMainThread(event: UpdateCommentsStarted?) {
+<span class="nc bnc" id="L892" title="All 6 branches missed.">        if (!commentsSnippetFeatureConfig.isEnabled() || event == null || event.scenario != COMMENT_SNIPPET) return</span>
+<span class="nc bnc" id="L893" title="All 12 branches missed.">        if (post?.blogId != event.blogId || post?.postId != event.postId) return</span>
+
+<span class="nc" id="L895">        _commentSnippetState.value = CommentSnippetState.Loading</span>
+<span class="nc" id="L896">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = MAIN)
+    fun onEventMainThread(event: UpdateCommentsEnded?) {
+<span class="nc bnc" id="L901" title="All 6 branches missed.">        if (!commentsSnippetFeatureConfig.isEnabled() || event == null || event.scenario != COMMENT_SNIPPET) return</span>
+<span class="nc bnc" id="L902" title="All 14 branches missed.">        if (event.result == null || post?.blogId != event.blogId || post?.postId != event.postId) return</span>
+
+<span class="nc" id="L904">        launch(mainDispatcher) {</span>
+            // Check the cache
+<span class="nc bnc" id="L906" title="All 2 branches missed.">            val comments: ReaderCommentList? = post?.let {</span>
+<span class="nc bnc" id="L907" title="All 2 branches missed.">                withContext(bgDispatcher) {</span>
+<span class="nc bnc" id="L908" title="All 2 branches missed.">                    readerCommentTableWrapper.getCommentsForPostSnippet(</span>
+<span class="nc" id="L909">                            it,</span>
+<span class="nc" id="L910">                            READER_COMMENTS_TO_REQUEST_FOR_POST_SNIPPET</span>
+<span class="nc" id="L911">                    ) ?: ReaderCommentList()</span>
+                }
+            }
+
+<span class="nc" id="L915">            _commentSnippetState.value = getUpdatedSnippetState(comments, event.result)</span>
+<span class="nc" id="L916">        }</span>
+<span class="nc" id="L917">    }</span>
+
+    fun onUserNavigateFromComments() {
+        // reload post from DB and update UI state
+<span class="nc bnc" id="L921" title="All 2 branches missed.">        val currentUiState: ReaderPostDetailsUiState? = (_uiState.value as? ReaderPostDetailsUiState)</span>
+<span class="nc bnc" id="L922" title="All 2 branches missed.">        currentUiState?.let {</span>
+<span class="nc bnc" id="L923" title="All 2 branches missed.">            findPost(currentUiState.postId, currentUiState.blogId)?.let { post -&gt;</span>
+<span class="nc" id="L924">                this.post = post</span>
+<span class="nc" id="L925">                onUpdatePost(post)</span>
+<span class="nc" id="L926">            }</span>
+        }
+
+<span class="nc bnc" id="L929" title="All 2 branches missed.">        if (commentsSnippetFeatureConfig.isEnabled()) {</span>
+            // reload comments from DB and update comments snippet if they are not being loaded
+<span class="nc bnc" id="L931" title="All 2 branches missed.">            if (_commentSnippetState.value !is CommentSnippetState.Loading) {</span>
+<span class="nc" id="L932">                launch(mainDispatcher) {</span>
+<span class="nc bnc" id="L933" title="All 2 branches missed.">                    val comments: ReaderCommentList? = post?.let {</span>
+<span class="nc bnc" id="L934" title="All 2 branches missed.">                        withContext(bgDispatcher) {</span>
+<span class="nc bnc" id="L935" title="All 2 branches missed.">                            readerCommentTableWrapper.getCommentsForPostSnippet(</span>
+<span class="nc" id="L936">                                    it,</span>
+<span class="nc" id="L937">                                    READER_COMMENTS_TO_REQUEST_FOR_POST_SNIPPET</span>
+<span class="nc" id="L938">                            ) ?: ReaderCommentList()</span>
+                        }
+                    }
+
+<span class="nc" id="L942">                    _commentSnippetState.value = getUpdatedSnippetState(comments, CHANGED)</span>
+<span class="nc" id="L943">                }</span>
+            }
+        }
+<span class="nc" id="L946">    }</span>
+
+    private fun getUpdatedSnippetState(comments: ReaderCommentList?, result: UpdateResult): CommentSnippetState {
+<span class="nc bnc" id="L949" title="All 2 branches missed.">        return if (comments == null) {</span>
+<span class="nc" id="L950">            lastRenderedRepliesData = null</span>
+<span class="nc" id="L951">            CommentSnippetState.Failure(UiStringRes(R.string.reader_comments_post_fetch_failure))</span>
+        } else {
+<span class="nc bnc" id="L953" title="All 2 branches missed.">            when (result) {</span>
+                HAS_NEW, CHANGED, UNCHANGED -&gt; {
+<span class="nc" id="L955">                    lastRenderedRepliesData = RenderedRepliesData(</span>
+<span class="nc bnc" id="L956" title="All 2 branches missed.">                            blogId = post?.blogId,</span>
+<span class="nc bnc" id="L957" title="All 2 branches missed.">                            postId = post?.postId,</span>
+<span class="nc bnc" id="L958" title="All 2 branches missed.">                            numReplies = post?.numReplies</span>
+                    )
+
+<span class="nc bnc" id="L961" title="All 4 branches missed.">                    if (comments.isNotEmpty()) {</span>
+<span class="nc" id="L962">                        CommentSnippetData(comments = comments)</span>
+                    } else {
+<span class="nc" id="L964">                        CommentSnippetState.Empty(UiStringRes(</span>
+<span class="nc bnc" id="L965" title="All 6 branches missed.">                                if (post?.isCommentsOpen != false) {</span>
+<span class="nc" id="L966">                                    R.string.reader_empty_comments</span>
+                                } else {
+<span class="nc" id="L968">                                    R.string.reader_label_comments_closed</span>
+                                }
+                        ))
+                    }
+                }
+                FAILED -&gt; {
+<span class="nc" id="L974">                    lastRenderedRepliesData = null</span>
+<span class="nc bnc" id="L975" title="All 2 branches missed.">                    if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L976">                        CommentSnippetState.Failure(UiStringRes(R.string.no_network_message))</span>
+                    } else {
+<span class="nc" id="L978">                        CommentSnippetState.Failure(UiStringRes(R.string.reader_comments_fetch_failure))</span>
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onCleared() {
+<span class="nc" id="L986">        super.onCleared()</span>
+<span class="nc bnc" id="L987" title="All 2 branches missed.">        getLikesJob?.cancel()</span>
+<span class="nc" id="L988">        getLikesHandler.clear()</span>
+<span class="nc" id="L989">        readerPostCardActionsHandler.onCleared()</span>
+<span class="nc" id="L990">        eventBusWrapper.unregister(readerFetchRelatedPostsUseCase)</span>
+<span class="nc bnc" id="L991" title="All 2 branches missed.">        if (commentsSnippetFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L992">            eventBusWrapper.unregister(this)</span>
+        }
+<span class="nc" id="L994">    }</span>
+
+    companion object {
+        @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+        const val MAX_NUM_LIKES_FACES_WITH_SELF = 6
+        @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+        const val MAX_NUM_LIKES_FACES_WITHOUT_SELF = 5
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

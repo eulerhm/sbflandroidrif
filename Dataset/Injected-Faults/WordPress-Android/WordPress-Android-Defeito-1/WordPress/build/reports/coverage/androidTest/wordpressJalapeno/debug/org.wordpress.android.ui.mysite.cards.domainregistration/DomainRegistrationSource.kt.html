@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DomainRegistrationSource.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.mysite.cards.domainregistration</a> &gt; <span class="el_source">DomainRegistrationSource.kt</span></div><h1>DomainRegistrationSource.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.mysite.cards.domainregistration
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.SiteActionBuilder
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.SiteStore.OnPlansFetched
+import org.wordpress.android.fluxc.utils.AppLogWrapper
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.mysite.MySiteSource.MySiteRefreshSource
+import org.wordpress.android.ui.mysite.MySiteUiState.PartialState.DomainCreditAvailable
+import org.wordpress.android.ui.mysite.SelectedSiteRepository
+import org.wordpress.android.ui.plans.isDomainCreditAvailable
+import org.wordpress.android.util.AppLog.T.DOMAIN_REGISTRATION
+import org.wordpress.android.util.SiteUtilsWrapper
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.resume
+
+<span class="nc" id="L30">class DomainRegistrationSource @Inject constructor(</span>
+<span class="nc" id="L31">    @param:Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L32">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L33">    private val selectedSiteRepository: SelectedSiteRepository,</span>
+<span class="nc" id="L34">    private val appLogWrapper: AppLogWrapper,</span>
+<span class="nc" id="L35">    private val siteUtils: SiteUtilsWrapper</span>
+) : MySiteRefreshSource&lt;DomainCreditAvailable&gt; {
+<span class="nc" id="L37">    override val refresh = MutableLiveData(false)</span>
+
+<span class="nc" id="L39">    private val continuations = mutableMapOf&lt;Int, CancellableContinuation&lt;OnPlansFetched&gt;?&gt;()</span>
+
+<span class="nc" id="L41">    init {</span>
+<span class="nc" id="L42">        dispatcher.register(this)</span>
+<span class="nc" id="L43">    }</span>
+
+    fun clear() {
+<span class="nc" id="L46">        dispatcher.unregister(this)</span>
+<span class="nc" id="L47">    }</span>
+
+    override fun build(coroutineScope: CoroutineScope, siteLocalId: Int): LiveData&lt;DomainCreditAvailable&gt; {
+<span class="nc" id="L50">        val data = MediatorLiveData&lt;DomainCreditAvailable&gt;()</span>
+<span class="nc" id="L51">        data.addSource(refresh) { data.refreshData(coroutineScope, siteLocalId, refresh.value) }</span>
+<span class="nc" id="L52">        refresh()</span>
+<span class="nc" id="L53">        return data</span>
+    }
+
+<span class="nc" id="L56">    private fun MediatorLiveData&lt;DomainCreditAvailable&gt;.refreshData(</span>
+        coroutineScope: CoroutineScope,
+        siteLocalId: Int,
+<span class="nc" id="L59">        isRefresh: Boolean? = null</span>
+    ) {
+<span class="nc" id="L61">        val selectedSite = selectedSiteRepository.getSelectedSite()</span>
+<span class="nc" id="L62">        when (isRefresh) {</span>
+<span class="nc bnc" id="L63" title="All 4 branches missed.">            null, true -&gt; refreshData(coroutineScope, siteLocalId, selectedSite)</span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">            false -&gt; Unit // Do nothing</span>
+        }
+<span class="nc" id="L66">    }</span>
+
+    private fun MediatorLiveData&lt;DomainCreditAvailable&gt;.refreshData(
+        coroutineScope: CoroutineScope,
+        siteLocalId: Int,
+        selectedSite: SiteModel?
+    ) {
+<span class="nc bnc" id="L73" title="All 6 branches missed.">        if (selectedSite == null || selectedSite.id != siteLocalId || !shouldFetchPlans(selectedSite)) {</span>
+<span class="nc" id="L74">            postState(DomainCreditAvailable(false))</span>
+        } else {
+<span class="nc" id="L76">            fetchPlansAndRefreshData(coroutineScope, siteLocalId, selectedSite)</span>
+        }
+<span class="nc" id="L78">    }</span>
+
+    private fun MediatorLiveData&lt;DomainCreditAvailable&gt;.fetchPlansAndRefreshData(
+        coroutineScope: CoroutineScope,
+        siteLocalId: Int,
+        selectedSite: SiteModel
+    ) {
+<span class="nc bnc" id="L85" title="All 2 branches missed.">        if (continuations[siteLocalId] == null) {</span>
+<span class="nc" id="L86">            coroutineScope.launch(bgDispatcher) { fetchPlans(siteLocalId, selectedSite) }</span>
+        } else {
+<span class="nc" id="L88">            appLogWrapper.d(DOMAIN_REGISTRATION, &quot;A request is already running for $siteLocalId&quot;)</span>
+        }
+<span class="nc" id="L90">    }</span>
+
+    @Suppress(&quot;SwallowedException&quot;)
+    private suspend fun MediatorLiveData&lt;DomainCreditAvailable&gt;.fetchPlans(siteLocalId: Int, selectedSite: SiteModel) {
+<span class="nc" id="L94">        try {</span>
+<span class="nc" id="L95">            val event = suspendCancellableCoroutine&lt;OnPlansFetched&gt; { cancellableContinuation -&gt;</span>
+<span class="nc" id="L96">                continuations[siteLocalId] = cancellableContinuation</span>
+<span class="nc" id="L97">                dispatchFetchPlans(selectedSite)</span>
+<span class="nc" id="L98">            }</span>
+<span class="nc" id="L99">            when {</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">                event.isError -&gt; {</span>
+<span class="nc" id="L101">                    val message = &quot;An error occurred while fetching plans :${event.error.message}&quot;</span>
+<span class="nc" id="L102">                    appLogWrapper.e(DOMAIN_REGISTRATION, message)</span>
+<span class="nc" id="L103">                    postState(DomainCreditAvailable(false))</span>
+                }
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                siteLocalId == event.site.id -&gt; {</span>
+<span class="nc" id="L106">                    postState(DomainCreditAvailable(isDomainCreditAvailable(event.plans)))</span>
+                }
+                else -&gt; {
+<span class="nc" id="L109">                    postState(DomainCreditAvailable(false))</span>
+                }
+            }
+<span class="nc" id="L112">        } catch (e: CancellationException) {</span>
+<span class="nc" id="L113">            postState(DomainCreditAvailable(false))</span>
+        }
+<span class="nc" id="L115">    }</span>
+
+<span class="nc bnc" id="L117" title="All 2 branches missed.">    private fun shouldFetchPlans(site: SiteModel) = !siteUtils.onFreePlan(site)</span>
+
+<span class="nc" id="L119">    private fun dispatchFetchPlans(site: SiteModel) = dispatcher.dispatch(SiteActionBuilder.newFetchPlansAction(site))</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onPlansFetched(event: OnPlansFetched) {
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        continuations[event.site.id]?.resume(event)</span>
+<span class="nc" id="L124">        continuations[event.site.id] = null</span>
+<span class="nc" id="L125">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

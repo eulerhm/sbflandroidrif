@@ -1,0 +1,608 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostUtils.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts</a> &gt; <span class="el_source">PostUtils.java</span></div><h1>PostUtils.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts;
+
+import android.content.Context;
+import android.text.TextUtils;
+import android.text.format.DateUtils;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import org.apache.commons.lang3.StringUtils;
+import org.greenrobot.eventbus.EventBus;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.editor.Utils;
+import org.wordpress.android.fluxc.model.MediaModel;
+import org.wordpress.android.fluxc.model.PostImmutableModel;
+import org.wordpress.android.fluxc.model.PostModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.model.post.PostLocation;
+import org.wordpress.android.fluxc.model.post.PostStatus;
+import org.wordpress.android.fluxc.store.PostStore;
+import org.wordpress.android.ui.posts.RemotePreviewLogicHelper.RemotePreviewType;
+import org.wordpress.android.ui.posts.mediauploadcompletionprocessors.MediaUploadCompletionProcessor;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.ui.uploads.PostEvents;
+import org.wordpress.android.ui.uploads.UploadUtils;
+import org.wordpress.android.ui.utils.UiString.UiStringText;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.DateTimeUtils;
+import org.wordpress.android.util.HtmlUtils;
+import org.wordpress.android.util.LocaleManager;
+import org.wordpress.android.util.SiteUtils;
+import org.wordpress.android.util.UrlUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+import org.wordpress.android.util.helpers.MediaFile;
+
+import java.text.BreakIterator;
+import java.text.DateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+<span class="nc" id="L52">public class PostUtils {</span>
+    private static final int MAX_EXCERPT_LEN = 150;
+
+<span class="nc" id="L55">    private static final HashSet&lt;String&gt; SHORTCODE_TABLE = new HashSet&lt;&gt;();</span>
+
+    private static final String GUTENBERG_BLOCK_START = &quot;&lt;!-- wp:&quot;;
+    private static final int SRC_ATTRIBUTE_LENGTH_PLUS_ONE = 5;
+    private static final String GB_IMG_BLOCK_HEADER_PLACEHOLDER = &quot;&lt;!-- wp:image {\&quot;id\&quot;:%s&quot;;
+    private static final String GB_IMG_BLOCK_CLASS_PLACEHOLDER = &quot;class=\&quot;wp-image-%s\&quot;&quot;;
+    private static final String GB_MEDIA_TEXT_BLOCK_HEADER_PLACEHOLDER = &quot;&lt;!-- wp:media-text {\&quot;mediaId\&quot;:%s&quot;;
+    public static final String WP_STORIES_GUTENBERG_BLOCK_START = &quot;&lt;!-- wp:jetpack/story&quot;;
+
+    public static Map&lt;String, Object&gt; addPostTypeAndPostFormatToAnalyticsProperties(PostImmutableModel post,
+                                                                                    Map&lt;String, Object&gt; properties) {
+<span class="nc bnc" id="L66" title="All 2 branches missed.">        if (properties == null) {</span>
+<span class="nc" id="L67">            properties = new HashMap&lt;&gt;();</span>
+        }
+<span class="nc bnc" id="L69" title="All 2 branches missed.">        properties.put(&quot;post_type&quot;, post.isPage() ? &quot;page&quot; : &quot;post&quot;);</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">        if (!StringUtils.isEmpty(post.getPostFormat())) {</span>
+<span class="nc" id="L71">            properties.put(&quot;post_format&quot;, post.getPostFormat());</span>
+        }
+<span class="nc" id="L73">        return properties;</span>
+    }
+
+    /*
+     * collapses shortcodes in the passed post content, stripping anything between the
+     * shortcode name and the closing brace
+     * ex: collapseShortcodes(&quot;[gallery ids=&quot;1206,1205,1191&quot;]&quot;) -&gt; &quot;[gallery]&quot;
+     */
+    public static String collapseShortcodes(final String postContent) {
+        // speed things up by skipping regex if content doesn't contain a brace
+<span class="nc bnc" id="L83" title="All 4 branches missed.">        if (postContent == null || !postContent.contains(&quot;[&quot;)) {</span>
+<span class="nc" id="L84">            return postContent;</span>
+        }
+
+        String shortCode;
+<span class="nc" id="L88">        Pattern p = Pattern.compile(&quot;(\\[ *([^ ]+) [^\\[\\]]*\\])&quot;);</span>
+<span class="nc" id="L89">        Matcher m = p.matcher(postContent);</span>
+<span class="nc" id="L90">        StringBuffer sb = new StringBuffer();</span>
+<span class="nc bnc" id="L91" title="All 2 branches missed.">        while (m.find()) {</span>
+<span class="nc" id="L92">            shortCode = m.group(2);</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">            if (isKnownShortcode(shortCode)) {</span>
+<span class="nc" id="L94">                m.appendReplacement(sb, &quot;[&quot; + shortCode + &quot;]&quot;);</span>
+            } else {
+<span class="nc" id="L96">                AppLog.d(AppLog.T.POSTS, &quot;unknown shortcode - &quot; + shortCode);</span>
+            }
+        }
+<span class="nc" id="L99">        m.appendTail(sb);</span>
+
+<span class="nc" id="L101">        return sb.toString();</span>
+    }
+
+    private static boolean isKnownShortcode(String shortCode) {
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (shortCode == null) {</span>
+<span class="nc" id="L106">            return false;</span>
+        }
+
+        // populate on first use
+<span class="nc bnc" id="L110" title="All 2 branches missed.">        if (SHORTCODE_TABLE.size() == 0) {</span>
+            // default shortcodes
+<span class="nc" id="L112">            SHORTCODE_TABLE.add(&quot;audio&quot;);</span>
+<span class="nc" id="L113">            SHORTCODE_TABLE.add(&quot;caption&quot;);</span>
+<span class="nc" id="L114">            SHORTCODE_TABLE.add(&quot;embed&quot;);</span>
+<span class="nc" id="L115">            SHORTCODE_TABLE.add(&quot;gallery&quot;);</span>
+<span class="nc" id="L116">            SHORTCODE_TABLE.add(&quot;playlist&quot;);</span>
+<span class="nc" id="L117">            SHORTCODE_TABLE.add(&quot;video&quot;);</span>
+<span class="nc" id="L118">            SHORTCODE_TABLE.add(&quot;wp_caption&quot;);</span>
+            // audio/video
+<span class="nc" id="L120">            SHORTCODE_TABLE.add(&quot;dailymotion&quot;);</span>
+<span class="nc" id="L121">            SHORTCODE_TABLE.add(&quot;flickr&quot;);</span>
+<span class="nc" id="L122">            SHORTCODE_TABLE.add(&quot;hulu&quot;);</span>
+<span class="nc" id="L123">            SHORTCODE_TABLE.add(&quot;kickstarter&quot;);</span>
+<span class="nc" id="L124">            SHORTCODE_TABLE.add(&quot;soundcloud&quot;);</span>
+<span class="nc" id="L125">            SHORTCODE_TABLE.add(&quot;vimeo&quot;);</span>
+<span class="nc" id="L126">            SHORTCODE_TABLE.add(&quot;vine&quot;);</span>
+<span class="nc" id="L127">            SHORTCODE_TABLE.add(&quot;wpvideo&quot;);</span>
+<span class="nc" id="L128">            SHORTCODE_TABLE.add(&quot;youtube&quot;);</span>
+            // images and documents
+<span class="nc" id="L130">            SHORTCODE_TABLE.add(&quot;instagram&quot;);</span>
+<span class="nc" id="L131">            SHORTCODE_TABLE.add(&quot;scribd&quot;);</span>
+<span class="nc" id="L132">            SHORTCODE_TABLE.add(&quot;slideshare&quot;);</span>
+<span class="nc" id="L133">            SHORTCODE_TABLE.add(&quot;slideshow&quot;);</span>
+<span class="nc" id="L134">            SHORTCODE_TABLE.add(&quot;presentation&quot;);</span>
+<span class="nc" id="L135">            SHORTCODE_TABLE.add(&quot;googleapps&quot;);</span>
+<span class="nc" id="L136">            SHORTCODE_TABLE.add(&quot;office&quot;);</span>
+            // other
+<span class="nc" id="L138">            SHORTCODE_TABLE.add(&quot;googlemaps&quot;);</span>
+<span class="nc" id="L139">            SHORTCODE_TABLE.add(&quot;polldaddy&quot;);</span>
+<span class="nc" id="L140">            SHORTCODE_TABLE.add(&quot;recipe&quot;);</span>
+<span class="nc" id="L141">            SHORTCODE_TABLE.add(&quot;sitemap&quot;);</span>
+<span class="nc" id="L142">            SHORTCODE_TABLE.add(&quot;twitter-timeline&quot;);</span>
+<span class="nc" id="L143">            SHORTCODE_TABLE.add(&quot;upcomingevents&quot;);</span>
+        }
+
+<span class="nc" id="L146">        return SHORTCODE_TABLE.contains(shortCode);</span>
+    }
+
+    public static void trackSavePostAnalytics(PostImmutableModel post, SiteModel site) {
+<span class="nc" id="L150">        PostStatus status = PostStatus.fromPost(post);</span>
+<span class="nc" id="L151">        Map&lt;String, Object&gt; properties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L152">        PostUtils.addPostTypeAndPostFormatToAnalyticsProperties(post, properties);</span>
+<span class="nc bnc" id="L153" title="All 4 branches missed.">        switch (status) {</span>
+            case PUBLISHED:
+<span class="nc bnc" id="L155" title="All 2 branches missed.">                if (!post.isLocalDraft()) {</span>
+<span class="nc" id="L156">                    properties.put(&quot;post_id&quot;, post.getRemotePostId());</span>
+<span class="nc" id="L157">                    properties.put(AnalyticsUtils.HAS_GUTENBERG_BLOCKS_KEY,</span>
+<span class="nc" id="L158">                            PostUtils.contentContainsGutenbergBlocks(post.getContent()));</span>
+<span class="nc" id="L159">                    AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.EDITOR_UPDATED_POST, site, properties);</span>
+                } else {
+                    // Analytics for the event EDITOR_PUBLISHED_POST are tracked in PostUploadHandler
+                }
+                break;
+            case SCHEDULED:
+<span class="nc bnc" id="L165" title="All 2 branches missed.">                if (!post.isLocalDraft()) {</span>
+<span class="nc" id="L166">                    properties.put(&quot;post_id&quot;, post.getRemotePostId());</span>
+<span class="nc" id="L167">                    properties.put(AnalyticsUtils.HAS_GUTENBERG_BLOCKS_KEY,</span>
+<span class="nc" id="L168">                            PostUtils.contentContainsGutenbergBlocks(post.getContent()));</span>
+<span class="nc" id="L169">                    AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.EDITOR_UPDATED_POST, site, properties);</span>
+                } else {
+<span class="nc" id="L171">                    properties.put(&quot;word_count&quot;, AnalyticsUtils.getWordCount(post.getContent()));</span>
+<span class="nc" id="L172">                    properties.put(&quot;editor_source&quot;,</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">                            contentContainsWPStoryGutenbergBlocks(post.getContent())</span>
+<span class="nc" id="L174">                                    ? SiteUtils.WP_STORIES_CREATOR_NAME</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                                    : (shouldShowGutenbergEditor(post.isLocalDraft(), post.getContent(), site)</span>
+<span class="nc" id="L176">                                        ? SiteUtils.GB_EDITOR_NAME : SiteUtils.AZTEC_EDITOR_NAME));</span>
+<span class="nc" id="L177">                    properties.put(AnalyticsUtils.HAS_GUTENBERG_BLOCKS_KEY,</span>
+<span class="nc" id="L178">                            PostUtils.contentContainsGutenbergBlocks(post.getContent()));</span>
+<span class="nc" id="L179">                    AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.EDITOR_SCHEDULED_POST, site,</span>
+                                                        properties);
+                }
+<span class="nc" id="L182">                break;</span>
+            case DRAFT:
+<span class="nc" id="L184">                properties.put(&quot;post_id&quot;, post.getRemotePostId());</span>
+<span class="nc" id="L185">                properties.put(AnalyticsUtils.HAS_GUTENBERG_BLOCKS_KEY,</span>
+<span class="nc" id="L186">                        PostUtils.contentContainsGutenbergBlocks(post.getContent()));</span>
+<span class="nc" id="L187">                AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.EDITOR_SAVED_DRAFT, site, properties);</span>
+<span class="nc" id="L188">                break;</span>
+            default:
+                // No-op
+        }
+<span class="nc" id="L192">    }</span>
+
+    public static void trackOpenEditorAnalytics(PostImmutableModel post, SiteModel site) {
+<span class="nc" id="L195">        Map&lt;String, Object&gt; properties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L196">        PostUtils.addPostTypeAndPostFormatToAnalyticsProperties(post, properties);</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        if (!post.isLocalDraft()) {</span>
+<span class="nc" id="L198">            properties.put(&quot;post_id&quot;, post.getRemotePostId());</span>
+        }
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        properties.put(AnalyticsUtils.EDITOR_HAS_HW_ACCELERATION_DISABLED_KEY, AppPrefs.isPostWithHWAccelerationOff(</span>
+<span class="nc" id="L201">                site.getId(), post.getId()) ? &quot;1&quot; : &quot;0&quot;);</span>
+<span class="nc" id="L202">        properties.put(AnalyticsUtils.HAS_GUTENBERG_BLOCKS_KEY,</span>
+<span class="nc" id="L203">                PostUtils.contentContainsGutenbergBlocks(post.getContent()));</span>
+<span class="nc" id="L204">        AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.EDITOR_OPENED, site,</span>
+                properties);
+<span class="nc" id="L206">    }</span>
+
+    public static boolean isPublishable(PostImmutableModel post) {
+<span class="nc bnc" id="L209" title="All 4 branches missed.">        return post != null &amp;&amp; !(post.getContent().trim().isEmpty()</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">                                 &amp;&amp; post.getExcerpt().trim().isEmpty()</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">                                 &amp;&amp; post.getTitle().trim().isEmpty());</span>
+    }
+
+    public static boolean hasEmptyContentFields(PostImmutableModel post) {
+<span class="nc bnc" id="L215" title="All 4 branches missed.">        return TextUtils.isEmpty(post.getTitle()) &amp;&amp; TextUtils.isEmpty(post.getContent());</span>
+    }
+
+    /**
+     * Checks if two posts have differing data
+     */
+    public static boolean postHasEdits(@Nullable PostImmutableModel oldPost, PostImmutableModel newPost) {
+<span class="nc bnc" id="L222" title="All 2 branches missed.">        if (oldPost == null) {</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">            return newPost != null;</span>
+        }
+
+<span class="nc bnc" id="L226" title="All 4 branches missed.">        return newPost == null || !(StringUtils.equals(oldPost.getTitle(), newPost.getTitle())</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">                                    &amp;&amp; StringUtils.equals(oldPost.getContent(), newPost.getContent())</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">                                    &amp;&amp; StringUtils.equals(oldPost.getExcerpt(), newPost.getExcerpt())</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">                                    &amp;&amp; StringUtils.equals(oldPost.getStatus(), newPost.getStatus())</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">                                    &amp;&amp; StringUtils.equals(oldPost.getPassword(), newPost.getPassword())</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">                                    &amp;&amp; StringUtils.equals(oldPost.getPostFormat(), newPost.getPostFormat())</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">                                    &amp;&amp; StringUtils.equals(oldPost.getDateCreated(), newPost.getDateCreated())</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">                                    &amp;&amp; StringUtils.equals(oldPost.getSlug(), newPost.getSlug())</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">                                    &amp;&amp; oldPost.getFeaturedImageId() == newPost.getFeaturedImageId()</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">                                    &amp;&amp; oldPost.getTagNameList().containsAll(newPost.getTagNameList())</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">                                    &amp;&amp; newPost.getTagNameList().containsAll(oldPost.getTagNameList())</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">                                    &amp;&amp; oldPost.getCategoryIdList().containsAll(newPost.getCategoryIdList())</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">                                    &amp;&amp; newPost.getCategoryIdList().containsAll(oldPost.getCategoryIdList())</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">                                    &amp;&amp; PostLocation.Companion.equals(oldPost.getLocation(), newPost.getLocation())</span>
+<span class="nc" id="L240">                                    &amp;&amp; oldPost.getChangesConfirmedContentHashcode() == newPost</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">                .getChangesConfirmedContentHashcode()</span>
+        );
+    }
+
+    public static String getPostListExcerptFromPost(PostModel post) {
+<span class="nc bnc" id="L246" title="All 2 branches missed.">        if (StringUtils.isEmpty(post.getExcerpt())) {</span>
+<span class="nc" id="L247">            return makeExcerpt(post.getContent());</span>
+        } else {
+<span class="nc" id="L249">            return makeExcerpt(post.getExcerpt());</span>
+        }
+    }
+
+
+    /*
+     * Java's string.trim() doesn't handle non-breaking space chars (#160), which may appear at the
+     * end of post content - work around this by converting them to standard spaces before trimming
+     */
+<span class="nc" id="L258">    private static final String NBSP = String.valueOf((char) 160);</span>
+
+    private static String trimEx(final String s) {
+<span class="nc" id="L261">        return s.replace(NBSP, &quot; &quot;).trim();</span>
+    }
+
+    private static String makeExcerpt(String description) {
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (StringUtils.isEmpty(description)) {</span>
+<span class="nc" id="L266">            return null;</span>
+        }
+
+<span class="nc" id="L269">        String s = HtmlUtils.fastStripHtml(removeWPGallery(description));</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        if (s.length() &lt; MAX_EXCERPT_LEN) {</span>
+<span class="nc" id="L271">            return trimEx(s);</span>
+        }
+
+<span class="nc" id="L274">        StringBuilder result = new StringBuilder();</span>
+<span class="nc" id="L275">        BreakIterator wordIterator = BreakIterator.getWordInstance();</span>
+<span class="nc" id="L276">        wordIterator.setText(s);</span>
+<span class="nc" id="L277">        int start = wordIterator.first();</span>
+<span class="nc" id="L278">        int end = wordIterator.next();</span>
+<span class="nc" id="L279">        int totalLen = 0;</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">        while (end != BreakIterator.DONE) {</span>
+<span class="nc" id="L281">            String word = s.substring(start, end);</span>
+<span class="nc" id="L282">            result.append(word);</span>
+<span class="nc" id="L283">            totalLen += word.length();</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">            if (totalLen &gt;= MAX_EXCERPT_LEN) {</span>
+<span class="nc" id="L285">                break;</span>
+            }
+<span class="nc" id="L287">            start = end;</span>
+<span class="nc" id="L288">            end = wordIterator.next();</span>
+<span class="nc" id="L289">        }</span>
+
+<span class="nc bnc" id="L291" title="All 2 branches missed.">        if (totalLen == 0) {</span>
+<span class="nc" id="L292">            return null;</span>
+        }
+<span class="nc" id="L294">        return trimEx(result.toString()) + &quot;...&quot;;</span>
+    }
+
+    /**
+     * Removes the wp-gallery tag and its internals from the given string.
+     *
+     * See https://github.com/wordpress-mobile/WordPress-Android/issues/11063
+     */
+    public static String removeWPGallery(String str) {
+<span class="nc" id="L303">        return str.replaceAll(&quot;(?s)&lt;!--\\swp:gallery?(.*?)wp:gallery\\s--&gt;&quot;, &quot;&quot;);</span>
+    }
+
+    public static String getFormattedDate(PostModel post) {
+<span class="nc bnc" id="L307" title="All 2 branches missed.">        if (PostStatus.fromPost(post) == PostStatus.SCHEDULED) {</span>
+<span class="nc" id="L308">            return DateUtils.formatDateTime(WordPress.getContext(),</span>
+<span class="nc" id="L309">                                            DateTimeUtils.timestampFromIso8601Millis(post.getDateCreated()),</span>
+                                            DateUtils.FORMAT_ABBREV_ALL);
+        } else {
+<span class="nc" id="L312">            return DateTimeUtils.javaDateToTimeSpan(DateTimeUtils.dateUTCFromIso8601(post.getDateCreated()),</span>
+<span class="nc" id="L313">                                                    WordPress.getContext());</span>
+        }
+    }
+
+    static boolean shouldPublishImmediately(PostModel postModel) {
+<span class="nc bnc" id="L318" title="All 2 branches missed.">        if (!shouldPublishImmediatelyOptionBeAvailable(PostStatus.fromPost(postModel))) {</span>
+<span class="nc" id="L319">            return false;</span>
+        }
+<span class="nc" id="L321">        Date pubDate = DateTimeUtils.dateFromIso8601(postModel.getDateCreated());</span>
+<span class="nc" id="L322">        Date now = new Date();</span>
+        // Publish immediately for posts that don't have any date set yet and drafts with publish dates in the past
+<span class="nc bnc" id="L324" title="All 4 branches missed.">        return pubDate == null || !pubDate.after(now);</span>
+    }
+
+    static boolean shouldPublishImmediately(PostStatus postStatus, String dateCreated) {
+<span class="nc bnc" id="L328" title="All 2 branches missed.">        if (!shouldPublishImmediatelyOptionBeAvailable(postStatus)) {</span>
+<span class="nc" id="L329">            return false;</span>
+        }
+<span class="nc" id="L331">        Date pubDate = DateTimeUtils.dateFromIso8601(dateCreated);</span>
+<span class="nc" id="L332">        Date now = new Date();</span>
+        // Publish immediately for posts that don't have any date set yet and drafts with publish dates in the past
+<span class="nc bnc" id="L334" title="All 4 branches missed.">        return pubDate == null || !pubDate.after(now);</span>
+    }
+
+    public static boolean isPublishDateInTheFuture(String dateCreated) {
+<span class="nc" id="L338">        return isPublishDateInTheFuture(dateCreated, new Date());</span>
+    }
+
+    public static boolean isPublishDateInTheFuture(String dateCreated, Date currentDate) {
+<span class="nc" id="L342">        Date pubDate = DateTimeUtils.dateFromIso8601(dateCreated);</span>
+<span class="nc bnc" id="L343" title="All 4 branches missed.">        return pubDate != null &amp;&amp; pubDate.after(currentDate);</span>
+    }
+
+    public static boolean isPublishDateInThePast(String dateCreated, Date currentDate) {
+<span class="nc" id="L347">        Date pubDate = DateTimeUtils.dateFromIso8601(dateCreated);</span>
+
+<span class="nc" id="L349">        Calendar cal = Calendar.getInstance();</span>
+<span class="nc" id="L350">        cal.setTime(currentDate);</span>
+        // just use half an hour before now as a threshold to make sure this is backdated, to avoid false positives
+<span class="nc" id="L352">        cal.add(Calendar.MINUTE, -30);</span>
+<span class="nc" id="L353">        Date halfHourBack = cal.getTime();</span>
+<span class="nc bnc" id="L354" title="All 4 branches missed.">        return pubDate != null &amp;&amp; pubDate.before(halfHourBack);</span>
+    }
+
+    // Only drafts should have the option to publish immediately to avoid user confusion
+    static boolean shouldPublishImmediatelyOptionBeAvailable(PostModel postModel) {
+<span class="nc bnc" id="L359" title="All 2 branches missed.">        return PostStatus.fromPost(postModel) == PostStatus.DRAFT;</span>
+    }
+
+    static boolean shouldPublishImmediatelyOptionBeAvailable(PostStatus postStatus) {
+<span class="nc bnc" id="L363" title="All 4 branches missed.">        return postStatus == PostStatus.DRAFT || postStatus == PostStatus.PRIVATE;</span>
+    }
+
+    static boolean shouldPublishImmediatelyOptionBeAvailable(String postStatus) {
+<span class="nc" id="L367">        return postStatus.equals(PostStatus.DRAFT.toString());</span>
+    }
+
+    public static void updatePublishDateIfShouldBePublishedImmediately(PostModel postModel) {
+<span class="nc bnc" id="L371" title="All 2 branches missed.">        if (shouldPublishImmediately(postModel)) {</span>
+<span class="nc" id="L372">            postModel.setDateCreated(DateTimeUtils.iso8601FromDate(new Date()));</span>
+        }
+<span class="nc" id="L374">    }</span>
+
+    public static boolean isFirstTimePublish(PostImmutableModel post) {
+<span class="nc bnc" id="L377" title="All 2 branches missed.">        return PostStatus.fromPost(post) == PostStatus.DRAFT</span>
+<span class="nc bnc" id="L378" title="All 4 branches missed.">               || (PostStatus.fromPost(post) == PostStatus.PUBLISHED &amp;&amp; post.isLocalDraft());</span>
+    }
+
+    public static Set&lt;PostModel&gt; getPostsThatIncludeAnyOfTheseMedia(PostStore postStore,
+                                                                    List&lt;MediaModel&gt; mediaModelList) {
+        // if there' a Post to which the retried media belongs, clear their status
+<span class="nc" id="L384">        HashSet&lt;PostModel&gt; postsThatContainListedMedia = new HashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">        for (MediaModel media : mediaModelList) {</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">            if (media.getLocalPostId() &gt; 0) {</span>
+<span class="nc" id="L387">                PostModel post = postStore.getPostByLocalPostId(media.getLocalPostId());</span>
+<span class="nc bnc" id="L388" title="All 2 branches missed.">                if (post != null) {</span>
+<span class="nc" id="L389">                    postsThatContainListedMedia.add(post);</span>
+                }
+            }
+<span class="nc" id="L392">        }</span>
+
+<span class="nc" id="L394">        return postsThatContainListedMedia;</span>
+    }
+
+    /*
+    Note the way we detect we're in presence of Gutenberg blocks logic is taken from
+    https://github.com/WordPress/gutenberg/blob/5a6693589285363341bebad15bd56d9371cf8ecc/lib/register.php#L331-L345
+
+    * Determine whether a content string contains blocks. This test optimizes for
+    * performance rather than strict accuracy, detecting the pattern of a block
+    * but not validating its structure. For strict accuracy, you should use the
+    * block parser on post content.
+    *
+    * @since 1.6.0
+    * @see gutenberg_parse_blocks()
+    *
+    * @param string $content Content to test.
+    * @return bool Whether the content contains blocks.
+
+    function gutenberg_content_has_blocks( $content ) {
+        return false !== strpos( $content, '&lt;!-- wp:' );
+    }
+    */
+    public static boolean contentContainsGutenbergBlocks(String postContent) {
+<span class="nc bnc" id="L417" title="All 4 branches missed.">        return (postContent != null &amp;&amp; postContent.contains(GUTENBERG_BLOCK_START));</span>
+    }
+
+    public static boolean shouldShowGutenbergEditor(boolean isNewPost, String postContent, SiteModel site) {
+        // Default to Gutenberg
+
+<span class="nc bnc" id="L423" title="All 4 branches missed.">        if (isNewPost || TextUtils.isEmpty(postContent)) {</span>
+            // For a new post, use Gutenberg if the &quot;use for new posts&quot; switch is set
+<span class="nc" id="L425">            return SiteUtils.isBlockEditorDefaultForNewPost(site);</span>
+        } else {
+            // for already existing (and non-empty) posts, open Gutenberg only if the post contains blocks
+<span class="nc" id="L428">            return contentContainsGutenbergBlocks(postContent);</span>
+        }
+    }
+
+    public static String replaceMediaFileWithUrlInGutenbergPost(@NonNull String postContent,
+                                                 String localMediaId, MediaFile mediaFile, String siteUrl) {
+<span class="nc bnc" id="L434" title="All 4 branches missed.">        if (mediaFile != null &amp;&amp; contentContainsGutenbergBlocks(postContent)) {</span>
+<span class="nc" id="L435">            String remoteUrl = org.wordpress.android.util.StringUtils</span>
+<span class="nc" id="L436">                    .notNullStr(Utils.escapeQuotes(mediaFile.getFileURL()));</span>
+<span class="nc" id="L437">            MediaUploadCompletionProcessor processor = new MediaUploadCompletionProcessor(localMediaId, mediaFile,</span>
+                    siteUrl);
+<span class="nc" id="L439">            postContent = processor.processContent(postContent);</span>
+        }
+<span class="nc" id="L441">        return postContent;</span>
+    }
+
+    public static boolean isMediaInGutenbergPostBody(@NonNull String postContent,
+                                            String localMediaId) {
+<span class="nc" id="L446">        List&lt;String&gt; patterns = new ArrayList&lt;&gt;();</span>
+        // Regex for Image, Video, Audio and File blocks
+<span class="nc" id="L448">        patterns.add(&quot;&lt;!-- wp:(?:image|video|audio|file){1} \\{[^\\}]*\&quot;id\&quot;:%s([^\\d\\}][^\\}]*)*\\} --&gt;&quot;);</span>
+        // Regex for Media&amp;Text block
+<span class="nc" id="L450">        patterns.add(&quot;&lt;!-- wp:media-text \\{[^\\}]*\&quot;mediaId\&quot;:%s([^\\d\\}][^\\}]*)*\\} --&gt;&quot;);</span>
+        // Regex for Gallery block
+<span class="nc" id="L452">        patterns.add(&quot;&lt;!-- wp:gallery \\{[^\\}]*\&quot;ids\&quot;:\\[(?:\\d*,)*%s(?:,\\d*)*\\][^\\}]*\\} --&gt;&quot;);</span>
+
+<span class="nc" id="L454">        StringBuilder sb = new StringBuilder();</span>
+        // Merge the patterns into one so we don't need to go over the post content multiple times
+<span class="nc bnc" id="L456" title="All 2 branches missed.">        for (int i = 0; i &lt; patterns.size(); i++) {</span>
+<span class="nc" id="L457">            sb.append(&quot;(?:&quot;)</span>
+              // insert the media id
+<span class="nc" id="L459">              .append(String.format(patterns.get(i), localMediaId))</span>
+<span class="nc" id="L460">              .append(&quot;)&quot;);</span>
+<span class="nc bnc" id="L461" title="All 2 branches missed.">            boolean notLast = i != patterns.size() - 1;</span>
+<span class="nc bnc" id="L462" title="All 2 branches missed.">            if (notLast) {</span>
+<span class="nc" id="L463">                sb.append(&quot;|&quot;);</span>
+            }
+        }
+
+<span class="nc" id="L467">        Matcher matcher = Pattern.compile(sb.toString()).matcher(postContent);</span>
+<span class="nc" id="L468">        return matcher.find();</span>
+    }
+
+    public static boolean isPostInConflictWithRemote(PostImmutableModel post) {
+        // at this point we know there's a potential version conflict (the post has been modified
+        // both locally and on the remote)
+<span class="nc bnc" id="L474" title="All 4 branches missed.">        return !post.getLastModified().equals(post.getRemoteLastModified()) &amp;&amp; post.isLocallyChanged();</span>
+    }
+
+    public static boolean hasAutoSave(PostModel post) {
+        // TODO: would be great to check if title, content and excerpt are different,
+        // but we currently don't have them when we fetch the post list
+
+        // Ignore auto-saves in case the post is locally changed.
+        // This might be changed in the future to show a better conflict UX.
+<span class="nc bnc" id="L483" title="All 2 branches missed.">        return !post.isLocallyChanged()</span>
+               // has auto-save
+<span class="nc bnc" id="L485" title="All 2 branches missed.">               &amp;&amp; post.hasUnpublishedRevision();</span>
+    }
+
+    public static String getConflictedPostCustomStringForDialog(PostModel post) {
+<span class="nc" id="L489">        Context context = WordPress.getContext();</span>
+<span class="nc" id="L490">        String firstPart = context.getString(R.string.dialog_confirm_load_remote_post_body);</span>
+        String lastModified =
+<span class="nc bnc" id="L492" title="All 2 branches missed.">                TextUtils.isEmpty(post.getDateLocallyChanged()) ? post.getLastModified() : post.getDateLocallyChanged();</span>
+<span class="nc" id="L493">        String secondPart =</span>
+<span class="nc" id="L494">                String.format(context.getString(R.string.dialog_confirm_load_remote_post_body_2),</span>
+<span class="nc" id="L495">                        getFormattedDateForLastModified(</span>
+<span class="nc" id="L496">                                context, DateTimeUtils.timestampFromIso8601Millis(lastModified)),</span>
+<span class="nc" id="L497">                        getFormattedDateForLastModified(</span>
+<span class="nc" id="L498">                                context, DateTimeUtils.timestampFromIso8601Millis(post.getRemoteLastModified())));</span>
+<span class="nc" id="L499">        return firstPart + secondPart;</span>
+    }
+
+    public static UiStringText getCustomStringForAutosaveRevisionDialog(PostModel post) {
+<span class="nc" id="L503">        Context context = WordPress.getContext();</span>
+<span class="nc bnc" id="L504" title="All 2 branches missed.">        String firstPart = post.isPage() ? context.getString(R.string.dialog_confirm_autosave_body_first_part_for_page)</span>
+<span class="nc" id="L505">                : context.getString(R.string.dialog_confirm_autosave_body_first_part);</span>
+
+        String lastModified =
+<span class="nc bnc" id="L508" title="All 2 branches missed.">                TextUtils.isEmpty(post.getDateLocallyChanged()) ? post.getLastModified() : post.getDateLocallyChanged();</span>
+<span class="nc" id="L509">        String secondPart =</span>
+<span class="nc" id="L510">                String.format(context.getString(R.string.dialog_confirm_autosave_body_second_part),</span>
+<span class="nc" id="L511">                        getFormattedDateForLastModified(</span>
+<span class="nc" id="L512">                                context, DateTimeUtils.timestampFromIso8601Millis(lastModified)),</span>
+<span class="nc" id="L513">                        getFormattedDateForLastModified(</span>
+<span class="nc" id="L514">                                context, DateTimeUtils.timestampFromIso8601Millis(post.getAutoSaveModified())));</span>
+<span class="nc" id="L515">        return new UiStringText(firstPart + secondPart);</span>
+    }
+
+    /**
+     * E.g. Jul 2, 2013 @ 21:57
+     */
+    public static String getFormattedDateForLastModified(Context context, long timeSinceLastModified) {
+<span class="nc" id="L522">        Date date = new Date(timeSinceLastModified);</span>
+
+<span class="nc" id="L524">        DateFormat dateFormat = DateFormat.getDateInstance(</span>
+                DateFormat.MEDIUM,
+<span class="nc" id="L526">                LocaleManager.getSafeLocale(context));</span>
+<span class="nc" id="L527">        DateFormat timeFormat = DateFormat.getTimeInstance(</span>
+                DateFormat.SHORT,
+<span class="nc" id="L529">                LocaleManager.getSafeLocale(context));</span>
+
+<span class="nc" id="L531">        dateFormat.setTimeZone(Calendar.getInstance().getTimeZone());</span>
+<span class="nc" id="L532">        timeFormat.setTimeZone(Calendar.getInstance().getTimeZone());</span>
+
+<span class="nc" id="L534">        return dateFormat.format(date) + &quot; @ &quot; + timeFormat.format(date);</span>
+    }
+
+    public static String getPreviewUrlForPost(RemotePreviewType remotePreviewType, PostImmutableModel post) {
+        String previewUrl;
+
+<span class="nc bnc" id="L540" title="All 3 branches missed.">        switch (remotePreviewType) {</span>
+            case NOT_A_REMOTE_PREVIEW:
+            case REMOTE_PREVIEW:
+                // always add the preview parameter to avoid bumping stats when viewing posts
+<span class="nc" id="L544">                previewUrl = UrlUtils.appendUrlParameter(post.getLink(), &quot;preview&quot;, &quot;true&quot;);</span>
+<span class="nc" id="L545">                break;</span>
+            case REMOTE_PREVIEW_WITH_REMOTE_AUTO_SAVE:
+<span class="nc" id="L547">                previewUrl = post.getAutoSavePreviewUrl();</span>
+<span class="nc" id="L548">                break;</span>
+            default:
+<span class="nc" id="L550">                throw new IllegalArgumentException(</span>
+                        &quot;Cannot get a Preview URL for &quot; + remotePreviewType + &quot; Preview type.&quot;
+                );
+        }
+
+<span class="nc" id="L555">        return previewUrl;</span>
+    }
+
+    public static void preparePostForPublish(PostModel post, SiteModel site) {
+<span class="nc" id="L559">        PostUtils.updatePublishDateIfShouldBePublishedImmediately(post);</span>
+<span class="nc" id="L560">        post.setDateLocallyChanged(DateTimeUtils.iso8601UTCFromTimestamp(System.currentTimeMillis() / 1000));</span>
+
+        // We need to update the post status and mark the post as locally changed. If we didn't mark it as locally
+        // changed the UploadStarter wouldn't upload the post if the only change the user did was clicking on Publish
+        // button.
+<span class="nc bnc" id="L565" title="All 2 branches missed.">        if (UploadUtils.userCanPublish(site)) {</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">            if (PostStatus.fromPost(post) != PostStatus.PRIVATE) {</span>
+<span class="nc" id="L567">                post.setStatus(PostStatus.PUBLISHED.toString());</span>
+            }
+        } else {
+<span class="nc" id="L570">            post.setStatus(PostStatus.PENDING.toString());</span>
+        }
+<span class="nc bnc" id="L572" title="All 2 branches missed.">        if (!post.isLocalDraft()) {</span>
+<span class="nc" id="L573">            post.setIsLocallyChanged(true);</span>
+        }
+<span class="nc" id="L575">        AppLog.d(T.POSTS, &quot;User explicitly confirmed changes. Post title: &quot; + post.getTitle());</span>
+        // the changes were explicitly confirmed by the user
+<span class="nc" id="L577">        post.setChangesConfirmedContentHashcode(post.contentHashcode());</span>
+<span class="nc" id="L578">    }</span>
+
+    public static boolean isPostCurrentlyBeingEdited(PostImmutableModel post) {
+<span class="nc" id="L581">        PostEvents.PostOpenedInEditor flag = EventBus.getDefault().getStickyEvent(PostEvents.PostOpenedInEditor.class);</span>
+<span class="nc bnc" id="L582" title="All 4 branches missed.">        return flag != null &amp;&amp; post != null</span>
+<span class="nc bnc" id="L583" title="All 2 branches missed.">               &amp;&amp; post.getLocalSiteId() == flag.localSiteId</span>
+<span class="nc bnc" id="L584" title="All 2 branches missed.">               &amp;&amp; post.getId() == flag.postId;</span>
+    }
+
+    public static boolean contentContainsWPStoryGutenbergBlocks(String postContent) {
+<span class="nc bnc" id="L588" title="All 4 branches missed.">        return (postContent != null &amp;&amp; postContent.contains(WP_STORIES_GUTENBERG_BLOCK_START));</span>
+    }
+
+<span class="nc" id="L591">    public enum EntryPoint {</span>
+<span class="nc" id="L592">        BLOGGING_PROMPTS_INTRODUCTION(&quot;blogging_prompts_introduction&quot;),</span>
+<span class="nc" id="L593">        BLOGGING_REMINDERS_NOTIFICATION_ANSWER_PROMPT(&quot;blogging_reminders_notification_answer_prompt&quot;),</span>
+<span class="nc" id="L594">        MY_SITE_CARD_ANSWER_PROMPT(&quot;my_site_card_answer_prompt&quot;),</span>
+<span class="nc" id="L595">        ADD_NEW_SHEET_ANSWER_PROMPT(&quot;add_new_sheet_answer_prompt&quot;);</span>
+
+        private final String mTrackingValue;
+
+<span class="nc" id="L599">        EntryPoint(@NonNull final String trackingValue) {</span>
+<span class="nc" id="L600">            this.mTrackingValue = trackingValue;</span>
+<span class="nc" id="L601">        }</span>
+
+        public String getTrackingValue() {
+<span class="nc" id="L604">            return mTrackingValue;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

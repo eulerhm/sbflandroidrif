@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostEditorAnalyticsSession.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts</a> &gt; <span class="el_source">PostEditorAnalyticsSession.java</span></div><h1>PostEditorAnalyticsSession.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts;
+
+import android.os.Bundle;
+
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.fluxc.model.PostImmutableModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.ui.posts.PostUtils.EntryPoint;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.SiteUtils;
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
+
+public class PostEditorAnalyticsSession implements Serializable {
+    private static final String KEY_BLOG_TYPE = &quot;blog_type&quot;;
+    private static final String KEY_CONTENT_TYPE = &quot;content_type&quot;;
+    private static final String KEY_EDITOR = &quot;editor&quot;;
+    private static final String KEY_HAS_UNSUPPORTED_BLOCKS = &quot;has_unsupported_blocks&quot;;
+    private static final String KEY_UNSUPPORTED_BLOCKS = &quot;unsupported_blocks&quot;;
+    private static final String KEY_GALLERY_WITH_IMAGE_BLOCKS = &quot;unstable_gallery_with_image_blocks&quot;;
+    private static final String KEY_POST_TYPE = &quot;post_type&quot;;
+    private static final String KEY_OUTCOME = &quot;outcome&quot;;
+    private static final String KEY_SESSION_ID = &quot;session_id&quot;;
+    private static final String KEY_STARTUP_TIME = &quot;startup_time_ms&quot;;
+    private static final String KEY_TEMPLATE = &quot;template&quot;;
+    private static final String KEY_FULL_SITE_EDITING = &quot;full_site_editing&quot;;
+    private static final String KEY_ENDPOINT = &quot;endpoint&quot;;
+    private static final String KEY_ENTRY_POINT = &quot;entry_point&quot;;
+
+
+    private transient AnalyticsTrackerWrapper mAnalyticsTrackerWrapper;
+
+<span class="nc" id="L42">    private String mSessionId = UUID.randomUUID().toString();</span>
+    private SiteModel mSiteModel;
+    private String mPostType;
+    private String mContentType;
+<span class="nc" id="L46">    private boolean mStarted = false;</span>
+    private Editor mCurrentEditor;
+<span class="nc" id="L48">    private boolean mHasUnsupportedBlocks = false;</span>
+<span class="nc" id="L49">    private Outcome mOutcome = null;</span>
+    private String mTemplate;
+<span class="nc" id="L51">    private boolean mHWAccOff = false;</span>
+<span class="nc" id="L52">    private long mStartTime = System.currentTimeMillis();</span>
+
+<span class="nc" id="L54">    public enum Editor {</span>
+<span class="nc" id="L55">        GUTENBERG,</span>
+<span class="nc" id="L56">        CLASSIC,</span>
+<span class="nc" id="L57">        HTML,</span>
+<span class="nc" id="L58">        WP_STORIES_CREATOR</span>
+    }
+
+<span class="nc" id="L61">    public enum Outcome {</span>
+<span class="nc" id="L62">        CANCEL,</span>
+<span class="nc" id="L63">        DISCARD,    // not used in WPAndroid, but kept for parity with iOS</span>
+                    // see https://github.com/wordpress-mobile/gutenberg-mobile/issues/556#issuecomment-462678807
+<span class="nc" id="L65">        SAVE,</span>
+<span class="nc" id="L66">        PUBLISH</span>
+    }
+
+    public static PostEditorAnalyticsSession fromBundle(Bundle bundle, String key,
+                                                        AnalyticsTrackerWrapper analyticsTrackerWrapper) {
+<span class="nc" id="L71">        PostEditorAnalyticsSession postEditorAnalyticsSession =</span>
+<span class="nc" id="L72">                (PostEditorAnalyticsSession) bundle.getSerializable(key);</span>
+<span class="nc" id="L73">        postEditorAnalyticsSession.mAnalyticsTrackerWrapper = analyticsTrackerWrapper;</span>
+<span class="nc" id="L74">        return postEditorAnalyticsSession;</span>
+    }
+
+    PostEditorAnalyticsSession(Editor editor, PostImmutableModel post, SiteModel site, boolean isNewPost,
+<span class="nc" id="L78">                               AnalyticsTrackerWrapper analyticsTrackerWrapper) {</span>
+<span class="nc" id="L79">        mAnalyticsTrackerWrapper = analyticsTrackerWrapper;</span>
+
+        // fill in which the current Editor is
+<span class="nc" id="L82">        mCurrentEditor = editor;</span>
+
+        // fill in mPostType
+<span class="nc bnc" id="L85" title="All 2 branches missed.">        if (post.isPage()) {</span>
+<span class="nc" id="L86">            mPostType = &quot;page&quot;;</span>
+        } else {
+<span class="nc" id="L88">            mPostType = &quot;post&quot;;</span>
+        }
+
+<span class="nc" id="L91">        mSiteModel = site;</span>
+
+        // fill in mContentType
+<span class="nc" id="L94">        String postContent = post.getContent();</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (isNewPost) {</span>
+<span class="nc" id="L96">            mContentType = &quot;new&quot;;</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">        } else if (PostUtils.contentContainsGutenbergBlocks(postContent)) {</span>
+<span class="nc" id="L98">            mContentType = SiteUtils.GB_EDITOR_NAME;</span>
+        } else {
+<span class="nc" id="L100">            mContentType = &quot;classic&quot;;</span>
+        }
+
+<span class="nc" id="L103">        mHWAccOff = AppPrefs.isPostWithHWAccelerationOff(site.getId(), post.getId());</span>
+<span class="nc" id="L104">    }</span>
+
+    public static PostEditorAnalyticsSession getNewPostEditorAnalyticsSession(
+            Editor editor, PostImmutableModel post, SiteModel site, boolean isNewPost,
+            AnalyticsTrackerWrapper analyticsTrackerWrapper) {
+<span class="nc" id="L109">        return new PostEditorAnalyticsSession(editor, post, site, isNewPost, analyticsTrackerWrapper);</span>
+    }
+
+    public static PostEditorAnalyticsSession getNewPostEditorAnalyticsSession(
+            Editor editor, PostImmutableModel post, SiteModel site, boolean isNewPost) {
+<span class="nc" id="L114">        return getNewPostEditorAnalyticsSession(editor, post, site, isNewPost, new AnalyticsTrackerWrapper());</span>
+    }
+
+    public void start(ArrayList&lt;Object&gt; unsupportedBlocksList,
+                      Boolean galleryWithImageBlocks,
+                      final EntryPoint entryPoint) {
+<span class="nc bnc" id="L120" title="All 2 branches missed.">        if (!mStarted) {</span>
+<span class="nc bnc" id="L121" title="All 4 branches missed.">            mHasUnsupportedBlocks = unsupportedBlocksList != null &amp;&amp; unsupportedBlocksList.size() &gt; 0;</span>
+<span class="nc" id="L122">            Map&lt;String, Object&gt; properties = getCommonProperties();</span>
+<span class="nc" id="L123">            properties.put(KEY_UNSUPPORTED_BLOCKS,</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">                    unsupportedBlocksList != null ? unsupportedBlocksList : new ArrayList&lt;&gt;());</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">            if (galleryWithImageBlocks != null) {</span>
+<span class="nc" id="L126">                properties.put(KEY_GALLERY_WITH_IMAGE_BLOCKS, galleryWithImageBlocks);</span>
+            }
+            // Note that start time only counts when the analytics session was created and not when the editor
+            // activity started. We are mostly interested in measuring the loading times for the block editor,
+            // where the main bottleneck seems to be initializing React Native and doing the initial load of Gutenberg.
+            //
+            // Measuring the full editor activity initialization would be more accurate, but we don't expect the
+            // difference to be significant enough, and doing that would add more complexity to how we are initializing
+            // the session.
+<span class="nc" id="L135">            properties.put(KEY_STARTUP_TIME, System.currentTimeMillis() - mStartTime);</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">            if (entryPoint != null) {</span>
+<span class="nc" id="L137">                properties.put(KEY_ENTRY_POINT, entryPoint.getTrackingValue());</span>
+            }
+<span class="nc" id="L139">            AnalyticsUtils.trackWithSiteDetails(mAnalyticsTrackerWrapper, Stat.EDITOR_SESSION_START, mSiteModel,</span>
+                    properties);
+<span class="nc" id="L141">            mStarted = true;</span>
+<span class="nc" id="L142">        } else {</span>
+<span class="nc" id="L143">            AppLog.w(T.EDITOR, &quot;An editor session cannot be attempted to be started more than once, &quot;</span>
+                               + &quot;unless it's due to rotation or Editor switch&quot;);
+        }
+<span class="nc" id="L146">    }</span>
+
+    public void resetStartTime() {
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        if (!mStarted) {</span>
+<span class="nc" id="L150">            mStartTime = System.currentTimeMillis();</span>
+        } else {
+<span class="nc" id="L152">            AppLog.w(T.EDITOR, &quot;An editor session start time cannot be reset once it's started&quot;);</span>
+        }
+<span class="nc" id="L154">    }</span>
+
+    public void switchEditor(Editor editor) {
+<span class="nc" id="L157">        mCurrentEditor = editor;</span>
+<span class="nc" id="L158">        Map&lt;String, Object&gt; properties = getCommonProperties();</span>
+<span class="nc" id="L159">        AnalyticsUtils.trackWithSiteDetails(mAnalyticsTrackerWrapper, Stat.EDITOR_SESSION_SWITCH_EDITOR, mSiteModel,</span>
+                properties);
+<span class="nc" id="L161">    }</span>
+
+    public void setOutcome(Outcome newOutcome) {
+        // on WPiOS we're using `forceOutcome` and some exception logic to allow / not allow forcing an outcome,
+        // but in WPAndroid we slightly changed the interface as we're not
+        // really `forcing` but just `setting` the outcome on specific places where we know what happened
+        // or is going to happen.
+        // Session ending will only properly end the session with the outcome already being set.
+<span class="nc" id="L169">        mOutcome = newOutcome;</span>
+<span class="nc" id="L170">    }</span>
+
+    public void applyTemplate(String template) {
+<span class="nc" id="L173">        mTemplate = template;</span>
+<span class="nc" id="L174">        final Map&lt;String, Object&gt; properties = getCommonProperties();</span>
+<span class="nc" id="L175">        properties.put(KEY_TEMPLATE, template);</span>
+<span class="nc" id="L176">        AnalyticsUtils.trackWithSiteDetails(mAnalyticsTrackerWrapper, Stat.EDITOR_SESSION_TEMPLATE_APPLY, mSiteModel,</span>
+                properties);
+<span class="nc" id="L178">    }</span>
+
+    public void editorSettingsFetched(Boolean fullSiteEditing, String endpoint) {
+<span class="nc" id="L181">        final Map&lt;String, Object&gt; properties = getCommonProperties();</span>
+<span class="nc" id="L182">        properties.put(KEY_FULL_SITE_EDITING, fullSiteEditing);</span>
+<span class="nc" id="L183">        properties.put(KEY_ENDPOINT, endpoint);</span>
+<span class="nc" id="L184">        AnalyticsUtils</span>
+<span class="nc" id="L185">                .trackWithSiteDetails(mAnalyticsTrackerWrapper, Stat.EDITOR_SETTINGS_FETCHED, mSiteModel, properties);</span>
+<span class="nc" id="L186">    }</span>
+
+    public void end() {
+        // don't try to send an &quot;end&quot; event if the session wasn't started in the first place
+<span class="nc bnc" id="L190" title="All 2 branches missed.">        if (mStarted) {</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">            if (mOutcome == null) {</span>
+                // outcome should have already been set with setOutcome at specific user actions
+                // if outcome is still unknown, chances are Activity was killed / user cancelled so, set to CANCEL.
+<span class="nc" id="L194">                mOutcome = Outcome.CANCEL;</span>
+            }
+<span class="nc" id="L196">            Map&lt;String, Object&gt; properties = getCommonProperties();</span>
+<span class="nc" id="L197">            properties.put(KEY_OUTCOME, mOutcome.toString().toLowerCase(Locale.ROOT));</span>
+<span class="nc" id="L198">            AnalyticsUtils</span>
+<span class="nc" id="L199">                    .trackWithSiteDetails(mAnalyticsTrackerWrapper, Stat.EDITOR_SESSION_END, mSiteModel, properties);</span>
+<span class="nc" id="L200">        } else {</span>
+<span class="nc" id="L201">            AppLog.e(T.EDITOR, &quot;A non-started editor session cannot be attempted to be ended&quot;);</span>
+        }
+<span class="nc" id="L203">    }</span>
+
+    private String getBlockType() {
+<span class="nc bnc" id="L206" title="All 2 branches missed.">        if (mSiteModel.isWPCom()) {</span>
+<span class="nc" id="L207">            return &quot;wpcom&quot;;</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">        } else if (mSiteModel.isJetpackConnected()) {</span>
+<span class="nc" id="L209">            return &quot;jetpack&quot;;</span>
+        }
+
+<span class="nc" id="L212">        return &quot;core&quot;;</span>
+    }
+
+    private Map&lt;String, Object&gt; getCommonProperties() {
+<span class="nc" id="L216">        Map&lt;String, Object&gt; properties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L217">        properties.put(KEY_EDITOR, mCurrentEditor.toString().toLowerCase(Locale.ROOT));</span>
+<span class="nc" id="L218">        properties.put(KEY_CONTENT_TYPE, mContentType);</span>
+<span class="nc" id="L219">        properties.put(KEY_POST_TYPE, mPostType);</span>
+<span class="nc" id="L220">        properties.put(KEY_BLOG_TYPE, getBlockType());</span>
+<span class="nc" id="L221">        properties.put(KEY_SESSION_ID, mSessionId);</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">        properties.put(KEY_HAS_UNSUPPORTED_BLOCKS, mHasUnsupportedBlocks ? &quot;1&quot; : &quot;0&quot;);</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">        properties.put(AnalyticsUtils.EDITOR_HAS_HW_ACCELERATION_DISABLED_KEY, mHWAccOff ? &quot;1&quot; : &quot;0&quot;);</span>
+
+<span class="nc bnc" id="L225" title="All 2 branches missed.">        if (mTemplate != null) {</span>
+<span class="nc" id="L226">            properties.put(KEY_TEMPLATE, mTemplate);</span>
+        }
+
+<span class="nc" id="L229">        return properties;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

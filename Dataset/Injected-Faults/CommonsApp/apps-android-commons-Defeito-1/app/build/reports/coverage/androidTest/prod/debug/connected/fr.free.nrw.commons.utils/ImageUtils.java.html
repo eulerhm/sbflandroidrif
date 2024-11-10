@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ImageUtils.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.utils</a> &gt; <span class="el_source">ImageUtils.java</span></div><h1>ImageUtils.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.utils;
+
+import android.app.ProgressDialog;
+import android.app.WallpaperManager;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.net.Uri;
+import androidx.annotation.IntDef;
+import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
+import androidx.exifinterface.media.ExifInterface;
+import com.facebook.common.executors.CallerThreadExecutor;
+import com.facebook.common.references.CloseableReference;
+import com.facebook.datasource.DataSource;
+import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.imagepipeline.core.ImagePipeline;
+import com.facebook.imagepipeline.datasource.BaseBitmapDataSubscriber;
+import com.facebook.imagepipeline.image.CloseableImage;
+import com.facebook.imagepipeline.request.ImageRequest;
+import com.facebook.imagepipeline.request.ImageRequestBuilder;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.mwapi.OkHttpJsonApiClient;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.CompositeDisposable;
+import io.reactivex.schedulers.Schedulers;
+import java.io.IOException;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import timber.log.Timber;
+
+/**
+ * Created by bluesir9 on 3/10/17.
+ */
+
+<span class="nc" id="L39">public class ImageUtils {</span>
+
+    /**
+     * Set 0th bit as 1 for dark image ie. 0001
+     */
+    public static final int IMAGE_DARK = 1 &lt;&lt; 0; // 1
+    /**
+     * Set 1st bit as 1 for blurry image ie. 0010
+     */
+    public static final int IMAGE_BLURRY = 1 &lt;&lt; 1; // 2
+    /**
+     * Set 2nd bit as 1 for duplicate image ie. 0100
+     */
+    public static final int IMAGE_DUPLICATE = 1 &lt;&lt; 2; //4
+    /**
+     * Set 3rd bit as 1 for image with different geo location ie. 1000
+     */
+    public static final int IMAGE_GEOLOCATION_DIFFERENT = 1 &lt;&lt; 3; //8
+    /**
+     * The parameter FILE_FBMD is returned from the class ReadFBMD if the uploaded image contains FBMD data else returns IMAGE_OK
+     * ie. 10000
+     */
+    public static final int FILE_FBMD = 1 &lt;&lt; 4;
+    /**
+    * The parameter FILE_NO_EXIF is returned from the class EXIFReader if the uploaded image does not contains EXIF data else returns IMAGE_OK
+    * ie. 100000
+    */
+    public static final int FILE_NO_EXIF = 1 &lt;&lt; 5;
+    public static final int IMAGE_OK = 0;
+    public static final int IMAGE_KEEP = -1;
+    public static final int IMAGE_WAIT = -2;
+    public static final int EMPTY_CAPTION = -3;
+    public static final int FILE_NAME_EXISTS = 1 &lt;&lt; 6;
+    static final int NO_CATEGORY_SELECTED = -5;
+
+    private static ProgressDialog progressDialogWallpaper;
+
+    private static ProgressDialog progressDialogAvatar;
+
+    @IntDef(
+            flag = true,
+            value = {
+                    IMAGE_DARK,
+                    IMAGE_BLURRY,
+                    IMAGE_DUPLICATE,
+                    IMAGE_OK,
+                    IMAGE_KEEP,
+                    IMAGE_WAIT,
+                    EMPTY_CAPTION,
+                    FILE_NAME_EXISTS,
+                    NO_CATEGORY_SELECTED,
+                    IMAGE_GEOLOCATION_DIFFERENT
+            }
+    )
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface Result {
+    }
+
+    /**
+     * @return IMAGE_OK if image is not too dark
+     * IMAGE_DARK if image is too dark
+     */
+    static @Result int checkIfImageIsTooDark(String imagePath) {
+<span class="nc" id="L102">        long millis = System.currentTimeMillis();</span>
+        try {
+<span class="nc" id="L104">            Bitmap bmp = new ExifInterface(imagePath).getThumbnailBitmap();</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">            if (bmp == null) {</span>
+<span class="nc" id="L106">                bmp = BitmapFactory.decodeFile(imagePath);</span>
+            }
+
+<span class="nc bnc" id="L109" title="All 2 branches missed.">            if (checkIfImageIsDark(bmp)) {</span>
+<span class="nc" id="L110">                return IMAGE_DARK;</span>
+            }
+
+<span class="nc" id="L113">        } catch (Exception e) {</span>
+<span class="nc" id="L114">            Timber.d(e, &quot;Error while checking image darkness.&quot;);</span>
+        } finally {
+<span class="nc" id="L116">            Timber.d(&quot;Checking image darkness took &quot; + (System.currentTimeMillis() - millis) + &quot; ms.&quot;);</span>
+        }
+<span class="nc" id="L118">        return IMAGE_OK;</span>
+    }
+
+    /**
+     * @param geolocationOfFileString Geolocation of image. If geotag doesn't exists, then this will be an empty string
+     * @param latLng Location of wikidata item will be edited after upload
+     * @return false if image is neither dark nor blurry or if the input bitmapRegionDecoder provided is null
+     * true if geolocation of the image and wikidata item are different
+     */
+    static boolean checkImageGeolocationIsDifferent(String geolocationOfFileString, LatLng latLng) {
+<span class="nc" id="L128">        Timber.d(&quot;Comparing geolocation of file with nearby place location&quot;);</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">        if (latLng == null) { // Means that geolocation for this image is not given</span>
+<span class="nc" id="L130">            return false; // Since we don't know geolocation of file, we choose letting upload</span>
+        }
+
+<span class="nc" id="L133">        String[] geolocationOfFile = geolocationOfFileString.split(&quot;\\|&quot;);</span>
+<span class="nc" id="L134">        Double distance = LengthUtils.computeDistanceBetween(</span>
+<span class="nc" id="L135">                new LatLng(Double.parseDouble(geolocationOfFile[0]),Double.parseDouble(geolocationOfFile[1]),0)</span>
+                , latLng);
+        // Distance is more than 1 km, means that geolocation is wrong
+<span class="nc bnc" id="L138" title="All 2 branches missed.">        return distance &gt;= 1000;</span>
+    }
+
+    private static boolean checkIfImageIsDark(Bitmap bitmap) {
+<span class="nc bnc" id="L142" title="All 2 branches missed.">        if (bitmap == null) {</span>
+<span class="nc" id="L143">            Timber.e(&quot;Expected bitmap was null&quot;);</span>
+<span class="nc" id="L144">            return true;</span>
+        }
+
+<span class="nc" id="L147">        int bitmapWidth = bitmap.getWidth();</span>
+<span class="nc" id="L148">        int bitmapHeight = bitmap.getHeight();</span>
+
+<span class="nc" id="L150">        int allPixelsCount = bitmapWidth * bitmapHeight;</span>
+<span class="nc" id="L151">        int numberOfBrightPixels = 0;</span>
+<span class="nc" id="L152">        int numberOfMediumBrightnessPixels = 0;</span>
+<span class="nc" id="L153">        double brightPixelThreshold = 0.025 * allPixelsCount;</span>
+<span class="nc" id="L154">        double mediumBrightPixelThreshold = 0.3 * allPixelsCount;</span>
+
+<span class="nc bnc" id="L156" title="All 2 branches missed.">        for (int x = 0; x &lt; bitmapWidth; x++) {</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">            for (int y = 0; y &lt; bitmapHeight; y++) {</span>
+<span class="nc" id="L158">                int pixel = bitmap.getPixel(x, y);</span>
+<span class="nc" id="L159">                int r = Color.red(pixel);</span>
+<span class="nc" id="L160">                int g = Color.green(pixel);</span>
+<span class="nc" id="L161">                int b = Color.blue(pixel);</span>
+
+<span class="nc bnc" id="L163" title="All 2 branches missed.">                int secondMax = r &gt; g ? r : g;</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">                double max = (secondMax &gt; b ? secondMax : b) / 255.0;</span>
+
+<span class="nc bnc" id="L166" title="All 2 branches missed.">                int secondMin = r &lt; g ? r : g;</span>
+<span class="nc bnc" id="L167" title="All 2 branches missed.">                double min = (secondMin &lt; b ? secondMin : b) / 255.0;</span>
+
+<span class="nc" id="L169">                double luminance = ((max + min) / 2.0) * 100;</span>
+
+<span class="nc" id="L171">                int highBrightnessLuminance = 40;</span>
+<span class="nc" id="L172">                int mediumBrightnessLuminance = 26;</span>
+
+<span class="nc bnc" id="L174" title="All 2 branches missed.">                if (luminance &lt; highBrightnessLuminance) {</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                    if (luminance &gt; mediumBrightnessLuminance) {</span>
+<span class="nc" id="L176">                        numberOfMediumBrightnessPixels++;</span>
+                    }
+                } else {
+<span class="nc" id="L179">                    numberOfBrightPixels++;</span>
+                }
+
+<span class="nc bnc" id="L182" title="All 4 branches missed.">                if (numberOfBrightPixels &gt;= brightPixelThreshold || numberOfMediumBrightnessPixels &gt;= mediumBrightPixelThreshold) {</span>
+<span class="nc" id="L183">                    return false;</span>
+                }
+            }
+        }
+<span class="nc" id="L187">        return true;</span>
+    }
+
+    /**
+     * Downloads the image from the URL and sets it as the phone's wallpaper
+     * Fails silently if download or setting wallpaper fails.
+     *
+     * @param context context
+     * @param imageUrl Url of the image
+     */
+    public static void setWallpaperFromImageUrl(Context context, Uri imageUrl) {
+<span class="nc" id="L198">        showSettingWallpaperProgressBar(context);</span>
+<span class="nc" id="L199">        Timber.d(&quot;Trying to set wallpaper from url %s&quot;, imageUrl.toString());</span>
+<span class="nc" id="L200">        ImageRequest imageRequest = ImageRequestBuilder</span>
+<span class="nc" id="L201">                .newBuilderWithSource(imageUrl)</span>
+<span class="nc" id="L202">                .setAutoRotateEnabled(true)</span>
+<span class="nc" id="L203">                .build();</span>
+
+<span class="nc" id="L205">        ImagePipeline imagePipeline = Fresco.getImagePipeline();</span>
+        final DataSource&lt;CloseableReference&lt;CloseableImage&gt;&gt;
+<span class="nc" id="L207">                dataSource = imagePipeline.fetchDecodedImage(imageRequest, context);</span>
+
+<span class="nc" id="L209">        dataSource.subscribe(new BaseBitmapDataSubscriber() {</span>
+
+            @Override
+            public void onNewResultImpl(@Nullable Bitmap bitmap) {
+<span class="nc bnc" id="L213" title="All 4 branches missed.">                if (dataSource.isFinished() &amp;&amp; bitmap != null) {</span>
+<span class="nc" id="L214">                    Timber.d(&quot;Bitmap loaded from url %s&quot;, imageUrl.toString());</span>
+<span class="nc" id="L215">                    setWallpaper(context, Bitmap.createBitmap(bitmap));</span>
+<span class="nc" id="L216">                    dataSource.close();</span>
+                }
+<span class="nc" id="L218">            }</span>
+
+            @Override
+            public void onFailureImpl(DataSource dataSource) {
+<span class="nc" id="L222">                Timber.d(&quot;Error getting bitmap from image url %s&quot;, imageUrl.toString());</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                if (dataSource != null) {</span>
+<span class="nc" id="L224">                    dataSource.close();</span>
+                }
+<span class="nc" id="L226">            }</span>
+<span class="nc" id="L227">        }, CallerThreadExecutor.getInstance());</span>
+<span class="nc" id="L228">    }</span>
+
+    /**
+     * Calls the set avatar api to set the image url as user's avatar
+     * @param context
+     * @param url
+     * @param username
+     * @param okHttpJsonApiClient
+     * @param compositeDisposable
+     */
+    public static void setAvatarFromImageUrl(Context context, String url, String username,
+        OkHttpJsonApiClient okHttpJsonApiClient, CompositeDisposable compositeDisposable) {
+<span class="nc" id="L240">        showSettingAvatarProgressBar(context);</span>
+
+        try {
+<span class="nc" id="L243">            compositeDisposable.add(okHttpJsonApiClient</span>
+<span class="nc" id="L244">                .setAvatar(username, url)</span>
+<span class="nc" id="L245">                .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L246">                .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L247">                .subscribe(</span>
+                    response -&gt; {
+<span class="nc bnc" id="L249" title="All 4 branches missed.">                        if (response != null &amp;&amp; response.getStatus().equals(&quot;200&quot;)) {</span>
+<span class="nc" id="L250">                            ViewUtil.showLongToast(context, context.getString(R.string.avatar_set_successfully));</span>
+<span class="nc bnc" id="L251" title="All 4 branches missed.">                            if (progressDialogAvatar != null &amp;&amp; progressDialogAvatar.isShowing()) {</span>
+<span class="nc" id="L252">                                progressDialogAvatar.dismiss();</span>
+                            }
+                        }
+<span class="nc" id="L255">                    },</span>
+                    t -&gt; {
+<span class="nc" id="L257">                        Timber.e(t, &quot;Setting Avatar Failed&quot;);</span>
+<span class="nc" id="L258">                        ViewUtil.showLongToast(context, context.getString(R.string.avatar_set_unsuccessfully));</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">                        if (progressDialogAvatar != null) {</span>
+<span class="nc" id="L260">                            progressDialogAvatar.cancel();</span>
+                        }
+<span class="nc" id="L262">                    }</span>
+                ));
+        }
+<span class="nc" id="L265">        catch (Exception e){</span>
+<span class="nc" id="L266">            Timber.d(e+&quot;success&quot;);</span>
+<span class="nc" id="L267">            ViewUtil.showLongToast(context, context.getString(R.string.avatar_set_unsuccessfully));</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">            if (progressDialogAvatar != null) {</span>
+<span class="nc" id="L269">                progressDialogAvatar.cancel();</span>
+            }
+<span class="nc" id="L271">        }</span>
+
+<span class="nc" id="L273">    }</span>
+
+    private static void setWallpaper(Context context, Bitmap bitmap) {
+<span class="nc" id="L276">        WallpaperManager wallpaperManager = WallpaperManager.getInstance(context);</span>
+        try {
+<span class="nc" id="L278">            wallpaperManager.setBitmap(bitmap);</span>
+<span class="nc" id="L279">            ViewUtil.showLongToast(context, context.getString(R.string.wallpaper_set_successfully));</span>
+<span class="nc bnc" id="L280" title="All 4 branches missed.">            if (progressDialogWallpaper != null &amp;&amp; progressDialogWallpaper.isShowing()) {</span>
+<span class="nc" id="L281">                progressDialogWallpaper.dismiss();</span>
+            }
+<span class="nc" id="L283">        } catch (IOException e) {</span>
+<span class="nc" id="L284">            Timber.e(e, &quot;Error setting wallpaper&quot;);</span>
+<span class="nc" id="L285">            ViewUtil.showLongToast(context, context.getString(R.string.wallpaper_set_unsuccessfully));</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">            if (progressDialogWallpaper != null) {</span>
+<span class="nc" id="L287">                progressDialogWallpaper.cancel();</span>
+            }
+<span class="nc" id="L289">        }</span>
+<span class="nc" id="L290">    }</span>
+
+    private static void showSettingWallpaperProgressBar(Context context) {
+<span class="nc" id="L293">        progressDialogWallpaper = ProgressDialog.show(context, context.getString(R.string.setting_wallpaper_dialog_title),</span>
+<span class="nc" id="L294">                context.getString(R.string.setting_wallpaper_dialog_message), true);</span>
+<span class="nc" id="L295">    }</span>
+
+    private static void showSettingAvatarProgressBar(Context context) {
+<span class="nc" id="L298">        progressDialogAvatar = ProgressDialog.show(context, context.getString(R.string.setting_avatar_dialog_title),</span>
+<span class="nc" id="L299">            context.getString(R.string.setting_avatar_dialog_message), true);</span>
+<span class="nc" id="L300">    }</span>
+
+    /**
+     * Result variable is a result of an or operation of all possible problems. Ie. if result
+     * is 0001 means IMAGE_DARK
+     * if result is 1100 IMAGE_DUPLICATE and IMAGE_GEOLOCATION_DIFFERENT
+     */
+    public static String getErrorMessageForResult(Context context, @Result int result) {
+<span class="nc" id="L308">        StringBuilder errorMessage = new StringBuilder();</span>
+<span class="nc bnc" id="L309" title="All 2 branches missed.">        if (result &lt;= 0 ) {</span>
+<span class="nc" id="L310">            Timber.d(&quot;No issues to warn user is found&quot;);</span>
+        } else {
+<span class="nc" id="L312">            Timber.d(&quot;Issues found to warn user&quot;);</span>
+
+<span class="nc" id="L314">            errorMessage.append(context.getResources().getString(R.string.upload_problem_exist));</span>
+
+<span class="nc bnc" id="L316" title="All 2 branches missed.">            if ((IMAGE_DARK &amp; result) != 0 ) { // We are checking image dark bit to see if that bit is set or not</span>
+<span class="nc" id="L317">                errorMessage.append(&quot;\n - &quot;).append(context.getResources().getString(R.string.upload_problem_image_dark));</span>
+            }
+
+<span class="nc bnc" id="L320" title="All 2 branches missed.">            if ((IMAGE_BLURRY &amp; result) != 0 ) {</span>
+<span class="nc" id="L321">                errorMessage.append(&quot;\n - &quot;).append(context.getResources().getString(R.string.upload_problem_image_blurry));</span>
+            }
+
+<span class="nc bnc" id="L324" title="All 2 branches missed.">            if ((IMAGE_DUPLICATE &amp; result) != 0 ) {</span>
+<span class="nc" id="L325">                errorMessage.append(&quot;\n - &quot;).append(context.getResources().getString(R.string.upload_problem_image_duplicate));</span>
+            }
+
+<span class="nc bnc" id="L328" title="All 2 branches missed.">            if ((IMAGE_GEOLOCATION_DIFFERENT &amp; result) != 0 ) {</span>
+<span class="nc" id="L329">                errorMessage.append(&quot;\n - &quot;).append(context.getResources().getString(R.string.upload_problem_different_geolocation));</span>
+            }
+
+<span class="nc bnc" id="L332" title="All 2 branches missed.">            if ((FILE_FBMD &amp; result) != 0) {</span>
+<span class="nc" id="L333">                errorMessage.append(&quot;\n - &quot;).append(context.getResources().getString(R.string.upload_problem_fbmd));</span>
+            }
+
+<span class="nc bnc" id="L336" title="All 2 branches missed.">            if ((FILE_NO_EXIF &amp; result) != 0){</span>
+<span class="nc" id="L337">                errorMessage.append(&quot;\n - &quot;).append(context.getResources().getString(R.string.internet_downloaded));</span>
+            }
+
+<span class="nc" id="L340">            errorMessage.append(&quot;\n\n&quot;).append(context.getResources().getString(R.string.upload_problem_do_you_continue));</span>
+        }
+
+<span class="nc" id="L343">        return errorMessage.toString();</span>
+    }
+
+    /**
+     * Adds red border to a bitmap
+     * @param bitmap
+     * @param borderSize
+     * @param context
+     * @return
+     */
+    public static Bitmap addRedBorder(Bitmap bitmap, int borderSize, Context context) {
+<span class="nc" id="L354">        Bitmap bmpWithBorder = Bitmap.createBitmap(bitmap.getWidth() + borderSize * 2, bitmap.getHeight() + borderSize * 2, bitmap.getConfig());</span>
+<span class="nc" id="L355">        Canvas canvas = new Canvas(bmpWithBorder);</span>
+<span class="nc" id="L356">        canvas.drawColor(ContextCompat.getColor(context, R.color.deleteRed));</span>
+<span class="nc" id="L357">        canvas.drawBitmap(bitmap, borderSize, borderSize, null);</span>
+<span class="nc" id="L358">        return bmpWithBorder;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

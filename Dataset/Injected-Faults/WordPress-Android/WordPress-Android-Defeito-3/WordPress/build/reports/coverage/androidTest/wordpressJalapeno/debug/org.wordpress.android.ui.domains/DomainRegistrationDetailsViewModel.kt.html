@@ -1,0 +1,446 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DomainRegistrationDetailsViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.domains</a> &gt; <span class="el_source">DomainRegistrationDetailsViewModel.kt</span></div><h1>DomainRegistrationDetailsViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.domains
+
+import android.text.TextUtils
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.action.TransactionAction.FETCH_SUPPORTED_COUNTRIES
+import org.wordpress.android.fluxc.generated.AccountActionBuilder
+import org.wordpress.android.fluxc.generated.SiteActionBuilder
+import org.wordpress.android.fluxc.generated.TransactionActionBuilder
+import org.wordpress.android.fluxc.model.DomainContactModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.network.rest.wpcom.site.SupportedStateResponse
+import org.wordpress.android.fluxc.network.rest.wpcom.transactions.SupportedDomainCountry
+import org.wordpress.android.fluxc.store.AccountStore.OnDomainContactFetched
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.fluxc.store.SiteStore.DesignatePrimaryDomainPayload
+import org.wordpress.android.fluxc.store.SiteStore.OnDomainSupportedStatesFetched
+import org.wordpress.android.fluxc.store.SiteStore.OnPrimaryDomainDesignated
+import org.wordpress.android.fluxc.store.SiteStore.OnSiteChanged
+import org.wordpress.android.fluxc.store.TransactionsStore
+import org.wordpress.android.fluxc.store.TransactionsStore.CreateShoppingCartPayload
+import org.wordpress.android.fluxc.store.TransactionsStore.OnShoppingCartCreated
+import org.wordpress.android.fluxc.store.TransactionsStore.OnShoppingCartRedeemed
+import org.wordpress.android.fluxc.store.TransactionsStore.OnSupportedCountriesFetched
+import org.wordpress.android.fluxc.store.TransactionsStore.RedeemShoppingCartError
+import org.wordpress.android.fluxc.store.TransactionsStore.RedeemShoppingCartPayload
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.DomainPhoneNumberUtils
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import javax.inject.Inject
+import javax.inject.Named
+
+const val SITE_CHECK_DELAY_MS = 5000L
+const val MAX_SITE_CHECK_TRIES = 10
+
+<span class="nc" id="L46">class DomainRegistrationDetailsViewModel @Inject constructor(</span>
+<span class="nc" id="L47">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L48">    private val transactionsStore: TransactionsStore, // needed for events to work</span>
+<span class="nc" id="L49">    private val siteStore: SiteStore,</span>
+<span class="nc" id="L50">    private val analyticsTracker: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L51">    @param:Named(UI_THREAD) private val uiDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L52">) : ScopedViewModel(uiDispatcher) {</span>
+    private lateinit var site: SiteModel
+    private lateinit var domainProductDetails: DomainProductDetails
+
+    private var isStarted = false
+
+    private var siteCheckTries = 0
+
+    private var supportedCountries: List&lt;SupportedDomainCountry&gt;? = null
+<span class="nc" id="L61">    private val _supportedStates = MutableLiveData&lt;List&lt;SupportedStateResponse&gt;?&gt;()</span>
+
+<span class="nc" id="L63">    private val _uiState = MutableLiveData&lt;DomainRegistrationDetailsUiState&gt;()</span>
+    val uiState: LiveData&lt;DomainRegistrationDetailsUiState&gt;
+<span class="nc" id="L65">        get() = _uiState</span>
+
+<span class="nc" id="L67">    private val _showErrorMessage = SingleLiveEvent&lt;String&gt;()</span>
+    val showErrorMessage: LiveData&lt;String&gt;
+<span class="nc" id="L69">        get() = _showErrorMessage</span>
+
+<span class="nc" id="L71">    private val _formError = SingleLiveEvent&lt;RedeemShoppingCartError&gt;()</span>
+    val formError: LiveData&lt;RedeemShoppingCartError&gt;
+<span class="nc" id="L73">        get() = _formError</span>
+
+<span class="nc" id="L75">    private val _showCountryPickerDialog = SingleLiveEvent&lt;List&lt;SupportedDomainCountry&gt;&gt;()</span>
+    val showCountryPickerDialog: LiveData&lt;List&lt;SupportedDomainCountry&gt;&gt;
+<span class="nc" id="L77">        get() = _showCountryPickerDialog</span>
+
+<span class="nc" id="L79">    private val _showStatePickerDialog = SingleLiveEvent&lt;List&lt;SupportedStateResponse&gt;&gt;()</span>
+    val showStatePickerDialog: LiveData&lt;List&lt;SupportedStateResponse&gt;&gt;
+<span class="nc" id="L81">        get() = _showStatePickerDialog</span>
+
+<span class="nc" id="L83">    private val _domainContactForm = MutableLiveData&lt;DomainContactFormModel&gt;()</span>
+    val domainContactForm: LiveData&lt;DomainContactFormModel&gt;
+<span class="nc" id="L85">        get() = _domainContactForm</span>
+
+<span class="nc" id="L87">    private val _handleCompletedDomainRegistration = SingleLiveEvent&lt;DomainRegistrationCompletedEvent&gt;()</span>
+    val handleCompletedDomainRegistration: LiveData&lt;DomainRegistrationCompletedEvent&gt;
+<span class="nc" id="L89">        get() = _handleCompletedDomainRegistration</span>
+
+<span class="nc" id="L91">    private val _showTos = SingleLiveEvent&lt;Unit&gt;()</span>
+    val showTos: LiveData&lt;Unit&gt;
+<span class="nc" id="L93">        get() = _showTos</span>
+
+<span class="nc" id="L95">    data class DomainRegistrationDetailsUiState(</span>
+<span class="nc" id="L96">        val isFormProgressIndicatorVisible: Boolean = false,</span>
+<span class="nc" id="L97">        val isStateProgressIndicatorVisible: Boolean = false,</span>
+<span class="nc" id="L98">        val isRegistrationProgressIndicatorVisible: Boolean = false,</span>
+<span class="nc" id="L99">        val isDomainRegistrationButtonEnabled: Boolean = false,</span>
+<span class="nc" id="L100">        val isPrivacyProtectionEnabled: Boolean = true,</span>
+<span class="nc" id="L101">        val selectedState: SupportedStateResponse? = null,</span>
+<span class="nc" id="L102">        val selectedCountry: SupportedDomainCountry? = null,</span>
+<span class="nc" id="L103">        val isStateInputEnabled: Boolean = false</span>
+<span class="nc" id="L104">    )</span>
+
+<span class="nc" id="L106">    init {</span>
+<span class="nc" id="L107">        dispatcher.register(this)</span>
+<span class="nc" id="L108">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L111">        dispatcher.unregister(this)</span>
+<span class="nc" id="L112">        super.onCleared()</span>
+<span class="nc" id="L113">    }</span>
+
+    fun start(site: SiteModel, domainProductDetails: DomainProductDetails) {
+<span class="nc bnc" id="L116" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L117">            return</span>
+        }
+<span class="nc" id="L119">        this.site = site</span>
+<span class="nc" id="L120">        this.domainProductDetails = domainProductDetails</span>
+        // default state
+<span class="nc" id="L122">        _uiState.value = DomainRegistrationDetailsUiState()</span>
+
+<span class="nc" id="L124">        fetchSupportedCountries()</span>
+
+<span class="nc" id="L126">        isStarted = true</span>
+<span class="nc" id="L127">    }</span>
+
+    private fun fetchSupportedCountries() {
+<span class="nc bnc" id="L130" title="All 2 branches missed.">        _uiState.value = _uiState.value?.copy(isFormProgressIndicatorVisible = true)</span>
+<span class="nc" id="L131">        dispatcher.dispatch(TransactionActionBuilder.generateNoPayloadAction(FETCH_SUPPORTED_COUNTRIES))</span>
+<span class="nc" id="L132">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onSupportedCountriesFetched(event: OnSupportedCountriesFetched) {
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">            _uiState.value = _uiState.value?.copy(isFormProgressIndicatorVisible = false)</span>
+<span class="nc" id="L138">            _showErrorMessage.value = event.error.message</span>
+<span class="nc" id="L139">            AppLog.e(T.DOMAIN_REGISTRATION, &quot;An error occurred while fetching supported countries&quot;)</span>
+        } else {
+<span class="nc bnc" id="L141" title="All 2 branches missed.">            supportedCountries = event.countries?.toCollection(ArrayList())</span>
+<span class="nc" id="L142">            dispatcher.dispatch(AccountActionBuilder.newFetchDomainContactAction())</span>
+        }
+<span class="nc" id="L144">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onDomainContactFetched(event: OnDomainContactFetched) {
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">            _uiState.value = _uiState.value?.copy(isFormProgressIndicatorVisible = false)</span>
+<span class="nc" id="L150">            _showErrorMessage.value = event.error.message</span>
+<span class="nc" id="L151">            AppLog.e(T.DOMAIN_REGISTRATION, &quot;An error occurred while fetching domain contact details&quot;)</span>
+        } else {
+<span class="nc" id="L153">            _domainContactForm.value = DomainContactFormModel.fromDomainContactModel(event.contactModel)</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">            _uiState.value = _uiState.value?.copy(isFormProgressIndicatorVisible = false)</span>
+
+<span class="nc bnc" id="L156" title="All 2 branches missed.">            val countryCode = event.contactModel?.countryCode</span>
+
+<span class="nc bnc" id="L158" title="All 4 branches missed.">            if (event.contactModel != null &amp;&amp; !TextUtils.isEmpty(countryCode)) {</span>
+<span class="nc" id="L159">                _uiState.value =</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">                        uiState.value?.copy(</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">                                selectedCountry = supportedCountries?.firstOrNull {</span>
+<span class="nc bnc" id="L162" title="All 4 branches missed.">                                    it.code == event.contactModel?.countryCode</span>
+                                },
+<span class="nc" id="L164">                                isStateProgressIndicatorVisible = true,</span>
+<span class="nc" id="L165">                                isDomainRegistrationButtonEnabled = false</span>
+                        )
+
+                // if customer does not have a phone number we will try to prefill a country code
+<span class="nc bnc" id="L169" title="All 4 branches missed.">                if (TextUtils.isEmpty(event.contactModel?.phone)) {</span>
+<span class="nc" id="L170">                    val countryCodePrefix = DomainPhoneNumberUtils.getPhoneNumberPrefix(countryCode!!)</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">                    _domainContactForm.value = _domainContactForm.value?.copy(</span>
+<span class="nc" id="L172">                            phoneNumberPrefix = countryCodePrefix</span>
+                    )
+                }
+
+<span class="nc" id="L176">                dispatcher.dispatch(</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">                        SiteActionBuilder.newFetchDomainSupportedStatesAction(event.contactModel?.countryCode)</span>
+                )
+            }
+        }
+<span class="nc" id="L181">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onDomainSupportedStatesFetched(event: OnDomainSupportedStatesFetched) {
+<span class="nc bnc" id="L185" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L186">            _uiState.value =</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">                    uiState.value?.copy(</span>
+<span class="nc" id="L188">                            isStateProgressIndicatorVisible = false,</span>
+<span class="nc" id="L189">                            isDomainRegistrationButtonEnabled = true</span>
+                    )
+<span class="nc bnc" id="L191" title="All 4 branches missed.">            event.error?.message?.let { _showErrorMessage.value = it }</span>
+<span class="nc" id="L192">            AppLog.e(T.DOMAIN_REGISTRATION, &quot;An error occurred while fetching supported countries&quot;)</span>
+        } else {
+<span class="nc bnc" id="L194" title="All 2 branches missed.">            _uiState.value = uiState.value?.copy(</span>
+<span class="nc bnc" id="L195" title="All 6 branches missed.">                    selectedState = event.supportedStates?.firstOrNull { it.code == domainContactForm.value?.state },</span>
+<span class="nc" id="L196">                    isStateProgressIndicatorVisible = false,</span>
+<span class="nc" id="L197">                    isDomainRegistrationButtonEnabled = true,</span>
+<span class="nc bnc" id="L198" title="All 6 branches missed.">                    isStateInputEnabled = !event.supportedStates.isNullOrEmpty()</span>
+            )
+<span class="nc" id="L200">            _supportedStates.value = event.supportedStates</span>
+        }
+<span class="nc" id="L202">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onShoppingCartCreated(event: OnShoppingCartCreated) {
+<span class="nc bnc" id="L206" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">            _uiState.value = uiState.value?.copy(isRegistrationProgressIndicatorVisible = false)</span>
+<span class="nc" id="L208">            AppLog.e(</span>
+<span class="nc" id="L209">                    T.DOMAIN_REGISTRATION,</span>
+<span class="nc" id="L210">                    &quot;An error occurred while creating a shopping cart : &quot; + event.error.message</span>
+            )
+<span class="nc" id="L212">            _showErrorMessage.value = event.error.message</span>
+<span class="nc" id="L213">            return</span>
+        }
+
+<span class="nc" id="L216">        dispatcher.dispatch(</span>
+<span class="nc" id="L217">                TransactionActionBuilder.newRedeemCartWithCreditsAction(</span>
+<span class="nc" id="L218">                        RedeemShoppingCartPayload(</span>
+<span class="nc" id="L219">                                event.cartDetails!!,</span>
+<span class="nc" id="L220">                                DomainContactFormModel.toDomainContactModel(domainContactForm.value)!!</span>
+                        )
+                )
+        )
+<span class="nc" id="L224">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onCartRedeemed(event: OnShoppingCartRedeemed) {
+<span class="nc bnc" id="L228" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L229">            analyticsTracker.track(Stat.AUTOMATED_TRANSFER_CUSTOM_DOMAIN_PURCHASE_FAILED)</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">            _uiState.value = uiState.value?.copy(isRegistrationProgressIndicatorVisible = false)</span>
+<span class="nc" id="L231">            _formError.value = event.error</span>
+<span class="nc" id="L232">            _showErrorMessage.value = event.error.message</span>
+<span class="nc" id="L233">            AppLog.e(</span>
+<span class="nc" id="L234">                    T.DOMAIN_REGISTRATION,</span>
+<span class="nc" id="L235">                    &quot;An error occurred while redeeming a shopping cart : &quot; + event.error.type +</span>
+<span class="nc" id="L236">                            &quot; &quot; + event.error.message</span>
+            )
+<span class="nc" id="L238">            return</span>
+        }
+
+        // after cart is redeemed, wait for a bit before manually setting domain as primary
+<span class="nc" id="L242">        launch {</span>
+<span class="nc" id="L243">            delay(SITE_CHECK_DELAY_MS)</span>
+<span class="nc" id="L244">            dispatcher.dispatch(</span>
+<span class="nc" id="L245">                    SiteActionBuilder.newDesignatePrimaryDomainAction(</span>
+<span class="nc" id="L246">                            DesignatePrimaryDomainPayload(</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">                                    site,</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">                                    domainProductDetails.domainName</span>
+                            )
+                    )
+            )
+<span class="nc" id="L252">        }</span>
+<span class="nc" id="L253">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onPrimaryDomainDesignated(event: OnPrimaryDomainDesignated) {
+<span class="nc bnc" id="L257" title="All 2 branches missed.">        if (event.isError) { // in case of error we notify used and proceed to next step</span>
+<span class="nc bnc" id="L258" title="All 4 branches missed.">            event.error?.message?.let { _showErrorMessage.value = it }</span>
+<span class="nc" id="L259">            AppLog.e(</span>
+<span class="nc" id="L260">                    T.DOMAIN_REGISTRATION,</span>
+<span class="nc" id="L261">                    &quot;An error occurred while redeeming a shopping cart : &quot; + event.error.type +</span>
+<span class="nc" id="L262">                            &quot; &quot; + event.error.message</span>
+            )
+        }
+
+<span class="nc bnc" id="L266" title="All 2 branches missed.">        dispatcher.dispatch(SiteActionBuilder.newFetchSiteAction(site))</span>
+<span class="nc" id="L267">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onSiteChanged(event: OnSiteChanged) {
+<span class="nc bnc" id="L271" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L272">            AppLog.e(</span>
+<span class="nc" id="L273">                    T.DOMAIN_REGISTRATION,</span>
+<span class="nc" id="L274">                    &quot;An error occurred while updating site details : &quot; + event.error.message</span>
+            )
+<span class="nc bnc" id="L276" title="All 4 branches missed.">            event.error?.message?.let { _showErrorMessage.value = it }</span>
+<span class="nc" id="L277">            finishRegistration()</span>
+<span class="nc" id="L278">            return</span>
+        }
+
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        val updatedSite = siteStore.getSiteByLocalId(site.id)</span>
+
+        // New domain is not is not reflected in SiteModel yet, try refreshing a site until we get it
+<span class="nc bnc" id="L284" title="All 10 branches missed.">        if (updatedSite?.url?.endsWith(&quot;.wordpress.com&quot;) == true &amp;&amp; siteCheckTries &lt; MAX_SITE_CHECK_TRIES) {</span>
+<span class="nc" id="L285">            AppLog.v(</span>
+<span class="nc" id="L286">                    T.DOMAIN_REGISTRATION,</span>
+<span class="nc" id="L287">                    &quot;Newly registered domain is still not reflected in site model. Refreshing site model...&quot;</span>
+            )
+<span class="nc" id="L289">            launch {</span>
+<span class="nc" id="L290">                delay(SITE_CHECK_DELAY_MS)</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">                dispatcher.dispatch(SiteActionBuilder.newFetchSiteAction(site))</span>
+<span class="nc" id="L292">                siteCheckTries++</span>
+<span class="nc" id="L293">            }</span>
+        } else {
+            // Everything looks good! Let's wait a bit before moving on
+<span class="nc" id="L296">            launch {</span>
+<span class="nc" id="L297">                AppLog.v(T.DOMAIN_REGISTRATION, &quot;Finishing registration...&quot;)</span>
+<span class="nc" id="L298">                delay(SITE_CHECK_DELAY_MS)</span>
+<span class="nc" id="L299">                finishRegistration()</span>
+<span class="nc" id="L300">            }</span>
+        }
+<span class="nc" id="L302">    }</span>
+
+    private fun finishRegistration() {
+<span class="nc bnc" id="L305" title="All 2 branches missed.">        _uiState.value = uiState.value?.copy(isRegistrationProgressIndicatorVisible = false)</span>
+<span class="nc" id="L306">        _handleCompletedDomainRegistration.postValue(</span>
+<span class="nc" id="L307">                DomainRegistrationCompletedEvent(</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">                        domainProductDetails.domainName,</span>
+<span class="nc" id="L309">                        domainContactForm.value!!.email!!</span>
+                )
+        )
+<span class="nc" id="L312">    }</span>
+
+    fun onCountrySelectorClicked() {
+<span class="nc" id="L315">        _showCountryPickerDialog.value = supportedCountries!!</span>
+<span class="nc" id="L316">    }</span>
+
+    fun onStateSelectorClicked() {
+<span class="nc" id="L319">        _showStatePickerDialog.value = _supportedStates.value</span>
+<span class="nc" id="L320">    }</span>
+
+    fun onRegisterDomainButtonClicked() {
+<span class="nc bnc" id="L323" title="All 2 branches missed.">        _uiState.value = uiState.value?.copy(isRegistrationProgressIndicatorVisible = true)</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">        _domainContactForm.value = _domainContactForm.value?.copy(</span>
+<span class="nc bnc" id="L325" title="All 4 branches missed.">                countryCode = uiState.value?.selectedCountry?.code,</span>
+<span class="nc bnc" id="L326" title="All 4 branches missed.">                state = uiState.value?.selectedState?.code</span>
+        )
+<span class="nc" id="L328">        dispatcher.dispatch(</span>
+<span class="nc" id="L329">                TransactionActionBuilder.newCreateShoppingCartAction(</span>
+<span class="nc" id="L330">                        CreateShoppingCartPayload(</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">                                site,</span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">                                domainProductDetails.productId,</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">                                domainProductDetails.domainName,</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">                                uiState.value?.isPrivacyProtectionEnabled!!</span>
+                        )
+                )
+        )
+<span class="nc" id="L338">    }</span>
+
+    fun onCountrySelected(country: SupportedDomainCountry) {
+<span class="nc bnc" id="L341" title="All 4 branches missed.">        if (country != uiState.value?.selectedCountry) {</span>
+<span class="nc" id="L342">            _supportedStates.value = null</span>
+<span class="nc" id="L343">            _uiState.value =</span>
+<span class="nc bnc" id="L344" title="All 2 branches missed.">                    uiState.value?.copy(</span>
+<span class="nc" id="L345">                            selectedCountry = country,</span>
+<span class="nc" id="L346">                            selectedState = null,</span>
+<span class="nc" id="L347">                            isStateProgressIndicatorVisible = true,</span>
+<span class="nc" id="L348">                            isDomainRegistrationButtonEnabled = false,</span>
+<span class="nc" id="L349">                            isStateInputEnabled = false</span>
+                    )
+
+<span class="nc bnc" id="L352" title="All 2 branches missed.">            _domainContactForm.value = _domainContactForm.value?.copy(</span>
+<span class="nc" id="L353">                    countryCode = country.code,</span>
+<span class="nc" id="L354">                    state = null,</span>
+<span class="nc" id="L355">                    phoneNumberPrefix = DomainPhoneNumberUtils.getPhoneNumberPrefix(country.code)</span>
+            )
+<span class="nc" id="L357">            dispatcher.dispatch(SiteActionBuilder.newFetchDomainSupportedStatesAction(country.code))</span>
+        }
+<span class="nc" id="L359">    }</span>
+
+    fun onStateSelected(state: SupportedStateResponse) {
+<span class="nc bnc" id="L362" title="All 2 branches missed.">        _uiState.value = uiState.value?.copy(selectedState = state)</span>
+<span class="nc" id="L363">    }</span>
+
+    fun onTosLinkClicked() {
+<span class="nc" id="L366">        _showTos.call()</span>
+<span class="nc" id="L367">    }</span>
+
+    fun onDomainContactDetailsChanged(domainContacFormModel: DomainContactFormModel) {
+<span class="nc bnc" id="L370" title="All 6 branches missed.">        val isFormBusy = uiState.value?.isFormProgressIndicatorVisible == true ||</span>
+<span class="nc bnc" id="L371" title="All 6 branches missed.">                uiState.value?.isRegistrationProgressIndicatorVisible == true</span>
+
+<span class="nc bnc" id="L373" title="All 2 branches missed.">        if (!isFormBusy) {</span>
+<span class="nc" id="L374">            _domainContactForm.value = domainContacFormModel</span>
+        }
+<span class="nc" id="L376">    }</span>
+
+    fun togglePrivacyProtection(isEnabled: Boolean) {
+<span class="nc bnc" id="L379" title="All 2 branches missed.">        _uiState.value = uiState.value?.copy(isPrivacyProtectionEnabled = isEnabled)</span>
+<span class="nc" id="L380">    }</span>
+
+<span class="nc" id="L382">    data class DomainContactFormModel(</span>
+<span class="nc" id="L383">        val firstName: String?,</span>
+<span class="nc" id="L384">        val lastName: String?,</span>
+<span class="nc" id="L385">        val organization: String?,</span>
+<span class="nc" id="L386">        val addressLine1: String?,</span>
+<span class="nc" id="L387">        val addressLine2: String?,</span>
+<span class="nc" id="L388">        val postalCode: String?,</span>
+<span class="nc" id="L389">        val city: String?,</span>
+<span class="nc" id="L390">        val state: String?,</span>
+<span class="nc" id="L391">        val countryCode: String?,</span>
+<span class="nc" id="L392">        val email: String?,</span>
+<span class="nc" id="L393">        val phoneNumberPrefix: String?,</span>
+<span class="nc" id="L394">        val phoneNumber: String?</span>
+    ) {
+        companion object {
+            fun toDomainContactModel(domainContactFormModel: DomainContactFormModel?): DomainContactModel? {
+<span class="nc bnc" id="L398" title="All 2 branches missed.">                if (domainContactFormModel == null) {</span>
+<span class="nc" id="L399">                    return null</span>
+                }
+
+<span class="nc" id="L402">                return DomainContactModel(</span>
+<span class="nc" id="L403">                        firstName = domainContactFormModel.firstName,</span>
+<span class="nc" id="L404">                        lastName = domainContactFormModel.lastName,</span>
+<span class="nc" id="L405">                        organization = domainContactFormModel.organization,</span>
+<span class="nc" id="L406">                        addressLine1 = domainContactFormModel.addressLine1,</span>
+<span class="nc" id="L407">                        addressLine2 = domainContactFormModel.addressLine2,</span>
+<span class="nc" id="L408">                        postalCode = domainContactFormModel.postalCode,</span>
+<span class="nc" id="L409">                        city = domainContactFormModel.city,</span>
+<span class="nc" id="L410">                        state = domainContactFormModel.state,</span>
+<span class="nc" id="L411">                        countryCode = domainContactFormModel.countryCode,</span>
+<span class="nc" id="L412">                        email = domainContactFormModel.email,</span>
+<span class="nc" id="L413">                        phone = DomainPhoneNumberUtils.formatPhoneNumberandPrefix(</span>
+<span class="nc" id="L414">                                domainContactFormModel.phoneNumberPrefix,</span>
+<span class="nc" id="L415">                                domainContactFormModel.phoneNumber</span>
+                        ),
+<span class="nc" id="L417">                        fax = null</span>
+                )
+            }
+
+            fun fromDomainContactModel(domainContactModel: DomainContactModel?): DomainContactFormModel? {
+<span class="nc bnc" id="L422" title="All 2 branches missed.">                if (domainContactModel == null) {</span>
+<span class="nc" id="L423">                    return null</span>
+                }
+
+<span class="nc" id="L426">                return DomainContactFormModel(</span>
+<span class="nc" id="L427">                        firstName = domainContactModel.firstName,</span>
+<span class="nc" id="L428">                        lastName = domainContactModel.lastName,</span>
+<span class="nc" id="L429">                        organization = domainContactModel.organization,</span>
+<span class="nc" id="L430">                        addressLine1 = domainContactModel.addressLine1,</span>
+<span class="nc" id="L431">                        addressLine2 = domainContactModel.addressLine2,</span>
+<span class="nc" id="L432">                        postalCode = domainContactModel.postalCode,</span>
+<span class="nc" id="L433">                        city = domainContactModel.city,</span>
+<span class="nc" id="L434">                        state = domainContactModel.state,</span>
+<span class="nc" id="L435">                        countryCode = domainContactModel.countryCode,</span>
+<span class="nc" id="L436">                        email = domainContactModel.email,</span>
+<span class="nc" id="L437">                        phoneNumberPrefix = DomainPhoneNumberUtils.getPhoneNumberPrefixFromFullPhoneNumber(</span>
+<span class="nc" id="L438">                                domainContactModel.phone</span>
+                        ),
+<span class="nc" id="L440">                        phoneNumber = DomainPhoneNumberUtils.getPhoneNumberWithoutPrefix(domainContactModel.phone)</span>
+                )
+            }
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReviewController.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.review</a> &gt; <span class="el_source">ReviewController.java</span></div><h1>ReviewController.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.review;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.app.NotificationManager;
+import android.content.Context;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.core.app.NotificationCompat;
+
+import org.wikipedia.dataclient.mwapi.MwQueryPage;
+
+import java.util.ArrayList;
+import java.util.concurrent.Callable;
+
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Singleton;
+
+import fr.free.nrw.commons.CommonsApplication;
+import fr.free.nrw.commons.Media;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.actions.PageEditClient;
+import fr.free.nrw.commons.actions.ThanksClient;
+import fr.free.nrw.commons.delete.DeleteHelper;
+import fr.free.nrw.commons.di.ApplicationlessInjection;
+import fr.free.nrw.commons.utils.ViewUtil;
+import io.reactivex.Observable;
+import io.reactivex.ObservableSource;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.schedulers.Schedulers;
+import timber.log.Timber;
+
+@Singleton
+public class ReviewController {
+    private static final int NOTIFICATION_SEND_THANK = 0x102;
+    private static final int NOTIFICATION_CHECK_CATEGORY = 0x101;
+    protected static ArrayList&lt;String&gt; categories;
+    @Inject
+    ThanksClient thanksClient;
+    private final DeleteHelper deleteHelper;
+    @Nullable
+    MwQueryPage.Revision firstRevision; // TODO: maybe we can expand this class to include fileName
+    @Inject
+    @Named(&quot;commons-page-edit&quot;)
+    PageEditClient pageEditClient;
+    private NotificationManager notificationManager;
+    private NotificationCompat.Builder notificationBuilder;
+    private Media media;
+
+<span class="nc" id="L52">    ReviewController(DeleteHelper deleteHelper, Context context) {</span>
+<span class="nc" id="L53">        this.deleteHelper = deleteHelper;</span>
+<span class="nc" id="L54">        CommonsApplication.createNotificationChannel(context.getApplicationContext());</span>
+<span class="nc" id="L55">        notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);</span>
+<span class="nc" id="L56">        notificationBuilder = new NotificationCompat.Builder(context, CommonsApplication.NOTIFICATION_CHANNEL_ID_ALL);</span>
+<span class="nc" id="L57">    }</span>
+
+    void onImageRefreshed(Media media) {
+<span class="nc" id="L60">        this.media = media;</span>
+<span class="nc" id="L61">    }</span>
+
+    public Media getMedia() {
+<span class="nc" id="L64">        return media;</span>
+    }
+
+<span class="nc" id="L67">    public enum DeleteReason {</span>
+<span class="nc" id="L68">        SPAM,</span>
+<span class="nc" id="L69">        COPYRIGHT_VIOLATION</span>
+    }
+
+    void reportSpam(@NonNull Activity activity, ReviewCallback reviewCallback) {
+<span class="nc" id="L73">        Timber.d(&quot;Report spam for %s&quot;, media.getFilename());</span>
+<span class="nc" id="L74">        deleteHelper.askReasonAndExecute(media,</span>
+                activity,
+<span class="nc" id="L76">                activity.getResources().getString(R.string.review_spam_report_question),</span>
+                DeleteReason.SPAM,
+                reviewCallback);
+<span class="nc" id="L79">    }</span>
+
+    void reportPossibleCopyRightViolation(@NonNull Activity activity, ReviewCallback reviewCallback) {
+<span class="nc" id="L82">        Timber.d(&quot;Report spam for %s&quot;, media.getFilename());</span>
+<span class="nc" id="L83">        deleteHelper.askReasonAndExecute(media,</span>
+                activity,
+<span class="nc" id="L85">                activity.getResources().getString(R.string.review_c_violation_report_question),</span>
+                DeleteReason.COPYRIGHT_VIOLATION,
+                reviewCallback);
+<span class="nc" id="L88">    }</span>
+
+    @SuppressLint(&quot;CheckResult&quot;)
+    void reportWrongCategory(@NonNull Activity activity, ReviewCallback reviewCallback) {
+<span class="nc" id="L92">        Context context = activity.getApplicationContext();</span>
+<span class="nc" id="L93">        ApplicationlessInjection</span>
+<span class="nc" id="L94">                .getInstance(context)</span>
+<span class="nc" id="L95">                .getCommonsApplicationComponent()</span>
+<span class="nc" id="L96">                .inject(this);</span>
+
+<span class="nc" id="L98">        ViewUtil.showShortToast(context, context.getString(R.string.check_category_toast, media.getDisplayTitle()));</span>
+
+<span class="nc" id="L100">        publishProgress(context, 0);</span>
+<span class="nc" id="L101">        String summary = context.getString(R.string.check_category_edit_summary);</span>
+<span class="nc" id="L102">        Observable.defer((Callable&lt;ObservableSource&lt;Boolean&gt;&gt;) () -&gt;</span>
+<span class="nc" id="L103">                pageEditClient.appendEdit(media.getFilename(), &quot;\n{{subst:chc}}\n&quot;, summary))</span>
+<span class="nc" id="L104">                .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L105">                .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L106">                .subscribe((result) -&gt; {</span>
+<span class="nc" id="L107">                    publishProgress(context, 2);</span>
+                    String message;
+                    String title;
+
+<span class="nc bnc" id="L111" title="All 2 branches missed.">                    if (result) {</span>
+<span class="nc" id="L112">                        title = context.getString(R.string.check_category_success_title);</span>
+<span class="nc" id="L113">                        message = context.getString(R.string.check_category_success_message, media.getDisplayTitle());</span>
+<span class="nc" id="L114">                        reviewCallback.onSuccess();</span>
+                    } else {
+<span class="nc" id="L116">                        title = context.getString(R.string.check_category_failure_title);</span>
+<span class="nc" id="L117">                        message = context.getString(R.string.check_category_failure_message, media.getDisplayTitle());</span>
+<span class="nc" id="L118">                        reviewCallback.onFailure();</span>
+                    }
+
+<span class="nc" id="L121">                    showNotification(title, message);</span>
+
+<span class="nc" id="L123">                }, Timber::e);</span>
+<span class="nc" id="L124">    }</span>
+
+    private void publishProgress(@NonNull Context context, int i) {
+<span class="nc" id="L127">        int[] messages = new int[]{R.string.getting_edit_token, R.string.check_category_adding_template};</span>
+<span class="nc" id="L128">        String message = &quot;&quot;;</span>
+<span class="nc bnc" id="L129" title="All 4 branches missed.">        if (0 &lt; i &amp;&amp; i &lt; messages.length) {</span>
+<span class="nc" id="L130">            message = context.getString(messages[i]);</span>
+        }
+
+<span class="nc" id="L133">        notificationBuilder.setContentTitle(context.getString(R.string.check_category_notification_title, media.getDisplayTitle()))</span>
+<span class="nc" id="L134">                .setStyle(new NotificationCompat.BigTextStyle()</span>
+<span class="nc" id="L135">                        .bigText(message))</span>
+<span class="nc" id="L136">                .setSmallIcon(R.drawable.ic_launcher)</span>
+<span class="nc" id="L137">                .setProgress(messages.length, i, false)</span>
+<span class="nc" id="L138">                .setOngoing(true);</span>
+<span class="nc" id="L139">        notificationManager.notify(NOTIFICATION_CHECK_CATEGORY, notificationBuilder.build());</span>
+<span class="nc" id="L140">    }</span>
+
+    @SuppressLint({&quot;CheckResult&quot;, &quot;StringFormatInvalid&quot;})
+    void sendThanks(@NonNull Activity activity) {
+<span class="nc" id="L144">        Context context = activity.getApplicationContext();</span>
+<span class="nc" id="L145">        ApplicationlessInjection</span>
+<span class="nc" id="L146">                .getInstance(context)</span>
+<span class="nc" id="L147">                .getCommonsApplicationComponent()</span>
+<span class="nc" id="L148">                .inject(this);</span>
+<span class="nc" id="L149">        ViewUtil.showShortToast(context, context.getString(R.string.send_thank_toast, media.getDisplayTitle()));</span>
+
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        if (firstRevision == null) {</span>
+<span class="nc" id="L152">            return;</span>
+        }
+
+<span class="nc" id="L155">        Observable.defer((Callable&lt;ObservableSource&lt;Boolean&gt;&gt;) () -&gt; thanksClient.thank(firstRevision.getRevisionId()))</span>
+<span class="nc" id="L156">                .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L157">                .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L158">                .subscribe((result) -&gt; {</span>
+<span class="nc" id="L159">                    displayThanksToast(context,result);</span>
+<span class="nc" id="L160">                }, Timber::e);</span>
+<span class="nc" id="L161">    }</span>
+
+    @SuppressLint(&quot;StringFormatInvalid&quot;)
+    private void displayThanksToast(final Context context, final boolean result){
+        final String message;
+        final String title;
+<span class="nc bnc" id="L167" title="All 2 branches missed.">        if (result) {</span>
+<span class="nc" id="L168">            title = context.getString(R.string.send_thank_success_title);</span>
+<span class="nc" id="L169">            message = context.getString(R.string.send_thank_success_message, media.getDisplayTitle());</span>
+        } else {
+<span class="nc" id="L171">            title = context.getString(R.string.send_thank_failure_title);</span>
+<span class="nc" id="L172">            message = context.getString(R.string.send_thank_failure_message, media.getDisplayTitle());</span>
+        }
+
+<span class="nc" id="L175">        ViewUtil.showShortToast(context,message);</span>
+<span class="nc" id="L176">    }</span>
+
+    private void showNotification(String title, String message) {
+<span class="nc" id="L179">        notificationBuilder.setDefaults(NotificationCompat.DEFAULT_ALL)</span>
+<span class="nc" id="L180">                .setContentTitle(title)</span>
+<span class="nc" id="L181">                .setStyle(new NotificationCompat.BigTextStyle()</span>
+<span class="nc" id="L182">                        .bigText(message))</span>
+<span class="nc" id="L183">                .setSmallIcon(R.drawable.ic_launcher)</span>
+<span class="nc" id="L184">                .setProgress(0, 0, false)</span>
+<span class="nc" id="L185">                .setOngoing(false)</span>
+<span class="nc" id="L186">                .setPriority(NotificationCompat.PRIORITY_HIGH);</span>
+<span class="nc" id="L187">        notificationManager.notify(NOTIFICATION_SEND_THANK, notificationBuilder.build());</span>
+<span class="nc" id="L188">    }</span>
+
+    public interface ReviewCallback {
+        void onSuccess();
+
+        void onFailure();
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

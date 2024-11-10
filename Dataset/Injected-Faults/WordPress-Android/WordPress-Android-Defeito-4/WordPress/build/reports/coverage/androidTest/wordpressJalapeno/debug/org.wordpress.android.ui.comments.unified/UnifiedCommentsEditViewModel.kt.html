@@ -1,0 +1,412 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UnifiedCommentsEditViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.comments.unified</a> &gt; <span class="el_source">UnifiedCommentsEditViewModel.kt</span></div><h1>UnifiedCommentsEditViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.comments.unified
+
+import androidx.annotation.StringRes
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.COMMENT_EDITED
+import org.wordpress.android.datasets.wrappers.ReaderCommentTableWrapper
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.persistence.comments.CommentsDao.CommentEntity
+import org.wordpress.android.fluxc.store.CommentsStore
+import org.wordpress.android.models.usecases.LocalCommentCacheUpdateHandler
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.comments.unified.CommentIdentifier.NotificationCommentIdentifier
+import org.wordpress.android.ui.comments.unified.CommentIdentifier.ReaderCommentIdentifier
+import org.wordpress.android.ui.comments.unified.CommentIdentifier.SiteCommentIdentifier
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.EditCommentActionEvent.CANCEL_EDIT_CONFIRM
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.EditCommentActionEvent.CLOSE
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.EditCommentActionEvent.DONE
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.FieldType.COMMENT
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.FieldType.USER_EMAIL
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.FieldType.USER_NAME
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.FieldType.WEB_ADDRESS
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.ProgressState.LOADING
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.ProgressState.NOT_VISIBLE
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditViewModel.ProgressState.SAVING
+import org.wordpress.android.ui.comments.unified.extension.isNotEqualTo
+import org.wordpress.android.ui.comments.unified.usecase.GetCommentUseCase
+import org.wordpress.android.ui.notifications.utils.NotificationsActionsWrapper
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.analytics.AnalyticsUtils.AnalyticsCommentActionSource
+import org.wordpress.android.util.analytics.AnalyticsUtilsWrapper
+import org.wordpress.android.util.validateEmail
+import org.wordpress.android.util.validateUrl
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ResourceProvider
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+@Suppress(&quot;TooManyFunctions&quot;)
+<span class="nc" id="L49">class UnifiedCommentsEditViewModel @Inject constructor(</span>
+<span class="nc" id="L50">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L51">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L52">    private val commentsStore: CommentsStore,</span>
+<span class="nc" id="L53">    private val resourceProvider: ResourceProvider,</span>
+<span class="nc" id="L54">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L55">    private val localCommentCacheUpdateHandler: LocalCommentCacheUpdateHandler,</span>
+<span class="nc" id="L56">    private val getCommentUseCase: GetCommentUseCase,</span>
+<span class="nc" id="L57">    private val notificationActionsWrapper: NotificationsActionsWrapper,</span>
+<span class="nc" id="L58">    private val readerCommentTableWrapper: ReaderCommentTableWrapper,</span>
+<span class="nc" id="L59">    private val analyticsUtilsWrapper: AnalyticsUtilsWrapper</span>
+<span class="nc" id="L60">) : ScopedViewModel(mainDispatcher) {</span>
+<span class="nc" id="L61">    private val _uiState = MutableLiveData&lt;EditCommentUiState&gt;()</span>
+<span class="nc" id="L62">    private val _uiActionEvent = MutableLiveData&lt;Event&lt;EditCommentActionEvent&gt;&gt;()</span>
+<span class="nc" id="L63">    private val _onSnackbarMessage = MutableLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+
+<span class="nc" id="L65">    val uiState: LiveData&lt;EditCommentUiState&gt; = _uiState</span>
+<span class="nc" id="L66">    val uiActionEvent: LiveData&lt;Event&lt;EditCommentActionEvent&gt;&gt; = _uiActionEvent</span>
+<span class="nc" id="L67">    val onSnackbarMessage: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _onSnackbarMessage</span>
+
+    private var isStarted = false
+    private lateinit var site: SiteModel
+
+    private lateinit var commentIdentifier: CommentIdentifier
+
+<span class="nc" id="L74">    data class EditErrorStrings(</span>
+<span class="nc" id="L75">        val userNameError: String? = null,</span>
+<span class="nc" id="L76">        val commentTextError: String? = null,</span>
+<span class="nc" id="L77">        val userUrlError: String? = null,</span>
+<span class="nc" id="L78">        val userEmailError: String? = null</span>
+<span class="nc" id="L79">    )</span>
+
+<span class="nc" id="L81">    data class EditCommentUiState(</span>
+<span class="nc" id="L82">        val canSaveChanges: Boolean,</span>
+<span class="nc" id="L83">        val shouldInitComment: Boolean,</span>
+<span class="nc" id="L84">        val shouldInitWatchers: Boolean,</span>
+<span class="nc" id="L85">        val showProgress: Boolean = false,</span>
+<span class="nc" id="L86">        val progressText: UiString? = null,</span>
+<span class="nc" id="L87">        val originalComment: CommentEssentials,</span>
+<span class="nc" id="L88">        val editedComment: CommentEssentials,</span>
+<span class="nc" id="L89">        val editErrorStrings: EditErrorStrings,</span>
+<span class="nc" id="L90">        val inputSettings: InputSettings</span>
+<span class="nc" id="L91">    )</span>
+
+<span class="nc" id="L93">    data class InputSettings(</span>
+<span class="nc" id="L94">        val enableEditName: Boolean,</span>
+<span class="nc" id="L95">        val enableEditUrl: Boolean,</span>
+<span class="nc" id="L96">        val enableEditEmail: Boolean,</span>
+<span class="nc" id="L97">        val enableEditComment: Boolean</span>
+    )
+
+<span class="nc" id="L100">    enum class ProgressState(val show: Boolean, val progressText: UiString?) {</span>
+<span class="nc" id="L101">        NOT_VISIBLE(false, null),</span>
+<span class="nc" id="L102">        LOADING(true, UiStringRes(R.string.loading)),</span>
+<span class="nc" id="L103">        SAVING(true, UiStringRes(R.string.saving_changes))</span>
+    }
+
+<span class="nc" id="L106">    enum class FieldType(@StringRes val errorStringRes: Int, val isValid: (String) -&gt; Boolean) {</span>
+<span class="nc" id="L107">        USER_NAME(R.string.comment_edit_user_name_error, { isValidUserName(it) }),</span>
+<span class="nc" id="L108">        USER_EMAIL(R.string.comment_edit_user_email_error, { isValidUserEmail(it) }),</span>
+<span class="nc" id="L109">        WEB_ADDRESS(R.string.comment_edit_web_address_error, { isValidWebAddress(it) }),</span>
+<span class="nc" id="L110">        COMMENT(R.string.comment_edit_comment_error, { isValidComment(it) });</span>
+
+        // This is here for testing purposes
+        fun matches(expectedField: FieldType): Boolean {
+<span class="nc bnc" id="L114" title="All 2 branches missed.">            return this == expectedField</span>
+        }
+
+        companion object {
+            private fun isValidUserName(userName: String): Boolean {
+<span class="nc bnc" id="L119" title="All 2 branches missed.">                return userName.isNotBlank()</span>
+            }
+
+            private fun isValidUserEmail(email: String): Boolean {
+<span class="nc bnc" id="L123" title="All 4 branches missed.">                return email.isBlank() || validateEmail(email)</span>
+            }
+
+            private fun isValidWebAddress(url: String): Boolean {
+<span class="nc bnc" id="L127" title="All 4 branches missed.">                return url.isBlank() || validateUrl(url)</span>
+            }
+
+            private fun isValidComment(comment: String): Boolean {
+<span class="nc bnc" id="L131" title="All 2 branches missed.">                return comment.isNotBlank()</span>
+            }
+        }
+    }
+
+    enum class EditCommentActionEvent {
+<span class="nc" id="L137">        CLOSE,</span>
+<span class="nc" id="L138">        DONE,</span>
+<span class="nc" id="L139">        CANCEL_EDIT_CONFIRM</span>
+    }
+
+    fun start(site: SiteModel, commentIdentifier: CommentIdentifier) {
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        if (isStarted) {</span>
+            // If we are here, the fragment view was recreated (like in a configuration change)
+            // so we reattach the watchers.
+<span class="nc bnc" id="L146" title="All 2 branches missed.">            _uiState.value = _uiState.value?.copy(shouldInitWatchers = true)</span>
+<span class="nc" id="L147">            return</span>
+        }
+<span class="nc" id="L149">        isStarted = true</span>
+
+<span class="nc" id="L151">        this.site = site</span>
+<span class="nc" id="L152">        this.commentIdentifier = commentIdentifier</span>
+
+<span class="nc" id="L154">        initViews()</span>
+<span class="nc" id="L155">    }</span>
+
+    private suspend fun setLoadingState(state: ProgressState) {
+<span class="nc bnc" id="L158" title="All 2 branches missed.">        val uiState = _uiState.value ?: EditCommentUiState(</span>
+<span class="nc" id="L159">                canSaveChanges = false,</span>
+<span class="nc" id="L160">                shouldInitComment = false,</span>
+<span class="nc" id="L161">                shouldInitWatchers = false,</span>
+<span class="nc" id="L162">                showProgress = LOADING.show,</span>
+<span class="nc" id="L163">                progressText = LOADING.progressText,</span>
+<span class="nc" id="L164">                originalComment = CommentEssentials(),</span>
+<span class="nc" id="L165">                editedComment = CommentEssentials(),</span>
+<span class="nc" id="L166">                editErrorStrings = EditErrorStrings(),</span>
+<span class="nc" id="L167">                inputSettings = mapInputSettings(CommentEssentials())</span>
+        )
+
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        withContext(mainDispatcher) {</span>
+<span class="nc" id="L171">            _uiState.value = uiState.copy(</span>
+<span class="nc" id="L172">                    showProgress = state.show,</span>
+<span class="nc" id="L173">                    progressText = state.progressText</span>
+            )
+<span class="nc" id="L175">        }</span>
+<span class="nc" id="L176">    }</span>
+
+    fun onActionMenuClicked() {
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L180">            _onSnackbarMessage.value = Event(SnackbarMessageHolder(UiStringRes(R.string.no_network_message)))</span>
+<span class="nc" id="L181">            return</span>
+        }
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        _uiState.value?.let { uiState -&gt;</span>
+<span class="nc" id="L184">            val editedCommentEssentials = uiState.editedComment</span>
+<span class="nc" id="L185">            launch(bgDispatcher) {</span>
+<span class="nc" id="L186">                setLoadingState(SAVING)</span>
+<span class="nc" id="L187">                updateComment(editedCommentEssentials)</span>
+<span class="nc" id="L188">            }</span>
+        }
+<span class="nc" id="L190">    }</span>
+
+    fun onBackPressed() {
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        _uiState.value?.let {</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">            if (it.editedComment.isNotEqualTo(it.originalComment)) {</span>
+<span class="nc" id="L195">                _uiActionEvent.value = Event(CANCEL_EDIT_CONFIRM)</span>
+            } else {
+<span class="nc" id="L197">                _uiActionEvent.value = Event(CLOSE)</span>
+            }
+<span class="nc" id="L199">        }</span>
+<span class="nc" id="L200">    }</span>
+
+    fun onConfirmEditingDiscard() {
+<span class="nc" id="L203">        _uiActionEvent.value = Event(CLOSE)</span>
+<span class="nc" id="L204">    }</span>
+
+    private fun initViews() {
+<span class="nc" id="L207">        launch {</span>
+<span class="nc" id="L208">            setLoadingState(LOADING)</span>
+
+<span class="nc" id="L210">            val commentEssentials = withContext(bgDispatcher) {</span>
+<span class="nc" id="L211">                mapCommentEssentials()</span>
+            }
+<span class="nc bnc" id="L213" title="All 2 branches missed.">            if (commentEssentials.isValid()) {</span>
+<span class="nc" id="L214">                _uiState.value =</span>
+<span class="nc" id="L215">                        EditCommentUiState(</span>
+<span class="nc" id="L216">                                canSaveChanges = false,</span>
+<span class="nc" id="L217">                                shouldInitComment = true,</span>
+<span class="nc" id="L218">                                shouldInitWatchers = true,</span>
+<span class="nc" id="L219">                                showProgress = LOADING.show,</span>
+<span class="nc" id="L220">                                progressText = LOADING.progressText,</span>
+<span class="nc" id="L221">                                originalComment = commentEssentials,</span>
+<span class="nc" id="L222">                                editedComment = commentEssentials,</span>
+<span class="nc" id="L223">                                editErrorStrings = EditErrorStrings(),</span>
+<span class="nc" id="L224">                                inputSettings = mapInputSettings(commentEssentials)</span>
+                        )
+            } else {
+<span class="nc" id="L227">                _onSnackbarMessage.value = Event(SnackbarMessageHolder(</span>
+<span class="nc" id="L228">                        message = UiStringRes(R.string.error_load_comment),</span>
+<span class="nc" id="L229">                        onDismissAction = { _uiActionEvent.value = Event(CLOSE) }</span>
+                ))
+            }
+<span class="nc" id="L232">            delay(LOADING_DELAY_MS)</span>
+<span class="nc" id="L233">            setLoadingState(NOT_VISIBLE)</span>
+<span class="nc" id="L234">        }</span>
+<span class="nc" id="L235">    }</span>
+
+<span class="nc" id="L237">    private suspend fun mapCommentEssentials(): CommentEssentials {</span>
+<span class="nc bnc" id="L238" title="All 4 branches missed.">        val commentEntity = getCommentUseCase.execute(site, commentIdentifier.remoteCommentId)</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        return if (commentEntity != null) {</span>
+<span class="nc" id="L240">            CommentEssentials(</span>
+<span class="nc" id="L241">                    commentId = commentEntity.id,</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">                    userName = commentEntity.authorName ?: &quot;&quot;,</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">                    commentText = commentEntity.content ?: &quot;&quot;,</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">                    userUrl = commentEntity.authorUrl ?: &quot;&quot;,</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">                    userEmail = commentEntity.authorEmail ?: &quot;&quot;,</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">                    isFromRegisteredUser = commentEntity.authorId &gt; 0</span>
+            )
+        } else {
+<span class="nc" id="L249">            CommentEssentials()</span>
+        }
+    }
+
+    private suspend fun updateComment(editedCommentEssentials: CommentEssentials) {
+<span class="nc" id="L254">        val commentEntity =</span>
+<span class="nc bnc" id="L255" title="All 4 branches missed.">                commentsStore.getCommentByLocalSiteAndRemoteId(site.id, commentIdentifier.remoteCommentId).firstOrNull()</span>
+<span class="nc bnc" id="L256" title="All 4 branches missed.">        commentEntity?.run {</span>
+<span class="nc" id="L257">            val isCommentEntityUpdated = updateCommentEntity(this, editedCommentEssentials)</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">            if (isCommentEntityUpdated) {</span>
+<span class="nc" id="L259">                analyticsUtilsWrapper.trackCommentActionWithSiteDetails(</span>
+<span class="nc" id="L260">                        COMMENT_EDITED,</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">                        commentIdentifier.toCommentActionSource(),</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">                        site</span>
+                )
+<span class="nc bnc" id="L264" title="All 2 branches missed.">                when (commentIdentifier) {</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">                    is NotificationCommentIdentifier -&gt; {</span>
+<span class="nc" id="L266">                        updateNotificationEntity()</span>
+                    }
+<span class="nc bnc" id="L268" title="All 2 branches missed.">                    is ReaderCommentIdentifier -&gt; {</span>
+<span class="nc" id="L269">                        updateReaderEntity(editedCommentEssentials)</span>
+                    }
+                    else -&gt; {
+<span class="nc" id="L272">                        _uiActionEvent.postValue(Event(DONE))</span>
+<span class="nc" id="L273">                        localCommentCacheUpdateHandler.requestCommentsUpdate()</span>
+                    }
+                }
+            } else {
+<span class="nc" id="L277">                showUpdateCommentError()</span>
+            }
+<span class="nc" id="L279">        } ?: showUpdateCommentError()</span>
+<span class="nc" id="L280">    }</span>
+
+<span class="nc" id="L282">    private suspend fun updateCommentEntity(</span>
+        comment: CommentEntity,
+        editedCommentEssentials: CommentEssentials
+    ): Boolean {
+<span class="nc" id="L286">        val updatedComment = comment.copy(</span>
+<span class="nc" id="L287">                authorUrl = editedCommentEssentials.userUrl,</span>
+<span class="nc" id="L288">                authorName = editedCommentEssentials.userName,</span>
+<span class="nc" id="L289">                authorEmail = editedCommentEssentials.userEmail,</span>
+<span class="nc" id="L290">                content = editedCommentEssentials.commentText</span>
+        )
+
+<span class="nc bnc" id="L293" title="All 2 branches missed.">        val result = commentsStore.updateEditComment(site, updatedComment)</span>
+<span class="nc bnc" id="L294" title="All 2 branches missed.">        return !result.isError</span>
+    }
+
+    private suspend fun updateNotificationEntity() {
+<span class="nc bnc" id="L298" title="All 2 branches missed.">        with(commentIdentifier as NotificationCommentIdentifier) {</span>
+<span class="nc" id="L299">            val isNotificationEntityUpdated = notificationActionsWrapper.downloadNoteAndUpdateDB(noteId)</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">            if (isNotificationEntityUpdated) {</span>
+<span class="nc" id="L301">                _uiActionEvent.postValue(Event(DONE))</span>
+<span class="nc" id="L302">                localCommentCacheUpdateHandler.requestCommentsUpdate()</span>
+            } else {
+<span class="nc" id="L304">                showUpdateNotificationError()</span>
+            }
+<span class="nc" id="L306">        }</span>
+<span class="nc" id="L307">    }</span>
+
+    private suspend fun updateReaderEntity(commentEssentials: CommentEssentials) {
+<span class="nc bnc" id="L310" title="All 2 branches missed.">        val readerCommentIdentifier = commentIdentifier as ReaderCommentIdentifier</span>
+
+<span class="nc" id="L312">        val readerComment = readerCommentTableWrapper.getComment(</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">                site.siteId,</span>
+<span class="nc" id="L314">                readerCommentIdentifier.postId,</span>
+<span class="nc" id="L315">                readerCommentIdentifier.remoteCommentId</span>
+        )
+
+<span class="nc bnc" id="L318" title="All 2 branches missed.">        readerComment?.apply {</span>
+<span class="nc" id="L319">            text = commentEssentials.commentText</span>
+<span class="nc" id="L320">            authorName = commentEssentials.userName</span>
+<span class="nc" id="L321">            authorEmail = commentEssentials.userEmail</span>
+<span class="nc" id="L322">            authorUrl = commentEssentials.userUrl</span>
+<span class="nc" id="L323">            readerCommentTableWrapper.addOrUpdateComment(readerComment)</span>
+<span class="nc" id="L324">        }</span>
+<span class="nc" id="L325">        _uiActionEvent.postValue(Event(DONE))</span>
+<span class="nc" id="L326">        localCommentCacheUpdateHandler.requestCommentsUpdate()</span>
+<span class="nc" id="L327">    }</span>
+
+    private suspend fun showUpdateCommentError() {
+<span class="nc" id="L330">        setLoadingState(NOT_VISIBLE)</span>
+<span class="nc" id="L331">        _onSnackbarMessage.postValue(</span>
+<span class="nc" id="L332">                Event(SnackbarMessageHolder(UiStringRes(R.string.error_edit_comment)))</span>
+        )
+<span class="nc" id="L334">    }</span>
+
+    private suspend fun showUpdateNotificationError() {
+<span class="nc" id="L337">        setLoadingState(NOT_VISIBLE)</span>
+<span class="nc" id="L338">        _onSnackbarMessage.postValue(</span>
+<span class="nc" id="L339">                Event(SnackbarMessageHolder(UiStringRes(R.string.error_edit_notification)))</span>
+        )
+<span class="nc" id="L341">    }</span>
+
+    fun onValidateField(field: String, fieldType: FieldType) {
+<span class="nc bnc" id="L344" title="All 2 branches missed.">        _uiState.value?.let {</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">            val fieldError = if (fieldType.isValid.invoke(field)) {</span>
+<span class="nc" id="L346">                null</span>
+            } else {
+<span class="nc" id="L348">                resourceProvider.getString(fieldType.errorStringRes)</span>
+            }
+
+<span class="nc" id="L351">            val previousComment = it.editedComment</span>
+<span class="nc" id="L352">            val previousErrors = it.editErrorStrings</span>
+
+<span class="nc" id="L354">            val editedComment = previousComment.copy(</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">                    userName = if (fieldType.matches(USER_NAME)) field else previousComment.userName,</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">                    commentText = if (fieldType.matches(COMMENT)) field else previousComment.commentText,</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">                    userUrl = if (fieldType.matches(WEB_ADDRESS)) field else previousComment.userUrl,</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">                    userEmail = if (fieldType.matches(USER_EMAIL)) field else previousComment.userEmail</span>
+            )
+
+<span class="nc" id="L361">            val errors = previousErrors.copy(</span>
+<span class="nc bnc" id="L362" title="All 2 branches missed.">                    userNameError = if (fieldType.matches(USER_NAME)) fieldError else previousErrors.userNameError,</span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">                    commentTextError = if (fieldType.matches(COMMENT)) fieldError else previousErrors.commentTextError,</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">                    userUrlError = if (fieldType.matches(WEB_ADDRESS)) fieldError else previousErrors.userUrlError,</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">                    userEmailError = if (fieldType.matches(USER_EMAIL)) fieldError else previousErrors.userEmailError</span>
+            )
+
+<span class="nc" id="L368">            _uiState.value = it.copy(</span>
+<span class="nc bnc" id="L369" title="All 4 branches missed.">                    canSaveChanges = editedComment.isNotEqualTo(it.originalComment) &amp;&amp; !errors.hasError(),</span>
+<span class="nc" id="L370">                    shouldInitComment = false,</span>
+<span class="nc" id="L371">                    shouldInitWatchers = false,</span>
+<span class="nc" id="L372">                    editedComment = editedComment,</span>
+<span class="nc" id="L373">                    editErrorStrings = errors</span>
+            )
+<span class="nc" id="L375">        }</span>
+<span class="nc" id="L376">    }</span>
+
+<span class="nc" id="L378">    private fun mapInputSettings(commentEssentials: CommentEssentials) = InputSettings(</span>
+<span class="nc bnc" id="L379" title="All 2 branches missed.">            enableEditName = !commentEssentials.isFromRegisteredUser,</span>
+<span class="nc bnc" id="L380" title="All 2 branches missed.">            enableEditUrl = !commentEssentials.isFromRegisteredUser,</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">            enableEditEmail = !commentEssentials.isFromRegisteredUser,</span>
+<span class="nc" id="L382">            enableEditComment = true</span>
+<span class="nc" id="L383">    )</span>
+
+    private fun EditErrorStrings.hasError(): Boolean {
+<span class="nc" id="L386">        return listOf(</span>
+<span class="nc" id="L387">                this.commentTextError,</span>
+<span class="nc" id="L388">                this.userEmailError,</span>
+<span class="nc" id="L389">                this.userNameError,</span>
+<span class="nc" id="L390">                this.userUrlError</span>
+<span class="nc bnc" id="L391" title="All 8 branches missed.">        ).any { !it.isNullOrEmpty() }</span>
+    }
+
+    private fun CommentIdentifier.toCommentActionSource(): AnalyticsCommentActionSource {
+<span class="nc" id="L395">        return when (this) {</span>
+<span class="nc bnc" id="L396" title="All 2 branches missed.">            is NotificationCommentIdentifier -&gt; {</span>
+<span class="nc" id="L397">                AnalyticsCommentActionSource.NOTIFICATIONS</span>
+            }
+<span class="nc bnc" id="L399" title="All 2 branches missed.">            is ReaderCommentIdentifier -&gt; {</span>
+<span class="nc" id="L400">                AnalyticsCommentActionSource.READER</span>
+            }
+<span class="nc" id="L402">            is SiteCommentIdentifier -&gt; {</span>
+<span class="nc" id="L403">                AnalyticsCommentActionSource.SITE_COMMENTS</span>
+            }
+        }
+    }
+
+    companion object {
+        private const val LOADING_DELAY_MS = 300L
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

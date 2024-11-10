@@ -1,0 +1,508 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PageListViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.pages</a> &gt; <span class="el_source">PageListViewModel.kt</span></div><h1>PageListViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.viewmodel.pages
+
+import android.content.Context
+import androidx.annotation.ColorRes
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.Observer
+import androidx.lifecycle.Transformations
+import kotlinx.coroutines.CoroutineDispatcher
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.MediaActionBuilder
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.page.PageModel
+import org.wordpress.android.fluxc.model.page.PageStatus
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.MediaStore
+import org.wordpress.android.fluxc.store.MediaStore.MediaPayload
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaChanged
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.pages.PageItem
+import org.wordpress.android.ui.pages.PageItem.Action
+import org.wordpress.android.ui.pages.PageItem.Divider
+import org.wordpress.android.ui.pages.PageItem.DraftPage
+import org.wordpress.android.ui.pages.PageItem.Empty
+import org.wordpress.android.ui.pages.PageItem.Page
+import org.wordpress.android.ui.pages.PageItem.PublishedPage
+import org.wordpress.android.ui.pages.PageItem.ScheduledPage
+import org.wordpress.android.ui.pages.PageItem.TrashedPage
+import org.wordpress.android.ui.posts.AuthorFilterSelection
+import org.wordpress.android.ui.posts.AuthorFilterSelection.ME
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.LocaleManagerWrapper
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.extensions.toFormattedDateString
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListState.FETCHING
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListType.DRAFTS
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListType.PUBLISHED
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListType.SCHEDULED
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListType.TRASHED
+import org.wordpress.android.viewmodel.uistate.ProgressBarUiState
+import javax.inject.Inject
+import javax.inject.Named
+
+private const val MAX_TOPOLOGICAL_PAGE_COUNT = 100
+private const val DEFAULT_INDENT = 0
+
+<span class="nc" id="L54">class PageListViewModel @Inject constructor(</span>
+<span class="nc" id="L55">    private val createPageListItemLabelsUseCase: CreatePageListItemLabelsUseCase,</span>
+<span class="nc" id="L56">    private val postModelUploadUiStateUseCase: PostModelUploadUiStateUseCase,</span>
+<span class="nc" id="L57">    private val pageListItemActionsUseCase: CreatePageListItemActionsUseCase,</span>
+<span class="nc" id="L58">    private val pageItemProgressUiStateUseCase: PageItemProgressUiStateUseCase,</span>
+<span class="nc" id="L59">    private val mediaStore: MediaStore,</span>
+<span class="nc" id="L60">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L61">    private val localeManagerWrapper: LocaleManagerWrapper,</span>
+<span class="nc" id="L62">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L63">    @Named(BG_THREAD) private val coroutineDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L64">) : ScopedViewModel(coroutineDispatcher) {</span>
+<span class="nc" id="L65">    private val _pages: MutableLiveData&lt;List&lt;PageItem&gt;&gt; = MutableLiveData()</span>
+<span class="nc" id="L66">    val pages: LiveData&lt;Triple&lt;List&lt;PageItem&gt;, Boolean, Boolean&gt;&gt; = Transformations.map(_pages) {</span>
+<span class="nc" id="L67">        Triple(it, isSitePhotonCapable, isSitePrivateAt)</span>
+    }
+<span class="nc" id="L69">    private val _scrollToPosition = SingleLiveEvent&lt;Int&gt;()</span>
+<span class="nc" id="L70">    val scrollToPosition: LiveData&lt;Int&gt; = _scrollToPosition</span>
+    private var retryScrollToPage: LocalId? = null
+    private var isStarted: Boolean = false
+    private lateinit var listType: PageListType
+
+    private lateinit var pagesViewModel: PagesViewModel
+
+    private val PageModel.isHomepage: Boolean
+<span class="nc bnc" id="L78" title="All 4 branches missed.">        get() = remoteId == pagesViewModel.site.pageOnFront</span>
+
+    private val PageModel.isPostsPage: Boolean
+<span class="nc bnc" id="L81" title="All 4 branches missed.">        get() = remoteId == pagesViewModel.site.pageForPosts</span>
+
+<span class="nc" id="L83">    private val featuredImageMap = mutableMapOf&lt;Long, String&gt;()</span>
+
+<span class="nc" id="L85">    private val isSitePhotonCapable: Boolean by lazy {</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        SiteUtils.isPhotonCapable(pagesViewModel.site)</span>
+    }
+
+<span class="nc" id="L89">    private val isSitePrivateAt: Boolean by lazy {</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        pagesViewModel.site.isPrivateWPComAtomic</span>
+    }
+
+<span class="nc" id="L93">    enum class PageListType(val pageStatuses: List&lt;PageStatus&gt;) {</span>
+<span class="nc" id="L94">        PUBLISHED(listOf(PageStatus.PUBLISHED, PageStatus.PRIVATE)),</span>
+<span class="nc" id="L95">        DRAFTS(listOf(PageStatus.DRAFT, PageStatus.PENDING)),</span>
+<span class="nc" id="L96">        SCHEDULED(listOf(PageStatus.SCHEDULED)),</span>
+<span class="nc" id="L97">        TRASHED(listOf(PageStatus.TRASHED));</span>
+
+        companion object {
+            fun fromPageStatus(status: PageStatus): PageListType {
+<span class="nc bnc" id="L101" title="All 4 branches missed.">                return when (status) {</span>
+<span class="nc" id="L102">                    PageStatus.PUBLISHED, PageStatus.PRIVATE -&gt; PUBLISHED</span>
+<span class="nc" id="L103">                    PageStatus.DRAFT, PageStatus.PENDING -&gt; DRAFTS</span>
+<span class="nc" id="L104">                    PageStatus.TRASHED -&gt; TRASHED</span>
+<span class="nc" id="L105">                    PageStatus.SCHEDULED -&gt; SCHEDULED</span>
+                }
+            }
+        }
+
+        val title: Int
+<span class="nc bnc" id="L111" title="All 4 branches missed.">            get() = when (this) {</span>
+<span class="nc" id="L112">                PUBLISHED -&gt; R.string.pages_published</span>
+<span class="nc" id="L113">                DRAFTS -&gt; R.string.pages_drafts</span>
+<span class="nc" id="L114">                SCHEDULED -&gt; R.string.pages_scheduled</span>
+<span class="nc" id="L115">                TRASHED -&gt; R.string.pages_trashed</span>
+<span class="nc" id="L116">            }</span>
+    }
+
+    enum class PageListState {
+<span class="nc" id="L120">        DONE,</span>
+<span class="nc" id="L121">        ERROR,</span>
+<span class="nc" id="L122">        REFRESHING,</span>
+<span class="nc" id="L123">        FETCHING</span>
+    }
+
+    fun start(listType: PageListType, pagesViewModel: PagesViewModel) {
+<span class="nc" id="L127">        this.listType = listType</span>
+<span class="nc" id="L128">        this.pagesViewModel = pagesViewModel</span>
+
+<span class="nc bnc" id="L130" title="All 2 branches missed.">        if (!isStarted) {</span>
+<span class="nc" id="L131">            isStarted = true</span>
+
+<span class="nc" id="L133">            pagesViewModel.pages.observeForever(pagesObserver)</span>
+<span class="nc" id="L134">            pagesViewModel.invalidateUploadStatus.observeForever(uploadStatusObserver)</span>
+<span class="nc" id="L135">            pagesViewModel.authorSelectionUpdated.observeForever(authorSelectionChangedObserver)</span>
+
+<span class="nc" id="L137">            dispatcher.register(this)</span>
+        }
+<span class="nc" id="L139">    }</span>
+
+    override fun onCleared() {
+<span class="nc bnc" id="L142" title="All 2 branches missed.">        pagesViewModel.pages.removeObserver(pagesObserver)</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        pagesViewModel.invalidateUploadStatus.removeObserver(uploadStatusObserver)</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">        pagesViewModel.authorSelectionUpdated.removeObserver(authorSelectionChangedObserver)</span>
+
+<span class="nc" id="L146">        dispatcher.unregister(this)</span>
+<span class="nc" id="L147">    }</span>
+
+    fun onMenuAction(action: Action, pageItem: Page, context: Context): Boolean {
+<span class="nc bnc" id="L150" title="All 2 branches missed.">        return pagesViewModel.onMenuAction(action, pageItem, context)</span>
+    }
+
+    fun onItemTapped(pageItem: Page, context: Context) {
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        if (pageItem.tapActionEnabled) {</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">            pagesViewModel.onItemTapped(pageItem)</span>
+        }
+<span class="nc" id="L157">    }</span>
+
+    fun onEmptyListNewPageButtonTapped() {
+<span class="nc bnc" id="L160" title="All 2 branches missed.">        pagesViewModel.onNewPageButtonTapped()</span>
+<span class="nc" id="L161">    }</span>
+
+    fun onScrollToPageRequested(localPageId: Int) {
+<span class="nc bnc" id="L164" title="All 8 branches missed.">        val position = _pages.value?.indexOfFirst { it is Page &amp;&amp; it.localId == localPageId } ?: -1</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        if (position != -1) {</span>
+<span class="nc" id="L166">            _scrollToPosition.postValue(position)</span>
+<span class="nc" id="L167">            retryScrollToPage = null</span>
+        } else {
+<span class="nc" id="L169">            retryScrollToPage = LocalId(localPageId)</span>
+<span class="nc" id="L170">            AppLog.e(AppLog.T.PAGES, &quot;Attempt to scroll to a missing page with ID $localPageId&quot;)</span>
+        }
+<span class="nc" id="L172">    }</span>
+
+<span class="nc" id="L174">    private val pagesObserver = Observer&lt;List&lt;PageModel&gt;&gt; { pages -&gt;</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">        pages?.let {</span>
+<span class="nc" id="L176">            loadPagesAsync(pages)</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">            pagesViewModel.checkIfNewPageButtonShouldBeVisible()</span>
+<span class="nc" id="L178">        }</span>
+<span class="nc" id="L179">    }</span>
+
+<span class="nc" id="L181">    private val uploadStatusObserver = Observer&lt;List&lt;LocalId&gt;&gt; { ids -&gt;</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">        pagesViewModel.uploadStatusTracker.invalidateUploadStatus(ids.map { localId -&gt; localId.value })</span>
+<span class="nc" id="L183">    }</span>
+
+<span class="nc" id="L185">    private val authorSelectionChangedObserver = Observer&lt;AuthorFilterSelection&gt; { authorSelection -&gt;</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">        authorSelection?.let {</span>
+<span class="nc bnc" id="L187" title="All 4 branches missed.">            pagesViewModel.pages.value?.let { loadPagesAsync(it) }</span>
+<span class="nc" id="L188">        }</span>
+<span class="nc" id="L189">    }</span>
+
+<span class="nc bnc" id="L191" title="All 2 branches missed.">    private fun loadPagesAsync(pages: List&lt;PageModel&gt;) = launch {</span>
+<span class="nc" id="L192">        val pageItems = pages</span>
+<span class="nc" id="L193">                .sortedBy { it.title.toLowerCase(localeManagerWrapper.getLocale()) }</span>
+<span class="nc bnc" id="L194" title="All 4 branches missed.">                .filter { listType.pageStatuses.contains(it.status) }</span>
+<span class="nc" id="L195">                .let {</span>
+<span class="nc bnc" id="L196" title="All 6 branches missed.">                    when (listType) {</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                        PUBLISHED -&gt; preparePublishedPages(it, pagesViewModel.arePageActionsEnabled)</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">                        SCHEDULED -&gt; prepareScheduledPages(it, pagesViewModel.arePageActionsEnabled)</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">                        DRAFTS -&gt; prepareDraftPages(it, pagesViewModel.arePageActionsEnabled)</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">                        TRASHED -&gt; prepareTrashedPages(it, pagesViewModel.arePageActionsEnabled)</span>
+                    }
+                }
+
+<span class="nc" id="L204">        displayListItems(pageItems)</span>
+<span class="nc" id="L205">    }</span>
+
+    private fun displayListItems(newPages: List&lt;PageItem&gt;) {
+<span class="nc bnc" id="L208" title="All 2 branches missed.">        if (newPages.isEmpty()) {</span>
+<span class="nc bnc" id="L209" title="All 8 branches missed.">            if (pagesViewModel.listState.value == FETCHING || pagesViewModel.listState.value == null) {</span>
+<span class="nc" id="L210">                _pages.postValue(</span>
+<span class="nc" id="L211">                        listOf(</span>
+<span class="nc" id="L212">                                Empty(</span>
+<span class="nc" id="L213">                                        R.string.pages_fetching,</span>
+<span class="nc" id="L214">                                        isButtonVisible = false,</span>
+<span class="nc" id="L215">                                        isImageVisible = false</span>
+                                )
+                        )
+                )
+            } else {
+<span class="nc bnc" id="L220" title="All 7 branches missed.">                when (listType) {</span>
+<span class="nc" id="L221">                    PUBLISHED -&gt; _pages.postValue(listOf(Empty(R.string.pages_empty_published)))</span>
+<span class="nc" id="L222">                    SCHEDULED -&gt; _pages.postValue(listOf(Empty(R.string.pages_empty_scheduled)))</span>
+<span class="nc" id="L223">                    DRAFTS -&gt; _pages.postValue(listOf(Empty(R.string.pages_empty_drafts)))</span>
+<span class="nc" id="L224">                    TRASHED -&gt; _pages.postValue(listOf(Empty(R.string.pages_empty_trashed, isButtonVisible = false)))</span>
+                }
+            }
+        } else {
+<span class="nc" id="L228">            val pagesWithBottomGap = newPages.toMutableList()</span>
+<span class="nc" id="L229">            pagesWithBottomGap.addAll(listOf(Divider(), Divider()))</span>
+<span class="nc" id="L230">            _pages.postValue(pagesWithBottomGap)</span>
+        }
+
+<span class="nc bnc" id="L233" title="All 2 branches missed.">        retryScrollToPage?.let {</span>
+<span class="nc" id="L234">            onScrollToPageRequested(it.value)</span>
+<span class="nc" id="L235">        }</span>
+<span class="nc" id="L236">    }</span>
+
+    private fun getFeaturedImageUrl(featuredImageId: Long): String? {
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        if (featuredImageId == 0L) {</span>
+<span class="nc" id="L240">            return null</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">        } else if (featuredImageMap.containsKey(featuredImageId)) {</span>
+<span class="nc" id="L242">            return featuredImageMap[featuredImageId]</span>
+        }
+
+<span class="nc bnc" id="L245" title="All 4 branches missed.">        mediaStore.getSiteMediaWithId(pagesViewModel.site, featuredImageId)?.let { media -&gt;</span>
+            // This should be a pretty rare case, but some media seems to be missing url
+<span class="nc bnc" id="L247" title="All 2 branches missed.">            return if (media.url != null) {</span>
+<span class="nc" id="L248">                featuredImageMap[featuredImageId] = media.url</span>
+<span class="nc" id="L249">                media.url</span>
+<span class="nc" id="L250">            } else null</span>
+        }
+
+        // Media is not in the Store, we need to download it
+<span class="nc" id="L254">        val mediaToDownload = MediaModel()</span>
+<span class="nc" id="L255">        mediaToDownload.mediaId = featuredImageId</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">        mediaToDownload.localSiteId = pagesViewModel.site.id</span>
+
+<span class="nc bnc" id="L258" title="All 2 branches missed.">        val payload = MediaPayload(pagesViewModel.site, mediaToDownload)</span>
+<span class="nc" id="L259">        dispatcher.dispatch(MediaActionBuilder.newFetchMediaAction(payload))</span>
+
+<span class="nc" id="L261">        return null</span>
+    }
+
+    private fun preparePublishedPages(pages: List&lt;PageModel&gt;, actionsEnabled: Boolean): List&lt;PageItem&gt; {
+<span class="nc bnc" id="L265" title="All 4 branches missed.">        val filteredPages = if (pagesViewModel.shouldFilterByAuthor()) {</span>
+<span class="nc bnc" id="L266" title="All 4 branches missed.">            pages.filter { it.post.authorId == accountStore.account.userId }</span>
+        } else {
+<span class="nc" id="L268">            pages</span>
+        }
+
+<span class="nc bnc" id="L271" title="All 2 branches missed.">        val shouldSortTopologically = filteredPages.size &lt; MAX_TOPOLOGICAL_PAGE_COUNT</span>
+<span class="nc bnc" id="L272" title="All 2 branches missed.">        val sortedPages = (if (shouldSortTopologically) {</span>
+<span class="nc" id="L273">            topologicalSort(filteredPages.sortedBy { !(it.isHomepage &amp;&amp; it.parent == null) }, listType = PUBLISHED)</span>
+        } else {
+<span class="nc" id="L275">            filteredPages.sortedByDescending { it.date }.sortedBy { !it.isHomepage }</span>
+        })
+
+<span class="nc" id="L278">        return sortedPages</span>
+<span class="nc" id="L279">                .map {</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">                    val pageItemIndent = if (shouldSortTopologically) {</span>
+<span class="nc" id="L281">                        getPageItemIndent(it)</span>
+                    } else {
+<span class="nc" id="L283">                        DEFAULT_INDENT</span>
+                    }
+<span class="nc" id="L285">                    val itemUiStateData = createItemUiStateData(it)</span>
+<span class="nc bnc" id="L286" title="All 6 branches missed.">                    val author = if (pagesViewModel.authorUIState.value?.authorFilterSelection == ME) {</span>
+<span class="nc" id="L287">                        null</span>
+                    } else {
+<span class="nc" id="L289">                        it.post.authorDisplayName</span>
+                    }
+<span class="nc" id="L291">                    PublishedPage(</span>
+<span class="nc" id="L292">                            remoteId = it.remoteId,</span>
+<span class="nc" id="L293">                            localId = it.pageId,</span>
+<span class="nc" id="L294">                            title = it.title,</span>
+<span class="nc" id="L295">                            subtitle = itemUiStateData.subtitle,</span>
+<span class="nc" id="L296">                            icon = itemUiStateData.icon,</span>
+<span class="nc" id="L297">                            date = it.date,</span>
+<span class="nc" id="L298">                            labels = itemUiStateData.labels,</span>
+<span class="nc" id="L299">                            labelsColor = itemUiStateData.labelsColor,</span>
+<span class="nc" id="L300">                            indent = pageItemIndent,</span>
+<span class="nc" id="L301">                            imageUrl = getFeaturedImageUrl(it.featuredImageId),</span>
+<span class="nc" id="L302">                            actions = itemUiStateData.actions,</span>
+<span class="nc" id="L303">                            actionsEnabled = actionsEnabled,</span>
+<span class="nc" id="L304">                            progressBarUiState = itemUiStateData.progressBarUiState,</span>
+<span class="nc" id="L305">                            showOverlay = itemUiStateData.showOverlay,</span>
+<span class="nc" id="L306">                            author = author,</span>
+<span class="nc" id="L307">                            showQuickStartFocusPoint = itemUiStateData.showQuickStartFocusPoint</span>
+                    )
+                }
+    }
+
+    private fun prepareScheduledPages(
+        pages: List&lt;PageModel&gt;,
+        actionsEnabled: Boolean
+    ): List&lt;PageItem&gt; {
+<span class="nc bnc" id="L316" title="All 4 branches missed.">        val filteredPages = if (pagesViewModel.shouldFilterByAuthor()) {</span>
+<span class="nc bnc" id="L317" title="All 4 branches missed.">            pages.filter { it.post.authorId == accountStore.account.userId }</span>
+        } else {
+<span class="nc" id="L319">            pages</span>
+        }
+
+<span class="nc" id="L322">        return filteredPages.groupBy { it.date.toFormattedDateString() }</span>
+<span class="nc" id="L323">                .map { (date, results) -&gt;</span>
+<span class="nc" id="L324">                    listOf(Divider(date)) +</span>
+<span class="nc" id="L325">                            results.map {</span>
+<span class="nc" id="L326">                                val itemUiStateData = createItemUiStateData(it)</span>
+
+<span class="nc bnc" id="L328" title="All 6 branches missed.">                                val author = if (pagesViewModel.authorUIState.value?.authorFilterSelection == ME) {</span>
+<span class="nc" id="L329">                                    null</span>
+                                } else {
+<span class="nc" id="L331">                                    it.post.authorDisplayName</span>
+                                }
+<span class="nc" id="L333">                                ScheduledPage(</span>
+<span class="nc" id="L334">                                        remoteId = it.remoteId,</span>
+<span class="nc" id="L335">                                        localId = it.pageId,</span>
+<span class="nc" id="L336">                                        title = it.title,</span>
+<span class="nc" id="L337">                                        date = it.date,</span>
+<span class="nc" id="L338">                                        labels = itemUiStateData.labels,</span>
+<span class="nc" id="L339">                                        labelsColor = itemUiStateData.labelsColor,</span>
+<span class="nc" id="L340">                                        imageUrl = getFeaturedImageUrl(it.featuredImageId),</span>
+<span class="nc" id="L341">                                        actions = itemUiStateData.actions,</span>
+<span class="nc" id="L342">                                        actionsEnabled = actionsEnabled,</span>
+<span class="nc" id="L343">                                        progressBarUiState = itemUiStateData.progressBarUiState,</span>
+<span class="nc" id="L344">                                        showOverlay = itemUiStateData.showOverlay,</span>
+<span class="nc" id="L345">                                        author = author,</span>
+<span class="nc" id="L346">                                        showQuickStartFocusPoint = itemUiStateData.showQuickStartFocusPoint</span>
+                                )
+                            }
+                }
+<span class="nc" id="L350">                .fold(mutableListOf()) { acc: MutableList&lt;PageItem&gt;, list: List&lt;PageItem&gt; -&gt;</span>
+<span class="nc" id="L351">                    acc.addAll(list)</span>
+<span class="nc" id="L352">                    return@fold acc</span>
+                }
+    }
+
+    private fun prepareDraftPages(pages: List&lt;PageModel&gt;, actionsEnabled: Boolean): List&lt;PageItem&gt; {
+<span class="nc bnc" id="L357" title="All 4 branches missed.">        val filteredPages = if (pagesViewModel.shouldFilterByAuthor()) {</span>
+<span class="nc bnc" id="L358" title="All 4 branches missed.">            pages.filter { it.post.authorId == accountStore.account.userId }</span>
+        } else {
+<span class="nc" id="L360">            pages</span>
+        }
+
+<span class="nc" id="L363">        return filteredPages</span>
+<span class="nc" id="L364">                .map {</span>
+<span class="nc" id="L365">                    val itemUiStateData = createItemUiStateData(it)</span>
+<span class="nc" id="L366">                    DraftPage(</span>
+<span class="nc" id="L367">                            remoteId = it.remoteId,</span>
+<span class="nc" id="L368">                            localId = it.pageId,</span>
+<span class="nc" id="L369">                            title = it.title,</span>
+<span class="nc" id="L370">                            date = it.date,</span>
+<span class="nc" id="L371">                            labels = itemUiStateData.labels,</span>
+<span class="nc" id="L372">                            labelsColor = itemUiStateData.labelsColor,</span>
+<span class="nc" id="L373">                            imageUrl = getFeaturedImageUrl(it.featuredImageId),</span>
+<span class="nc" id="L374">                            actions = itemUiStateData.actions,</span>
+<span class="nc" id="L375">                            actionsEnabled = actionsEnabled,</span>
+<span class="nc" id="L376">                            progressBarUiState = itemUiStateData.progressBarUiState,</span>
+<span class="nc" id="L377">                            showOverlay = itemUiStateData.showOverlay,</span>
+<span class="nc bnc" id="L378" title="All 6 branches missed.">                            author = if (pagesViewModel.authorUIState.value?.authorFilterSelection == ME) {</span>
+<span class="nc" id="L379">                                null</span>
+                            } else {
+<span class="nc" id="L381">                                it.post.authorDisplayName</span>
+                            },
+<span class="nc" id="L383">                            showQuickStartFocusPoint = itemUiStateData.showQuickStartFocusPoint</span>
+                    )
+                }
+    }
+
+    private fun prepareTrashedPages(
+        pages: List&lt;PageModel&gt;,
+        actionsEnabled: Boolean
+    ): List&lt;PageItem&gt; {
+<span class="nc bnc" id="L392" title="All 4 branches missed.">        val filteredPages = if (pagesViewModel.shouldFilterByAuthor()) {</span>
+<span class="nc bnc" id="L393" title="All 4 branches missed.">            pages.filter { it.post.authorId == accountStore.account.userId }</span>
+        } else {
+<span class="nc" id="L395">            pages</span>
+        }
+
+<span class="nc" id="L398">        return filteredPages</span>
+<span class="nc" id="L399">                .map {</span>
+<span class="nc" id="L400">                    val itemUiStateData = createItemUiStateData(it)</span>
+<span class="nc bnc" id="L401" title="All 6 branches missed.">                    val author = if (pagesViewModel.authorUIState.value?.authorFilterSelection == ME) {</span>
+<span class="nc" id="L402">                        null</span>
+                    } else {
+<span class="nc" id="L404">                        it.post.authorDisplayName</span>
+                    }
+<span class="nc" id="L406">                    TrashedPage(</span>
+<span class="nc" id="L407">                            remoteId = it.remoteId,</span>
+<span class="nc" id="L408">                            localId = it.pageId,</span>
+<span class="nc" id="L409">                            title = it.title,</span>
+<span class="nc" id="L410">                            date = it.date,</span>
+<span class="nc" id="L411">                            labels = itemUiStateData.labels,</span>
+<span class="nc" id="L412">                            labelsColor = itemUiStateData.labelsColor,</span>
+<span class="nc" id="L413">                            imageUrl = getFeaturedImageUrl(it.featuredImageId),</span>
+<span class="nc" id="L414">                            actions = itemUiStateData.actions,</span>
+<span class="nc" id="L415">                            actionsEnabled = actionsEnabled,</span>
+<span class="nc" id="L416">                            progressBarUiState = itemUiStateData.progressBarUiState,</span>
+<span class="nc" id="L417">                            showOverlay = itemUiStateData.showOverlay,</span>
+<span class="nc" id="L418">                            author = author,</span>
+<span class="nc" id="L419">                            showQuickStartFocusPoint = itemUiStateData.showQuickStartFocusPoint</span>
+                    )
+                }
+    }
+
+<span class="nc" id="L424">    private fun topologicalSort(</span>
+        pages: List&lt;PageModel&gt;,
+        listType: PageListType,
+<span class="nc" id="L427">        parent: PageModel? = null</span>
+    ): List&lt;PageModel&gt; {
+<span class="nc" id="L429">        val sortedList = mutableListOf&lt;PageModel&gt;()</span>
+<span class="nc" id="L430">        pages.filter {</span>
+<span class="nc bnc" id="L431" title="All 8 branches missed.">            it.parent?.remoteId == parent?.remoteId ||</span>
+<span class="nc bnc" id="L432" title="All 6 branches missed.">                    (parent == null &amp;&amp; !listType.pageStatuses.contains(it.parent?.status))</span>
+<span class="nc" id="L433">        }.forEach {</span>
+<span class="nc" id="L434">            sortedList += it</span>
+<span class="nc" id="L435">            sortedList += topologicalSort(pages, listType, it)</span>
+<span class="nc" id="L436">        }</span>
+<span class="nc" id="L437">        return sortedList</span>
+    }
+
+    private fun getPageItemIndent(page: PageModel?): Int {
+<span class="nc bnc" id="L441" title="All 4 branches missed.">        return if (page == null || !PUBLISHED.pageStatuses.contains(page.status)) {</span>
+<span class="nc" id="L442">            -1</span>
+        } else {
+<span class="nc" id="L444">            getPageItemIndent(page.parent) + 1</span>
+        }
+    }
+
+    private fun invalidateFeaturedMedia(vararg featuredImageIds: Long) {
+<span class="nc" id="L449">        featuredImageIds.forEach { featuredImageMap.remove(it) }</span>
+<span class="nc bnc" id="L450" title="All 2 branches missed.">        pagesViewModel.onImagesChanged()</span>
+<span class="nc" id="L451">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.BACKGROUND)
+    @SuppressWarnings(&quot;unused&quot;)
+    fun onMediaChanged(event: OnMediaChanged) {
+<span class="nc bnc" id="L456" title="All 4 branches missed.">        if (!event.isError &amp;&amp; event.mediaList != null) {</span>
+<span class="nc" id="L457">            invalidateFeaturedMedia(*event.mediaList.map { it.mediaId }.toLongArray())</span>
+        }
+<span class="nc" id="L459">    }</span>
+
+    private fun createItemUiStateData(pageModel: PageModel): ItemUiStateData {
+<span class="nc" id="L462">        val uploadUiState = postModelUploadUiStateUseCase.createUploadUiState(</span>
+<span class="nc" id="L463">                pageModel.post,</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">                pagesViewModel.site,</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">                pagesViewModel.uploadStatusTracker</span>
+        )
+<span class="nc" id="L467">        val (labels, labelColor) = createPageListItemLabelsUseCase.createLabels(pageModel.post, uploadUiState)</span>
+
+<span class="nc" id="L469">        val (progressBarUiState, showOverlay) = pageItemProgressUiStateUseCase.getProgressStateForPage(uploadUiState)</span>
+<span class="nc" id="L470">        val actions = pageListItemActionsUseCase.setupPageActions(</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">                listType,</span>
+<span class="nc" id="L472">                uploadUiState,</span>
+<span class="nc bnc" id="L473" title="All 2 branches missed.">                pagesViewModel.site,</span>
+<span class="nc" id="L474">                pageModel.remoteId</span>
+        )
+<span class="nc" id="L476">        val subtitle = when {</span>
+<span class="nc bnc" id="L477" title="All 2 branches missed.">            pageModel.isHomepage -&gt; R.string.site_settings_homepage</span>
+<span class="nc bnc" id="L478" title="All 2 branches missed.">            pageModel.isPostsPage -&gt; R.string.site_settings_posts_page</span>
+<span class="nc" id="L479">            else -&gt; null</span>
+        }
+<span class="nc" id="L481">        val icon = when {</span>
+<span class="nc bnc" id="L482" title="All 2 branches missed.">            pageModel.isHomepage -&gt; R.drawable.ic_homepage_16dp</span>
+<span class="nc bnc" id="L483" title="All 2 branches missed.">            pageModel.isPostsPage -&gt; R.drawable.ic_posts_16dp</span>
+<span class="nc" id="L484">            else -&gt; null</span>
+        }
+<span class="nc" id="L486">        return ItemUiStateData(</span>
+<span class="nc" id="L487">                labels,</span>
+<span class="nc" id="L488">                labelColor,</span>
+<span class="nc" id="L489">                progressBarUiState,</span>
+<span class="nc" id="L490">                showOverlay,</span>
+<span class="nc" id="L491">                actions,</span>
+<span class="nc" id="L492">                subtitle,</span>
+<span class="nc" id="L493">                icon</span>
+        )
+    }
+
+<span class="nc" id="L497">    private data class ItemUiStateData(</span>
+<span class="nc" id="L498">        val labels: List&lt;UiString&gt;,</span>
+<span class="nc" id="L499">        @ColorRes val labelsColor: Int?,</span>
+<span class="nc" id="L500">        val progressBarUiState: ProgressBarUiState,</span>
+<span class="nc" id="L501">        val showOverlay: Boolean,</span>
+<span class="nc" id="L502">        val actions: Set&lt;Action&gt;,</span>
+<span class="nc" id="L503">        val subtitle: Int? = null,</span>
+<span class="nc" id="L504">        val icon: Int? = null,</span>
+<span class="nc" id="L505">        val showQuickStartFocusPoint: Boolean = false</span>
+<span class="nc" id="L506">    )</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

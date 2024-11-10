@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PeopleInviteViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.people</a> &gt; <span class="el_source">PeopleInviteViewModel.kt</span></div><h1>PeopleInviteViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.people
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import org.wordpress.android.R.string
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.models.InvitePeopleUtils
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.people.AnalyticsInviteLinksActionResult.ERROR
+import org.wordpress.android.ui.people.AnalyticsInviteLinksActionResult.SUCCEEDED
+import org.wordpress.android.ui.people.AnalyticsInviteLinksGenericError.NO_ROLE_DATA_MATCHED
+import org.wordpress.android.ui.people.InviteLinksApiCallsProvider.InviteLinksItem
+import org.wordpress.android.ui.people.InviteLinksUiStateType.GET_STATUS_RETRY
+import org.wordpress.android.ui.people.InviteLinksUiStateType.HIDDEN
+import org.wordpress.android.ui.people.InviteLinksUiStateType.LINKS_AVAILABLE
+import org.wordpress.android.ui.people.InviteLinksUiStateType.LINKS_GENERATE
+import org.wordpress.android.ui.people.InviteLinksUiStateType.LOADING
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.InviteLinksData
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.InviteLinksError
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.InviteLinksLoading
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.InviteLinksNotAllowed
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.InviteLinksUserChangedRole
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.UserNotAuthenticated
+import org.wordpress.android.ui.people.InviteLinksUseCase.UseCaseScenarioContext.GENERATING_LINKS
+import org.wordpress.android.ui.people.InviteLinksUseCase.UseCaseScenarioContext.INITIALIZING
+import org.wordpress.android.ui.people.InviteLinksUseCase.UseCaseScenarioContext.MANAGING_AVAILABLE_LINKS
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.DateTimeUtilsWrapper
+import org.wordpress.android.util.analytics.AnalyticsUtilsWrapper
+import org.wordpress.android.util.map
+import org.wordpress.android.viewmodel.ContextProvider
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import java.text.SimpleDateFormat
+import javax.inject.Inject
+import javax.inject.Named
+
+<span class="nc" id="L47">class PeopleInviteViewModel @Inject constructor(</span>
+<span class="nc" id="L48">    private val inviteLinksHandler: InviteLinksHandler,</span>
+<span class="nc" id="L49">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L50">    private val dateTimeUtilsWrapper: DateTimeUtilsWrapper,</span>
+<span class="nc" id="L51">    private val contextProvider: ContextProvider,</span>
+<span class="nc" id="L52">    private val invitePeopleUtils: InvitePeopleUtils,</span>
+<span class="nc" id="L53">    private val analyticsUtilsWrapper: AnalyticsUtilsWrapper</span>
+<span class="nc" id="L54">) : ScopedViewModel(bgDispatcher) {</span>
+    private var isStarted = false
+    private var inviteLinksRequestJob: Job? = null
+    private lateinit var siteModel: SiteModel
+<span class="nc" id="L58">    private val inviteLinksData: MutableList&lt;InviteLinksItem&gt; = mutableListOf()</span>
+<span class="nc" id="L59">    private var inviteLinksSelectedRole: InviteLinksUiItem = InviteLinksUiItem.getEmptyItem()</span>
+
+<span class="nc" id="L61">    private val _snackbarEvents = MediatorLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L62">    val snackbarEvents: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _snackbarEvents</span>
+
+<span class="nc" id="L64">    private val _inviteLinksState = MediatorLiveData&lt;InviteLinksState&gt;()</span>
+<span class="nc" id="L65">    val inviteLinksUiState: LiveData&lt;InviteLinksUiState&gt; =</span>
+<span class="nc" id="L66">            _inviteLinksState.map { state -&gt; buildInviteLinksUiState(state) }</span>
+
+<span class="nc" id="L68">    private val _shareLink = MutableLiveData&lt;Event&lt;InviteLinksItem&gt;&gt;()</span>
+<span class="nc" id="L69">    val shareLink: LiveData&lt;Event&lt;InviteLinksItem&gt;&gt; = _shareLink</span>
+
+<span class="nc" id="L71">    private val _showSelectLinksRoleDialog = MutableLiveData&lt;Event&lt;Array&lt;String&gt;&gt;&gt;()</span>
+<span class="nc" id="L72">    val showSelectLinksRoleDialog: LiveData&lt;Event&lt;Array&lt;String&gt;&gt;&gt; = _showSelectLinksRoleDialog</span>
+
+    fun start(siteModel: SiteModel) {
+<span class="nc bnc" id="L75" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc" id="L76">        isStarted = true</span>
+
+<span class="nc" id="L78">        this.siteModel = siteModel</span>
+
+<span class="nc" id="L80">        _snackbarEvents.addSource(inviteLinksHandler.snackbarEvents) { event -&gt;</span>
+<span class="nc" id="L81">            _snackbarEvents.value = event</span>
+<span class="nc" id="L82">        }</span>
+
+<span class="nc" id="L84">        _inviteLinksState.addSource(inviteLinksHandler.inviteLinksState) { event -&gt;</span>
+<span class="nc" id="L85">            _inviteLinksState.value = event</span>
+<span class="nc" id="L86">        }</span>
+
+<span class="nc bnc" id="L88" title="All 2 branches missed.">        if (siteModel.isWpForTeamsSite) {</span>
+<span class="nc" id="L89">            _inviteLinksState.value = InviteLinksLoading(INITIALIZING)</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">            inviteLinksRequestJob?.cancel()</span>
+<span class="nc" id="L91">            inviteLinksRequestJob = launch(bgDispatcher) {</span>
+<span class="nc" id="L92">                inviteLinksHandler.handleInviteLinksStatusRequest(</span>
+<span class="nc" id="L93">                        siteModel.siteId,</span>
+<span class="nc" id="L94">                        INITIALIZING</span>
+                )
+<span class="nc" id="L96">            }</span>
+        } else {
+<span class="nc" id="L98">            _inviteLinksState.value = InviteLinksNotAllowed</span>
+        }
+<span class="nc" id="L100">    }</span>
+
+    fun onGenerateLinksButtonClicked() {
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        inviteLinksRequestJob?.cancel()</span>
+<span class="nc" id="L104">        inviteLinksRequestJob = launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">            inviteLinksHandler.handleGenerateLinks(siteModel.siteId)</span>
+<span class="nc" id="L106">        }</span>
+<span class="nc" id="L107">    }</span>
+
+    fun onDisableLinksButtonClicked() {
+<span class="nc bnc" id="L110" title="All 2 branches missed.">        inviteLinksRequestJob?.cancel()</span>
+<span class="nc" id="L111">        inviteLinksRequestJob = launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">            inviteLinksHandler.handleDisableLinks(siteModel.siteId)</span>
+<span class="nc" id="L113">        }</span>
+<span class="nc" id="L114">    }</span>
+
+    fun onRetryButtonClicked() {
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        inviteLinksRequestJob?.cancel()</span>
+<span class="nc" id="L118">        inviteLinksRequestJob = launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">            inviteLinksHandler.handleInviteLinksStatusRequest(siteModel.siteId, INITIALIZING)</span>
+<span class="nc" id="L120">        }</span>
+<span class="nc" id="L121">    }</span>
+
+    fun onLinksRoleClicked() {
+<span class="nc bnc" id="L124" title="All 2 branches missed.">        val roles = invitePeopleUtils.getInviteLinksRoleDisplayNames(inviteLinksData, siteModel)</span>
+
+<span class="nc bnc" id="L126" title="All 2 branches missed.">        if (roles.count() &gt; 0) {</span>
+<span class="nc" id="L127">            _showSelectLinksRoleDialog.value = Event(roles.toTypedArray())</span>
+        } else {
+<span class="nc bnc" id="L129" title="All 2 branches missed.">            AppLog.d(T.PEOPLE, &quot;Could not get roles for site [${siteModel.siteId}]&quot;)</span>
+<span class="nc" id="L130">            _snackbarEvents.value = Event(</span>
+<span class="nc" id="L131">                    SnackbarMessageHolder(</span>
+<span class="nc" id="L132">                            UiStringText(</span>
+<span class="nc" id="L133">                                    contextProvider.getContext()</span>
+<span class="nc" id="L134">                                            .getString(string.invite_links_cannot_get_roles_error)</span>
+                            )
+                    )
+            )
+        }
+<span class="nc" id="L139">    }</span>
+
+    fun onLinksRoleSelected(roleDisplayName: String) {
+<span class="nc" id="L142">        val selectedRole = invitePeopleUtils.getInviteLinkDataFromRoleDisplayName(</span>
+<span class="nc" id="L143">                inviteLinksData,</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">                siteModel,</span>
+<span class="nc" id="L145">                roleDisplayName</span>
+        )
+
+<span class="nc bnc" id="L148" title="All 4 branches missed.">        selectedRole?.let {</span>
+<span class="nc" id="L149">            _inviteLinksState.value = InviteLinksUserChangedRole(it)</span>
+<span class="nc" id="L150">        } ?: run {</span>
+<span class="nc" id="L151">            AppLog.d(</span>
+<span class="nc" id="L152">                    T.PEOPLE,</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">                    &quot;Could not get data for site [${siteModel.siteId}] &quot; +</span>
+<span class="nc" id="L154">                            &quot;role [$roleDisplayName] from ${inviteLinksData.map { it.role }}&quot;</span>
+            )
+<span class="nc" id="L156">            _snackbarEvents.value = Event(</span>
+<span class="nc" id="L157">                    SnackbarMessageHolder(</span>
+<span class="nc" id="L158">                            UiStringText(</span>
+<span class="nc" id="L159">                                    contextProvider.getContext()</span>
+<span class="nc" id="L160">                                            .getString(string.invite_links_cannot_get_role_data_error, roleDisplayName)</span>
+                            )
+                    )
+            )
+<span class="nc" id="L164">        }</span>
+<span class="nc" id="L165">    }</span>
+
+    fun onShareButtonClicked(roleDisplayName: String) {
+<span class="nc" id="L168">        val selectedRole = invitePeopleUtils.getInviteLinkDataFromRoleDisplayName(</span>
+<span class="nc" id="L169">                inviteLinksData,</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">                siteModel,</span>
+<span class="nc" id="L171">                roleDisplayName</span>
+        )
+
+<span class="nc" id="L174">        val properties = mutableMapOf&lt;String, Any?&gt;()</span>
+
+<span class="nc bnc" id="L176" title="All 4 branches missed.">        selectedRole?.let {</span>
+<span class="nc" id="L177">            _shareLink.value = Event(it)</span>
+<span class="nc" id="L178">            properties.addInviteLinksActionResult(SUCCEEDED)</span>
+<span class="nc" id="L179">            properties.addInviteLinksSharedRole(it.role)</span>
+<span class="nc" id="L180">        } ?: run {</span>
+<span class="nc" id="L181">            AppLog.d(</span>
+<span class="nc" id="L182">                    T.PEOPLE,</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                    &quot;Could not share link for site [${siteModel.siteId}] &quot; +</span>
+<span class="nc" id="L184">                            &quot;role [$roleDisplayName] from ${inviteLinksData.map { it.role }}&quot;</span>
+            )
+<span class="nc" id="L186">            _snackbarEvents.value = Event(</span>
+<span class="nc" id="L187">                    SnackbarMessageHolder(</span>
+<span class="nc" id="L188">                            UiStringText(</span>
+<span class="nc" id="L189">                                    contextProvider.getContext()</span>
+<span class="nc" id="L190">                                            .getString(string.invite_links_cannot_get_role_data_error, roleDisplayName)</span>
+                            )
+                    )
+            )
+<span class="nc" id="L194">            properties.addInviteLinksActionResult(ERROR, NO_ROLE_DATA_MATCHED.errorMessage)</span>
+<span class="nc" id="L195">            properties.addInviteLinksSharedRole(roleDisplayName)</span>
+        }
+
+<span class="nc bnc" id="L198" title="All 2 branches missed.">        analyticsUtilsWrapper.trackInviteLinksAction(Stat.INVITE_LINKS_SHARE, siteModel, properties)</span>
+<span class="nc" id="L199">    }</span>
+
+    private fun buildInviteLinksUiState(inviteLinksState: InviteLinksState): InviteLinksUiState {
+<span class="nc" id="L202">        val formatter = SimpleDateFormat.getDateInstance()</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">        var links: List&lt;InviteLinksUiItem&gt; = invitePeopleUtils.getMappedLinksUiItems(inviteLinksData, siteModel)</span>
+
+<span class="nc bnc" id="L205" title="All 2 branches missed.">        if (inviteLinksState is InviteLinksData) {</span>
+<span class="nc" id="L206">            inviteLinksData.clear()</span>
+<span class="nc" id="L207">            inviteLinksData.addAll(inviteLinksState.links)</span>
+
+<span class="nc bnc" id="L209" title="All 2 branches missed.">            links = invitePeopleUtils.getMappedLinksUiItems(inviteLinksData, siteModel)</span>
+
+<span class="nc bnc" id="L211" title="All 2 branches missed.">            inviteLinksSelectedRole = links.firstOrNull() ?: InviteLinksUiItem.getEmptyItem()</span>
+        } else if (
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                inviteLinksState.scenarioContext != MANAGING_AVAILABLE_LINKS &amp;&amp;</span>
+<span class="nc bnc" id="L214" title="All 2 branches missed.">                inviteLinksState is InviteLinksError</span>
+        ) {
+<span class="nc" id="L216">            inviteLinksData.clear()</span>
+<span class="nc" id="L217">            links = listOf()</span>
+<span class="nc" id="L218">            inviteLinksSelectedRole = InviteLinksUiItem.getEmptyItem()</span>
+        }
+
+<span class="nc bnc" id="L221" title="All 2 branches missed.">        if (inviteLinksState is InviteLinksUserChangedRole) {</span>
+<span class="nc" id="L222">            val roleData = inviteLinksState.selectedRole</span>
+
+<span class="nc" id="L224">            inviteLinksSelectedRole = InviteLinksUiItem(</span>
+<span class="nc" id="L225">                    roleName = roleData.role,</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">                    roleDisplayName = invitePeopleUtils.getDisplayNameForRole(siteModel, roleData.role),</span>
+<span class="nc" id="L227">                    expiryDate = formatter.format(dateTimeUtilsWrapper.dateFromTimestamp(roleData.expiry))</span>
+            )
+        }
+
+<span class="nc" id="L231">        val uiStateType = mapUiStateType(inviteLinksState, links)</span>
+
+<span class="nc bnc" id="L233" title="All 2 branches missed.">        val loadAndRetryUiState = if (inviteLinksState.scenarioContext != INITIALIZING ||</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">                listOf(LINKS_AVAILABLE, LINKS_GENERATE).contains(uiStateType)) {</span>
+<span class="nc" id="L235">            LoadAndRetryUiState.HIDDEN</span>
+        } else {
+<span class="nc bnc" id="L237" title="All 2 branches missed.">            if (uiStateType == GET_STATUS_RETRY) {</span>
+<span class="nc" id="L238">                LoadAndRetryUiState.RETRY</span>
+            } else {
+<span class="nc" id="L240">                LoadAndRetryUiState.LOADING</span>
+            }
+        }
+
+<span class="nc" id="L244">        return InviteLinksUiState(</span>
+<span class="nc" id="L245">                type = uiStateType,</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">                isLinksSectionVisible = uiStateType != HIDDEN,</span>
+<span class="nc" id="L247">                loadAndRetryUiState = loadAndRetryUiState,</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">                isShimmerSectionVisible = loadAndRetryUiState == LoadAndRetryUiState.HIDDEN,</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                isRoleSelectionAllowed = links.count() &gt; 1,</span>
+<span class="nc" id="L250">                links = links,</span>
+<span class="nc" id="L251">                inviteLinksSelectedRole = inviteLinksSelectedRole,</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">                enableManageLinksActions = links.count() &gt; 0</span>
+        )
+    }
+
+    private fun mapUiStateType(
+        inviteLinksState: InviteLinksState,
+        links: List&lt;InviteLinksUiItem&gt;
+    ): InviteLinksUiStateType {
+<span class="nc" id="L260">        return when (inviteLinksState) {</span>
+<span class="nc bnc" id="L261" title="All 4 branches missed.">            InviteLinksNotAllowed, UserNotAuthenticated -&gt; HIDDEN</span>
+<span class="nc bnc" id="L262" title="All 4 branches missed.">            is InviteLinksData -&gt; if (links.count() &gt; 0) LINKS_AVAILABLE else LINKS_GENERATE</span>
+<span class="nc bnc" id="L263" title="All 5 branches missed.">            is InviteLinksError -&gt; when (inviteLinksState.scenarioContext) {</span>
+<span class="nc" id="L264">                INITIALIZING -&gt; GET_STATUS_RETRY</span>
+<span class="nc" id="L265">                GENERATING_LINKS -&gt; LINKS_GENERATE</span>
+<span class="nc" id="L266">                MANAGING_AVAILABLE_LINKS -&gt; LINKS_AVAILABLE</span>
+            }
+<span class="nc bnc" id="L268" title="All 2 branches missed.">            is InviteLinksLoading -&gt; LOADING</span>
+<span class="nc" id="L269">            is InviteLinksUserChangedRole -&gt; LINKS_AVAILABLE</span>
+        }
+    }
+
+    override fun onCleared() {
+<span class="nc" id="L274">        super.onCleared()</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">        inviteLinksRequestJob?.cancel()</span>
+<span class="nc" id="L276">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

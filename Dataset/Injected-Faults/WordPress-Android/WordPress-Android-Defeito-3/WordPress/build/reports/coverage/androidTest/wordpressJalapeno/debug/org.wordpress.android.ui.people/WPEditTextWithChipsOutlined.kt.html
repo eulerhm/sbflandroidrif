@@ -1,0 +1,736 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WPEditTextWithChipsOutlined.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.people</a> &gt; <span class="el_source">WPEditTextWithChipsOutlined.kt</span></div><h1>WPEditTextWithChipsOutlined.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.people
+
+import android.animation.Animator
+import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.Color
+import android.os.Parcel
+import android.os.Parcelable
+import android.os.Parcelable.Creator
+import android.text.Editable
+import android.text.TextUtils.TruncateAt
+import android.text.TextWatcher
+import android.util.AttributeSet
+import android.util.TypedValue
+import android.view.KeyEvent
+import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.widget.TextView.OnEditorActionListener
+import androidx.annotation.AttrRes
+import androidx.annotation.ColorInt
+import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.content.ContextCompat
+import androidx.core.content.res.ResourcesCompat
+import androidx.core.graphics.ColorUtils
+import com.google.android.flexbox.FlexboxLayout
+import com.google.android.material.chip.Chip
+import com.google.android.material.shape.CornerFamily
+import com.google.android.material.shape.MaterialShapeDrawable
+import com.google.android.material.shape.ShapeAppearanceModel
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textview.MaterialTextView
+import org.wordpress.android.R
+import org.wordpress.android.databinding.WpEditTextWithChipsOutlinedBinding
+import org.wordpress.android.util.RtlUtils
+import org.wordpress.android.util.extensions.getColorResIdFromAttribute
+import java.util.LinkedHashMap
+
+/**
+ * As of our understanding, currently the TextInputLayout (that is a LinearLayout) works in OutlinedBox mode having
+ * a single TextInputEditText as a direct child, inflating needed views into an internal not accessible FrameLayout;
+ * so not easily possible to add additional views over the main TextInputLayout keeping the usual
+ * behaviours of the TextInputEditText.
+ *
+ * This component was mainly created to address the move of PeopleInviteFragment into material design.
+ * Specifically tries to cover the usage of chips in combination with an EditText while mimic an
+ * OutlinedBox with TextInputLayout material design behaviour.
+ *
+ * The implementation is pretty basic and do not cover all possible use cases. We should leave this component usage
+ * once we find a more out of the box solution with material design lib (keep an eye on future releases) that
+ * covers our use cases.
+ *
+ * Supports hint/label animation (with RTL support).
+ *
+ * Based and inspired by https://stackoverflow.com/a/61748466
+ *
+ * Note: other possible implementation is using ImageSpan in the EditText but we found cursor/keyboard management
+ * to be more complex and less clean and preferred to use the FlexBox approach for now.
+ */
+
+<span class="nc" id="L60">class WPEditTextWithChipsOutlined @JvmOverloads constructor(</span>
+    context: Context,
+<span class="nc" id="L62">    attrs: AttributeSet? = null,</span>
+<span class="nc" id="L63">    defStyleAttr: Int = 0</span>
+<span class="nc" id="L64">) : ConstraintLayout(context, attrs, defStyleAttr) {</span>
+    private enum class HelperTextState {
+<span class="nc" id="L66">        HINT_VISIBLE,</span>
+<span class="nc" id="L67">        LABEL_VISIBLE</span>
+    }
+
+<span class="nc" id="L70">    private var helperTextState: HelperTextState = HelperTextState.HINT_VISIBLE</span>
+    private var flexBox: FlexboxLayout
+    private var editor: TextInputEditText
+    private var label: MaterialTextView
+    private var hint: MaterialTextView
+
+    private lateinit var outlineDrawable: MaterialShapeDrawable
+
+    private var outlineColorDefault: Int = 0
+    private var outlineColorFocused: Int = 0
+    private var colorSurface: Int = 0
+
+    private var outlineColorAlphaFocused: Float = 0f
+    private var outlineColorAlphaDefault: Float = 0f
+    private var hintLabelColorAlphaDefault: Float = 0f
+
+    private var outlinePixelWidthDefault: Int = 0
+    private var outlinePixelWidthFocused: Int = 0
+
+    private var hintResourceId = 0
+    private var chipifyEnabled = false
+    private var maxChips = 0
+
+    private var isRightToLeft = false
+
+    private var itemsManager: ItemsManagerInterface? = null
+
+    fun setItemsManager(itemsManager: ItemsManagerInterface?) {
+<span class="nc" id="L98">        this.itemsManager = itemsManager</span>
+<span class="nc" id="L99">    }</span>
+
+    interface ItemsManagerInterface {
+        fun onRemoveItem(item: String)
+        fun onAddItem(item: String)
+    }
+
+<span class="nc" id="L106">    enum class ItemValidationState(@AttrRes val colorAttr: Int) {</span>
+<span class="nc" id="L107">        NEUTRAL(R.attr.colorOnSurface),</span>
+<span class="nc" id="L108">        VALIDATED(R.attr.colorPrimary),</span>
+<span class="nc" id="L109">        VALIDATED_WITH_ERRORS(R.attr.wpColorError);</span>
+
+        @ColorInt fun colorFromState(context: Context): Int {
+<span class="nc" id="L112">            val color = context.getColorResIdFromAttribute(this.colorAttr)</span>
+
+<span class="nc" id="L114">            return ContextCompat.getColor(context, color)</span>
+        }
+
+        companion object {
+            fun stateFromColor(context: Context, color: Int): ItemValidationState {
+<span class="nc" id="L119">                return values().first { value -&gt;</span>
+<span class="nc bnc" id="L120" title="All 4 branches missed.">                    ContextCompat.getColor(context, context.getColorResIdFromAttribute(value.colorAttr)) == color</span>
+                }
+            }
+        }
+    }
+
+<span class="nc" id="L126">    init {</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        attrs?.also {</span>
+<span class="nc" id="L128">            val stylesAttributes = context.theme.obtainStyledAttributes(</span>
+<span class="nc" id="L129">                    attrs,</span>
+<span class="nc" id="L130">                    R.styleable.WPEditTextWithChipsOutlined,</span>
+<span class="nc" id="L131">                    0,</span>
+<span class="nc" id="L132">                    0</span>
+            )
+
+<span class="nc" id="L135">            try {</span>
+<span class="nc" id="L136">                hintResourceId = stylesAttributes.getResourceId(</span>
+<span class="nc" id="L137">                        R.styleable.WPEditTextWithChipsOutlined_wpHint,</span>
+<span class="nc" id="L138">                        0</span>
+                )
+<span class="nc" id="L140">                chipifyEnabled = stylesAttributes.getBoolean(</span>
+<span class="nc" id="L141">                        R.styleable.WPEditTextWithChipsOutlined_wpChipifyEnabled,</span>
+<span class="nc" id="L142">                        false</span>
+                )
+
+<span class="nc" id="L145">                maxChips = stylesAttributes.getInteger(</span>
+<span class="nc" id="L146">                        R.styleable.WPEditTextWithChipsOutlined_wpMaxNumberChips, 0</span>
+                )
+            } finally {
+<span class="nc" id="L149">                stylesAttributes.recycle()</span>
+            }
+<span class="nc" id="L151">        }</span>
+
+<span class="nc" id="L153">        inflate(getContext(), R.layout.wp_edit_text_with_chips_outlined, this)</span>
+
+<span class="nc" id="L155">        flexBox = findViewById(R.id.flexbox)</span>
+<span class="nc" id="L156">        editor = findViewById(R.id.flexbox_editor)</span>
+<span class="nc" id="L157">        label = findViewById(R.id.flexbox_label)</span>
+<span class="nc" id="L158">        hint = findViewById(R.id.flexbox_hint)</span>
+
+<span class="nc" id="L160">        isRightToLeft = RtlUtils.isRtl(context)</span>
+
+<span class="nc bnc" id="L162" title="All 2 branches missed.">        if (hasHint()) {</span>
+<span class="nc" id="L163">            label.setText(hintResourceId)</span>
+<span class="nc" id="L164">            hint.setText(hintResourceId)</span>
+        }
+
+<span class="nc" id="L167">        isSaveEnabled = true</span>
+
+<span class="nc" id="L169">        loadOutlineDrawable()</span>
+<span class="nc" id="L170">        loadDimensions()</span>
+<span class="nc" id="L171">        loadColors()</span>
+
+<span class="nc" id="L173">        styleView(isEditorFocused(), hasItemsOrText(), false)</span>
+
+<span class="nc" id="L175">        setListeners()</span>
+<span class="nc" id="L176">    }</span>
+
+    fun getTextIfAvailableOrNull(): String? {
+<span class="nc" id="L179">        throwExceptionIfChipifyNotEnabled()</span>
+
+<span class="nc bnc" id="L181" title="All 4 branches missed.">        if (!hasText() || !canAddMoreChips()) {</span>
+<span class="nc" id="L182">            resetText()</span>
+<span class="nc" id="L183">            return null</span>
+        }
+
+<span class="nc" id="L186">        return removeDelimiterFromItemIfPresent(editor.text.toString())</span>
+    }
+
+    fun addOrUpdateChip(item: String, state: ItemValidationState) {
+<span class="nc" id="L190">        throwExceptionIfChipifyNotEnabled()</span>
+<span class="nc" id="L191">        chipify(item, state)</span>
+<span class="nc" id="L192">    }</span>
+
+    fun removeChip(item: String) {
+<span class="nc" id="L195">        throwExceptionIfChipifyNotEnabled()</span>
+<span class="nc" id="L196">        val chips = getChipsMap()</span>
+
+<span class="nc bnc" id="L198" title="All 2 branches missed.">        chips[item]?.let {</span>
+<span class="nc" id="L199">            withBinding {</span>
+<span class="nc" id="L200">                flexbox.removeView(it)</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">                if (flexbox.childCount == 1) {</span>
+<span class="nc" id="L202">                    styleView(isEditorFocused(), hasItemsOrText(), true)</span>
+                }
+<span class="nc" id="L204">            }</span>
+<span class="nc" id="L205">        }</span>
+<span class="nc" id="L206">    }</span>
+
+    fun getChipsStrings(): MutableSet&lt;String&gt; {
+<span class="nc" id="L209">        throwExceptionIfChipifyNotEnabled()</span>
+
+<span class="nc" id="L211">        return getChipsMap().keys</span>
+    }
+
+    fun hasChips(): Boolean {
+<span class="nc" id="L215">        throwExceptionIfChipifyNotEnabled()</span>
+<span class="nc bnc" id="L216" title="All 2 branches missed.">        return getChipsMap().isNotEmpty()</span>
+    }
+
+    fun containsChip(item: String): Boolean {
+<span class="nc" id="L220">        throwExceptionIfChipifyNotEnabled()</span>
+<span class="nc" id="L221">        return getChipsMap().containsKey(item)</span>
+    }
+
+    private fun &lt;T&gt; withBinding(block: WpEditTextWithChipsOutlinedBinding.() -&gt; T): T {
+<span class="nc" id="L225">        return with(WpEditTextWithChipsOutlinedBinding.bind(this)) {</span>
+<span class="nc" id="L226">            block()</span>
+        }
+    }
+
+    private fun loadOutlineDrawable() {
+<span class="nc" id="L231">        val shapeAppearanceModel = ShapeAppearanceModel.builder()</span>
+<span class="nc" id="L232">                .setAllCorners(</span>
+<span class="nc" id="L233">                        CornerFamily.ROUNDED,</span>
+<span class="nc" id="L234">                        resources.getDimension(R.dimen.edit_with_chips_outline_radius)</span>
+                )
+<span class="nc" id="L236">                .build()</span>
+
+<span class="nc" id="L238">        outlineDrawable = MaterialShapeDrawable(shapeAppearanceModel)</span>
+<span class="nc" id="L239">    }</span>
+
+    private fun loadDimensions() {
+<span class="nc" id="L242">        outlinePixelWidthDefault = resources.getDimensionPixelSize(R.dimen.edit_with_chips_outline_default_width)</span>
+<span class="nc" id="L243">        outlinePixelWidthFocused = resources.getDimensionPixelSize(R.dimen.edit_with_chips_outline_focused_width)</span>
+<span class="nc" id="L244">    }</span>
+
+    private fun loadColors() {
+<span class="nc" id="L247">        outlineColorDefault = ContextCompat.getColor(context,</span>
+<span class="nc" id="L248">                TypedValue().let {</span>
+<span class="nc" id="L249">                    getContext().theme.resolveAttribute(R.attr.colorOnSurface, it, true)</span>
+<span class="nc" id="L250">                    it.resourceId</span>
+                })
+<span class="nc" id="L252">        outlineColorFocused = ContextCompat.getColor(context,</span>
+<span class="nc" id="L253">                TypedValue().let {</span>
+<span class="nc" id="L254">                    getContext().theme.resolveAttribute(R.attr.colorPrimary, it, true)</span>
+<span class="nc" id="L255">                    it.resourceId</span>
+                })
+<span class="nc" id="L257">        colorSurface = ContextCompat.getColor(context,</span>
+<span class="nc" id="L258">                TypedValue().let {</span>
+<span class="nc" id="L259">                    getContext().theme.resolveAttribute(R.attr.colorSurface, it, true)</span>
+<span class="nc" id="L260">                    it.resourceId</span>
+                })
+
+<span class="nc" id="L263">        outlineColorAlphaDefault = ResourcesCompat.getFloat(</span>
+<span class="nc" id="L264">                resources,</span>
+<span class="nc" id="L265">                R.dimen.edit_with_chips_outline_default_alpha</span>
+        )
+<span class="nc" id="L267">        outlineColorAlphaFocused = ResourcesCompat.getFloat(</span>
+<span class="nc" id="L268">                resources,</span>
+<span class="nc" id="L269">                R.dimen.edit_with_chips_outline_focused_alpha</span>
+        )
+
+<span class="nc" id="L272">        hintLabelColorAlphaDefault = ResourcesCompat.getFloat(</span>
+<span class="nc" id="L273">                resources,</span>
+<span class="nc" id="L274">                R.dimen.edit_with_chips_hint_label_default_alpha</span>
+        )
+<span class="nc" id="L276">    }</span>
+
+    private fun setListeners() {
+<span class="nc" id="L279">        editor.setOnFocusChangeListener { v, hasFocus -&gt;</span>
+<span class="nc bnc" id="L280" title="All 8 branches missed.">            val canAnimate = hint.width &gt; 0 &amp;&amp; label.width &gt; 0 &amp;&amp; hint.height &gt; 0 &amp;&amp; label.height &gt; 0</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">            if (canAnimate) {</span>
+<span class="nc" id="L282">                styleView(hasFocus, hasItemsOrText(), true)</span>
+            }
+
+<span class="nc bnc" id="L285" title="All 6 branches missed.">            if (chipifyEnabled &amp;&amp; !hasFocus &amp;&amp; hasText()) {</span>
+<span class="nc" id="L286">                addItem(editor.text.toString())</span>
+            }
+<span class="nc" id="L288">        }</span>
+
+<span class="nc bnc" id="L290" title="All 2 branches missed.">        if (chipifyEnabled) {</span>
+<span class="nc" id="L291">            editor.addTextChangedListener(object : TextWatcher {</span>
+                private var mShouldIgnoreChanges = false
+
+<span class="nc" id="L294">                override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) {}</span>
+
+                override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) {
+<span class="nc bnc" id="L297" title="All 2 branches missed.">                    if (mShouldIgnoreChanges) { // used to avoid double call after calling setText from this method</span>
+<span class="nc" id="L298">                        return</span>
+                    }
+<span class="nc" id="L300">                    mShouldIgnoreChanges = true</span>
+
+<span class="nc bnc" id="L302" title="All 6 branches missed.">                    if (s.isNotBlank() &amp;&amp; endsWithDelimiter(s.toString())) {</span>
+<span class="nc" id="L303">                        addItem(s.toString())</span>
+                    }
+
+<span class="nc" id="L306">                    mShouldIgnoreChanges = false</span>
+<span class="nc" id="L307">                }</span>
+
+<span class="nc" id="L309">                override fun afterTextChanged(s: Editable) {}</span>
+            })
+
+<span class="nc" id="L312">            editor.setOnEditorActionListener(OnEditorActionListener { _, actionId, event -&gt;</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">                if (actionId == EditorInfo.IME_ACTION_DONE ||</span>
+<span class="nc bnc" id="L314" title="All 4 branches missed.">                        event != null &amp;&amp; event.keyCode == KeyEvent.KEYCODE_ENTER) {</span>
+<span class="nc" id="L315">                    val editable = editor.text</span>
+
+<span class="nc bnc" id="L317" title="All 2 branches missed.">                    editable?.let {</span>
+<span class="nc" id="L318">                        val item = it.toString()</span>
+
+<span class="nc bnc" id="L320" title="All 4 branches missed.">                        if (item.isNotBlank()) {</span>
+<span class="nc" id="L321">                            addItem(item)</span>
+                        }
+<span class="nc" id="L323">                    }</span>
+<span class="nc" id="L324">                    return@OnEditorActionListener true</span>
+                } else {
+<span class="nc" id="L326">                    return@OnEditorActionListener false</span>
+                }
+            })
+
+            // handle key preses from hardware keyboard
+<span class="nc" id="L331">            editor.setOnKeyListener { _, _, keyEvent -&gt;</span>
+<span class="nc bnc" id="L332" title="All 2 branches missed.">                keyEvent.keyCode == KeyEvent.KEYCODE_DEL &amp;&amp;</span>
+<span class="nc bnc" id="L333" title="All 4 branches missed.">                        keyEvent.action == KeyEvent.ACTION_DOWN &amp;&amp; removeLastEnteredItem()</span>
+            }
+        }
+<span class="nc" id="L336">    }</span>
+
+    private fun canAddMoreChips(): Boolean {
+<span class="nc" id="L339">        return withBinding {</span>
+<span class="nc bnc" id="L340" title="All 4 branches missed.">            flexbox.childCount &lt; maxChips + 1 || maxChips == 0</span>
+        }
+    }
+
+    private fun addItem(item: String) {
+<span class="nc bnc" id="L345" title="All 6 branches missed.">        if (!canAddMoreChips() &amp;&amp; item.isNotBlank()) {</span>
+<span class="nc" id="L346">            resetText()</span>
+        } else {
+<span class="nc" id="L348">            val cleanedItem = removeDelimiterFromItemIfPresent(item)</span>
+
+<span class="nc bnc" id="L350" title="All 6 branches missed.">            if (cleanedItem.isNullOrBlank()) return</span>
+
+<span class="nc" id="L352">            resetText()</span>
+
+<span class="nc bnc" id="L354" title="All 4 branches missed.">            itemsManager?.onAddItem(cleanedItem) ?: chipify(cleanedItem, ItemValidationState.NEUTRAL)</span>
+        }
+<span class="nc" id="L356">    }</span>
+
+<span class="nc" id="L358">    private data class ChipReplaceData(val index: Int, val chip: Chip, val isAlreadyInGroup: Boolean)</span>
+
+    private fun chipify(item: String, state: ItemValidationState) {
+<span class="nc bnc" id="L361" title="All 2 branches missed.">        if (!chipifyEnabled) return</span>
+
+<span class="nc" id="L363">        val chipsMap = getChipsMap()</span>
+
+<span class="nc bnc" id="L365" title="All 2 branches missed.">        val (index, chip, isAlreadyInGroup) = if (chipsMap.containsKey(item)) {</span>
+<span class="nc" id="L366">            ChipReplaceData(flexBox.indexOfChild(chipsMap[item]), chipsMap[item]!!, true)</span>
+        } else {
+<span class="nc" id="L368">            ChipReplaceData(flexBox.childCount - 1, Chip(context), false)</span>
+        }
+
+<span class="nc" id="L371">        chip.layoutDirection = View.LAYOUT_DIRECTION_LOCALE</span>
+<span class="nc" id="L372">        chip.setEnsureMinTouchTargetSize(true)</span>
+<span class="nc" id="L373">        chip.ensureAccessibleTouchTarget(resources.getDimensionPixelSize(R.dimen.people_chips_min_target))</span>
+<span class="nc" id="L374">        chip.text = item</span>
+<span class="nc" id="L375">        chip.setTextColor(state.colorFromState(context))</span>
+<span class="nc" id="L376">        chip.isCloseIconVisible = true</span>
+<span class="nc" id="L377">        chip.isClickable = false</span>
+<span class="nc" id="L378">        chip.isCheckable = false</span>
+<span class="nc" id="L379">        chip.ellipsize = TruncateAt.MIDDLE</span>
+<span class="nc" id="L380">        chip.closeIconContentDescription = resources.getString(</span>
+<span class="nc" id="L381">                R.string.invite_user_delete_desc,</span>
+<span class="nc" id="L382">                item</span>
+        )
+
+<span class="nc bnc" id="L385" title="All 2 branches missed.">        if (!isAlreadyInGroup) {</span>
+<span class="nc" id="L386">            chip.setOnCloseIconClickListener { chipView -&gt;</span>
+<span class="nc" id="L387">                val itemName = chip.text.toString()</span>
+<span class="nc" id="L388">                withBinding {</span>
+<span class="nc" id="L389">                    flexbox.removeView(chipView)</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">                    itemsManager?.onRemoveItem(itemName)</span>
+
+<span class="nc bnc" id="L392" title="All 2 branches missed.">                    if (flexbox.childCount == 1) {</span>
+<span class="nc" id="L393">                        styleView(isEditorFocused(), hasItemsOrText(), true)</span>
+                    }
+<span class="nc" id="L395">                }</span>
+<span class="nc" id="L396">            }</span>
+
+<span class="nc" id="L398">            flexBox.addView(chip as View, index)</span>
+        }
+
+<span class="nc" id="L401">        resetText()</span>
+<span class="nc" id="L402">    }</span>
+
+    private fun resetText() {
+<span class="nc" id="L405">        editor.apply {</span>
+<span class="nc bnc" id="L406" title="All 4 branches missed.">            text?.clear() ?: setText(&quot;&quot;)</span>
+<span class="nc" id="L407">        }</span>
+<span class="nc" id="L408">    }</span>
+
+    private fun removeDelimiterFromItemIfPresent(item: String?): String? {
+<span class="nc bnc" id="L411" title="All 6 branches missed.">        if (item.isNullOrBlank()) {</span>
+<span class="nc" id="L412">            return null</span>
+        }
+<span class="nc" id="L414">        val trimmedItem = item.trim()</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">        for (itemDelimiter in ITEM_DELIMITERS) {</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">            if (trimmedItem.endsWith(itemDelimiter)) {</span>
+<span class="nc" id="L417">                return trimmedItem.substring(0, trimmedItem.length - itemDelimiter.length)</span>
+            }
+        }
+<span class="nc" id="L420">        return trimmedItem</span>
+    }
+
+    private fun throwExceptionIfChipifyNotEnabled() {
+<span class="nc bnc" id="L424" title="All 2 branches missed.">        if (!chipifyEnabled) throw IllegalArgumentException(</span>
+<span class="nc" id="L425">                &quot;Please set chipifyEnabled to true in order to use chips feature&quot;</span>
+        )
+<span class="nc" id="L427">    }</span>
+
+    // This should be fast enough for our use case, so we get fresh data always
+    private fun getChipsMap(): MutableMap&lt;String, Chip&gt; {
+<span class="nc" id="L431">        val chips: MutableMap&lt;String, Chip&gt; = LinkedHashMap()</span>
+<span class="nc" id="L432">        withBinding {</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">            for (i in 0 until flexbox.childCount) {</span>
+<span class="nc" id="L434">                val v: View = flexbox.getChildAt(i)</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">                if (v is Chip) {</span>
+<span class="nc" id="L436">                    chips[v.text.toString()] = v</span>
+                }
+            }
+<span class="nc" id="L439">        }</span>
+
+<span class="nc" id="L441">        return chips</span>
+    }
+
+    private fun removeLastEnteredItem(): Boolean {
+<span class="nc bnc" id="L445" title="All 2 branches missed.">        if (hasText()) {</span>
+<span class="nc" id="L446">            return false</span>
+        }
+
+<span class="nc" id="L449">        return withBinding {</span>
+            // try and remove the last entered username
+<span class="nc bnc" id="L451" title="All 2 branches missed.">            if (flexbox.childCount &gt; 1) {</span>
+<span class="nc bnc" id="L452" title="All 2 branches missed.">                val chipToRemove = flexBox.getChildAt(flexbox.childCount - 2) as Chip</span>
+<span class="nc" id="L453">                val itemName = chipToRemove.text.toString()</span>
+<span class="nc" id="L454">                flexBox.removeViewAt(flexbox.childCount - 2)</span>
+<span class="nc bnc" id="L455" title="All 2 branches missed.">                itemsManager?.onRemoveItem(itemName)</span>
+<span class="nc" id="L456">                true</span>
+            } else {
+<span class="nc" id="L458">                false</span>
+            }
+        }
+    }
+
+    private fun endsWithDelimiter(string: String): Boolean {
+<span class="nc bnc" id="L464" title="All 2 branches missed.">        if (string.isBlank()) {</span>
+<span class="nc" id="L465">            return false</span>
+        }
+<span class="nc bnc" id="L467" title="All 2 branches missed.">        for (usernameDelimiter in ITEM_DELIMITERS) {</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">            if (string.endsWith(usernameDelimiter)) {</span>
+<span class="nc" id="L469">                return true</span>
+            }
+        }
+<span class="nc" id="L472">        return false</span>
+    }
+
+    private fun styleView(hasFocus: Boolean, hasText: Boolean, animateOnChange: Boolean) {
+<span class="nc bnc" id="L476" title="All 2 branches missed.">        flexBox.background = outlineDrawable</span>
+<span class="nc" id="L477">        setLabelColor(hint, outlineColorDefault, hintLabelColorAlphaDefault)</span>
+<span class="nc bnc" id="L478" title="All 2 branches missed.">        if (hasFocus) {</span>
+<span class="nc" id="L479">            setOutlineStroke(</span>
+<span class="nc" id="L480">                    outlinePixelWidthFocused,</span>
+<span class="nc" id="L481">                    outlineColorFocused,</span>
+<span class="nc" id="L482">                    outlineColorAlphaFocused</span>
+            )
+        } else {
+<span class="nc" id="L485">            setOutlineStroke(</span>
+<span class="nc" id="L486">                    outlinePixelWidthDefault,</span>
+<span class="nc" id="L487">                    outlineColorDefault,</span>
+<span class="nc" id="L488">                    outlineColorAlphaDefault</span>
+            )
+        }
+
+<span class="nc bnc" id="L492" title="All 2 branches missed.">        if (!hasHint()) {</span>
+<span class="nc" id="L493">            hint.visibility = View.INVISIBLE</span>
+<span class="nc" id="L494">            label.visibility = View.INVISIBLE</span>
+<span class="nc" id="L495">            return</span>
+        }
+
+<span class="nc" id="L498">        val previousLabelState = helperTextState</span>
+
+<span class="nc bnc" id="L500" title="All 4 branches missed.">        if (hasFocus || hasText) {</span>
+<span class="nc" id="L501">            helperTextState = HelperTextState.LABEL_VISIBLE</span>
+
+<span class="nc bnc" id="L503" title="All 4 branches missed.">            if (animateOnChange &amp;&amp; previousLabelState != helperTextState) {</span>
+<span class="nc" id="L504">                animateViewTo(HelperTextState.LABEL_VISIBLE)</span>
+            } else {
+<span class="nc bnc" id="L506" title="All 2 branches missed.">                if (hasFocus) {</span>
+<span class="nc" id="L507">                    setLabelColor(label, outlineColorFocused, outlineColorAlphaFocused)</span>
+<span class="nc" id="L508">                    hint.visibility = View.INVISIBLE</span>
+<span class="nc" id="L509">                    label.visibility = View.VISIBLE</span>
+                } else {
+<span class="nc" id="L511">                    setLabelColor(label, outlineColorDefault, hintLabelColorAlphaDefault)</span>
+<span class="nc" id="L512">                    hint.visibility = View.INVISIBLE</span>
+<span class="nc" id="L513">                    label.visibility = View.VISIBLE</span>
+                }
+            }
+        } else {
+<span class="nc" id="L517">            helperTextState = HelperTextState.HINT_VISIBLE</span>
+
+<span class="nc bnc" id="L519" title="All 4 branches missed.">            if (animateOnChange &amp;&amp; previousLabelState != helperTextState) {</span>
+<span class="nc" id="L520">                animateViewTo(HelperTextState.HINT_VISIBLE)</span>
+            } else {
+<span class="nc" id="L522">                setLabelColor(label, colorSurface, outlineColorAlphaFocused)</span>
+
+<span class="nc" id="L524">                hint.visibility = View.VISIBLE</span>
+<span class="nc" id="L525">                label.visibility = View.INVISIBLE</span>
+            }
+        }
+<span class="nc" id="L528">    }</span>
+
+    private fun animateViewTo(targetState: HelperTextState) {
+<span class="nc bnc" id="L531" title="All 2 branches missed.">        if (isRightToLeft) {</span>
+<span class="nc" id="L532">            hint.pivotX = hint.width.toFloat()</span>
+<span class="nc" id="L533">            hint.pivotY = 0f</span>
+        } else {
+<span class="nc" id="L535">            hint.pivotX = 0f</span>
+<span class="nc" id="L536">            hint.pivotY = 0f</span>
+        }
+
+<span class="nc bnc" id="L539" title="All 3 branches missed.">        when (targetState) {</span>
+            HelperTextState.HINT_VISIBLE -&gt; {
+<span class="nc" id="L541">                hint.animate().cancel()</span>
+
+<span class="nc bnc" id="L543" title="All 4 branches missed.">                if (hint.translationY == 0f) {</span>
+<span class="nc" id="L544">                    hint.translationY = label.y - hint.y</span>
+<span class="nc" id="L545">                    hint.scaleX = label.width.toFloat() / hint.width</span>
+<span class="nc" id="L546">                    hint.scaleX = label.height.toFloat() / hint.height</span>
+                }
+
+<span class="nc" id="L549">                hint.animate()</span>
+<span class="nc" id="L550">                        .translationY(0f)</span>
+<span class="nc" id="L551">                        .scaleX(1f)</span>
+<span class="nc" id="L552">                        .scaleY(1f)</span>
+<span class="nc" id="L553">                        .setDuration(LABEL_ANIMATION_DURATION)</span>
+<span class="nc" id="L554">                        .setListener(object : Animator.AnimatorListener {</span>
+                            override fun onAnimationStart(animation: Animator?) {
+<span class="nc" id="L556">                                label.visibility = View.INVISIBLE</span>
+<span class="nc" id="L557">                                hint.visibility = View.VISIBLE</span>
+<span class="nc" id="L558">                            }</span>
+
+                            override fun onAnimationEnd(animation: Animator?) {
+<span class="nc" id="L561">                            }</span>
+
+                            override fun onAnimationCancel(animation: Animator?) {
+<span class="nc" id="L564">                            }</span>
+
+                            override fun onAnimationRepeat(animation: Animator?) {
+<span class="nc" id="L567">                            }</span>
+<span class="nc" id="L568">                        }).start()</span>
+            }
+            HelperTextState.LABEL_VISIBLE -&gt; {
+<span class="nc" id="L571">                hint.animate().cancel()</span>
+
+<span class="nc bnc" id="L573" title="All 4 branches missed.">                if (hint.translationY != 0f) {</span>
+<span class="nc" id="L574">                    hint.translationY = 0f</span>
+<span class="nc" id="L575">                    hint.scaleX = 1f</span>
+<span class="nc" id="L576">                    hint.scaleX = 1f</span>
+                }
+
+<span class="nc" id="L579">                hint.animate()</span>
+<span class="nc" id="L580">                        .translationY(label.y - hint.y)</span>
+<span class="nc" id="L581">                        .scaleX(label.width.toFloat() / hint.width)</span>
+<span class="nc" id="L582">                        .scaleY(label.height.toFloat() / hint.height)</span>
+<span class="nc" id="L583">                        .setDuration(LABEL_ANIMATION_DURATION)</span>
+<span class="nc" id="L584">                        .setListener(object : Animator.AnimatorListener {</span>
+                            override fun onAnimationStart(animation: Animator?) {
+<span class="nc" id="L586">                                setLabelColor(label, colorSurface, outlineColorAlphaFocused)</span>
+<span class="nc" id="L587">                                label.visibility = View.VISIBLE</span>
+<span class="nc" id="L588">                                hint.visibility = View.VISIBLE</span>
+<span class="nc" id="L589">                            }</span>
+
+                            override fun onAnimationEnd(animation: Animator?) {
+<span class="nc" id="L592">                                hint.visibility = View.INVISIBLE</span>
+<span class="nc" id="L593">                                setLabelColor(label, outlineColorFocused, outlineColorAlphaFocused)</span>
+<span class="nc" id="L594">                            }</span>
+
+                            override fun onAnimationCancel(animation: Animator?) {
+<span class="nc" id="L597">                            }</span>
+
+                            override fun onAnimationRepeat(animation: Animator?) {
+<span class="nc" id="L600">                            }</span>
+<span class="nc" id="L601">                        }).start()</span>
+            }
+        }
+<span class="nc" id="L604">    }</span>
+
+    private fun setOutlineStroke(width: Int, color: Int, alpha: Float) {
+<span class="nc bnc" id="L607" title="All 2 branches missed.">        outlineDrawable.apply {</span>
+<span class="nc" id="L608">            this.setStroke(width.toFloat(), color)</span>
+<span class="nc" id="L609">            this.alpha = (alpha * 255).coerceAtMost(255f).toInt()</span>
+<span class="nc" id="L610">            this.fillColor = ColorStateList.valueOf(Color.TRANSPARENT)</span>
+<span class="nc" id="L611">        }</span>
+<span class="nc" id="L612">    }</span>
+
+    private fun setLabelColor(textView: MaterialTextView, color: Int, alpha: Float) {
+<span class="nc" id="L615">        val colorWithAlpha = ColorUtils.setAlphaComponent(color, (alpha * 255).coerceAtMost(255f).toInt())</span>
+<span class="nc" id="L616">        textView.setTextColor(colorWithAlpha)</span>
+<span class="nc" id="L617">    }</span>
+
+<span class="nc bnc" id="L619" title="All 4 branches missed.">    private fun hasItemsOrText() = hasItems() || hasText()</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">    private fun hasItems() = withBinding { flexbox.childCount &gt; 1 }</span>
+<span class="nc bnc" id="L621" title="All 4 branches missed.">    private fun hasText() = (editor.text?.length ?: 0) &gt; 0</span>
+<span class="nc" id="L622">    private fun isEditorFocused() = editor.isFocused</span>
+<span class="nc bnc" id="L623" title="All 2 branches missed.">    private fun hasHint() = hintResourceId != 0</span>
+
+    override fun onSaveInstanceState(): Parcelable {
+<span class="nc" id="L626">        val savedState = SavedState(super.onSaveInstanceState())</span>
+<span class="nc" id="L627">        savedState.isFocused = isEditorFocused()</span>
+<span class="nc" id="L628">        savedState.labelState = helperTextState</span>
+<span class="nc" id="L629">        savedState.hasText = hasItemsOrText()</span>
+<span class="nc" id="L630">        savedState.chipsData.clear()</span>
+<span class="nc" id="L631">        savedState.chipsData.addAll(</span>
+<span class="nc" id="L632">                getChipsMap().map { (_, v) -&gt;</span>
+<span class="nc" id="L633">                    ChipData(v.text.toString(), v.currentTextColor)</span>
+                }
+        )
+<span class="nc" id="L636">        return savedState</span>
+    }
+
+    override fun onRestoreInstanceState(state: Parcelable?) {
+<span class="nc bnc" id="L640" title="All 2 branches missed.">        if (state !is SavedState) {</span>
+<span class="nc" id="L641">            super.onRestoreInstanceState(state)</span>
+<span class="nc" id="L642">            return</span>
+        }
+<span class="nc" id="L644">        val savedState: SavedState = state</span>
+<span class="nc" id="L645">        super.onRestoreInstanceState(savedState.superState)</span>
+
+<span class="nc" id="L647">        helperTextState = savedState.labelState</span>
+
+<span class="nc" id="L649">        val chipsData = savedState.chipsData</span>
+
+<span class="nc bnc" id="L651" title="All 2 branches missed.">        for (chip: ChipData in chipsData) {</span>
+<span class="nc" id="L652">            chipify(chip.text, ItemValidationState.stateFromColor(context, chip.color))</span>
+        }
+
+<span class="nc" id="L655">        styleView(savedState.isFocused, savedState.hasText, false)</span>
+<span class="nc" id="L656">    }</span>
+
+<span class="nc" id="L658">    private data class ChipData(val text: String, val color: Int) : Parcelable {</span>
+<span class="nc" id="L659">        constructor(parcel: Parcel) : this(</span>
+<span class="nc" id="L660">                parcel.readString()!!,</span>
+<span class="nc" id="L661">                parcel.readInt()</span>
+<span class="nc" id="L662">        )</span>
+
+        override fun writeToParcel(parcel: Parcel, flags: Int) {
+<span class="nc" id="L665">            parcel.writeString(text)</span>
+<span class="nc" id="L666">            parcel.writeInt(color)</span>
+<span class="nc" id="L667">        }</span>
+
+        override fun describeContents(): Int {
+<span class="nc" id="L670">            return 0</span>
+        }
+
+        companion object CREATOR : Creator&lt;ChipData&gt; {
+            override fun createFromParcel(parcel: Parcel): ChipData {
+<span class="nc" id="L675">                return ChipData(parcel)</span>
+            }
+
+            override fun newArray(size: Int): Array&lt;ChipData?&gt; {
+<span class="nc" id="L679">                return arrayOfNulls(size)</span>
+            }
+        }
+    }
+
+    private class SavedState : BaseSavedState {
+<span class="nc" id="L685">        var labelState = HelperTextState.HINT_VISIBLE</span>
+<span class="nc" id="L686">        var isFocused = false</span>
+<span class="nc" id="L687">        var hasText = false</span>
+<span class="nc" id="L688">        var chipsData = mutableListOf&lt;ChipData&gt;()</span>
+
+<span class="nc" id="L690">        constructor(superState: Parcelable?) : super(superState) {}</span>
+<span class="nc" id="L691">        private constructor(`in`: Parcel) : super(`in`) {</span>
+<span class="nc" id="L692">            this.labelState = HelperTextState.values()[`in`.readInt()]</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">            this.isFocused = `in`.readInt() == 1</span>
+<span class="nc bnc" id="L694" title="All 2 branches missed.">            this.hasText = `in`.readInt() == 1</span>
+<span class="nc" id="L695">            val arrayLen = `in`.readInt()</span>
+<span class="nc bnc" id="L696" title="All 2 branches missed.">            if (arrayLen &gt; 0) {</span>
+<span class="nc" id="L697">                val chipsDataArray = arrayOfNulls&lt;ChipData&gt;(arrayLen)</span>
+<span class="nc" id="L698">                `in`.readTypedArray(chipsDataArray, ChipData.CREATOR)</span>
+<span class="nc" id="L699">                this.chipsData = chipsDataArray.filterNotNull().toMutableList()</span>
+            }
+<span class="nc" id="L701">        }</span>
+
+        override fun writeToParcel(out: Parcel, flags: Int) {
+<span class="nc" id="L704">            super.writeToParcel(out, flags)</span>
+<span class="nc" id="L705">            out.writeInt(labelState.ordinal)</span>
+<span class="nc bnc" id="L706" title="All 2 branches missed.">            out.writeInt(if (this.isFocused) 1 else 0)</span>
+<span class="nc bnc" id="L707" title="All 2 branches missed.">            out.writeInt(if (this.hasText) 1 else 0)</span>
+<span class="nc bnc" id="L708" title="All 2 branches missed.">            if (chipsData.size == 0) {</span>
+<span class="nc" id="L709">                out.writeInt(0)</span>
+            } else {
+<span class="nc" id="L711">                out.writeInt(chipsData.size)</span>
+<span class="nc" id="L712">                out.writeTypedArray(chipsData.toTypedArray(), flags)</span>
+            }
+<span class="nc" id="L714">        }</span>
+
+        companion object {
+            @JvmField
+<span class="nc" id="L718">            val CREATOR: Parcelable.Creator&lt;SavedState&gt; = object : Parcelable.Creator&lt;SavedState&gt; {</span>
+                override fun createFromParcel(`in`: Parcel): SavedState {
+<span class="nc" id="L720">                    return SavedState(`in`)</span>
+                }
+
+                override fun newArray(size: Int): Array&lt;SavedState?&gt; {
+<span class="nc" id="L724">                    return arrayOfNulls(size)</span>
+                }
+            }
+        }
+    }
+
+    companion object {
+        // this duration should be the material design default for the animation
+        private const val LABEL_ANIMATION_DURATION = 167L
+<span class="nc" id="L733">        private val ITEM_DELIMITERS = arrayOf(&quot; &quot;, &quot;,&quot;)</span>
+    }
+<span class="nc" id="L735">}</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

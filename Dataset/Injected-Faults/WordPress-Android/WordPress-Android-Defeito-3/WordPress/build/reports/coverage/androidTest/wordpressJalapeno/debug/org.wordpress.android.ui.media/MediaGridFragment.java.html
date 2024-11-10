@@ -1,0 +1,888 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MediaGridFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.media</a> &gt; <span class="el_source">MediaGridFragment.java</span></div><h1>MediaGridFragment.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.media;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.os.Bundle;
+import android.os.Handler;
+import android.text.Spannable;
+import android.text.TextUtils;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.view.ViewGroup;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.view.ActionMode;
+import androidx.fragment.app.Fragment;
+import androidx.recyclerview.widget.DefaultItemAnimator;
+import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
+import com.google.android.material.snackbar.Snackbar;
+
+import org.greenrobot.eventbus.EventBus;
+import org.greenrobot.eventbus.Subscribe;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.MediaActionBuilder;
+import org.wordpress.android.fluxc.generated.SiteActionBuilder;
+import org.wordpress.android.fluxc.model.MediaModel;
+import org.wordpress.android.fluxc.model.MediaModel.MediaUploadState;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.MediaStore;
+import org.wordpress.android.fluxc.store.MediaStore.FetchMediaListPayload;
+import org.wordpress.android.fluxc.store.MediaStore.MediaErrorType;
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaListFetched;
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartExistingSiteTask;
+import org.wordpress.android.fluxc.utils.MimeType;
+import org.wordpress.android.ui.ActionableEmptyView;
+import org.wordpress.android.ui.EmptyViewMessageType;
+import org.wordpress.android.ui.media.MediaGridAdapter.MediaGridAdapterCallback;
+import org.wordpress.android.ui.media.services.MediaDeleteService;
+import org.wordpress.android.ui.mysite.SelectedSiteRepository;
+import org.wordpress.android.ui.mysite.cards.quickstart.QuickStartRepository;
+import org.wordpress.android.ui.prefs.EmptyViewRecyclerView;
+import org.wordpress.android.ui.quickstart.QuickStartEvent;
+import org.wordpress.android.ui.utils.UiString.UiStringText;
+import org.wordpress.android.util.AccessibilityUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.ListUtils;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.QuickStartUtilsWrapper;
+import org.wordpress.android.util.SnackbarItem;
+import org.wordpress.android.util.SnackbarSequencer;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.WPMediaUtils;
+import org.wordpress.android.util.helpers.SwipeToRefreshHelper;
+import org.wordpress.android.util.helpers.SwipeToRefreshHelper.RefreshListener;
+import org.wordpress.android.util.widgets.CustomSwipeRefreshLayout;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+import javax.inject.Inject;
+
+import static android.app.Activity.RESULT_OK;
+import static org.greenrobot.eventbus.ThreadMode.MAIN;
+import static org.wordpress.android.fluxc.utils.MimeType.Type.APPLICATION;
+import static org.wordpress.android.fluxc.utils.MimeType.Type.AUDIO;
+import static org.wordpress.android.fluxc.utils.MimeType.Type.IMAGE;
+import static org.wordpress.android.fluxc.utils.MimeType.Type.VIDEO;
+import static org.wordpress.android.util.WPSwipeToRefreshHelper.buildSwipeToRefreshHelper;
+
+/**
+ * The grid displaying the media items.
+ */
+@SuppressWarnings(&quot;ALL&quot;)
+<span class="nc" id="L83">public class MediaGridFragment extends Fragment implements MediaGridAdapterCallback {</span>
+    private static final String BUNDLE_SELECTED_STATES = &quot;BUNDLE_SELECTED_STATES&quot;;
+    private static final String BUNDLE_IN_MULTI_SELECT_MODE = &quot;BUNDLE_IN_MULTI_SELECT_MODE&quot;;
+    private static final String BUNDLE_SCROLL_POSITION = &quot;BUNDLE_SCROLL_POSITION&quot;;
+    private static final String BUNDLE_RETRIEVED_ALL_FILTERS = &quot;BUNDLE_RETRIEVED_ALL_FILTERS&quot;;
+    private static final String BUNDLE_FETCHED_FILTERS = &quot;BUNDLE_FETCHED_FILTERS&quot;;
+    private static final String BUNDLE_EMPTY_VIEW_MESSAGE = &quot;BUNDLE_EMPTY_VIEW_MESSAGE&quot;;
+
+    static final String TAG = &quot;media_grid_fragment&quot;;
+
+    // should be a multiple of both the column counts (3 in portrait, 4 in landscape)
+    private static final int NUM_MEDIA_PER_FETCH = 48;
+
+<span class="nc" id="L96">    enum MediaFilter {</span>
+<span class="nc" id="L97">        FILTER_ALL(0),</span>
+<span class="nc" id="L98">        FILTER_IMAGES(1),</span>
+<span class="nc" id="L99">        FILTER_DOCUMENTS(2),</span>
+<span class="nc" id="L100">        FILTER_VIDEOS(3),</span>
+<span class="nc" id="L101">        FILTER_AUDIO(4);</span>
+
+        private final int mValue;
+
+<span class="nc" id="L105">        MediaFilter(int value) {</span>
+<span class="nc" id="L106">            this.mValue = value;</span>
+<span class="nc" id="L107">        }</span>
+
+        int getValue() {
+<span class="nc" id="L110">            return mValue;</span>
+        }
+
+        private MimeType.Type toMimeType() {
+<span class="nc bnc" id="L114" title="All 5 branches missed.">            switch (this) {</span>
+                case FILTER_AUDIO:
+<span class="nc" id="L116">                    return AUDIO;</span>
+                case FILTER_DOCUMENTS:
+<span class="nc" id="L118">                    return APPLICATION;</span>
+                case FILTER_IMAGES:
+<span class="nc" id="L120">                    return IMAGE;</span>
+                case FILTER_VIDEOS:
+<span class="nc" id="L122">                    return VIDEO;</span>
+                default:
+<span class="nc" id="L124">                    return null;</span>
+            }
+        }
+
+        private static MediaFilter fromMimeType(@NonNull MimeType.Type mimeType) {
+<span class="nc bnc" id="L129" title="All 5 branches missed.">            switch (mimeType) {</span>
+                case APPLICATION:
+<span class="nc" id="L131">                    return MediaFilter.FILTER_DOCUMENTS;</span>
+                case AUDIO:
+<span class="nc" id="L133">                    return MediaFilter.FILTER_AUDIO;</span>
+                case IMAGE:
+<span class="nc" id="L135">                    return MediaFilter.FILTER_IMAGES;</span>
+                case VIDEO:
+<span class="nc" id="L137">                    return MediaFilter.FILTER_VIDEOS;</span>
+                default:
+<span class="nc" id="L139">                    return MediaFilter.FILTER_ALL;</span>
+            }
+        }
+    }
+
+    // describes which filters we've fetched media for
+<span class="nc" id="L145">    private boolean[] mFetchedFilters = new boolean[MediaFilter.values().length];</span>
+
+    // describes which filters we've fetched ALL media for
+<span class="nc" id="L148">    private boolean[] mFetchedAllFilters = new boolean[MediaFilter.values().length];</span>
+
+    @Inject Dispatcher mDispatcher;
+    @Inject MediaStore mMediaStore;
+    @Inject QuickStartRepository mQuickStartRepository;
+    @Inject QuickStartUtilsWrapper mQuickStartUtilsWrapper;
+    @Inject SnackbarSequencer mSnackbarSequencer;
+    @Inject SelectedSiteRepository mSelectedSiteRepository;
+
+    private MediaBrowserType mBrowserType;
+
+    private EmptyViewRecyclerView mRecycler;
+    private GridLayoutManager mGridManager;
+    private MediaGridAdapter mGridAdapter;
+    private MediaGridListener mListener;
+
+    private boolean mIsRefreshing;
+
+    private ActionMode mActionMode;
+    private String mSearchTerm;
+<span class="nc" id="L168">    private MediaFilter mFilter = MediaFilter.FILTER_ALL;</span>
+
+    private SwipeToRefreshHelper mSwipeToRefreshHelper;
+
+    private ActionableEmptyView mActionableEmptyView;
+<span class="nc" id="L173">    private EmptyViewMessageType mEmptyViewMessageType = EmptyViewMessageType.NO_CONTENT;</span>
+
+    private SiteModel mSite;
+    private QuickStartEvent mQuickStartEvent;
+
+    public interface MediaGridListener {
+        void onMediaItemSelected(int localMediaId, boolean isLongClick);
+
+        void onMediaRequestRetry(int localMediaId);
+
+        void onMediaRequestDelete(int localMediaId);
+    }
+
+    public static MediaGridFragment newInstance(@NonNull SiteModel site,
+                                                @NonNull MediaBrowserType browserType,
+                                                @NonNull MediaFilter filter) {
+<span class="nc" id="L189">        Bundle args = new Bundle();</span>
+<span class="nc" id="L190">        args.putSerializable(WordPress.SITE, site);</span>
+<span class="nc" id="L191">        args.putSerializable(MediaBrowserActivity.ARG_BROWSER_TYPE, browserType);</span>
+<span class="nc" id="L192">        args.putSerializable(MediaBrowserActivity.ARG_FILTER, filter);</span>
+
+<span class="nc" id="L194">        MediaGridFragment fragment = new MediaGridFragment();</span>
+<span class="nc" id="L195">        fragment.setArguments(args);</span>
+<span class="nc" id="L196">        return fragment;</span>
+    }
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L201">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L202">        ((WordPress) getActivity().getApplication()).component().inject(this);</span>
+
+<span class="nc" id="L204">        Bundle args = getArguments();</span>
+<span class="nc" id="L205">        mSite = (SiteModel) args.getSerializable(WordPress.SITE);</span>
+<span class="nc" id="L206">        mBrowserType = (MediaBrowserType) args.getSerializable(MediaBrowserActivity.ARG_BROWSER_TYPE);</span>
+<span class="nc" id="L207">        mFilter = (MediaFilter) args.getSerializable(MediaBrowserActivity.ARG_FILTER);</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L209">            mQuickStartEvent = savedInstanceState.getParcelable(QuickStartEvent.KEY);</span>
+        }
+<span class="nc bnc" id="L211" title="All 2 branches missed.">        if (mSite == null) {</span>
+<span class="nc" id="L212">            ToastUtils.showToast(getActivity(), R.string.blog_not_found, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L213">            getActivity().finish();</span>
+        }
+<span class="nc" id="L215">    }</span>
+
+    @Override
+    public void onStart() {
+<span class="nc" id="L219">        super.onStart();</span>
+<span class="nc" id="L220">        mDispatcher.register(this);</span>
+<span class="nc" id="L221">        EventBus.getDefault().register(this);</span>
+<span class="nc" id="L222">        mGridAdapter.refreshCurrentItems(mRecycler);</span>
+<span class="nc" id="L223">    }</span>
+
+    @Override
+    public void onStop() {
+<span class="nc" id="L227">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L228">        EventBus.getDefault().unregister(this);</span>
+<span class="nc" id="L229">        mGridAdapter.cancelPendingRequestsForVisibleItems(mRecycler);</span>
+<span class="nc" id="L230">        super.onStop();</span>
+<span class="nc" id="L231">    }</span>
+
+    @Subscribe(sticky = true, threadMode = MAIN)
+    public void onEvent(QuickStartEvent event) {
+<span class="nc bnc" id="L235" title="All 4 branches missed.">        if (!isAdded() || getView() == null) {</span>
+<span class="nc" id="L236">            return;</span>
+        }
+<span class="nc" id="L238">        mQuickStartEvent = event;</span>
+<span class="nc" id="L239">        EventBus.getDefault().removeStickyEvent(event);</span>
+<span class="nc bnc" id="L240" title="All 4 branches missed.">        if (mQuickStartEvent.getTask() == QuickStartExistingSiteTask.UPLOAD_MEDIA &amp;&amp; isAdded()) {</span>
+<span class="nc" id="L241">            showQuickStartSnackbar();</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">            if (getActivity() instanceof MediaBrowserActivity) {</span>
+<span class="nc" id="L243">                MediaBrowserActivity activity = (MediaBrowserActivity) getActivity();</span>
+<span class="nc" id="L244">                getView().post(() -&gt; activity.updateMenuNewMediaQuickStartFocusPoint(true));</span>
+            }
+        }
+<span class="nc" id="L247">    }</span>
+
+    private void showQuickStartSnackbar() {
+<span class="nc" id="L250">        Spannable title = mQuickStartUtilsWrapper.stylizeQuickStartPrompt(</span>
+<span class="nc" id="L251">                requireContext(),</span>
+                R.string.quick_start_dialog_upload_media_message_short_plus,
+                R.drawable.ic_plus_white_12dp
+        );
+<span class="nc" id="L255">        mSnackbarSequencer.enqueue(</span>
+                new SnackbarItem(
+<span class="nc" id="L257">                        new SnackbarItem.Info(getSnackbarParent(), new UiStringText(title), Snackbar.LENGTH_LONG)</span>
+                )
+        );
+<span class="nc" id="L260">    }</span>
+
+    private View getSnackbarParent() {
+<span class="nc" id="L263">        View coordinator = getActivity().findViewById(R.id.coordinator_layout);</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">        if (coordinator != null) {</span>
+<span class="nc" id="L265">            return coordinator;</span>
+        }
+<span class="nc" id="L267">        return getView();</span>
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+<span class="nc" id="L272">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L273">        outState.putParcelable(QuickStartEvent.KEY, mQuickStartEvent);</span>
+<span class="nc" id="L274">        saveState(outState);</span>
+<span class="nc" id="L275">    }</span>
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+<span class="nc" id="L279">        super.onCreateView(inflater, container, savedInstanceState);</span>
+
+<span class="nc" id="L281">        View view = inflater.inflate(R.layout.media_grid_fragment, container, false);</span>
+
+<span class="nc" id="L283">        mRecycler = view.findViewById(R.id.recycler);</span>
+<span class="nc" id="L284">        mRecycler.setHasFixedSize(true);</span>
+
+<span class="nc" id="L286">        int numColumns = MediaGridAdapter.getColumnCount(getActivity());</span>
+<span class="nc" id="L287">        mGridManager = new GridLayoutManager(getActivity(), numColumns);</span>
+<span class="nc" id="L288">        mRecycler.setLayoutManager(mGridManager);</span>
+<span class="nc" id="L289">        mRecycler.setAdapter(getAdapter());</span>
+
+        // disable thumbnail loading during a fling to conserve memory
+<span class="nc" id="L292">        final int minDistance = WPMediaUtils.getFlingDistanceToDisableThumbLoading(getActivity());</span>
+<span class="nc" id="L293">        mRecycler.setOnFlingListener(new RecyclerView.OnFlingListener() {</span>
+            @Override
+            public boolean onFling(int velocityX, int velocityY) {
+<span class="nc bnc" id="L296" title="All 2 branches missed.">                if (Math.abs(velocityY) &gt; minDistance) {</span>
+<span class="nc" id="L297">                    getAdapter().setLoadThumbnails(false);</span>
+                }
+<span class="nc" id="L299">                return false;</span>
+            }
+        });
+<span class="nc" id="L302">        mRecycler.addOnScrollListener(new RecyclerView.OnScrollListener() {</span>
+            @Override
+            public void onScrollStateChanged(RecyclerView recyclerView, int newState) {
+<span class="nc" id="L305">                super.onScrollStateChanged(recyclerView, newState);</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">                if (newState == RecyclerView.SCROLL_STATE_IDLE) {</span>
+<span class="nc" id="L307">                    getAdapter().setLoadThumbnails(true);</span>
+                }
+<span class="nc" id="L309">            }</span>
+        });
+
+<span class="nc" id="L312">        mActionableEmptyView = (ActionableEmptyView) view.findViewById(R.id.actionable_empty_view);</span>
+<span class="nc" id="L313">        mActionableEmptyView.button.setOnClickListener(new OnClickListener() {</span>
+            @Override public void onClick(View view) {
+<span class="nc bnc" id="L315" title="All 4 branches missed.">                if (isAdded() &amp;&amp; getActivity() instanceof MediaBrowserActivity) {</span>
+<span class="nc" id="L316">                    ((MediaBrowserActivity) getActivity()).showAddMediaPopup();</span>
+                }
+<span class="nc" id="L318">            }</span>
+        });
+<span class="nc" id="L320">        mRecycler.setEmptyView(mActionableEmptyView);</span>
+
+        // swipe to refresh setup
+<span class="nc" id="L323">        mSwipeToRefreshHelper = buildSwipeToRefreshHelper(</span>
+<span class="nc" id="L324">                (CustomSwipeRefreshLayout) view.findViewById(R.id.ptr_layout), new RefreshListener() {</span>
+                    @Override
+                    public void onRefreshStarted() {
+<span class="nc bnc" id="L327" title="All 2 branches missed.">                        if (!isAdded()) {</span>
+<span class="nc" id="L328">                            return;</span>
+                        }
+<span class="nc bnc" id="L330" title="All 2 branches missed.">                        if (!NetworkUtils.checkConnection(getActivity())) {</span>
+<span class="nc" id="L331">                            updateEmptyView(EmptyViewMessageType.NETWORK_ERROR);</span>
+<span class="nc" id="L332">                            setRefreshing(false);</span>
+<span class="nc" id="L333">                            return;</span>
+                        }
+<span class="nc" id="L335">                        fetchMediaList(false);</span>
+<span class="nc" id="L336">                    }</span>
+                }
+        );
+
+<span class="nc bnc" id="L340" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L341">            restoreState(savedInstanceState);</span>
+        }
+
+<span class="nc" id="L344">        setFilter(mFilter);</span>
+
+<span class="nc" id="L346">        return view;</span>
+    }
+
+    private boolean hasAdapter() {
+<span class="nc bnc" id="L350" title="All 2 branches missed.">        return mGridAdapter != null;</span>
+    }
+
+    private MediaGridAdapter getAdapter() {
+<span class="nc bnc" id="L354" title="All 2 branches missed.">        if (!hasAdapter()) {</span>
+<span class="nc" id="L355">            mGridAdapter = new MediaGridAdapter(getActivity(), mSite, mBrowserType);</span>
+<span class="nc" id="L356">            mGridAdapter.setCallback(this);</span>
+        }
+<span class="nc" id="L358">        return mGridAdapter;</span>
+    }
+
+    @Override
+    public void onAttach(Activity activity) {
+<span class="nc" id="L363">        super.onAttach(activity);</span>
+
+        try {
+<span class="nc" id="L366">            mListener = (MediaGridListener) activity;</span>
+<span class="nc" id="L367">        } catch (ClassCastException e) {</span>
+<span class="nc" id="L368">            throw new ClassCastException(activity.toString() + &quot; must implement MediaGridListener&quot;);</span>
+<span class="nc" id="L369">        }</span>
+<span class="nc" id="L370">    }</span>
+
+    boolean isEmpty() {
+<span class="nc bnc" id="L373" title="All 4 branches missed.">        return hasAdapter() &amp;&amp; getAdapter().isEmpty();</span>
+    }
+
+    MediaFilter getFilter() {
+<span class="nc" id="L377">        return mFilter;</span>
+    }
+
+    /*
+     * called when we know we've retrieved and fetched all media for all filters
+     */
+    private void setHasFetchedMediaForAllFilters() {
+<span class="nc bnc" id="L384" title="All 2 branches missed.">        for (int i = 0; i &lt; mFetchedAllFilters.length; i++) {</span>
+<span class="nc" id="L385">            mFetchedFilters[i] = true;</span>
+<span class="nc" id="L386">            mFetchedAllFilters[i] = true;</span>
+        }
+<span class="nc" id="L388">    }</span>
+
+    /*
+      * this method has two purposes: (1) make sure media that is being deleted still has the right UploadState,
+      * as it may have been overwritten by a refresh while deletion was still in progress, (2) remove any local
+      * files (ie: media not uploaded yet) that no longer exist (in case user deleted them from the device)
+      */
+    private void ensureCorrectState(List&lt;MediaModel&gt; mediaModels) {
+<span class="nc bnc" id="L396" title="All 4 branches missed.">        if (isAdded() &amp;&amp; getActivity() instanceof MediaBrowserActivity) {</span>
+            // we only need to check the deletion state if media are currently being deleted
+<span class="nc" id="L398">            MediaDeleteService service = ((MediaBrowserActivity) getActivity()).getMediaDeleteService();</span>
+<span class="nc bnc" id="L399" title="All 4 branches missed.">            boolean checkDeleteState = service != null &amp;&amp; service.isAnyMediaBeingDeleted();</span>
+
+            // note we count backwards so we can remove from the list
+<span class="nc bnc" id="L402" title="All 2 branches missed.">            for (int i = mediaModels.size() - 1; i &gt;= 0; i--) {</span>
+<span class="nc" id="L403">                MediaModel media = mediaModels.get(i);</span>
+                // ensure correct upload state for media being deleted
+<span class="nc bnc" id="L405" title="All 4 branches missed.">                if (checkDeleteState &amp;&amp; service.isMediaBeingDeleted(media)) {</span>
+<span class="nc" id="L406">                    media.setUploadState(MediaUploadState.DELETING);</span>
+                }
+
+                // remove local media that no longer exists
+<span class="nc bnc" id="L410" title="All 2 branches missed.">                if (media.getFilePath() != null</span>
+<span class="nc bnc" id="L411" title="All 2 branches missed.">                    &amp;&amp; org.wordpress.android.util.MediaUtils.isLocalFile(media.getUploadState())) {</span>
+<span class="nc" id="L412">                    File file = new File(media.getFilePath());</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">                    if (!file.exists()) {</span>
+<span class="nc" id="L414">                        AppLog.w(AppLog.T.MEDIA, &quot;removing nonexistent local media &quot; + media.getFilePath());</span>
+                        // remove from the store
+<span class="nc" id="L416">                        mDispatcher.dispatch(MediaActionBuilder.newRemoveMediaAction(media));</span>
+                        // remove from the passed list
+<span class="nc" id="L418">                        mediaModels.remove(i);</span>
+                    }
+                }
+            }
+        }
+<span class="nc" id="L423">    }</span>
+
+    List&lt;MediaModel&gt; getFilteredMedia() {
+        List&lt;MediaModel&gt; mediaList;
+<span class="nc bnc" id="L427" title="All 2 branches missed.">        if (!TextUtils.isEmpty(mSearchTerm)) {</span>
+<span class="nc bnc" id="L428" title="All 5 branches missed.">            switch (mFilter) {</span>
+                case FILTER_IMAGES:
+<span class="nc" id="L430">                    mediaList = mMediaStore.searchSiteImages(mSite, mSearchTerm);</span>
+<span class="nc" id="L431">                    break;</span>
+                case FILTER_DOCUMENTS:
+<span class="nc" id="L433">                    mediaList = mMediaStore.searchSiteDocuments(mSite, mSearchTerm);</span>
+<span class="nc" id="L434">                    break;</span>
+                case FILTER_VIDEOS:
+<span class="nc" id="L436">                    mediaList = mMediaStore.searchSiteVideos(mSite, mSearchTerm);</span>
+<span class="nc" id="L437">                    break;</span>
+                case FILTER_AUDIO:
+<span class="nc" id="L439">                    mediaList = mMediaStore.searchSiteAudio(mSite, mSearchTerm);</span>
+<span class="nc" id="L440">                    break;</span>
+                default:
+<span class="nc" id="L442">                    mediaList = mMediaStore.searchSiteMedia(mSite, mSearchTerm);</span>
+<span class="nc" id="L443">                    break;</span>
+            }
+<span class="nc bnc" id="L445" title="All 2 branches missed.">        } else if (mBrowserType.isSingleImagePicker()) {</span>
+<span class="nc" id="L446">            mediaList = mMediaStore.getSiteImages(mSite);</span>
+<span class="nc bnc" id="L447" title="All 4 branches missed.">        } else if (mBrowserType.canFilter() || mBrowserType.canOnlyDoInitialFilter() || mBrowserType</span>
+<span class="nc bnc" id="L448" title="All 2 branches missed.">                .isSingleFilePicker() || mBrowserType</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">                           .isSingleAudioFilePicker()) {</span>
+<span class="nc" id="L450">            mediaList = getMediaList();</span>
+        } else {
+<span class="nc" id="L452">            List&lt;MediaModel&gt; allMedia = mMediaStore.getAllSiteMedia(mSite);</span>
+<span class="nc" id="L453">            mediaList = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">            for (MediaModel media : allMedia) {</span>
+<span class="nc" id="L455">                String mime = media.getMimeType();</span>
+<span class="nc bnc" id="L456" title="All 6 branches missed.">                if (mime != null &amp;&amp; (mime.startsWith(&quot;image&quot;) || mime.startsWith(&quot;video&quot;))) {</span>
+<span class="nc" id="L457">                    mediaList.add(media);</span>
+                }
+<span class="nc" id="L459">            }</span>
+        }
+
+<span class="nc" id="L462">        ensureCorrectState(mediaList);</span>
+<span class="nc" id="L463">        return mediaList;</span>
+    }
+
+    private List&lt;MediaModel&gt; getMediaList() {
+<span class="nc bnc" id="L467" title="All 5 branches missed.">        switch (mFilter) {</span>
+            case FILTER_IMAGES:
+<span class="nc" id="L469">                return mMediaStore.getSiteImages(mSite);</span>
+            case FILTER_DOCUMENTS:
+<span class="nc" id="L471">                return mMediaStore.getSiteDocuments(mSite);</span>
+            case FILTER_VIDEOS:
+<span class="nc" id="L473">                return mMediaStore.getSiteVideos(mSite);</span>
+            case FILTER_AUDIO:
+<span class="nc" id="L475">                return mMediaStore.getSiteAudio(mSite);</span>
+            default:
+<span class="nc" id="L477">                return mMediaStore.getAllSiteMedia(mSite);</span>
+        }
+    }
+
+    void setFilter(@NonNull MediaFilter filter) {
+<span class="nc" id="L482">        mFilter = filter;</span>
+<span class="nc" id="L483">        getArguments().putSerializable(MediaBrowserActivity.ARG_FILTER, filter);</span>
+
+<span class="nc bnc" id="L485" title="All 2 branches missed.">        if (!isAdded()) {</span>
+<span class="nc" id="L486">            return;</span>
+        }
+
+        // temporarily disable animation - otherwise the user will see items animate
+        // when they change the filter
+<span class="nc" id="L491">        mRecycler.setItemAnimator(null);</span>
+<span class="nc" id="L492">        getAdapter().setMediaList(getFilteredMedia());</span>
+<span class="nc" id="L493">        new Handler().postDelayed(new Runnable() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L496">                mRecycler.setItemAnimator(new DefaultItemAnimator());</span>
+<span class="nc" id="L497">            }</span>
+        }, 500L);
+
+<span class="nc bnc" id="L500" title="All 2 branches missed.">        if (mEmptyViewMessageType == EmptyViewMessageType.LOADING) {</span>
+<span class="nc" id="L501">            updateEmptyView(EmptyViewMessageType.NO_CONTENT);</span>
+        } else {
+<span class="nc" id="L503">            updateEmptyView(mEmptyViewMessageType);</span>
+        }
+
+<span class="nc" id="L506">        boolean hasFetchedThisFilter = mFetchedFilters[filter.getValue()];</span>
+<span class="nc bnc" id="L507" title="All 4 branches missed.">        if (!hasFetchedThisFilter &amp;&amp; NetworkUtils.isNetworkAvailable(getActivity())) {</span>
+<span class="nc bnc" id="L508" title="All 2 branches missed.">            if (isEmpty()) {</span>
+<span class="nc" id="L509">                mSwipeToRefreshHelper.setRefreshing(true);</span>
+            }
+<span class="nc" id="L511">            fetchMediaList(false);</span>
+        }
+<span class="nc" id="L513">    }</span>
+
+    @Override
+    public void onAdapterFetchMoreData() {
+<span class="nc" id="L517">        boolean hasFetchedAll = mFetchedAllFilters[mFilter.getValue()];</span>
+<span class="nc bnc" id="L518" title="All 2 branches missed.">        if (!hasFetchedAll) {</span>
+<span class="nc" id="L519">            fetchMediaList(true);</span>
+        }
+<span class="nc" id="L521">    }</span>
+
+    @Override
+    public void onAdapterItemClicked(int position, boolean isLongPress) {
+<span class="nc" id="L525">        int localMediaId = getAdapter().getLocalMediaIdAtPosition(position);</span>
+<span class="nc" id="L526">        mListener.onMediaItemSelected(localMediaId, isLongPress);</span>
+<span class="nc" id="L527">    }</span>
+
+    @Override
+    public void onAdapterSelectionCountChanged(int count) {
+<span class="nc bnc" id="L531" title="All 2 branches missed.">        if (!mBrowserType.canMultiselect()) {</span>
+<span class="nc" id="L532">            return;</span>
+        }
+
+<span class="nc bnc" id="L535" title="All 4 branches missed.">        if (count == 0 &amp;&amp; mActionMode != null) {</span>
+<span class="nc" id="L536">            mActionMode.finish();</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">        } else if (mActionMode == null) {</span>
+<span class="nc" id="L538">            ((AppCompatActivity) getActivity()).startSupportActionMode(new ActionModeCallback());</span>
+        }
+
+<span class="nc" id="L541">        updateActionModeTitle(count);</span>
+<span class="nc" id="L542">    }</span>
+
+    @Override
+    public void onAdapterRequestRetry(int position) {
+<span class="nc" id="L546">        int localMediaId = getAdapter().getLocalMediaIdAtPosition(position);</span>
+<span class="nc" id="L547">        mListener.onMediaRequestRetry(localMediaId);</span>
+<span class="nc" id="L548">    }</span>
+
+    @Override
+    public void onAdapterRequestDelete(int position) {
+<span class="nc" id="L552">        int localMediaId = getAdapter().getLocalMediaIdAtPosition(position);</span>
+<span class="nc" id="L553">        mListener.onMediaRequestDelete(localMediaId);</span>
+<span class="nc" id="L554">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = MAIN)
+    public void onMediaListFetched(OnMediaListFetched event) {
+<span class="nc bnc" id="L559" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L560">            handleFetchAllMediaError(event);</span>
+<span class="nc" id="L561">            return;</span>
+        }
+
+<span class="nc" id="L564">        handleFetchAllMediaSuccess(event);</span>
+<span class="nc" id="L565">    }</span>
+
+    public void showActionableEmptyViewButton(boolean show) {
+<span class="nc bnc" id="L568" title="All 2 branches missed.">        mActionableEmptyView.button.setVisibility(show ? View.VISIBLE : View.GONE);</span>
+<span class="nc" id="L569">    }</span>
+
+    /*
+     * load the adapter from the local store
+     */
+    void reload() {
+<span class="nc bnc" id="L575" title="All 2 branches missed.">        if (isAdded()) {</span>
+<span class="nc" id="L576">            getAdapter().setMediaList(getFilteredMedia());</span>
+        }
+<span class="nc" id="L578">    }</span>
+
+    /*
+     * update just the passed media item - if it doesn't exist it may be because
+     * it was just added, so reload the adapter
+     */
+    void updateMediaItem(@NonNull MediaModel media, boolean forceUpdate) {
+<span class="nc bnc" id="L585" title="All 4 branches missed.">        if (!isAdded() || !hasAdapter()) {</span>
+<span class="nc" id="L586">            return;</span>
+        }
+
+<span class="nc bnc" id="L589" title="All 2 branches missed.">        if (getAdapter().mediaExists(media)) {</span>
+<span class="nc" id="L590">            getAdapter().updateMediaItem(media, forceUpdate);</span>
+        } else {
+<span class="nc" id="L592">            reload();</span>
+        }
+<span class="nc" id="L594">    }</span>
+
+    void removeMediaItem(@NonNull MediaModel media) {
+<span class="nc bnc" id="L597" title="All 4 branches missed.">        if (!isAdded() || !hasAdapter()) {</span>
+<span class="nc" id="L598">            return;</span>
+        }
+
+<span class="nc" id="L601">        getAdapter().removeMediaItem(media);</span>
+<span class="nc" id="L602">    }</span>
+
+    public void search(String searchTerm) {
+<span class="nc" id="L605">        mSearchTerm = searchTerm;</span>
+<span class="nc" id="L606">        List&lt;MediaModel&gt; mediaList = getFilteredMedia();</span>
+<span class="nc" id="L607">        mGridAdapter.setMediaList(mediaList);</span>
+
+<span class="nc bnc" id="L609" title="All 2 branches missed.">        if (isEmpty()) {</span>
+<span class="nc" id="L610">            updateEmptyView(EmptyViewMessageType.NO_CONTENT);</span>
+        }
+<span class="nc" id="L612">    }</span>
+
+    public void clearSelection() {
+<span class="nc" id="L615">        getAdapter().clearSelection();</span>
+<span class="nc" id="L616">    }</span>
+
+    public void removeFromMultiSelect(int localMediaId) {
+<span class="nc bnc" id="L619" title="All 2 branches missed.">        if (hasAdapter()</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">            &amp;&amp; getAdapter().isInMultiSelect()</span>
+<span class="nc bnc" id="L621" title="All 2 branches missed.">            &amp;&amp; getAdapter().isItemSelected(localMediaId)) {</span>
+<span class="nc" id="L622">            getAdapter().removeSelectionByLocalId(localMediaId);</span>
+        }
+<span class="nc" id="L624">    }</span>
+
+    private void setRefreshing(boolean isRefreshing) {
+<span class="nc" id="L627">        mIsRefreshing = isRefreshing;</span>
+<span class="nc bnc" id="L628" title="All 2 branches missed.">        if (!isRefreshing) {</span>
+<span class="nc" id="L629">            mSwipeToRefreshHelper.setRefreshing(false);</span>
+        }
+<span class="nc" id="L631">    }</span>
+
+    private void setSwipeToRefreshEnabled(boolean enabled) {
+<span class="nc bnc" id="L634" title="All 2 branches missed.">        if (isAdded()) {</span>
+<span class="nc" id="L635">            mSwipeToRefreshHelper.setEnabled(enabled);</span>
+        }
+<span class="nc" id="L637">    }</span>
+
+    private void updateEmptyView(EmptyViewMessageType emptyViewMessageType) {
+<span class="nc" id="L640">        mEmptyViewMessageType = emptyViewMessageType;</span>
+
+<span class="nc bnc" id="L642" title="All 4 branches missed.">        if (!isAdded() || mActionableEmptyView == null) {</span>
+<span class="nc" id="L643">            return;</span>
+        }
+
+<span class="nc bnc" id="L646" title="All 2 branches missed.">        if (isEmpty()) {</span>
+            int stringId;
+<span class="nc bnc" id="L648" title="All 5 branches missed.">            switch (emptyViewMessageType) {</span>
+                case LOADING:
+<span class="nc" id="L650">                    stringId = R.string.media_fetching;</span>
+<span class="nc" id="L651">                    break;</span>
+                case NO_CONTENT:
+<span class="nc bnc" id="L653" title="All 2 branches missed.">                    if (!TextUtils.isEmpty(mSearchTerm)) {</span>
+<span class="nc" id="L654">                        mActionableEmptyView.updateLayoutForSearch(true, 0);</span>
+<span class="nc" id="L655">                        stringId = R.string.media_empty_search_list;</span>
+                    } else {
+<span class="nc" id="L657">                        mActionableEmptyView.updateLayoutForSearch(false, 0);</span>
+<span class="nc" id="L658">                        mActionableEmptyView.image.setVisibility(View.VISIBLE);</span>
+
+<span class="nc bnc" id="L660" title="All 5 branches missed.">                        switch (mFilter) {</span>
+                            case FILTER_IMAGES:
+<span class="nc" id="L662">                                stringId = R.string.media_empty_image_list;</span>
+<span class="nc" id="L663">                                break;</span>
+                            case FILTER_VIDEOS:
+<span class="nc" id="L665">                                stringId = R.string.media_empty_videos_list;</span>
+<span class="nc" id="L666">                                break;</span>
+                            case FILTER_DOCUMENTS:
+<span class="nc" id="L668">                                stringId = R.string.media_empty_documents_list;</span>
+<span class="nc" id="L669">                                break;</span>
+                            case FILTER_AUDIO:
+<span class="nc" id="L671">                                stringId = R.string.media_empty_audio_list;</span>
+<span class="nc" id="L672">                                break;</span>
+                            default:
+<span class="nc" id="L674">                                stringId = R.string.media_empty_list;</span>
+<span class="nc" id="L675">                                break;</span>
+                        }
+                    }
+
+                    break;
+                case NETWORK_ERROR:
+<span class="nc" id="L681">                    stringId = R.string.no_network_message;</span>
+<span class="nc" id="L682">                    break;</span>
+                case PERMISSION_ERROR:
+<span class="nc" id="L684">                    stringId = R.string.media_error_no_permission;</span>
+<span class="nc" id="L685">                    break;</span>
+                default:
+<span class="nc" id="L687">                    stringId = R.string.error_refresh_media;</span>
+                    break;
+            }
+
+<span class="nc" id="L691">            mActionableEmptyView.title.setText(stringId);</span>
+<span class="nc" id="L692">            mActionableEmptyView.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L693">        } else {</span>
+<span class="nc" id="L694">            mActionableEmptyView.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L696">    }</span>
+
+    private void hideEmptyView() {
+<span class="nc bnc" id="L699" title="All 4 branches missed.">        if (isAdded() &amp;&amp; mActionableEmptyView != null) {</span>
+<span class="nc" id="L700">            mActionableEmptyView.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L702">    }</span>
+
+    private void saveState(Bundle outState) {
+<span class="nc" id="L705">        outState.putIntArray(BUNDLE_SELECTED_STATES, ListUtils.toIntArray(getAdapter().getSelectedItems()));</span>
+<span class="nc" id="L706">        outState.putInt(BUNDLE_SCROLL_POSITION, mGridManager.findFirstCompletelyVisibleItemPosition());</span>
+<span class="nc" id="L707">        outState.putBoolean(BUNDLE_IN_MULTI_SELECT_MODE, getAdapter().isInMultiSelect());</span>
+<span class="nc" id="L708">        outState.putString(BUNDLE_EMPTY_VIEW_MESSAGE, mEmptyViewMessageType.name());</span>
+<span class="nc" id="L709">        outState.putBooleanArray(BUNDLE_FETCHED_FILTERS, mFetchedFilters);</span>
+<span class="nc" id="L710">        outState.putBooleanArray(BUNDLE_RETRIEVED_ALL_FILTERS, mFetchedAllFilters);</span>
+<span class="nc" id="L711">    }</span>
+
+    private void updateActionModeTitle(int selectCount) {
+<span class="nc bnc" id="L714" title="All 2 branches missed.">        if (mActionMode != null) {</span>
+<span class="nc" id="L715">            mActionMode.setTitle(String.format(getString(R.string.cab_selected), selectCount));</span>
+        }
+<span class="nc" id="L717">    }</span>
+
+    private void restoreState(@NonNull Bundle savedInstanceState) {
+<span class="nc" id="L720">        boolean isInMultiSelectMode = savedInstanceState.getBoolean(BUNDLE_IN_MULTI_SELECT_MODE);</span>
+<span class="nc bnc" id="L721" title="All 2 branches missed.">        if (isInMultiSelectMode) {</span>
+<span class="nc" id="L722">            getAdapter().setInMultiSelect(true);</span>
+<span class="nc bnc" id="L723" title="All 2 branches missed.">            if (savedInstanceState.containsKey(BUNDLE_SELECTED_STATES)) {</span>
+<span class="nc" id="L724">                ArrayList&lt;Integer&gt; selectedItems =</span>
+<span class="nc" id="L725">                        ListUtils.fromIntArray(savedInstanceState.getIntArray(BUNDLE_SELECTED_STATES));</span>
+<span class="nc" id="L726">                getAdapter().setSelectedItems(selectedItems);</span>
+<span class="nc" id="L727">                setSwipeToRefreshEnabled(false);</span>
+            }
+        }
+
+<span class="nc" id="L731">        mFetchedFilters = savedInstanceState.getBooleanArray(BUNDLE_FETCHED_FILTERS);</span>
+<span class="nc" id="L732">        mFetchedAllFilters = savedInstanceState.getBooleanArray(BUNDLE_RETRIEVED_ALL_FILTERS);</span>
+
+<span class="nc" id="L734">        EmptyViewMessageType emptyType = EmptyViewMessageType.getEnumFromString(</span>
+<span class="nc" id="L735">                savedInstanceState.getString(BUNDLE_EMPTY_VIEW_MESSAGE));</span>
+<span class="nc" id="L736">        updateEmptyView(emptyType);</span>
+<span class="nc" id="L737">    }</span>
+
+    private void fetchMediaList(boolean loadMore) {
+        // do not refresh if there is no network
+<span class="nc bnc" id="L741" title="All 2 branches missed.">        if (!NetworkUtils.isNetworkAvailable(getActivity())) {</span>
+<span class="nc" id="L742">            updateEmptyView(EmptyViewMessageType.NETWORK_ERROR);</span>
+<span class="nc" id="L743">            setRefreshing(false);</span>
+<span class="nc" id="L744">            return;</span>
+        }
+
+        // do not refresh if in search
+<span class="nc bnc" id="L748" title="All 2 branches missed.">        if (!TextUtils.isEmpty(mSearchTerm)) {</span>
+<span class="nc" id="L749">            setRefreshing(false);</span>
+<span class="nc" id="L750">            return;</span>
+        }
+
+<span class="nc bnc" id="L753" title="All 2 branches missed.">        if (!mIsRefreshing) {</span>
+<span class="nc" id="L754">            setRefreshing(true);</span>
+<span class="nc" id="L755">            updateEmptyView(EmptyViewMessageType.LOADING);</span>
+<span class="nc bnc" id="L756" title="All 2 branches missed.">            if (loadMore) {</span>
+<span class="nc" id="L757">                mSwipeToRefreshHelper.setRefreshing(true);</span>
+            }
+
+<span class="nc" id="L760">            FetchMediaListPayload payload =</span>
+<span class="nc" id="L761">                    new FetchMediaListPayload(mSite, NUM_MEDIA_PER_FETCH, loadMore, mFilter.toMimeType());</span>
+<span class="nc" id="L762">            mDispatcher.dispatch(MediaActionBuilder.newFetchMediaListAction(payload));</span>
+
+<span class="nc bnc" id="L764" title="All 2 branches missed.">            if (!loadMore) {</span>
+                // Fetch site to refresh space quota in activity.
+<span class="nc" id="L766">                mDispatcher.dispatch(SiteActionBuilder.newFetchSiteAction(mSite));</span>
+            }
+        }
+<span class="nc" id="L769">    }</span>
+
+    private void handleFetchAllMediaSuccess(OnMediaListFetched event) {
+<span class="nc bnc" id="L772" title="All 2 branches missed.">        if (!isAdded()) {</span>
+<span class="nc" id="L773">            return;</span>
+        }
+
+        // make sure this request was for the current filter
+<span class="nc bnc" id="L777" title="All 4 branches missed.">        if (event.mimeType != null &amp;&amp; MediaFilter.fromMimeType(event.mimeType) != mFilter) {</span>
+<span class="nc" id="L778">            return;</span>
+        }
+
+<span class="nc" id="L781">        List&lt;MediaModel&gt; filteredMedia = getFilteredMedia();</span>
+<span class="nc" id="L782">        ensureCorrectState(filteredMedia);</span>
+<span class="nc" id="L783">        getAdapter().setMediaList(filteredMedia);</span>
+
+<span class="nc bnc" id="L785" title="All 2 branches missed.">        boolean hasRetrievedAll = !event.canLoadMore;</span>
+<span class="nc" id="L786">        getAdapter().setHasRetrievedAll(hasRetrievedAll);</span>
+
+<span class="nc" id="L788">        int position = mFilter.getValue();</span>
+<span class="nc" id="L789">        mFetchedFilters[position] = true;</span>
+
+<span class="nc bnc" id="L791" title="All 2 branches missed.">        if (hasRetrievedAll) {</span>
+<span class="nc bnc" id="L792" title="All 2 branches missed.">            if (mFilter == MediaFilter.FILTER_ALL) {</span>
+<span class="nc" id="L793">                setHasFetchedMediaForAllFilters();</span>
+            } else {
+<span class="nc" id="L795">                mFetchedAllFilters[position] = true;</span>
+            }
+        }
+
+<span class="nc" id="L799">        setRefreshing(false);</span>
+<span class="nc" id="L800">        updateEmptyView(EmptyViewMessageType.NO_CONTENT);</span>
+<span class="nc" id="L801">    }</span>
+
+    private void handleFetchAllMediaError(OnMediaListFetched event) {
+<span class="nc" id="L804">        MediaErrorType errorType = event.error.type;</span>
+<span class="nc" id="L805">        AppLog.e(AppLog.T.MEDIA, &quot;Media error occurred: &quot; + errorType);</span>
+<span class="nc bnc" id="L806" title="All 2 branches missed.">        if (!isAdded()) {</span>
+<span class="nc" id="L807">            return;</span>
+        }
+
+<span class="nc bnc" id="L810" title="All 4 branches missed.">        if (event.mimeType != null &amp;&amp; MediaFilter.fromMimeType(event.mimeType) != mFilter) {</span>
+<span class="nc" id="L811">            return;</span>
+        }
+
+        int toastResId;
+<span class="nc bnc" id="L815" title="All 2 branches missed.">        if (errorType == MediaErrorType.AUTHORIZATION_REQUIRED) {</span>
+<span class="nc" id="L816">            updateEmptyView(EmptyViewMessageType.PERMISSION_ERROR);</span>
+<span class="nc" id="L817">            toastResId = R.string.media_error_no_permission;</span>
+        } else {
+<span class="nc" id="L819">            updateEmptyView(EmptyViewMessageType.GENERIC_ERROR);</span>
+<span class="nc" id="L820">            toastResId = R.string.error_refresh_media;</span>
+        }
+
+        // only show the toast if the list is NOT empty since the empty view shows the same message
+<span class="nc bnc" id="L824" title="All 2 branches missed.">        if (!isEmpty()) {</span>
+<span class="nc" id="L825">            ToastUtils.showToast(getActivity(), getString(toastResId));</span>
+        }
+
+<span class="nc" id="L828">        setRefreshing(false);</span>
+<span class="nc" id="L829">        setHasFetchedMediaForAllFilters();</span>
+<span class="nc" id="L830">        getAdapter().setHasRetrievedAll(true);</span>
+<span class="nc" id="L831">    }</span>
+
+    private void setResultIdsAndFinish() {
+<span class="nc" id="L834">        Intent intent = new Intent();</span>
+<span class="nc bnc" id="L835" title="All 2 branches missed.">        if (getAdapter().getSelectedItemCount() &gt; 0) {</span>
+<span class="nc" id="L836">            ArrayList&lt;Long&gt; remoteMediaIds = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L837" title="All 2 branches missed.">            for (Integer localId : getAdapter().getSelectedItems()) {</span>
+<span class="nc" id="L838">                MediaModel media = mMediaStore.getMediaWithLocalId(localId);</span>
+<span class="nc bnc" id="L839" title="All 2 branches missed.">                if (media != null) {</span>
+<span class="nc" id="L840">                    remoteMediaIds.add(media.getMediaId());</span>
+                }
+<span class="nc" id="L842">            }</span>
+<span class="nc" id="L843">            intent.putExtra(MediaBrowserActivity.RESULT_IDS, ListUtils.toLongArray(remoteMediaIds));</span>
+        }
+<span class="nc" id="L845">        getActivity().setResult(RESULT_OK, intent);</span>
+<span class="nc" id="L846">        getActivity().finish();</span>
+<span class="nc" id="L847">    }</span>
+
+
+<span class="nc" id="L850">    private final class ActionModeCallback implements ActionMode.Callback {</span>
+        @Override
+        public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+<span class="nc" id="L853">            mActionMode = mode;</span>
+<span class="nc" id="L854">            int selectCount = getAdapter().getSelectedItemCount();</span>
+<span class="nc" id="L855">            MenuInflater inflater = mode.getMenuInflater();</span>
+<span class="nc" id="L856">            inflater.inflate(R.menu.media_multiselect, menu);</span>
+<span class="nc" id="L857">            setSwipeToRefreshEnabled(false);</span>
+<span class="nc" id="L858">            getAdapter().setInMultiSelect(true);</span>
+<span class="nc" id="L859">            updateActionModeTitle(selectCount);</span>
+<span class="nc" id="L860">            return true;</span>
+        }
+
+        @Override
+        public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+<span class="nc" id="L865">            MenuItem mnuConfirm = menu.findItem(R.id.mnu_confirm_selection);</span>
+<span class="nc" id="L866">            mnuConfirm.setVisible(mBrowserType.isPicker());</span>
+
+<span class="nc" id="L868">            AccessibilityUtils.setActionModeDoneButtonContentDescription(getActivity(), getString(R.string.cancel));</span>
+<span class="nc" id="L869">            return true;</span>
+        }
+
+        @Override
+        public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+<span class="nc bnc" id="L874" title="All 2 branches missed.">            if (item.getItemId() == R.id.mnu_confirm_selection) {</span>
+<span class="nc" id="L875">                setResultIdsAndFinish();</span>
+            }
+<span class="nc" id="L877">            return true;</span>
+        }
+
+        @Override
+        public void onDestroyActionMode(ActionMode mode) {
+<span class="nc" id="L882">            setSwipeToRefreshEnabled(true);</span>
+<span class="nc" id="L883">            getAdapter().setInMultiSelect(false);</span>
+<span class="nc" id="L884">            mActionMode = null;</span>
+<span class="nc" id="L885">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

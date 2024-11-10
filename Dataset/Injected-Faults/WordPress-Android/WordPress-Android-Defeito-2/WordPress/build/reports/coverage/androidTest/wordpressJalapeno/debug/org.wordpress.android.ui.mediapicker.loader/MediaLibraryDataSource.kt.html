@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MediaLibraryDataSource.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.mediapicker.loader</a> &gt; <span class="el_source">MediaLibraryDataSource.kt</span></div><h1>MediaLibraryDataSource.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.mediapicker.loader
+
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withContext
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode.MAIN
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.MediaActionBuilder
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.MediaStore
+import org.wordpress.android.fluxc.store.MediaStore.FetchMediaListPayload
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaListFetched
+import org.wordpress.android.fluxc.utils.MimeType
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.mediapicker.MediaItem
+import org.wordpress.android.ui.mediapicker.MediaItem.Identifier.RemoteId
+import org.wordpress.android.ui.mediapicker.MediaType
+import org.wordpress.android.ui.mediapicker.MediaType.AUDIO
+import org.wordpress.android.ui.mediapicker.MediaType.DOCUMENT
+import org.wordpress.android.ui.mediapicker.MediaType.IMAGE
+import org.wordpress.android.ui.mediapicker.MediaType.VIDEO
+import org.wordpress.android.ui.mediapicker.loader.MediaSource.MediaLoadingResult
+import org.wordpress.android.ui.mediapicker.loader.MediaSource.MediaLoadingResult.Empty
+import org.wordpress.android.ui.mediapicker.loader.MediaSource.MediaLoadingResult.Failure
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.DateTimeUtilsWrapper
+import org.wordpress.android.util.NetworkUtilsWrapper
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+
+<span class="nc" id="L39">@Suppress(&quot;LongParameterList&quot;)</span>
+<span class="nc" id="L40">class MediaLibraryDataSource(</span>
+<span class="nc" id="L41">    private val mediaStore: MediaStore,</span>
+<span class="nc" id="L42">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L43">    @param:Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L44">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L45">    private val dateTimeUtilsWrapper: DateTimeUtilsWrapper,</span>
+<span class="nc" id="L46">    private val siteModel: SiteModel,</span>
+<span class="nc" id="L47">    override val mediaTypes: Set&lt;MediaType&gt;</span>
+) : MediaSource, MediaSourceWithTypes {
+<span class="nc" id="L49">    init {</span>
+<span class="nc" id="L50">        dispatcher.register(this)</span>
+<span class="nc" id="L51">    }</span>
+
+<span class="nc" id="L53">    private var loadContinuations = mutableMapOf&lt;MimeType.Type, Continuation&lt;OnMediaListFetched&gt;&gt;()</span>
+
+    override suspend fun load(
+        forced: Boolean,
+        loadMore: Boolean,
+        filter: String?
+    ): MediaLoadingResult {
+<span class="nc bnc" id="L60" title="All 2 branches missed.">        if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L61">            return Failure(</span>
+<span class="nc" id="L62">                    UiStringRes(R.string.no_network_title),</span>
+<span class="nc" id="L63">                    htmlSubtitle = UiStringRes(R.string.no_network_message),</span>
+<span class="nc" id="L64">                    image = R.drawable.img_illustration_cloud_off_152dp,</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">                    data = if (loadMore) get(mediaTypes, filter) else listOf()</span>
+            )
+        }
+<span class="nc bnc" id="L68" title="All 2 branches missed.">        return withContext(bgDispatcher) {</span>
+<span class="nc" id="L69">            val loadingResults = mediaTypes.map { mediaType -&gt;</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">                async {</span>
+<span class="nc" id="L71">                    loadPage(</span>
+<span class="nc" id="L72">                            siteModel,</span>
+<span class="nc" id="L73">                            loadMore,</span>
+<span class="nc" id="L74">                            mediaType.toMimeType()</span>
+                    )
+                }
+<span class="nc" id="L77">            }.awaitAll()</span>
+
+<span class="nc" id="L79">            var error: String? = null</span>
+<span class="nc" id="L80">            var hasMore = false</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">            for (loadingResult in loadingResults) {</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">                if (loadingResult.isError) {</span>
+<span class="nc" id="L83">                    error = loadingResult.error.message</span>
+<span class="nc" id="L84">                    break</span>
+                } else {
+<span class="nc bnc" id="L86" title="All 4 branches missed.">                    hasMore = hasMore || loadingResult.canLoadMore</span>
+                }
+            }
+<span class="nc bnc" id="L89" title="All 2 branches missed.">            if (error != null) {</span>
+<span class="nc" id="L90">                Failure(</span>
+<span class="nc" id="L91">                        UiStringRes(R.string.media_loading_failed),</span>
+<span class="nc" id="L92">                        htmlSubtitle = UiStringText(error),</span>
+<span class="nc" id="L93">                        image = R.drawable.img_illustration_cloud_off_152dp,</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">                        data = if (loadMore) get(mediaTypes, filter) else listOf()</span>
+                )
+            } else {
+<span class="nc" id="L97">                val data = get(mediaTypes, filter)</span>
+<span class="nc bnc" id="L98" title="All 10 branches missed.">                if (filter.isNullOrEmpty() || data.isNotEmpty()) {</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">                    MediaLoadingResult.Success(data, hasMore)</span>
+                } else {
+<span class="nc" id="L101">                    Empty(</span>
+<span class="nc" id="L102">                            UiStringRes(R.string.media_empty_search_list),</span>
+<span class="nc" id="L103">                            image = R.drawable.img_illustration_empty_results_216dp</span>
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun get(mediaTypes: Set&lt;MediaType&gt;, filter: String?): List&lt;MediaItem&gt; {
+<span class="nc" id="L111">        return withContext(bgDispatcher) {</span>
+<span class="nc" id="L112">            mediaTypes.map { mediaType -&gt;</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">                async {</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">                    if (filter == null) {</span>
+<span class="nc" id="L115">                        getFromDatabase(mediaType)</span>
+                    } else {
+<span class="nc" id="L117">                        searchInDatabase(mediaType, filter)</span>
+                    }
+                }
+<span class="nc" id="L120">            }.fold(mutableListOf&lt;MediaItem&gt;()) { result, databaseItems -&gt;</span>
+<span class="nc" id="L121">                result.addAll(databaseItems.await())</span>
+<span class="nc" id="L122">                result</span>
+<span class="nc" id="L123">            }.sortedByDescending { it.dataModified }</span>
+        }
+    }
+
+    private fun List&lt;MediaModel&gt;.toMediaItems(mediaType: MediaType): List&lt;MediaItem&gt; {
+<span class="nc bnc" id="L128" title="All 4 branches missed.">        return this.filter { it.url != null }.map { mediaModel -&gt;</span>
+<span class="nc" id="L129">            MediaItem(</span>
+<span class="nc" id="L130">                    RemoteId(mediaModel.mediaId),</span>
+<span class="nc" id="L131">                    mediaModel.url,</span>
+<span class="nc" id="L132">                    mediaModel.title,</span>
+<span class="nc" id="L133">                    mediaType,</span>
+<span class="nc" id="L134">                    mediaModel.mimeType,</span>
+<span class="nc" id="L135">                    dateTimeUtilsWrapper.dateFromIso8601(mediaModel.uploadDate).time</span>
+            )
+        }
+    }
+
+    private fun getFromDatabase(mediaType: MediaType): List&lt;MediaItem&gt; {
+<span class="nc bnc" id="L141" title="All 4 branches missed.">        return when (mediaType) {</span>
+<span class="nc" id="L142">            IMAGE -&gt; mediaStore.getSiteImages(siteModel)</span>
+<span class="nc" id="L143">            VIDEO -&gt; mediaStore.getSiteVideos(siteModel)</span>
+<span class="nc" id="L144">            AUDIO -&gt; mediaStore.getSiteAudio(siteModel)</span>
+<span class="nc" id="L145">            DOCUMENT -&gt; mediaStore.getSiteDocuments(siteModel)</span>
+<span class="nc" id="L146">        }.toMediaItems(mediaType)</span>
+    }
+
+    private fun searchInDatabase(mediaType: MediaType, filter: String): List&lt;MediaItem&gt; {
+<span class="nc bnc" id="L150" title="All 4 branches missed.">        return when (mediaType) {</span>
+<span class="nc" id="L151">            IMAGE -&gt; mediaStore.searchSiteImages(siteModel, filter)</span>
+<span class="nc" id="L152">            VIDEO -&gt; mediaStore.searchSiteVideos(siteModel, filter)</span>
+<span class="nc" id="L153">            AUDIO -&gt; mediaStore.searchSiteAudio(siteModel, filter)</span>
+<span class="nc" id="L154">            DOCUMENT -&gt; mediaStore.searchSiteDocuments(siteModel, filter)</span>
+<span class="nc" id="L155">        }.toMediaItems(mediaType)</span>
+    }
+
+    private suspend fun loadPage(siteModel: SiteModel, loadMore: Boolean, filter: MimeType.Type): OnMediaListFetched =
+<span class="nc bnc" id="L159" title="All 2 branches missed.">            suspendCoroutine { cont -&gt;</span>
+<span class="nc" id="L160">                loadContinuations[filter] = cont</span>
+<span class="nc" id="L161">                val payload = FetchMediaListPayload(</span>
+<span class="nc" id="L162">                        siteModel,</span>
+<span class="nc" id="L163">                        NUM_MEDIA_PER_FETCH,</span>
+<span class="nc" id="L164">                        loadMore,</span>
+<span class="nc" id="L165">                        filter</span>
+                )
+<span class="nc" id="L167">                dispatcher.dispatch(MediaActionBuilder.newFetchMediaListAction(payload))</span>
+<span class="nc" id="L168">            }</span>
+
+    private fun MediaType.toMimeType(): MimeType.Type {
+<span class="nc bnc" id="L171" title="All 4 branches missed.">        return when (this) {</span>
+<span class="nc" id="L172">            IMAGE -&gt; MimeType.Type.IMAGE</span>
+<span class="nc" id="L173">            VIDEO -&gt; MimeType.Type.VIDEO</span>
+<span class="nc" id="L174">            AUDIO -&gt; MimeType.Type.AUDIO</span>
+<span class="nc" id="L175">            DOCUMENT -&gt; MimeType.Type.APPLICATION</span>
+        }
+    }
+
+    @Subscribe(threadMode = MAIN)
+    fun onMediaListFetched(event: OnMediaListFetched) {
+<span class="nc bnc" id="L181" title="All 2 branches missed.">        loadContinuations[event.mimeType]?.resume(event)</span>
+<span class="nc" id="L182">        loadContinuations.remove(event.mimeType)</span>
+<span class="nc" id="L183">    }</span>
+
+    companion object {
+        const val NUM_MEDIA_PER_FETCH = 24
+    }
+
+<span class="nc" id="L189">    class MediaLibraryDataSourceFactory</span>
+<span class="nc" id="L190">    @Inject constructor(</span>
+<span class="nc" id="L191">        private val mediaStore: MediaStore,</span>
+<span class="nc" id="L192">        private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L193">        @param:Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L194">        private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L195">        private val dateTimeUtilsWrapper: DateTimeUtilsWrapper</span>
+    ) {
+        fun build(siteModel: SiteModel, mediaTypes: Set&lt;MediaType&gt;) =
+<span class="nc" id="L198">                MediaLibraryDataSource(</span>
+<span class="nc" id="L199">                        mediaStore,</span>
+<span class="nc" id="L200">                        dispatcher,</span>
+<span class="nc" id="L201">                        bgDispatcher,</span>
+<span class="nc" id="L202">                        networkUtilsWrapper,</span>
+<span class="nc" id="L203">                        dateTimeUtilsWrapper,</span>
+<span class="nc" id="L204">                        siteModel,</span>
+<span class="nc" id="L205">                        mediaTypes</span>
+<span class="nc" id="L206">                )</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

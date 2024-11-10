@@ -1,0 +1,1035 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AppInitializer.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android</a> &gt; <span class="el_source">AppInitializer.kt</span></div><h1>AppInitializer.kt</h1><pre class="source lang-java linenums">package org.wordpress.android
+
+import android.annotation.SuppressLint
+import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.ComponentCallbacks2
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.res.Configuration
+import android.database.SQLException
+import android.database.sqlite.SQLiteException
+import android.net.ConnectivityManager
+import android.net.http.HttpResponseCache
+import android.os.Build
+import android.os.Build.VERSION_CODES
+import android.os.Bundle
+import android.os.SystemClock
+import android.preference.PreferenceManager
+import android.text.TextUtils
+import android.util.AndroidRuntimeException
+import android.util.Log
+import android.webkit.WebSettings
+import android.webkit.WebView
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.provider.FontRequest
+import androidx.emoji.text.EmojiCompat
+import androidx.emoji.text.EmojiCompat.InitCallback
+import androidx.emoji.text.FontRequestEmojiCompatConfig
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleObserver
+import androidx.lifecycle.OnLifecycleEvent
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.work.WorkManager
+import com.android.volley.RequestQueue
+import com.automattic.android.tracks.crashlogging.CrashLogging
+import com.google.android.gms.auth.api.Auth
+import com.google.android.gms.common.api.GoogleApiClient
+import com.google.firebase.iid.FirebaseInstanceId
+import com.wordpress.rest.RestClient
+import com.wordpress.stories.compose.NotificationTrackerProvider
+import com.wordpress.stories.compose.frame.StoryNotificationType
+import com.wordpress.stories.compose.frame.StoryNotificationType.STORY_FRAME_SAVE_ERROR
+import com.wordpress.stories.compose.frame.StoryNotificationType.STORY_FRAME_SAVE_SUCCESS
+import com.wordpress.stories.compose.frame.StoryNotificationType.STORY_SAVE_ERROR
+import com.wordpress.stories.compose.frame.StoryNotificationType.STORY_SAVE_SUCCESS
+import kotlinx.coroutines.CoroutineScope
+import org.greenrobot.eventbus.EventBus
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.analytics.Tracker
+import org.wordpress.android.datasets.NotificationsTable
+import org.wordpress.android.datasets.ReaderDatabase
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.action.AccountAction
+import org.wordpress.android.fluxc.generated.AccountActionBuilder
+import org.wordpress.android.fluxc.generated.ListActionBuilder
+import org.wordpress.android.fluxc.generated.PostActionBuilder
+import org.wordpress.android.fluxc.generated.SiteActionBuilder
+import org.wordpress.android.fluxc.generated.ThemeActionBuilder
+import org.wordpress.android.fluxc.network.rest.wpcom.site.PrivateAtomicCookie
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.AccountStore.OnAccountChanged
+import org.wordpress.android.fluxc.store.AccountStore.OnAuthenticationChanged
+import org.wordpress.android.fluxc.store.ListStore.RemoveExpiredListsPayload
+import org.wordpress.android.fluxc.store.MediaStore
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.fluxc.store.StatsStore
+import org.wordpress.android.fluxc.tools.FluxCImageLoader
+import org.wordpress.android.fluxc.utils.ErrorUtils.OnUnexpectedError
+import org.wordpress.android.modules.APPLICATION_SCOPE
+import org.wordpress.android.networking.ConnectionChangeReceiver
+import org.wordpress.android.networking.OAuthAuthenticator
+import org.wordpress.android.networking.RestClientUtils
+import org.wordpress.android.push.GCMRegistrationIntentService
+import org.wordpress.android.push.NotificationType
+import org.wordpress.android.support.ZendeskHelper
+import org.wordpress.android.ui.ActivityId
+import org.wordpress.android.ui.debug.cookies.DebugCookieManager
+import org.wordpress.android.ui.mysite.SelectedSiteRepository
+import org.wordpress.android.ui.mysite.tabs.MySiteDefaultTabExperiment
+import org.wordpress.android.ui.notifications.SystemNotificationsTracker
+import org.wordpress.android.ui.notifications.services.NotificationsUpdateServiceStarter
+import org.wordpress.android.ui.notifications.utils.NotificationsUtils
+import org.wordpress.android.ui.posts.editor.ImageEditorFileUtils
+import org.wordpress.android.ui.posts.editor.ImageEditorInitializer
+import org.wordpress.android.ui.posts.editor.ImageEditorTracker
+import org.wordpress.android.ui.prefs.AppPrefs
+import org.wordpress.android.ui.reader.tracker.ReaderTracker
+import org.wordpress.android.ui.stats.refresh.lists.widget.WidgetUpdater.StatsWidgetUpdaters
+import org.wordpress.android.ui.stories.media.StoryMediaSaveUploadBridge
+import org.wordpress.android.ui.uploads.UploadService
+import org.wordpress.android.ui.uploads.UploadStarter
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.AppLog.T.MAIN
+import org.wordpress.android.util.AppThemeUtils
+import org.wordpress.android.util.BitmapLruCache
+import org.wordpress.android.util.DateTimeUtils
+import org.wordpress.android.util.EncryptedLogging
+import org.wordpress.android.util.FluxCUtils
+import org.wordpress.android.util.LocaleManager
+import org.wordpress.android.util.NetworkUtils
+import org.wordpress.android.util.PackageUtils
+import org.wordpress.android.util.ProfilingUtils
+import org.wordpress.android.util.QuickStartUtils
+import org.wordpress.android.util.RateLimitedTask
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.VolleyUtils
+import org.wordpress.android.util.WPActivityUtils
+import org.wordpress.android.util.analytics.AnalyticsUtils
+import org.wordpress.android.util.config.AppConfig
+import org.wordpress.android.util.enqueuePeriodicUploadWorkRequestForAllSites
+import org.wordpress.android.util.experiments.ExPlat
+import org.wordpress.android.util.image.ImageManager
+import org.wordpress.android.widgets.AppRatingDialog
+import org.wordpress.android.workers.WordPressWorkersFactory
+import java.io.File
+import java.io.IOException
+import java.util.Date
+import javax.inject.Inject
+import javax.inject.Named
+import javax.inject.Singleton
+
+<span class="fc" id="L128">@Suppress(&quot;TooManyFunctions&quot;)</span>
+@Singleton
+<span class="fc" id="L130">class AppInitializer @Inject constructor(</span>
+    wellSqlInitializer: WellSqlInitializer,
+<span class="fc" id="L132">    private val application: Application</span>
+) : LifecycleObserver {
+<span class="pc bpc" id="L134" title="1 of 2 branches missed.">    @Inject lateinit var dispatcher: Dispatcher</span>
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">    @Inject lateinit var accountStore: AccountStore</span>
+<span class="pc bpc" id="L136" title="1 of 2 branches missed.">    @Inject lateinit var siteStore: SiteStore</span>
+<span class="pc bpc" id="L137" title="1 of 2 branches missed.">    @Inject lateinit var mediaStore: MediaStore</span>
+<span class="pc bpc" id="L138" title="1 of 2 branches missed.">    @Inject lateinit var zendeskHelper: ZendeskHelper</span>
+<span class="pc bpc" id="L139" title="1 of 2 branches missed.">    @Inject lateinit var uploadStarter: UploadStarter</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">    @Inject lateinit var statsWidgetUpdaters: StatsWidgetUpdaters</span>
+<span class="nc bnc" id="L141" title="All 2 branches missed.">    @Inject lateinit var statsStore: StatsStore</span>
+<span class="pc bpc" id="L142" title="1 of 2 branches missed.">    @Inject lateinit var systemNotificationsTracker: SystemNotificationsTracker</span>
+<span class="nc bnc" id="L143" title="All 2 branches missed.">    @Inject lateinit var readerTracker: ReaderTracker</span>
+<span class="pc bpc" id="L144" title="1 of 2 branches missed.">    @Inject lateinit var imageManager: ImageManager</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">    @Inject lateinit var privateAtomicCookie: PrivateAtomicCookie</span>
+<span class="pc bpc" id="L146" title="1 of 2 branches missed.">    @Inject lateinit var imageEditorTracker: ImageEditorTracker</span>
+<span class="pc bpc" id="L147" title="1 of 2 branches missed.">    @Inject lateinit var storyMediaSaveUploadBridge: StoryMediaSaveUploadBridge</span>
+<span class="pc bpc" id="L148" title="1 of 2 branches missed.">    @Inject lateinit var crashLogging: CrashLogging</span>
+<span class="pc bpc" id="L149" title="1 of 2 branches missed.">    @Inject lateinit var encryptedLogging: EncryptedLogging</span>
+<span class="pc bpc" id="L150" title="1 of 2 branches missed.">    @Inject lateinit var appConfig: AppConfig</span>
+<span class="pc bpc" id="L151" title="1 of 2 branches missed.">    @Inject lateinit var imageEditorFileUtils: ImageEditorFileUtils</span>
+<span class="pc bpc" id="L152" title="1 of 2 branches missed.">    @Inject lateinit var exPlat: ExPlat</span>
+<span class="pc bpc" id="L153" title="1 of 2 branches missed.">    @Inject lateinit var wordPressWorkerFactory: WordPressWorkersFactory</span>
+<span class="pc bpc" id="L154" title="1 of 2 branches missed.">    @Inject lateinit var debugCookieManager: DebugCookieManager</span>
+<span class="pc bpc" id="L155" title="1 of 2 branches missed.">    @Inject @Named(APPLICATION_SCOPE) lateinit var appScope: CoroutineScope</span>
+<span class="pc bpc" id="L156" title="1 of 2 branches missed.">    @Inject lateinit var selectedSiteRepository: SelectedSiteRepository</span>
+<span class="pc bpc" id="L157" title="1 of 2 branches missed.">    @Inject lateinit var mySiteDefaultTabExperiment: MySiteDefaultTabExperiment</span>
+
+    // For development and production `AnalyticsTrackerNosara`, for testing a mocked `Tracker` will be injected.
+<span class="pc bpc" id="L160" title="1 of 2 branches missed.">    @Inject lateinit var tracker: Tracker</span>
+
+<span class="pc bpc" id="L162" title="1 of 2 branches missed.">    @Inject @Named(&quot;custom-ssl&quot;) lateinit var requestQueue: RequestQueue</span>
+<span class="pc bpc" id="L163" title="1 of 2 branches missed.">    @Inject lateinit var imageLoader: FluxCImageLoader</span>
+<span class="pc bpc" id="L164" title="1 of 2 branches missed.">    @Inject lateinit var oAuthAuthenticator: OAuthAuthenticator</span>
+
+    private lateinit var applicationLifecycleMonitor: ApplicationLifecycleMonitor
+<span class="nc bnc" id="L167" title="All 2 branches missed.">    lateinit var storyNotificationTrackerProvider: StoryNotificationTrackerProvider</span>
+<span class="nc" id="L168">        private set</span>
+
+    private lateinit var credentialsClient: GoogleApiClient
+
+    private var startDate: Long
+
+    /**
+     * Update site list in a background task. (WPCOM site list, and eventually self hosted multisites)
+     */
+<span class="pc" id="L177">    var updateSiteList = object : RateLimitedTask(SECONDS_BETWEEN_BLOGLIST_UPDATE) {</span>
+        override fun run(): Boolean {
+<span class="nc bnc" id="L179" title="All 2 branches missed.">            if (accountStore.hasAccessToken()) {</span>
+<span class="nc" id="L180">                dispatcher.dispatch(SiteActionBuilder.newFetchSitesAction(SiteUtils.getFetchSitesPayload()))</span>
+<span class="nc" id="L181">                dispatcher.dispatch(AccountActionBuilder.newFetchSubscriptionsAction())</span>
+            }
+<span class="nc" id="L183">            return true</span>
+        }
+<span class="nc" id="L185">    }</span>
+
+    /**
+     * Update site information in a background task.
+     */
+<span class="pc" id="L190">    var updateSelectedSite = object : RateLimitedTask(SECONDS_BETWEEN_SITE_UPDATE) {</span>
+        override fun run(): Boolean {
+<span class="nc" id="L192">            val selectedSiteLocalId = selectedSiteRepository.getSelectedSiteLocalId(true)</span>
+<span class="nc" id="L193">            val site = siteStore.getSiteByLocalId(selectedSiteLocalId)</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">            site?.let {</span>
+<span class="nc" id="L195">                dispatcher.dispatch(SiteActionBuilder.newFetchSiteAction(site))</span>
+                // Reload editor details from the remote backend
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                if (!AppPrefs.isDefaultAppWideEditorPreferenceSet()) {</span>
+                    // Check if the migration from app-wide to per-site setting has already happened - v12.9-&gt;13.0
+<span class="nc" id="L199">                    dispatcher.dispatch(SiteActionBuilder.newFetchSiteEditorsAction(site))</span>
+                }
+<span class="nc" id="L201">            }</span>
+<span class="nc" id="L202">            return true</span>
+        }
+<span class="nc" id="L204">    }</span>
+
+<span class="fc" id="L206">    init {</span>
+<span class="fc" id="L207">        context = application</span>
+<span class="fc" id="L208">        startDate = SystemClock.elapsedRealtime()</span>
+
+<span class="pc bpc" id="L210" title="1 of 2 branches missed.">        if (!initialized) {</span>
+            // This call needs be made before accessing any methods in android.webkit package
+<span class="fc" id="L212">            setWebViewDataDirectorySuffixOnAndroidP()</span>
+        }
+
+<span class="fc" id="L215">        wellSqlInitializer.init()</span>
+<span class="fc" id="L216">    }</span>
+
+    fun init() {
+<span class="fc" id="L219">        dispatcher.register(this)</span>
+<span class="fc" id="L220">        appConfig.init()</span>
+
+        // Upload any encrypted logs that were queued but not yet uploaded
+<span class="fc" id="L223">        encryptedLogging.start()</span>
+
+        // Init static fields from dagger injected singletons, for legacy Actions and Utilities
+<span class="fc" id="L226">        WordPress.requestQueue = requestQueue</span>
+<span class="fc" id="L227">        WordPress.imageLoader = imageLoader</span>
+<span class="fc" id="L228">        sOAuthAuthenticator = oAuthAuthenticator</span>
+
+<span class="fc" id="L230">        ProfilingUtils.start(&quot;App Startup&quot;)</span>
+
+<span class="fc" id="L232">        enableLogRecording()</span>
+<span class="fc" id="L233">        AppLog.i(T.UTILS, &quot;AppInitializer.init&quot;)</span>
+
+<span class="fc" id="L235">        WordPress.versionName = PackageUtils.getVersionName(application)</span>
+<span class="fc" id="L236">        initWpDb()</span>
+<span class="pc bpc" id="L237" title="1 of 2 branches missed.">        context?.let { enableHttpResponseCache(it) }</span>
+
+<span class="fc" id="L239">        AppRatingDialog.init(application)</span>
+
+<span class="pc bpc" id="L241" title="1 of 2 branches missed.">        if (!initialized) {</span>
+            // EventBus setup
+<span class="fc" id="L243">            EventBus.TAG = &quot;WordPress-EVENT&quot;</span>
+<span class="fc" id="L244">            EventBus.builder()</span>
+<span class="fc" id="L245">                    .logNoSubscriberMessages(false)</span>
+<span class="fc" id="L246">                    .sendNoSubscriberEvent(false)</span>
+<span class="fc" id="L247">                    .throwSubscriberException(true)</span>
+<span class="fc" id="L248">                    .installDefaultEventBus()</span>
+        }
+
+<span class="fc" id="L251">        RestClientUtils.setUserAgent(userAgent)</span>
+
+<span class="pc bpc" id="L253" title="1 of 2 branches missed.">        if (!initialized) {</span>
+<span class="fc" id="L254">            zendeskHelper.setupZendesk(</span>
+<span class="fc" id="L255">                    application,</span>
+<span class="fc" id="L256">                    BuildConfig.ZENDESK_DOMAIN,</span>
+<span class="fc" id="L257">                    BuildConfig.ZENDESK_APP_ID,</span>
+<span class="fc" id="L258">                    BuildConfig.ZENDESK_OAUTH_CLIENT_ID</span>
+            )
+        }
+
+<span class="fc" id="L262">        val memoryAndConfigChangeMonitor = MemoryAndConfigChangeMonitor()</span>
+<span class="fc" id="L263">        application.registerComponentCallbacks(memoryAndConfigChangeMonitor)</span>
+
+        // initialize our ApplicationLifecycleMonitor, which is the App's LifecycleObserver implementation
+<span class="fc" id="L266">        applicationLifecycleMonitor = ApplicationLifecycleMonitor()</span>
+<span class="fc" id="L267">        ProcessLifecycleOwner.get().lifecycle.addObserver(this)</span>
+
+        // Make the UploadStarter observe the app process so it can auto-start uploads
+<span class="fc" id="L270">        uploadStarter.activateAutoUploading(ProcessLifecycleOwner.get() as ProcessLifecycleOwner)</span>
+
+<span class="fc" id="L272">        initAnalytics(SystemClock.elapsedRealtime() - startDate)</span>
+
+<span class="fc" id="L274">        createNotificationChannelsOnSdk26()</span>
+
+        // Allows vector drawable from resources (in selectors for instance) on Android &lt; 21 (can cause issues with
+        // memory usage and the use of Configuration). More information: http://bit.ly/2H1KTQo
+        // Note: if removed, this will cause crashes on Android &lt; 21
+<span class="fc" id="L279">        AppCompatDelegate.setCompatVectorFromResourcesEnabled(true)</span>
+<span class="fc" id="L280">        AppThemeUtils.setAppTheme(application)</span>
+
+        // verify media is sanitized
+<span class="fc" id="L283">        sanitizeMediaUploadStateForSite()</span>
+
+        // remove expired lists
+<span class="fc" id="L286">        dispatcher.dispatch(ListActionBuilder.newRemoveExpiredListsAction(RemoveExpiredListsPayload()))</span>
+
+        // setup the Credentials Client so we can clean it up on wpcom logout
+<span class="fc" id="L289">        setupCredentialsClient()</span>
+
+<span class="pc bpc" id="L291" title="1 of 2 branches missed.">        if (!initialized) {</span>
+<span class="fc" id="L292">            initWorkManager()</span>
+        }
+
+        // Enqueue our periodic upload work request. The UploadWorkRequest will be called even if the app is closed.
+        // It will upload local draft or published posts with local changes to the server.
+<span class="fc" id="L297">        enqueuePeriodicUploadWorkRequestForAllSites()</span>
+
+<span class="fc" id="L299">        systemNotificationsTracker.checkSystemNotificationsState()</span>
+<span class="fc" id="L300">        ImageEditorInitializer.init(imageManager, imageEditorTracker, imageEditorFileUtils, appScope)</span>
+
+<span class="fc" id="L302">        initEmojiCompat()</span>
+<span class="fc" id="L303">        storyNotificationTrackerProvider = StoryNotificationTrackerProvider()</span>
+<span class="fc" id="L304">        storyMediaSaveUploadBridge.init(application)</span>
+<span class="fc" id="L305">        ProcessLifecycleOwner.get().lifecycle.addObserver(storyMediaSaveUploadBridge)</span>
+
+<span class="fc" id="L307">        exPlat.forceRefresh()</span>
+
+<span class="fc" id="L309">        debugCookieManager.sync()</span>
+
+<span class="fc" id="L311">        initAnalyticsExperimentPropertiesIfNeeded()</span>
+
+<span class="fc" id="L313">        initialized = true</span>
+<span class="fc" id="L314">    }</span>
+
+    private fun initWorkManager() {
+<span class="fc" id="L317">        val configBuilder = androidx.work.Configuration.Builder().setWorkerFactory(wordPressWorkerFactory)</span>
+<span class="pc bpc" id="L318" title="1 of 2 branches missed.">        if (BuildConfig.DEBUG) {</span>
+<span class="fc" id="L319">            configBuilder.setMinimumLoggingLevel(Log.DEBUG)</span>
+        }
+<span class="fc" id="L321">        WorkManager.initialize(application, configBuilder.build())</span>
+<span class="fc" id="L322">    }</span>
+
+    private fun enableLogRecording() {
+<span class="fc" id="L325">        AppLog.enableRecording(true)</span>
+<span class="fc" id="L326">        AppLog.enableLogFilePersistence(application.baseContext, MAX_LOG_COUNT)</span>
+<span class="fc" id="L327">        AppLog.addListener { tag, logLevel, message -&gt;</span>
+<span class="fc" id="L328">            val sb = StringBuffer()</span>
+<span class="fc" id="L329">            sb.append(logLevel.toString())</span>
+<span class="fc" id="L330">                    .append(&quot;/&quot;)</span>
+<span class="fc" id="L331">                    .append(AppLog.TAG)</span>
+<span class="fc" id="L332">                    .append(&quot;-&quot;)</span>
+<span class="fc" id="L333">                    .append(tag.toString())</span>
+<span class="fc" id="L334">                    .append(&quot;: &quot;)</span>
+<span class="fc" id="L335">                    .append(message)</span>
+<span class="fc" id="L336">            crashLogging.recordEvent(sb.toString(), null)</span>
+<span class="fc" id="L337">        }</span>
+<span class="fc" id="L338">    }</span>
+
+    private fun sanitizeMediaUploadStateForSite() {
+<span class="fc" id="L341">        val selectedSiteLocalId: Int = selectedSiteRepository.getSelectedSiteLocalId(true)</span>
+<span class="fc" id="L342">        val site = siteStore.getSiteByLocalId(selectedSiteLocalId)</span>
+<span class="pc bpc" id="L343" title="1 of 2 branches missed.">        site?.let {</span>
+<span class="fc" id="L344">            Thread {</span>
+<span class="fc" id="L345">                UploadService.sanitizeMediaUploadStateForSite(mediaStore, dispatcher, site)</span>
+<span class="fc" id="L346">            }.start()</span>
+<span class="fc" id="L347">        }</span>
+<span class="fc" id="L348">    }</span>
+
+    private fun setupCredentialsClient() {
+<span class="fc" id="L351">        credentialsClient = GoogleApiClient.Builder(application)</span>
+<span class="fc" id="L352">                .addConnectionCallbacks(object : GoogleApiClient.ConnectionCallbacks {</span>
+                    override fun onConnected(bundle: Bundle?) {
+                        // Do nothing
+<span class="fc" id="L355">                    }</span>
+
+                    override fun onConnectionSuspended(i: Int) {
+                        // Do nothing
+<span class="nc" id="L359">                    }</span>
+                })
+<span class="fc" id="L361">                .addApi(Auth.CREDENTIALS_API)</span>
+<span class="fc" id="L362">                .build()</span>
+<span class="pc bpc" id="L363" title="1 of 2 branches missed.">        credentialsClient.connect()</span>
+<span class="fc" id="L364">    }</span>
+
+    private fun createNotificationChannelsOnSdk26() {
+        // create Notification channels introduced in Android Oreo
+<span class="pc bpc" id="L368" title="1 of 2 branches missed.">        if (Build.VERSION.SDK_INT &gt;= VERSION_CODES.O) {</span>
+            // Create the NORMAL channel (used for likes, comments, replies, etc.)
+<span class="fc" id="L370">            val normalChannel = NotificationChannel(</span>
+<span class="fc" id="L371">                    application.getString(R.string.notification_channel_normal_id),</span>
+<span class="fc" id="L372">                    application.getString(R.string.notification_channel_general_title),</span>
+<span class="fc" id="L373">                    NotificationManager.IMPORTANCE_DEFAULT</span>
+            )
+            // Register the channel with the system; you can't change the importance
+            // or other notification behaviors after this
+<span class="pc bpc" id="L377" title="1 of 2 branches missed.">            val notificationManager = application.getSystemService(</span>
+<span class="fc" id="L378">                    Context.NOTIFICATION_SERVICE</span>
+            ) as NotificationManager
+<span class="fc" id="L380">            notificationManager.createNotificationChannel(normalChannel)</span>
+
+            // Create the IMPORTANT channel (used for 2fa auth, for example)
+<span class="fc" id="L383">            val importantChannel = NotificationChannel(</span>
+<span class="fc" id="L384">                    application.getString(R.string.notification_channel_important_id),</span>
+<span class="fc" id="L385">                    application.getString(R.string.notification_channel_important_title),</span>
+<span class="fc" id="L386">                    NotificationManager.IMPORTANCE_HIGH</span>
+            )
+            // Register the channel with the system; you can't change the importance
+            // or other notification behaviors after this
+<span class="fc" id="L390">            notificationManager.createNotificationChannel(importantChannel)</span>
+
+            // Create the REMINDER channel (used for various reminders, like Quick Start, etc.)
+<span class="fc" id="L393">            val reminderChannel = NotificationChannel(</span>
+<span class="fc" id="L394">                    application.getString(R.string.notification_channel_reminder_id),</span>
+<span class="fc" id="L395">                    application.getString(R.string.notification_channel_reminder_title),</span>
+<span class="fc" id="L396">                    NotificationManager.IMPORTANCE_LOW</span>
+            )
+            // Register the channel with the system; you can't change the importance
+            // or other notification behaviors after this
+<span class="fc" id="L400">            notificationManager.createNotificationChannel(reminderChannel)</span>
+
+            // Create the TRANSIENT channel (used for short-lived notifications such as processing a Like/Approve,
+            // or media upload)
+<span class="fc" id="L404">            val transientChannel = NotificationChannel(</span>
+<span class="fc" id="L405">                    application.getString(R.string.notification_channel_transient_id),</span>
+<span class="fc" id="L406">                    application.getString(R.string.notification_channel_transient_title),</span>
+<span class="fc" id="L407">                    NotificationManager.IMPORTANCE_DEFAULT</span>
+            )
+<span class="fc" id="L409">            transientChannel.setSound(null, null)</span>
+<span class="fc" id="L410">            transientChannel.enableVibration(false)</span>
+<span class="fc" id="L411">            transientChannel.enableLights(false)</span>
+            // Register the channel with the system; you can't change the importance
+            // or other notification behaviors after this
+<span class="fc" id="L414">            notificationManager.createNotificationChannel(transientChannel)</span>
+
+            // Create the WEEKLY ROUNDUP channel (used for weekly roundup notification containing weekly stats)
+<span class="fc" id="L417">            val weeklyRoundupChannel = NotificationChannel(</span>
+<span class="fc" id="L418">                    application.getString(R.string.notification_channel_weekly_roundup_id),</span>
+<span class="fc" id="L419">                    application.getString(R.string.notification_channel_weekly_roundup_title),</span>
+<span class="fc" id="L420">                    NotificationManager.IMPORTANCE_LOW</span>
+            )
+            // Register the channel with the system; you can't change the importance or other notification behaviors
+            // after this
+<span class="fc" id="L424">            notificationManager.createNotificationChannel(weeklyRoundupChannel)</span>
+        }
+<span class="fc" id="L426">    }</span>
+
+    private fun initAnalytics(elapsedTimeOnCreate: Long) {
+<span class="fc" id="L429">        AnalyticsTracker.registerTracker(tracker)</span>
+<span class="fc" id="L430">        AnalyticsTracker.init(context)</span>
+<span class="fc" id="L431">        AnalyticsUtils.refreshMetadata(accountStore, siteStore)</span>
+
+        // Track app upgrade and install
+<span class="fc" id="L434">        val versionCode = PackageUtils.getVersionCode(context)</span>
+<span class="fc" id="L435">        val oldVersionCode = AppPrefs.getLastAppVersionCode()</span>
+<span class="pc bpc" id="L436" title="1 of 2 branches missed.">        if (oldVersionCode == 0) {</span>
+            // Track application installed if there isn't old version code
+<span class="nc" id="L438">            AnalyticsTracker.track(Stat.APPLICATION_INSTALLED)</span>
+        }
+<span class="pc bpc" id="L440" title="2 of 4 branches missed.">        if (oldVersionCode != 0 &amp;&amp; oldVersionCode &lt; versionCode) {</span>
+<span class="nc" id="L441">            val properties: MutableMap&lt;String, Long?&gt; = HashMap(1)</span>
+<span class="nc" id="L442">            properties[&quot;elapsed_time_on_create&quot;] = elapsedTimeOnCreate</span>
+            // app upgraded
+<span class="nc" id="L444">            AnalyticsTracker.track(Stat.APPLICATION_UPGRADED, properties)</span>
+        }
+<span class="fc" id="L446">        AppPrefs.setLastAppVersionCode(versionCode)</span>
+<span class="fc" id="L447">    }</span>
+
+    /**
+     * Application.onCreate is called before any activity, service, or receiver - it can be called while the app
+     * is in background by a sticky service or a receiver, so we don't want Application.onCreate to make network request
+     * or other heavy tasks.
+     *
+     *
+     * This deferredInit method is called when a user starts an activity for the first time, ie. when he sees a
+     * screen for the first time. This allows us to have heavy calls on first activity startup instead of app startup.
+     */
+    fun deferredInit() {
+<span class="nc" id="L459">        AppLog.i(T.UTILS, &quot;Deferred Initialisation&quot;)</span>
+
+        // Refresh account informations
+<span class="nc bnc" id="L462" title="All 2 branches missed.">        if (accountStore.hasAccessToken()) {</span>
+<span class="nc" id="L463">            dispatcher.dispatch(AccountActionBuilder.newFetchAccountAction())</span>
+<span class="nc" id="L464">            dispatcher.dispatch(AccountActionBuilder.newFetchSettingsAction())</span>
+<span class="nc" id="L465">            NotificationsUpdateServiceStarter.startService(context)</span>
+        }
+<span class="nc" id="L467">    }</span>
+
+    private fun initWpDb() {
+<span class="pc bpc" id="L470" title="1 of 2 branches missed.">        if (!createAndVerifyWpDb()) {</span>
+<span class="nc" id="L471">            AppLog.e(T.DB, &quot;Invalid database, sign out user and delete database&quot;)</span>
+            // Force DB deletion
+<span class="nc" id="L473">            WordPressDB.deleteDatabase(application)</span>
+<span class="nc" id="L474">            WordPress.wpDB = WordPressDB(application)</span>
+        }
+<span class="fc" id="L476">    }</span>
+
+    private fun createAndVerifyWpDb(): Boolean {
+<span class="fc" id="L479">        return try {</span>
+<span class="fc" id="L480">            WordPress.wpDB = WordPressDB(application)</span>
+<span class="fc" id="L481">            true</span>
+<span class="nc" id="L482">        } catch (e: SQLiteException) {</span>
+<span class="nc" id="L483">            AppLog.e(T.DB, e)</span>
+<span class="nc" id="L484">            false</span>
+<span class="nc" id="L485">        } catch (e: SQLException) {</span>
+<span class="nc" id="L486">            AppLog.e(T.DB, e)</span>
+<span class="pc" id="L487">            false</span>
+        }
+    }
+
+    /**
+     * Sign out from wpcom account.
+     * Note: This method must not be called on UI Thread.
+     */
+    fun wordPressComSignOut() {
+        // Keep the analytics tracking at the beginning, before the account data is actual removed.
+<span class="nc" id="L497">        AnalyticsTracker.track(Stat.ACCOUNT_LOGOUT)</span>
+
+<span class="nc" id="L499">        removeWpComUserRelatedData(application.applicationContext)</span>
+
+<span class="nc bnc" id="L501" title="All 4 branches missed.">        if (credentialsClient.isConnected) {</span>
+<span class="nc bnc" id="L502" title="All 2 branches missed.">            Auth.CredentialsApi.disableAutoSignIn(credentialsClient)</span>
+        }
+
+        // Once fully logged out refresh the metadata so the user information doesn't persist for logged out events
+<span class="nc" id="L506">        AnalyticsUtils.refreshMetadata(accountStore, siteStore)</span>
+<span class="nc" id="L507">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onAccountChanged(event: OnAccountChanged) {
+<span class="nc bnc" id="L511" title="All 2 branches missed.">        if (!FluxCUtils.isSignedInWPComOrHasWPOrgSite(accountStore, siteStore)) {</span>
+<span class="nc" id="L512">            flushHttpCache()</span>
+
+            // Analytics resets
+<span class="nc" id="L515">            AnalyticsTracker.endSession(false)</span>
+<span class="nc" id="L516">            AnalyticsTracker.clearAllData()</span>
+        }
+
+<span class="nc bnc" id="L519" title="All 4 branches missed.">        if (!event.isError &amp;&amp; accountStore.hasAccessToken()) {</span>
+            // previously we reset the reader database on logout but this meant losing saved posts
+            // so now we only reset it when the user id changes
+<span class="nc bnc" id="L522" title="All 2 branches missed.">            if (event.causeOfChange == AccountAction.FETCH_ACCOUNT) {</span>
+<span class="nc" id="L523">                val thisUserId = accountStore.account.userId</span>
+<span class="nc" id="L524">                val lastUserId = AppPrefs.getLastUsedUserId()</span>
+<span class="nc bnc" id="L525" title="All 2 branches missed.">                if (thisUserId != lastUserId) {</span>
+<span class="nc" id="L526">                    AppPrefs.setLastUsedUserId(thisUserId)</span>
+<span class="nc" id="L527">                    AppLog.i(T.READER, &quot;User changed, resetting reader db&quot;)</span>
+<span class="nc" id="L528">                    ReaderDatabase.reset(false)</span>
+                }
+<span class="nc bnc" id="L530" title="All 2 branches missed.">            } else if (event.causeOfChange == AccountAction.FETCH_SETTINGS) {</span>
+<span class="nc" id="L531">                val prefs = PreferenceManager.getDefaultSharedPreferences(WordPress.getContext())</span>
+<span class="nc bnc" id="L532" title="All 2 branches missed.">                val hasUserOptedOut = !prefs.getBoolean(application.getString(R.string.pref_key_send_usage), true)</span>
+<span class="nc" id="L533">                AnalyticsTracker.setHasUserOptedOut(hasUserOptedOut)</span>
+                // When local and remote prefs are different, force opt out to TRUE
+<span class="nc bnc" id="L535" title="All 2 branches missed.">                if (hasUserOptedOut != accountStore.account.tracksOptOut) {</span>
+<span class="nc" id="L536">                    AnalyticsUtils.updateAnalyticsPreference(WordPress.getContext(), dispatcher, accountStore, true)</span>
+                }
+            }
+        }
+<span class="nc" id="L540">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onAuthenticationChanged(event: OnAuthenticationChanged) {
+<span class="nc bnc" id="L544" title="All 2 branches missed.">        if (accountStore.hasAccessToken()) {</span>
+            // Make sure the Push Notification token is sent to our servers after a successful login
+<span class="nc" id="L546">            GCMRegistrationIntentService.enqueueWork(</span>
+<span class="nc" id="L547">                    application,</span>
+<span class="nc" id="L548">                    Intent(application, GCMRegistrationIntentService::class.java)</span>
+            )
+
+            // Force a refresh if user has logged in. This can be removed once we start using an anonymous ID.
+<span class="nc" id="L552">            exPlat.forceRefresh()</span>
+        }
+<span class="nc" id="L554">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onUnexpectedError(event: OnUnexpectedError) {
+<span class="nc" id="L558">        AppLog.d(T.API, &quot;Receiving OnUnexpectedError event, message: &quot; + event.exception.message)</span>
+<span class="nc" id="L559">    }</span>
+
+    private fun removeWpComUserRelatedData(context: Context) {
+        // cancel all Volley requests - do this before unregistering push since that uses a Volley request
+<span class="nc" id="L563">        VolleyUtils.cancelAllRequests(requestQueue)</span>
+
+<span class="nc" id="L565">        NotificationsUtils.unregisterDevicePushNotifications(context)</span>
+<span class="nc" id="L566">        zendeskHelper.reset()</span>
+<span class="nc" id="L567">        try {</span>
+<span class="nc" id="L568">            FirebaseInstanceId.getInstance().deleteInstanceId()</span>
+<span class="nc" id="L569">        } catch (e: IOException) {</span>
+<span class="nc" id="L570">            AppLog.e(T.NOTIFS, &quot;Could not delete GCM Token&quot;, e)</span>
+<span class="nc" id="L571">        } catch (e: IllegalArgumentException) {</span>
+<span class="nc" id="L572">            AppLog.e(T.NOTIFS, &quot;Could not delete GCM Token&quot;, e)</span>
+        }
+
+        // reset default account
+<span class="nc" id="L576">        dispatcher.dispatch(AccountActionBuilder.newSignOutAction())</span>
+        // delete site-associated themes (keep WP.com themes cached)
+<span class="nc bnc" id="L578" title="All 2 branches missed.">        for (site in siteStore.sites) {</span>
+<span class="nc" id="L579">            dispatcher.dispatch(ThemeActionBuilder.newRemoveSiteThemesAction(site))</span>
+        }
+
+        // delete wpcom and jetpack sites
+<span class="nc" id="L583">        dispatcher.dispatch(SiteActionBuilder.newRemoveWpcomAndJetpackSitesAction())</span>
+
+        // remove all lists
+<span class="nc" id="L586">        dispatcher.dispatch(ListActionBuilder.newRemoveAllListsAction())</span>
+        // remove all posts
+<span class="nc" id="L588">        dispatcher.dispatch(PostActionBuilder.newRemoveAllPostsAction())</span>
+
+        // reset all user prefs
+<span class="nc" id="L591">        AppPrefs.reset()</span>
+
+        // reset the reader database, but retain bookmarked posts
+<span class="nc" id="L594">        ReaderDatabase.reset(true)</span>
+
+        // Reset Stats Data
+<span class="nc" id="L597">        statsStore.deleteAllData()</span>
+<span class="nc" id="L598">        statsWidgetUpdaters.update(context)</span>
+
+        // Reset Notifications Data
+<span class="nc" id="L601">        NotificationsTable.reset()</span>
+
+        // Cancel QuickStart reminders
+<span class="nc" id="L604">        QuickStartUtils.cancelQuickStartReminder(context)</span>
+
+        // Remove private Atomic cookie
+<span class="nc" id="L607">        privateAtomicCookie.clearCookie()</span>
+
+        // Clear cached assignments if user has logged out. This can be removed once we start using an anonymous ID.
+<span class="nc" id="L610">        exPlat.clear()</span>
+<span class="nc" id="L611">    }</span>
+
+    /*
+     * Since Android P:
+     * &quot;Apps can no longer share a single WebView data directory across processes.
+     * If your app has more than one process using WebView, CookieManager, or any other API in the android.webkit
+     * package, your app will crash when the second process calls a WebView method.&quot;
+     *
+     * (see https://developer.android.com/about/versions/pie/android-9.0-migration)
+     *
+     * Also here: https://developer.android.com/about/versions/pie/android-9.0-changes-28#web-data-dirs
+     *
+     * &quot;If your app must use instances of WebView in more than one process, you must assign a unique data directory
+     * suffix for each process, using the WebView.setDataDirectorySuffix() method, before using a given instance of
+     * WebView in that process.&quot;
+     *
+     * While we don't explicitly use a different process other than the default, making the directory suffix be the
+     * actual process name will ensure there's one directory per process, should the Application's onCreate() method be
+     * called from a different process any time.
+     *
+    */
+    private fun setWebViewDataDirectorySuffixOnAndroidP() {
+<span class="pc bpc" id="L633" title="1 of 2 branches missed.">        if (Build.VERSION.SDK_INT &gt;= VERSION_CODES.P) {</span>
+<span class="fc" id="L634">            val procName = Application.getProcessName()</span>
+<span class="pc bpc" id="L635" title="1 of 2 branches missed.">            if (!TextUtils.isEmpty(procName)) {</span>
+<span class="fc" id="L636">                WebView.setDataDirectorySuffix(procName)</span>
+            }
+        }
+<span class="fc" id="L639">    }</span>
+
+    /*
+     * enable caching for HttpUrlConnection
+     * http://developer.android.com/training/efficient-downloads/redundant_redundant.html
+     */
+    private fun enableHttpResponseCache(context: Context) {
+<span class="fc" id="L646">        try {</span>
+<span class="fc" id="L647">            val httpCacheDir = File(context.cacheDir, &quot;http&quot;)</span>
+<span class="fc" id="L648">            HttpResponseCache.install(httpCacheDir, HTTP_CACHE_SIZE)</span>
+<span class="nc" id="L649">        } catch (e: IOException) {</span>
+<span class="nc" id="L650">            AppLog.w(T.UTILS, &quot;Failed to enable http response cache&quot;)</span>
+        }
+<span class="fc" id="L652">    }</span>
+
+    private fun flushHttpCache() {
+<span class="nc" id="L655">        val cache = HttpResponseCache.getInstalled()</span>
+<span class="nc bnc" id="L656" title="All 2 branches missed.">        cache?.flush()</span>
+<span class="nc" id="L657">    }</span>
+
+    private fun initEmojiCompat() {
+        // Use a downloadable font for EmojiCompat
+<span class="fc" id="L661">        val fontRequest = FontRequest(</span>
+<span class="fc" id="L662">                &quot;com.google.android.gms.fonts&quot;,</span>
+<span class="fc" id="L663">                &quot;com.google.android.gms&quot;,</span>
+<span class="fc" id="L664">                &quot;Noto Color Emoji Compat&quot;,</span>
+<span class="fc" id="L665">                R.array.com_google_android_gms_fonts_certs</span>
+        )
+<span class="fc" id="L667">        val config = FontRequestEmojiCompatConfig(application, fontRequest)</span>
+<span class="fc" id="L668">        config.setReplaceAll(true)</span>
+<span class="fc" id="L669">        config.setUseEmojiAsDefaultStyle(true)</span>
+<span class="fc" id="L670">        config.registerInitCallback(object : InitCallback() {</span>
+            override fun onInitialized() {
+<span class="fc" id="L672">                super.onInitialized()</span>
+<span class="fc" id="L673">                AppLog.d(MAIN, &quot;EmojiCompat initialized&quot;)</span>
+<span class="fc" id="L674">            }</span>
+
+            override fun onFailed(throwable: Throwable?) {
+<span class="nc" id="L677">                super.onFailed(throwable)</span>
+<span class="nc" id="L678">                AppLog.d(MAIN, &quot;EmojiCompat initialization failed: &quot; + throwable!!.message)</span>
+<span class="nc" id="L679">            }</span>
+        })
+<span class="fc" id="L681">        EmojiCompat.init(config)</span>
+<span class="fc" id="L682">    }</span>
+
+    /* If default tab experiment is running, pass along to tracker */
+    private fun initAnalyticsExperimentPropertiesIfNeeded() {
+<span class="fc" id="L686">        mySiteDefaultTabExperiment.checkAndSetTrackingPropertiesIfNeeded()</span>
+<span class="fc" id="L687">    }</span>
+
+    @Suppress(&quot;unused&quot;)
+    @OnLifecycleEvent(Lifecycle.Event.ON_START)
+    fun onAppComesFromBackground() {
+<span class="nc bnc" id="L692" title="All 2 branches missed.">        applicationLifecycleMonitor.onAppComesFromBackground()</span>
+<span class="nc" id="L693">        appConfig.refresh()</span>
+<span class="nc" id="L694">    }</span>
+
+    @Suppress(&quot;unused&quot;)
+    @OnLifecycleEvent(Lifecycle.Event.ON_STOP)
+    fun onAppGoesToBackground() {
+<span class="nc bnc" id="L699" title="All 2 branches missed.">        applicationLifecycleMonitor.onAppGoesToBackground()</span>
+<span class="nc" id="L700">    }</span>
+
+<span class="fc" id="L702">    inner class ApplicationLifecycleMonitor {</span>
+        private var lastPingDate: Date? = null
+        private var applicationOpenedDate: Date? = null
+        private var connectionReceiverRegistered = false
+<span class="pc" id="L706">        var firstActivityResumed = true</span>
+
+        private val isPushNotificationPingNeeded: Boolean
+            get() {
+<span class="nc bnc" id="L710" title="All 2 branches missed.">                if (lastPingDate == null) {</span>
+                    // first startup
+<span class="nc" id="L712">                    return false</span>
+                }
+<span class="nc" id="L714">                val now = Date()</span>
+<span class="nc bnc" id="L715" title="All 2 branches missed.">                if (DateTimeUtils.secondsBetween(now, lastPingDate) &gt;= DEFAULT_TIMEOUT) {</span>
+<span class="nc" id="L716">                    lastPingDate = now</span>
+<span class="nc" id="L717">                    return true</span>
+                }
+<span class="nc" id="L719">                return false</span>
+            }
+
+        /**
+         * Check if user has valid credentials, and at least 2 minutes have passed since the last ping, then try to
+         * update the PN token.
+         */
+        private fun updatePushNotificationTokenIfNotLimited() {
+            // Sync Push Notifications settings
+<span class="nc bnc" id="L728" title="All 4 branches missed.">            if (isPushNotificationPingNeeded &amp;&amp; accountStore.hasAccessToken()) {</span>
+                // Register for Cloud messaging
+<span class="nc" id="L730">                GCMRegistrationIntentService.enqueueWork(</span>
+<span class="nc" id="L731">                        context,</span>
+<span class="nc" id="L732">                        Intent(context, GCMRegistrationIntentService::class.java)</span>
+                )
+            }
+<span class="nc" id="L735">        }</span>
+
+        fun onAppGoesToBackground() {
+<span class="nc" id="L738">            AppLog.i(T.UTILS, &quot;App goes to background&quot;)</span>
+<span class="nc bnc" id="L739" title="All 2 branches missed.">            if (WordPress.appIsInTheBackground) {</span>
+<span class="nc" id="L740">                return</span>
+            }
+<span class="nc" id="L742">            WordPress.appIsInTheBackground = true</span>
+<span class="nc" id="L743">            val lastActivityString = AppPrefs.getLastActivityStr()</span>
+<span class="nc" id="L744">            val lastActivity = ActivityId.getActivityIdFromName(lastActivityString)</span>
+<span class="nc" id="L745">            val properties: MutableMap&lt;String, Any?&gt; = HashMap()</span>
+<span class="nc" id="L746">            properties[&quot;last_visible_screen&quot;] = lastActivity.toString()</span>
+<span class="nc bnc" id="L747" title="All 2 branches missed.">            if (applicationOpenedDate != null) {</span>
+<span class="nc" id="L748">                val now = Date()</span>
+<span class="nc" id="L749">                properties[&quot;time_in_app&quot;] = DateTimeUtils.secondsBetween(now, applicationOpenedDate)</span>
+<span class="nc" id="L750">                applicationOpenedDate = null</span>
+            }
+<span class="nc" id="L752">            properties.putAll(readerTracker.getAnalyticsData())</span>
+
+<span class="nc" id="L754">            readerTracker.onAppGoesToBackground()</span>
+
+            // Ensure that the deeplinking activity is re-enabled.
+<span class="nc" id="L757">            WPActivityUtils.enableReaderDeeplinks(context)</span>
+
+<span class="nc" id="L759">            AnalyticsTracker.track(Stat.APPLICATION_CLOSED, properties)</span>
+<span class="nc" id="L760">            AnalyticsTracker.endSession(false)</span>
+            // Methods onAppComesFromBackground and onAppGoesToBackground are only workarounds to track when the app
+            // goes to or comes from background. The workarounds are not 100% reliable, so avoid unregistering the
+            // receiver twice.
+<span class="nc bnc" id="L764" title="All 2 branches missed.">            if (connectionReceiverRegistered) {</span>
+<span class="nc" id="L765">                connectionReceiverRegistered = false</span>
+<span class="nc" id="L766">                try {</span>
+<span class="nc" id="L767">                    application.unregisterReceiver(ConnectionChangeReceiver.getInstance())</span>
+<span class="nc" id="L768">                    AppLog.d(MAIN, &quot;ConnectionChangeReceiver successfully unregistered&quot;)</span>
+<span class="nc" id="L769">                } catch (e: IllegalArgumentException) {</span>
+<span class="nc" id="L770">                    AppLog.e(MAIN, &quot;ConnectionChangeReceiver was already unregistered&quot;)</span>
+                }
+            }
+<span class="nc" id="L773">        }</span>
+
+        /**
+         * This method is called when:
+         * 1. the app starts (but it's not opened by a service or a broadcast receiver, i.e. an activity is resumed)
+         * 2. the app was in background and is now foreground
+         */
+        fun onAppComesFromBackground() {
+<span class="nc" id="L781">            readerTracker.setupTrackers()</span>
+<span class="nc" id="L782">            AppLog.i(T.UTILS, &quot;App comes from background&quot;)</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">            if (!WordPress.appIsInTheBackground) {</span>
+<span class="nc" id="L784">                return</span>
+            }
+<span class="nc" id="L786">            WordPress.appIsInTheBackground = false</span>
+
+            // https://developer.android.com/reference/android/net/ConnectivityManager.html
+            // Apps targeting Android 7.0 (API level 24) and higher do not receive this broadcast if the broadcast
+            // receiver is declared in their manifest. Apps will still receive broadcasts if BroadcastReceiver is
+            // registered with Context.registerReceiver() and that context is still valid.
+<span class="nc bnc" id="L792" title="All 2 branches missed.">            if (!connectionReceiverRegistered) {</span>
+<span class="nc" id="L793">                connectionReceiverRegistered = true</span>
+<span class="nc" id="L794">                application.registerReceiver(</span>
+<span class="nc" id="L795">                        ConnectionChangeReceiver.getInstance(),</span>
+<span class="nc" id="L796">                        IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION)</span>
+                )
+            }
+<span class="nc" id="L799">            AnalyticsUtils.refreshMetadata(accountStore, siteStore)</span>
+<span class="nc" id="L800">            applicationOpenedDate = Date()</span>
+            // This stat is part of a funnel that provides critical information. Before making ANY modification to this
+            // stat please refer to: p4qSXL-35X-p2
+<span class="nc" id="L803">            AnalyticsTracker.track(Stat.APPLICATION_OPENED)</span>
+<span class="nc bnc" id="L804" title="All 2 branches missed.">            if (NetworkUtils.isNetworkAvailable(context)) {</span>
+                // Refresh account informations and Notifications
+<span class="nc bnc" id="L806" title="All 2 branches missed.">                if (accountStore.hasAccessToken()) {</span>
+<span class="nc" id="L807">                    NotificationsUpdateServiceStarter.startService(context)</span>
+                }
+
+                // verify media is sanitized
+<span class="nc" id="L811">                sanitizeMediaUploadStateForSite()</span>
+
+                // Rate limited PN Token Update
+<span class="nc" id="L814">                updatePushNotificationTokenIfNotLimited()</span>
+
+                // Rate limited WPCom blog list update
+<span class="nc" id="L817">                updateSiteList.runIfNotLimited()</span>
+
+                // Rate limited Site information and options update
+<span class="nc" id="L820">                updateSelectedSite.runIfNotLimited()</span>
+            }
+
+            // Let's migrate the old editor preference if available in AppPrefs to the remote backend
+<span class="nc" id="L824">            SiteUtils.migrateAppWideMobileEditorPreferenceToRemote(accountStore, siteStore, dispatcher)</span>
+<span class="nc bnc" id="L825" title="All 2 branches missed.">            if (!firstActivityResumed) {</span>
+                // Since we're force refreshing on app startup, we don't need to try refreshing again when starting
+                // our first Activity.
+<span class="nc" id="L828">                exPlat.refreshIfNeeded()</span>
+            }
+<span class="nc bnc" id="L830" title="All 2 branches missed.">            if (firstActivityResumed) {</span>
+<span class="nc" id="L831">                deferredInit()</span>
+            }
+<span class="nc" id="L833">            firstActivityResumed = false</span>
+<span class="nc" id="L834">        }</span>
+    }
+
+    /**
+     * Uses ComponentCallbacks2 is used for memory-related event handling and configuration changes
+     */
+<span class="fc" id="L840">    private inner class MemoryAndConfigChangeMonitor : ComponentCallbacks2 {</span>
+        override fun onConfigurationChanged(newConfig: Configuration) {
+            // Reapply locale on configuration change
+<span class="nc" id="L843">            LocaleManager.setLocale(context)</span>
+<span class="nc" id="L844">        }</span>
+
+        override fun onLowMemory() {
+            // Do nothing
+<span class="nc" id="L848">        }</span>
+
+        override fun onTrimMemory(level: Int) {
+<span class="nc" id="L851">            var evictBitmaps = false</span>
+<span class="nc bnc" id="L852" title="All 2 branches missed.">            when (level) {</span>
+                ComponentCallbacks2.TRIM_MEMORY_COMPLETE,
+                ComponentCallbacks2.TRIM_MEMORY_MODERATE,
+                ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE,
+                ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
+<span class="nc" id="L857">                ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -&gt; evictBitmaps = true</span>
+                ComponentCallbacks2.TRIM_MEMORY_BACKGROUND, ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -&gt; {}
+                else -&gt; {}
+            }
+<span class="nc bnc" id="L861" title="All 4 branches missed.">            if (evictBitmaps &amp;&amp; bitmapCache != null) {</span>
+                // getBitmapCache
+<span class="nc" id="L863">                WordPress.getBitmapCache().evictAll()</span>
+            }
+<span class="nc" id="L865">        }</span>
+    }
+
+<span class="fc" id="L868">    inner class StoryNotificationTrackerProvider : NotificationTrackerProvider {</span>
+        private fun translateNotificationTypes(storyNotificationType: StoryNotificationType): NotificationType {
+<span class="nc bnc" id="L870" title="All 4 branches missed.">            return when (storyNotificationType) {</span>
+<span class="nc" id="L871">                STORY_SAVE_SUCCESS -&gt; NotificationType.STORY_SAVE_SUCCESS</span>
+<span class="nc" id="L872">                STORY_SAVE_ERROR -&gt; NotificationType.STORY_SAVE_ERROR</span>
+<span class="nc" id="L873">                STORY_FRAME_SAVE_SUCCESS -&gt; NotificationType.STORY_FRAME_SAVE_SUCCESS</span>
+<span class="nc" id="L874">                STORY_FRAME_SAVE_ERROR -&gt; NotificationType.STORY_FRAME_SAVE_ERROR</span>
+            }
+        }
+
+        override fun trackShownNotification(storyNotificationType: StoryNotificationType) {
+<span class="nc" id="L879">            systemNotificationsTracker.trackShownNotification(translateNotificationTypes(storyNotificationType))</span>
+<span class="nc" id="L880">        }</span>
+
+        override fun trackTappedNotification(storyNotificationType: StoryNotificationType) {
+<span class="nc" id="L883">            systemNotificationsTracker.trackTappedNotification(translateNotificationTypes(storyNotificationType))</span>
+<span class="nc" id="L884">        }</span>
+
+        override fun trackDismissedNotification(storyNotificationType: StoryNotificationType) {
+<span class="nc" id="L887">            systemNotificationsTracker.trackDismissedNotification(translateNotificationTypes(storyNotificationType))</span>
+<span class="nc" id="L888">        }</span>
+    }
+
+    companion object {
+        private const val SECONDS_BETWEEN_SITE_UPDATE = 60 * 60 // 1 hour
+        private const val SECONDS_BETWEEN_BLOGLIST_UPDATE = 15 * 60 // 15 minutes
+        private const val MAX_LOG_COUNT = 5
+        private const val HTTP_CACHE_SIZE: Long = 5 * 1024 * 1024 // 5 MB
+        private const val KILOBYTES_IN_BYTES = 1024
+        private const val MEMORY_CACHE_RATIO = 0.25 // Use 1/4th of the available memory for memory cache.
+        private const val DEFAULT_TIMEOUT = 2 * 60 // 2 minutes
+
+<span class="pc" id="L900">        @SuppressLint(&quot;StaticFieldLeak&quot;) var context: Context? = null</span>
+
+        // This is for UI testing. AppInitializer is being created more than once for only UI tests. initialized
+        // prevents some static functions from being initialized twice and exceptions.
+        private var initialized = false
+
+        private var bitmapCache: BitmapLruCache? = null
+        private var sOAuthAuthenticator: OAuthAuthenticator? = null
+
+<span class="pc" id="L909">        val restClientUtils: RestClientUtils by lazy {</span>
+<span class="nc" id="L910">            RestClientUtils(</span>
+<span class="nc" id="L911">                    context,</span>
+<span class="nc" id="L912">                    WordPress.requestQueue,</span>
+<span class="nc" id="L913">                    sOAuthAuthenticator,</span>
+<span class="nc" id="L914">                    null</span>
+            )
+        }
+
+<span class="pc" id="L918">        val restClientUtilsV1_1: RestClientUtils by lazy {</span>
+<span class="nc" id="L919">            RestClientUtils(</span>
+<span class="nc" id="L920">                    context,</span>
+<span class="nc" id="L921">                    WordPress.requestQueue,</span>
+<span class="nc" id="L922">                    sOAuthAuthenticator,</span>
+<span class="nc" id="L923">                    null,</span>
+<span class="nc" id="L924">                    RestClient.REST_CLIENT_VERSIONS.V1_1</span>
+            )
+        }
+
+<span class="pc" id="L928">        val restClientUtilsV1_2: RestClientUtils by lazy {</span>
+<span class="nc" id="L929">            RestClientUtils(</span>
+<span class="nc" id="L930">                    context,</span>
+<span class="nc" id="L931">                    WordPress.requestQueue,</span>
+<span class="nc" id="L932">                    sOAuthAuthenticator,</span>
+<span class="nc" id="L933">                    null,</span>
+<span class="nc" id="L934">                    RestClient.REST_CLIENT_VERSIONS.V1_2</span>
+            )
+        }
+
+<span class="pc" id="L938">        val restClientUtilsV1_3: RestClientUtils by lazy {</span>
+<span class="nc" id="L939">            RestClientUtils(</span>
+<span class="nc" id="L940">                    context,</span>
+<span class="nc" id="L941">                    WordPress.requestQueue,</span>
+<span class="nc" id="L942">                    sOAuthAuthenticator,</span>
+<span class="nc" id="L943">                    null,</span>
+<span class="nc" id="L944">                    RestClient.REST_CLIENT_VERSIONS.V1_3</span>
+            )
+        }
+
+<span class="pc" id="L948">        val restClientUtilsV2: RestClientUtils by lazy {</span>
+<span class="nc" id="L949">            RestClientUtils(</span>
+<span class="nc" id="L950">                    context,</span>
+<span class="nc" id="L951">                    WordPress.requestQueue,</span>
+<span class="nc" id="L952">                    sOAuthAuthenticator,</span>
+<span class="nc" id="L953">                    null,</span>
+<span class="nc" id="L954">                    RestClient.REST_CLIENT_VERSIONS.V2</span>
+            )
+        }
+
+<span class="pc" id="L958">        val restClientUtilsV0: RestClientUtils by lazy {</span>
+<span class="nc" id="L959">            RestClientUtils(</span>
+<span class="nc" id="L960">                    context,</span>
+<span class="nc" id="L961">                    WordPress.requestQueue,</span>
+<span class="nc" id="L962">                    sOAuthAuthenticator,</span>
+<span class="nc" id="L963">                    null,</span>
+<span class="nc" id="L964">                    RestClient.REST_CLIENT_VERSIONS.V0</span>
+            )
+        }
+
+        /**
+         * Device's default User-Agent string.
+         * E.g.:
+         * &quot;Mozilla/5.0 (Linux; Android 6.0; Android SDK built for x86_64 Build/MASTER; wv)
+         * AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/44.0.2403.119 Mobile
+         * Safari/537.36&quot;
+         */
+<span class="fc" id="L975">        val defaultUserAgent: String by lazy {</span>
+<span class="fc" id="L976">            try {</span>
+<span class="fc" id="L977">                WebSettings.getDefaultUserAgent(context)</span>
+<span class="nc" id="L978">            } catch (e: AndroidRuntimeException) {</span>
+                // Catch AndroidRuntimeException that could be raised by the WebView() constructor.
+                // See https://github.com/wordpress-mobile/WordPress-Android/issues/3594
+
+                // initialize with the empty string, it's a rare issue
+<span class="nc" id="L983">                &quot;&quot;</span>
+<span class="nc" id="L984">            } catch (expected: NullPointerException) {</span>
+                // Catch NullPointerException that could be raised by WebSettings.getDefaultUserAgent()
+                // See https://github.com/wordpress-mobile/WordPress-Android/issues/3838
+
+                // initialize with the empty string, it's a rare issue
+<span class="nc" id="L989">                &quot;&quot;</span>
+<span class="nc" id="L990">            } catch (e: IllegalArgumentException) {</span>
+                // Catch IllegalArgumentException that could be raised by WebSettings.getDefaultUserAgent()
+                // See https://github.com/wordpress-mobile/WordPress-Android/issues/9015
+
+                // initialize with the empty string, it's a rare issue
+<span class="pc" id="L995">                &quot;&quot;</span>
+            }
+        }
+
+        /**
+         * User-Agent string when making HTTP connections, for both API traffic and WebViews. Appends
+         * &quot;wp-android/version&quot; to WebView's default User-Agent string for the webservers to get the full feature list
+         * of the browser and serve content accordingly, e.g.:
+         * &quot;Mozilla/5.0 (Linux; Android 6.0; Android SDK built for x86_64 Build/MASTER; wv)
+         * AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/44.0.2403.119 Mobile
+         * Safari/537.36 wp-android/4.7&quot;
+         * Note that app versions prior to 2.7 simply used &quot;wp-android&quot; as the user agent
+         **/
+<span class="fc" id="L1008">        val userAgent: String by lazy {</span>
+<span class="pc bpc" id="L1009" title="1 of 2 branches missed.">            if (TextUtils.isEmpty(defaultUserAgent)) {</span>
+<span class="nc" id="L1010">                WordPress.USER_AGENT_APPNAME + &quot;/&quot; + PackageUtils.getVersionName(context)</span>
+            } else {
+<span class="fc" id="L1012">                (defaultUserAgent + &quot; &quot; + WordPress.USER_AGENT_APPNAME + &quot;/&quot; + PackageUtils.getVersionName(context))</span>
+            }
+        }
+
+        fun getBitmapCache(): BitmapLruCache {
+<span class="pc bpc" id="L1017" title="1 of 2 branches missed.">            if (bitmapCache == null) {</span>
+                // The cache size will be measured in kilobytes rather than number of items.
+                // See http://developer.android.com/training/displaying-bitmaps/cache-bitmap.html
+<span class="fc" id="L1020">                val maxMemory = (Runtime.getRuntime().maxMemory() / KILOBYTES_IN_BYTES).toInt()</span>
+<span class="fc" id="L1021">                val cacheSize = (maxMemory * MEMORY_CACHE_RATIO).toInt()</span>
+<span class="fc" id="L1022">                bitmapCache = BitmapLruCache(cacheSize)</span>
+            }
+<span class="pc bpc" id="L1024" title="1 of 2 branches missed.">            return bitmapCache as BitmapLruCache</span>
+        }
+
+        /**
+         * Update locale of the static context when language is changed.
+         */
+        fun updateContextLocale() {
+<span class="nc" id="L1031">            context = LocaleManager.setLocale(context)</span>
+<span class="nc" id="L1032">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

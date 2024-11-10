@@ -1,0 +1,354 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>LayoutPickerViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.layoutpicker</a> &gt; <span class="el_source">LayoutPickerViewModel.kt</span></div><h1>LayoutPickerViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.layoutpicker
+
+import android.os.Bundle
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.R.string
+import org.wordpress.android.ui.PreviewMode
+import org.wordpress.android.ui.PreviewMode.MOBILE
+import org.wordpress.android.ui.PreviewMode.TABLET
+import org.wordpress.android.ui.PreviewMode.valueOf
+import org.wordpress.android.ui.PreviewModeHandler
+import org.wordpress.android.ui.layoutpicker.LayoutPickerUiState.Content
+import org.wordpress.android.ui.layoutpicker.LayoutPickerUiState.Error
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+
+private const val FETCHED_LAYOUTS = &quot;FETCHED_LAYOUTS&quot;
+private const val FETCHED_CATEGORIES = &quot;FETCHED_CATEGORIES&quot;
+private const val SELECTED_LAYOUT = &quot;SELECTED_LAYOUT&quot;
+private const val SELECTED_CATEGORIES = &quot;SELECTED_CATEGORIES&quot;
+private const val PREVIEW_MODE = &quot;PREVIEW_MODE&quot;
+
+<span class="nc" id="L28">abstract class LayoutPickerViewModel(</span>
+<span class="nc" id="L29">    open val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L30">    open val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L31">    open val networkUtils: NetworkUtilsWrapper,</span>
+<span class="nc" id="L32">    private val layoutPickerTracker: LayoutPickerTracker</span>
+<span class="nc" id="L33">) : ScopedViewModel(bgDispatcher), PreviewModeHandler {</span>
+<span class="nc bnc" id="L34" title="All 2 branches missed.">    lateinit var layouts: List&lt;LayoutModel&gt;</span>
+<span class="nc bnc" id="L35" title="All 2 branches missed.">    lateinit var categories: List&lt;LayoutCategoryModel&gt;</span>
+
+<span class="nc" id="L37">    private val _uiState: MutableLiveData&lt;LayoutPickerUiState&gt; = MutableLiveData()</span>
+<span class="nc" id="L38">    val uiState: LiveData&lt;LayoutPickerUiState&gt; = _uiState</span>
+
+<span class="nc" id="L40">    private val _previewMode = SingleLiveEvent&lt;PreviewMode&gt;()</span>
+<span class="nc" id="L41">    val previewMode: LiveData&lt;PreviewMode&gt; = _previewMode</span>
+
+<span class="nc" id="L43">    private val _previewState: MutableLiveData&lt;PreviewUiState&gt; = MutableLiveData()</span>
+<span class="nc" id="L44">    val previewState: LiveData&lt;PreviewUiState&gt; = _previewState</span>
+
+<span class="nc" id="L46">    private val _onPreviewModeButtonPressed = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L47">    val onPreviewModeButtonPressed: LiveData&lt;Unit&gt; = _onPreviewModeButtonPressed</span>
+
+<span class="nc" id="L49">    private val _onPreviewActionPressed = SingleLiveEvent&lt;DesignPreviewAction&gt;()</span>
+<span class="nc" id="L50">    val onPreviewActionPressed: LiveData&lt;DesignPreviewAction&gt; = _onPreviewActionPressed</span>
+
+<span class="nc" id="L52">    private val _onCategorySelectionChanged = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L53">    val onCategorySelectionChanged: LiveData&lt;Event&lt;Unit&gt;&gt; = _onCategorySelectionChanged</span>
+
+<span class="nc" id="L55">    private val _onThumbnailModeButtonPressed = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L56">    val onThumbnailModeButtonPressed: LiveData&lt;Unit&gt; = _onThumbnailModeButtonPressed</span>
+
+    val isLoading: Boolean
+<span class="nc bnc" id="L59" title="All 2 branches missed.">        get() = _uiState.value === LayoutPickerUiState.Loading</span>
+
+    open val selectedLayout: LayoutModel?
+<span class="nc bnc" id="L62" title="All 4 branches missed.">        get() = (uiState.value as? Content)?.let { state -&gt;</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">            layouts.firstOrNull { it.slug == state.selectedLayoutSlug }</span>
+<span class="nc" id="L64">        }</span>
+
+    abstract val useCachedData: Boolean
+    abstract val shouldUseMobileThumbnail: Boolean
+<span class="nc" id="L68">    open val thumbnailTapOpensPreview = false</span>
+
+<span class="nc" id="L70">    var nestedScrollStates: Bundle = Bundle()</span>
+
+    // Map that holds the ordered/randomised layouts list per category (key: slug)
+<span class="nc" id="L73">    val orderedLayouts: MutableMap&lt;String, List&lt;LayoutModel&gt;&gt; = mutableMapOf()</span>
+
+<span class="nc" id="L75">    abstract fun fetchLayouts(preferCache: Boolean = false)</span>
+
+<span class="nc" id="L77">    open fun onPreviewChooseTapped() = onDismissPreview()</span>
+
+    fun handleResponse(layouts: List&lt;LayoutModel&gt;, categories: List&lt;LayoutCategoryModel&gt;) {
+<span class="nc" id="L80">        this.layouts = layouts</span>
+<span class="nc" id="L81">        this.categories = categories</span>
+<span class="nc" id="L82">        loadCategories()</span>
+<span class="nc" id="L83">    }</span>
+
+    fun initializePreviewMode(isTablet: Boolean) {
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        if (_previewMode.value == null) {</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">            _previewMode.value = if (isTablet) TABLET else MOBILE</span>
+        }
+<span class="nc" id="L89">    }</span>
+
+<span class="nc bnc" id="L91" title="All 2 branches missed.">    override fun selectedPreviewMode() = previewMode.value ?: MOBILE</span>
+
+    override fun onPreviewModeChanged(mode: PreviewMode) {
+<span class="nc bnc" id="L94" title="All 2 branches missed.">        if (_previewMode.value !== mode) {</span>
+<span class="nc" id="L95">            layoutPickerTracker.trackPreviewModeChanged(mode.key)</span>
+<span class="nc" id="L96">            _previewMode.value = mode</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">            if (uiState.value is Content) {</span>
+<span class="nc" id="L98">                loadLayouts()</span>
+            }
+        }
+<span class="nc" id="L101">    }</span>
+
+    fun updateUiState(uiState: LayoutPickerUiState) {
+<span class="nc" id="L104">        _uiState.value = uiState</span>
+<span class="nc" id="L105">    }</span>
+
+    /**
+     * Category tapped
+     * @param categorySlug the slug of the tapped category
+     */
+    fun onCategoryTapped(categorySlug: String) {
+<span class="nc bnc" id="L112" title="All 4 branches missed.">        (uiState.value as? Content)?.let { state -&gt;</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">            if (state.selectedCategoriesSlugs.contains(categorySlug)) { // deselect</span>
+<span class="nc" id="L114">                updateUiState(</span>
+<span class="nc" id="L115">                        state.copy(selectedCategoriesSlugs = state.selectedCategoriesSlugs.apply {</span>
+<span class="nc" id="L116">                            remove(categorySlug)</span>
+<span class="nc" id="L117">                        })</span>
+                )
+<span class="nc" id="L119">                layoutPickerTracker.filterDeselected(categorySlug, state.selectedCategoriesSlugs)</span>
+            } else {
+<span class="nc" id="L121">                updateUiState(</span>
+<span class="nc" id="L122">                        state.copy(selectedCategoriesSlugs = state.selectedCategoriesSlugs.apply { add(categorySlug) })</span>
+                )
+<span class="nc" id="L124">                layoutPickerTracker.filterSelected(categorySlug, state.selectedCategoriesSlugs)</span>
+            }
+<span class="nc" id="L126">            loadCategories()</span>
+<span class="nc" id="L127">            _onCategorySelectionChanged.postValue(Event(Unit))</span>
+<span class="nc" id="L128">        }</span>
+<span class="nc" id="L129">    }</span>
+
+    private fun loadCategories() {
+<span class="nc bnc" id="L132" title="All 4 branches missed.">        val state = uiState.value as? Content ?: Content()</span>
+<span class="nc" id="L133">        launch(bgDispatcher) {</span>
+<span class="nc" id="L134">            val listItems: List&lt;CategoryListItemUiState&gt; = categories.map {</span>
+<span class="nc" id="L135">                CategoryListItemUiState(</span>
+<span class="nc" id="L136">                        it.slug,</span>
+<span class="nc" id="L137">                        it.title,</span>
+<span class="nc" id="L138">                        it.emoji,</span>
+<span class="nc" id="L139">                        state.selectedCategoriesSlugs.contains(it.slug)</span>
+<span class="nc" id="L140">                ) { onCategoryTapped(it.slug) }</span>
+            }
+<span class="nc bnc" id="L142" title="All 2 branches missed.">            withContext(mainDispatcher) {</span>
+<span class="nc" id="L143">                updateUiState(state.copy(categories = listItems))</span>
+<span class="nc" id="L144">            }</span>
+<span class="nc" id="L145">            loadLayouts()</span>
+<span class="nc" id="L146">        }</span>
+<span class="nc" id="L147">    }</span>
+
+    fun loadLayouts() {
+<span class="nc bnc" id="L150" title="All 4 branches missed.">        val state = uiState.value as? Content ?: Content()</span>
+<span class="nc" id="L151">        launch(bgDispatcher) {</span>
+<span class="nc" id="L152">            val listItems = ArrayList&lt;LayoutCategoryUiState&gt;()</span>
+
+<span class="nc bnc" id="L154" title="All 4 branches missed.">            val selectedCategories = if (state.selectedCategoriesSlugs.isNotEmpty()) {</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">                categories.filter { state.selectedCategoriesSlugs.contains(it.slug) }</span>
+            } else {
+<span class="nc" id="L157">                categories</span>
+            }
+
+<span class="nc" id="L160">            selectedCategories.forEach { category -&gt;</span>
+<span class="nc bnc" id="L161" title="All 4 branches missed.">                val ordered = orderedLayouts[category.slug] ?: if (category.randomizeOrder) {</span>
+<span class="nc" id="L162">                    val randomised = layouts.getFilteredLayouts(category.slug).shuffled()</span>
+<span class="nc" id="L163">                    orderedLayouts[category.slug] = randomised</span>
+<span class="nc" id="L164">                    randomised</span>
+                } else {
+<span class="nc" id="L166">                    val ordered = layouts.getFilteredLayouts(category.slug)</span>
+<span class="nc" id="L167">                    orderedLayouts[category.slug] = ordered</span>
+<span class="nc" id="L168">                    ordered</span>
+                }
+<span class="nc" id="L170">                val layouts = ordered.map { layout -&gt;</span>
+<span class="nc bnc" id="L171" title="All 5 branches missed.">                    val preview = when (_previewMode.value) {</span>
+<span class="nc" id="L172">                        MOBILE -&gt; layout.previewMobile</span>
+<span class="nc" id="L173">                        TABLET -&gt; layout.previewTablet</span>
+<span class="nc" id="L174">                        else -&gt; layout.preview</span>
+                    }
+<span class="nc bnc" id="L176" title="All 2 branches missed.">                    val thumbnailPreview = if (shouldUseMobileThumbnail) layout.previewMobile else preview</span>
+<span class="nc" id="L177">                    LayoutListItemUiState(</span>
+<span class="nc" id="L178">                            slug = layout.slug,</span>
+<span class="nc" id="L179">                            title = layout.title,</span>
+<span class="nc" id="L180">                            preview = preview,</span>
+<span class="nc" id="L181">                            mShotPreview = thumbnailPreview,</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">                            selected = layout.slug == state.selectedLayoutSlug,</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                            tapOpensPreview = thumbnailTapOpensPreview,</span>
+<span class="nc" id="L184">                            onItemTapped = { onLayoutTapped(layoutSlug = layout.slug, category.isRecommended) },</span>
+<span class="nc" id="L185">                            onThumbnailReady = { onThumbnailReady(layoutSlug = layout.slug) }</span>
+                    )
+                }
+<span class="nc" id="L188">                listItems.add(</span>
+<span class="nc" id="L189">                        LayoutCategoryUiState(</span>
+<span class="nc" id="L190">                                category.slug,</span>
+<span class="nc" id="L191">                                category.title,</span>
+<span class="nc" id="L192">                                category.description,</span>
+<span class="nc" id="L193">                                layouts,</span>
+<span class="nc" id="L194">                                category.isRecommended</span>
+                        )
+                )
+<span class="nc" id="L197">            }</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">            withContext(mainDispatcher) {</span>
+<span class="nc" id="L199">                updateUiState(state.copy(layoutCategories = listItems))</span>
+<span class="nc" id="L200">            }</span>
+<span class="nc" id="L201">        }</span>
+<span class="nc" id="L202">    }</span>
+
+    /**
+     * Layout tapped
+     * @param layoutSlug the slug of the tapped layout
+     */
+<span class="nc" id="L208">    open fun onLayoutTapped(layoutSlug: String, isRecommended: Boolean = false) {</span>
+<span class="nc bnc" id="L209" title="All 4 branches missed.">        (uiState.value as? Content)?.let { state -&gt;</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">            if (!state.loadedThumbnailSlugs.contains(layoutSlug)) return // No action</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">            if (layoutSlug == state.selectedLayoutSlug) { // deselect</span>
+<span class="nc" id="L212">                updateUiState(state.copy(selectedLayoutSlug = null, isToolbarVisible = false))</span>
+            } else {
+<span class="nc" id="L214">                updateUiState(state.copy(selectedLayoutSlug = layoutSlug, isToolbarVisible = true))</span>
+            }
+<span class="nc" id="L216">            updateButtonsUiState()</span>
+<span class="nc" id="L217">            loadLayouts()</span>
+<span class="nc" id="L218">        }</span>
+<span class="nc" id="L219">    }</span>
+
+    /**
+     * Layout thumbnail is ready
+     * @param layoutSlug the slug of the tapped layout
+     */
+    fun onThumbnailReady(layoutSlug: String) {
+<span class="nc bnc" id="L226" title="All 4 branches missed.">        (uiState.value as? Content)?.let { state -&gt;</span>
+<span class="nc" id="L227">            updateUiState(state.copy(loadedThumbnailSlugs = state.loadedThumbnailSlugs.apply { add(layoutSlug) }))</span>
+<span class="nc" id="L228">        }</span>
+<span class="nc" id="L229">    }</span>
+
+    /**
+     * Updates the buttons UiState
+     */
+    private fun updateButtonsUiState() {
+<span class="nc bnc" id="L235" title="All 4 branches missed.">        (uiState.value as? Content)?.let { state -&gt;</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">            val selection = state.selectedLayoutSlug != null</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">            updateUiState(state.copy(buttonsUiState = ButtonsUiState(!selection, selection, selection)))</span>
+<span class="nc" id="L238">        }</span>
+<span class="nc" id="L239">    }</span>
+
+    fun onThumbnailModePressed() {
+<span class="nc" id="L242">        layoutPickerTracker.trackThumbnailModeTapped(selectedPreviewMode().key)</span>
+<span class="nc" id="L243">        _onThumbnailModeButtonPressed.call()</span>
+<span class="nc" id="L244">    }</span>
+
+    /**
+     * Retries data fetching
+     */
+<span class="nc" id="L249">    fun onRetryClicked() = fetchLayouts()</span>
+
+    fun onPreviewLoading() {
+<span class="nc bnc" id="L252" title="All 2 branches missed.">        if (networkUtils.isNetworkAvailable()) {</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">            selectedLayout?.let { layout -&gt;</span>
+<span class="nc" id="L254">                _previewState.value = PreviewUiState.Loading(layout.demoUrl)</span>
+<span class="nc" id="L255">                layoutPickerTracker.trackPreviewLoading(layout.slug, selectedPreviewMode().key)</span>
+<span class="nc" id="L256">            }</span>
+        } else {
+<span class="nc" id="L258">            _previewState.value = PreviewUiState.Error(toast = R.string.hpp_retry_error)</span>
+<span class="nc" id="L259">            layoutPickerTracker.trackNoNetworkErrorShown(&quot;Preview error&quot;)</span>
+        }
+<span class="nc" id="L261">    }</span>
+
+    fun onPreviewLoaded() {
+<span class="nc bnc" id="L264" title="All 2 branches missed.">        selectedLayout?.let { layout -&gt;</span>
+<span class="nc" id="L265">            _previewState.value = PreviewUiState.Loaded</span>
+<span class="nc" id="L266">            layoutPickerTracker.trackPreviewLoaded(layout.slug, selectedPreviewMode().key)</span>
+<span class="nc" id="L267">        }</span>
+<span class="nc" id="L268">    }</span>
+
+    fun onPreviewError() {
+<span class="nc" id="L271">        _previewState.value = PreviewUiState.Error()</span>
+<span class="nc" id="L272">        layoutPickerTracker.trackErrorShown(&quot;Preview error&quot;)</span>
+<span class="nc" id="L273">    }</span>
+
+    fun onPreviewModePressed() {
+<span class="nc" id="L276">        layoutPickerTracker.trackPreviewModeTapped(selectedPreviewMode().key)</span>
+<span class="nc" id="L277">        _onPreviewModeButtonPressed.call()</span>
+<span class="nc" id="L278">    }</span>
+
+    fun onPreviewTapped() {
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        selectedLayout?.let { layout -&gt;</span>
+<span class="nc" id="L282">            val template = layout.slug</span>
+<span class="nc" id="L283">            layoutPickerTracker.trackPreviewViewed(template, selectedPreviewMode().key)</span>
+<span class="nc" id="L284">            _onPreviewActionPressed.value = DesignPreviewAction.Show(template, layout.demoUrl)</span>
+<span class="nc" id="L285">            return</span>
+        }
+<span class="nc" id="L287">        layoutPickerTracker.trackErrorShown(&quot;Error previewing design&quot;)</span>
+<span class="nc" id="L288">        updateUiState(Error(toast = string.hpp_choose_error))</span>
+<span class="nc" id="L289">    }</span>
+
+    fun onDismissPreview() {
+<span class="nc" id="L292">        _onPreviewActionPressed.value = DesignPreviewAction.Dismiss</span>
+<span class="nc" id="L293">    }</span>
+
+    /**
+     * Appbar scrolled event used to set the header and title visibility
+     * @param verticalOffset the scroll state vertical offset
+     * @param scrollThreshold the scroll threshold
+     */
+    fun onAppBarOffsetChanged(verticalOffset: Int, scrollThreshold: Int) {
+<span class="nc bnc" id="L301" title="All 2 branches missed.">        val headerShouldBeVisible = verticalOffset &lt; scrollThreshold</span>
+<span class="nc bnc" id="L302" title="All 4 branches missed.">        (uiState.value as? Content)?.let { state -&gt;</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">            if (state.isHeaderVisible == headerShouldBeVisible) return // No change</span>
+<span class="nc" id="L304">            updateUiState(state.copy(isHeaderVisible = headerShouldBeVisible))</span>
+<span class="nc" id="L305">        }</span>
+<span class="nc" id="L306">    }</span>
+
+    fun loadSavedState(savedInstanceState: Bundle?) {
+<span class="nc bnc" id="L309" title="All 2 branches missed.">        if (savedInstanceState == null) return</span>
+<span class="nc" id="L310">        val layouts = savedInstanceState.getParcelableArrayList&lt;LayoutModel&gt;(FETCHED_LAYOUTS)</span>
+<span class="nc" id="L311">        val categories = savedInstanceState.getParcelableArrayList&lt;LayoutCategoryModel&gt;(FETCHED_CATEGORIES)</span>
+<span class="nc" id="L312">        val selected = savedInstanceState.getString(SELECTED_LAYOUT)</span>
+<span class="nc bnc" id="L313" title="All 6 branches missed.">        val selectedCategories = (savedInstanceState.getSerializable(SELECTED_CATEGORIES) as? List&lt;*&gt;)</span>
+<span class="nc" id="L314">                ?.filterIsInstance&lt;String&gt;() ?: listOf()</span>
+<span class="nc" id="L315">        val previewMode = savedInstanceState.getString(PREVIEW_MODE, MOBILE.name)</span>
+<span class="nc" id="L316">        resetState(selected, ArrayList(selectedCategories.toMutableList()), previewMode)</span>
+<span class="nc bnc" id="L317" title="All 6 branches missed.">        if (layouts == null || categories == null || layouts.isEmpty()) {</span>
+<span class="nc" id="L318">            fetchLayouts(preferCache = useCachedData)</span>
+<span class="nc" id="L319">            return</span>
+        }
+<span class="nc" id="L321">        handleResponse(layouts, categories)</span>
+<span class="nc" id="L322">    }</span>
+
+    private fun resetState(selected: String?, selectedCategories: ArrayList&lt;String&gt;, previewMode: String) {
+<span class="nc bnc" id="L325" title="All 2 branches missed.">        if (isLoading) return</span>
+<span class="nc bnc" id="L326" title="All 4 branches missed.">        val state = uiState.value as? Content ?: Content()</span>
+<span class="nc" id="L327">        updateUiState(</span>
+<span class="nc" id="L328">                state.copy(</span>
+<span class="nc" id="L329">                        selectedLayoutSlug = selected,</span>
+<span class="nc" id="L330">                        selectedCategoriesSlugs = selectedCategories</span>
+                )
+        )
+<span class="nc" id="L333">        _previewMode.value = valueOf(previewMode)</span>
+<span class="nc" id="L334">        updateButtonsUiState()</span>
+<span class="nc" id="L335">    }</span>
+
+    fun writeToBundle(outState: Bundle) {
+<span class="nc bnc" id="L338" title="All 4 branches missed.">        (uiState.value as? Content)?.let {</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">            if (!useCachedData) {</span>
+<span class="nc" id="L340">                outState.putParcelableArrayList(FETCHED_LAYOUTS, ArrayList(layouts))</span>
+<span class="nc" id="L341">                outState.putParcelableArrayList(FETCHED_CATEGORIES, ArrayList(categories))</span>
+            }
+<span class="nc" id="L343">            outState.putString(SELECTED_LAYOUT, it.selectedLayoutSlug)</span>
+<span class="nc" id="L344">            outState.putSerializable(SELECTED_CATEGORIES, it.selectedCategoriesSlugs)</span>
+<span class="nc" id="L345">            outState.putString(PREVIEW_MODE, selectedPreviewMode().name)</span>
+<span class="nc" id="L346">        }</span>
+<span class="nc" id="L347">    }</span>
+
+    sealed class DesignPreviewAction {
+<span class="nc" id="L350">        object Dismiss : DesignPreviewAction()</span>
+<span class="nc" id="L351">        class Show(val template: String, val demoUrl: String) : DesignPreviewAction()</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

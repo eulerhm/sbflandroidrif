@@ -1,0 +1,396 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderDatabase.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.datasets</a> &gt; <span class="el_source">ReaderDatabase.java</span></div><h1>ReaderDatabase.java</h1><pre class="source lang-java linenums">package org.wordpress.android.datasets;
+
+import android.content.Context;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
+
+import org.greenrobot.eventbus.EventBus;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.models.ReaderPostList;
+import org.wordpress.android.models.ReaderTag;
+import org.wordpress.android.models.ReaderTagList;
+import org.wordpress.android.models.ReaderTagType;
+import org.wordpress.android.ui.reader.repository.ReaderRepositoryEvent.ReaderPostTableActionEnded;
+import org.wordpress.android.ui.reader.utils.ReaderUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.DateTimeUtils;
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.sql.Date;
+import java.util.Locale;
+
+/**
+ * database for all reader information
+ */
+public class ReaderDatabase extends SQLiteOpenHelper {
+    protected static final String DB_NAME = &quot;wpreader.db&quot;;
+    private static final int DB_VERSION = 153;
+    private static final int DB_LAST_VERSION_WITHOUT_MIGRATION_SCRIPT = 136; // do not change this value
+
+    /*
+     * version history
+     * 67 - added tbl_blog_info to ReaderBlogTable
+     * 68 - added author_blog_id to ReaderCommentTable
+     * 69 - renamed tbl_blog_urls to tbl_followed_blogs in ReaderBlogTable
+     * 70 - added author_id to ReaderCommentTable and ReaderPostTable
+     * 71 - added blog_id to ReaderUserTable
+     * 72 - removed tbl_followed_blogs from ReaderBlogTable
+     * 73 - added tbl_recommended_blogs to ReaderBlogTable
+     * 74 - added primary_tag to ReaderPostTable
+     * 75 - added secondary_tag to ReaderPostTable
+     * 76 - added feed_id to ReaderBlogTable
+     * 77 - restructured tag tables (ReaderTagTable)
+     * 78 - added tag_type to ReaderPostTable.tbl_post_tags
+     * 79 - added is_likes_enabled and is_sharing_enabled to tbl_posts
+     * 80 - added tbl_comment_likes in ReaderLikeTable, added num_likes to tbl_comments
+     * 81 - added image_url to tbl_blog_info
+     * 82 - added idx_posts_timestamp to tbl_posts
+     * 83 - removed tag_list from tbl_posts
+     * 84 - added tbl_attachments
+     * 85 - removed tbl_attachments, added attachments_json to tbl_posts
+     * 90 - added default values for all INTEGER columns that were missing them (hotfix 3.1.1)
+     * 92 - added default values for all INTEGER columns that were missing them (3.2)
+     * 93 - tbl_posts text is now truncated to a max length (3.3)
+     * 94 - added is_jetpack to tbl_posts (3.4)
+     * 95 - added page_number to tbl_comments (3.4)
+     * 96 - removed tbl_tag_updates, added date_updated to tbl_tags (3.4)
+     * 97 - added short_url to tbl_posts
+     * 98 - added feed_id to tbl_posts
+     * 99 - added feed_url to tbl_blog_info
+     * 100 - changed primary key on tbl_blog_info
+     * 101 - dropped is_reblogged from ReaderPostTable
+     * 102 - changed primary key of tbl_blog_info from blog_id+feed_id to just blog_id
+     * 103 - added discover_json to ReaderPostTable
+     * 104 - added word_count to ReaderPostTable
+     * 105 - added date_updated to ReaderBlogTable
+     * 106 - dropped is_likes_enabled and is_sharing_enabled from tbl_posts
+     * 107 - &quot;Blogs I Follow&quot; renamed to &quot;Followed Sites&quot;
+     * 108 - added &quot;has_gap_marker&quot; to tbl_post_tags
+     * 109 - added &quot;feed_item_id&quot; to tbl_posts
+     * 110 - added xpost_post_id and xpost_blog_id to tbl_posts
+     * 111 - added author_first_name to tbl_posts
+     * 112 - no structural change, just reset db
+     * 113 - added tag_title to tag tables
+     * 114 - renamed tag_name to tag_slug in tag tables
+     * 115 - added ReaderSearchTable
+     * 116 - added tag_display_name to tag tables
+     * 117 - changed tbl_posts.timestamp from INTEGER to REAL
+     * 118 - renamed tbl_search_history to tbl_search_suggestions
+     * 119 - renamed tbl_posts.timestamp to sort_index
+     * 120 - added &quot;format&quot; to tbl_posts
+     * 121 - removed word_count from tbl_posts
+     * 122 - changed tbl_posts primary key to pseudo_id
+     * 123 - changed tbl_posts.published to tbl_posts.date
+     * 124 - returned tbl_posts.published
+     * 125 - added tbl_posts.railcar_json
+     * 126 - separate fields in tbl_posts for date_liked, date_tagged, date_published
+     * 127 - changed tbl_posts.sort_index to tbl_posts.score
+     * 128 - added indexes on tbl_posts.date_published and tbl_posts.date_tagged
+     * 129 - denormalized post storage, dropped tbl_post_tags
+     * 130 - added tbl_posts.blog_image_url
+     * 131 - added tbl_posts.card_type
+     * 132 - no schema changes, simply clearing to accommodate gallery card_type
+     * 133 - no schema changes, simply clearing to accommodate video card_type
+     * 134 - added tbl_posts.use_excerpt
+     * 135 - added tbl_blog_info.is_notifications_enabled in ReaderBlogTable
+     * 136 - added tbl_posts.is_bookmarked
+     * 137 - added support for migration scripts
+     * 138 - added tbl_posts.is_private_atomic
+     * 139 - introduced new DiscoverCardsTable
+     * 140 - drop tbl_tags_recommended
+     * 141 - added tbl_posts.tags
+     * 142 - remove followed tags from tbl_tags
+     * 143 - drop tbl_recommended_blogs
+     * 144 - added tbl_posts.is_wpforteams_site
+     * 145 - added tbl_blog_info.is_wp_for_teams
+     * 146 - replaced tbl_blog_info.is_wp_for_teams and tbl_posts.is_wpforteams_site with organization_id
+     * 147 - added tbl_blog_info.unseen_count
+     * 148 - added tbl_posts.is_seen
+     * 149 - added tbl_posts.is_seen_supported that will be false for posts created before 2020-07-13
+     * 150 - added tbl_posts.author_blog_id and tbl_posts.author_blog_url
+     * 151 - removed existing followed-sites, blog posts from tbl_posts to fix duplicate posts issue
+     * 152 - added short_url to tbl_comments
+     * 153 - added author_email to tbl_comments
+     */
+
+    /*
+     * database singleton
+     */
+    private static ReaderDatabase mReaderDb;
+<span class="nc" id="L125">    private static final Object DB_LOCK = new Object();</span>
+
+    public static ReaderDatabase getDatabase() {
+<span class="nc bnc" id="L128" title="All 2 branches missed.">        if (mReaderDb == null) {</span>
+<span class="nc" id="L129">            synchronized (DB_LOCK) {</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">                if (mReaderDb == null) {</span>
+<span class="nc" id="L131">                    mReaderDb = new ReaderDatabase(WordPress.getContext());</span>
+                    // this ensures that onOpen() is called with a writable database
+                    // (open will fail if app calls getReadableDb() first)
+<span class="nc" id="L134">                    mReaderDb.getWritableDatabase();</span>
+                }
+<span class="nc" id="L136">            }</span>
+        }
+<span class="nc" id="L138">        return mReaderDb;</span>
+    }
+
+    public static SQLiteDatabase getReadableDb() {
+<span class="nc" id="L142">        return getDatabase().getReadableDatabase();</span>
+    }
+
+    public static SQLiteDatabase getWritableDb() {
+<span class="nc" id="L146">        return getDatabase().getWritableDatabase();</span>
+    }
+
+    @Override
+    public void onOpen(SQLiteDatabase db) {
+<span class="nc" id="L151">        super.onOpen(db);</span>
+        // copyDatabase(db);
+        // getDatabase().reset(db);
+<span class="nc" id="L154">    }</span>
+
+    /*
+     * resets (clears) the reader database
+     */
+    public static void reset(boolean retainBookmarkedPosts) {
+        // note that we must call getWritableDb() before getDatabase() in case the database
+        // object hasn't been created yet
+<span class="nc" id="L162">        SQLiteDatabase db = getWritableDb();</span>
+
+<span class="nc bnc" id="L164" title="All 4 branches missed.">        if (retainBookmarkedPosts &amp;&amp; ReaderPostTable.hasBookmarkedPosts()) {</span>
+<span class="nc" id="L165">            ReaderTagList tags = ReaderTagTable.getBookmarkTags();</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">            if (!tags.isEmpty()) {</span>
+<span class="nc" id="L167">                ReaderPostList bookmarkedPosts = ReaderPostTable.getPostsWithTag(tags.get(0), 0, false);</span>
+<span class="nc" id="L168">                db.beginTransaction();</span>
+                try {
+<span class="nc" id="L170">                    getDatabase().reset(db);</span>
+<span class="nc" id="L171">                    ReaderPostTable.addOrUpdatePosts(tags.get(0), bookmarkedPosts);</span>
+<span class="nc" id="L172">                    db.setTransactionSuccessful();</span>
+                } finally {
+<span class="nc" id="L174">                    db.endTransaction();</span>
+                }
+<span class="nc" id="L176">                return;</span>
+            }
+        }
+
+<span class="nc" id="L180">        getDatabase().reset(db);</span>
+<span class="nc" id="L181">    }</span>
+
+    public ReaderDatabase(Context context) {
+<span class="nc" id="L184">        super(context, DB_NAME, null, DB_VERSION);</span>
+<span class="nc" id="L185">    }</span>
+
+    @Override
+    public void onCreate(SQLiteDatabase db) {
+<span class="nc" id="L189">        createAllTables(db);</span>
+<span class="nc" id="L190">    }</span>
+
+    @SuppressWarnings({&quot;FallThrough&quot;})
+    @Override
+    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+<span class="nc" id="L195">        AppLog.i(T.READER,</span>
+                &quot;Upgrading database from version &quot; + oldVersion + &quot; to version &quot; + newVersion + &quot; IN PROGRESS&quot;);
+<span class="nc" id="L197">        int currentVersion = oldVersion;</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">        if (currentVersion &lt;= DB_LAST_VERSION_WITHOUT_MIGRATION_SCRIPT) {</span>
+            // versions 0 - 136 didn't support migration scripts, so we can safely drop and recreate all tables
+<span class="nc" id="L200">            reset(db);</span>
+<span class="nc" id="L201">            currentVersion = newVersion;</span>
+        }
+
+<span class="nc bnc" id="L204" title="All 18 branches missed.">        switch (currentVersion) {</span>
+            case 136:
+                // no-op
+<span class="nc" id="L207">                currentVersion++;</span>
+            case 137:
+<span class="nc" id="L209">                db.execSQL(&quot;ALTER TABLE tbl_posts ADD is_private_atomic BOOLEAN;&quot;);</span>
+<span class="nc" id="L210">                currentVersion++;</span>
+            case 138:
+<span class="nc" id="L212">                ReaderDiscoverCardsTable.INSTANCE.createTable(db);</span>
+<span class="nc" id="L213">                currentVersion++;</span>
+            case 139:
+<span class="nc" id="L215">                db.execSQL(&quot;DROP TABLE IF EXISTS tbl_tags_recommended;&quot;);</span>
+<span class="nc" id="L216">                currentVersion++;</span>
+            case 140:
+<span class="nc" id="L218">                db.execSQL(&quot;ALTER TABLE tbl_posts ADD tags TEXT;&quot;);</span>
+<span class="nc" id="L219">                currentVersion++;</span>
+            case 141:
+<span class="nc" id="L221">                String[] args = {Integer.toString(ReaderTagType.FOLLOWED.toInt())};</span>
+<span class="nc" id="L222">                db.execSQL(&quot;DELETE FROM tbl_tags WHERE tag_type=?&quot;, args);</span>
+<span class="nc" id="L223">                currentVersion++;</span>
+            case 142:
+<span class="nc" id="L225">                db.execSQL(&quot;DROP TABLE IF EXISTS tbl_recommended_blogs;&quot;);</span>
+<span class="nc" id="L226">                currentVersion++;</span>
+            case 143:
+                // removed additions of deprecated tbl_posts.is_wpforteams_site
+<span class="nc" id="L229">                currentVersion++;</span>
+            case 144:
+                // removed additions of deprecated tbl_blog_info.is_wp_for_teams
+<span class="nc" id="L232">                currentVersion++;</span>
+            case 145:
+<span class="nc" id="L234">                db.execSQL(&quot;ALTER TABLE tbl_blog_info ADD organization_id INTEGER;&quot;);</span>
+<span class="nc" id="L235">                db.execSQL(&quot;ALTER TABLE tbl_posts ADD organization_id INTEGER;&quot;);</span>
+<span class="nc" id="L236">                currentVersion++;</span>
+            case 146:
+<span class="nc" id="L238">                db.execSQL(&quot;ALTER TABLE tbl_blog_info ADD unseen_count INTEGER;&quot;);</span>
+<span class="nc" id="L239">                currentVersion++;</span>
+            case 147:
+<span class="nc" id="L241">                db.execSQL(&quot;ALTER TABLE tbl_posts ADD is_seen BOOLEAN;&quot;);</span>
+<span class="nc" id="L242">                currentVersion++;</span>
+            case 148:
+<span class="nc" id="L244">                db.execSQL(&quot;ALTER TABLE tbl_posts ADD is_seen_supported BOOLEAN;&quot;);</span>
+<span class="nc" id="L245">                currentVersion++;</span>
+            case 149:
+<span class="nc" id="L247">                db.execSQL(&quot;ALTER TABLE tbl_posts ADD author_blog_id INTEGER;&quot;);</span>
+<span class="nc" id="L248">                db.execSQL(&quot;ALTER TABLE tbl_posts ADD author_blog_url TEXT;&quot;);</span>
+<span class="nc" id="L249">                currentVersion++;</span>
+            case 150:
+<span class="nc" id="L251">                String followedSitesTagSlug = ReaderUtils.sanitizeWithDashes(ReaderTag.TAG_TITLE_FOLLOWED_SITES);</span>
+<span class="nc" id="L252">                db.execSQL(&quot;DELETE FROM tbl_posts WHERE tag_name=?&quot;, new String[]{followedSitesTagSlug});</span>
+<span class="nc" id="L253">                db.execSQL(&quot;DELETE FROM tbl_posts WHERE tag_name='' AND tag_type=0&quot;);</span>
+<span class="nc" id="L254">                db.execSQL(&quot;UPDATE tbl_tags SET date_updated=? WHERE tag_slug=? AND tag_type=?&quot;,</span>
+                        new String[]{
+<span class="nc" id="L256">                                DateTimeUtils.iso8601FromDate(new Date(0)),</span>
+                                followedSitesTagSlug,
+<span class="nc" id="L258">                                Integer.toString(ReaderTagType.DEFAULT.toInt())</span>
+                        }
+                );
+<span class="nc" id="L261">                currentVersion++;</span>
+            case 151:
+<span class="nc" id="L263">                db.execSQL(&quot;ALTER TABLE tbl_comments ADD short_url TEXT;&quot;);</span>
+<span class="nc" id="L264">                currentVersion++;</span>
+            case 152:
+<span class="nc" id="L266">                db.execSQL(&quot;ALTER TABLE tbl_comments ADD author_email TEXT;&quot;);</span>
+<span class="nc" id="L267">                currentVersion++;</span>
+        }
+<span class="nc bnc" id="L269" title="All 2 branches missed.">        if (currentVersion != newVersion) {</span>
+<span class="nc" id="L270">            throw new RuntimeException(</span>
+                    &quot;Migration from version &quot; + oldVersion + &quot; to version &quot; + newVersion + &quot; FAILED. &quot;);
+        }
+<span class="nc" id="L273">        AppLog.i(T.READER,</span>
+                &quot;Upgrading database from version &quot; + oldVersion + &quot; to version &quot; + newVersion + &quot; SUCCEEDED&quot;);
+<span class="nc" id="L275">    }</span>
+
+    @Override
+    public void onDowngrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        // IMPORTANT: do NOT call super() here - doing so throws a SQLiteException
+<span class="nc" id="L280">        AppLog.w(T.READER, &quot;Downgrading database from version &quot; + oldVersion + &quot; to version &quot; + newVersion);</span>
+<span class="nc" id="L281">        reset(db);</span>
+<span class="nc" id="L282">    }</span>
+
+    private void createAllTables(SQLiteDatabase db) {
+<span class="nc" id="L285">        ReaderCommentTable.createTables(db);</span>
+<span class="nc" id="L286">        ReaderLikeTable.createTables(db);</span>
+<span class="nc" id="L287">        ReaderPostTable.createTables(db);</span>
+<span class="nc" id="L288">        ReaderTagTable.createTables(db);</span>
+<span class="nc" id="L289">        ReaderUserTable.createTables(db);</span>
+<span class="nc" id="L290">        ReaderThumbnailTable.createTables(db);</span>
+<span class="nc" id="L291">        ReaderBlogTable.createTables(db);</span>
+<span class="nc" id="L292">        ReaderSearchTable.createTables(db);</span>
+<span class="nc" id="L293">        ReaderDiscoverCardsTable.INSTANCE.createTable(db);</span>
+<span class="nc" id="L294">    }</span>
+
+    private void dropAllTables(SQLiteDatabase db) {
+<span class="nc" id="L297">        ReaderCommentTable.dropTables(db);</span>
+<span class="nc" id="L298">        ReaderLikeTable.dropTables(db);</span>
+<span class="nc" id="L299">        ReaderPostTable.dropTables(db);</span>
+<span class="nc" id="L300">        ReaderTagTable.dropTables(db);</span>
+<span class="nc" id="L301">        ReaderUserTable.dropTables(db);</span>
+<span class="nc" id="L302">        ReaderThumbnailTable.dropTables(db);</span>
+<span class="nc" id="L303">        ReaderBlogTable.dropTables(db);</span>
+<span class="nc" id="L304">        ReaderSearchTable.dropTables(db);</span>
+<span class="nc" id="L305">        ReaderDiscoverCardsTable.INSTANCE.dropTables(db);</span>
+<span class="nc" id="L306">    }</span>
+
+    /*
+     * drop &amp; recreate all tables (essentially clears the db of all data)
+     */
+    private void reset(SQLiteDatabase db) {
+<span class="nc" id="L312">        db.beginTransaction();</span>
+        try {
+<span class="nc" id="L314">            dropAllTables(db);</span>
+<span class="nc" id="L315">            createAllTables(db);</span>
+<span class="nc" id="L316">            db.setTransactionSuccessful();</span>
+        } finally {
+<span class="nc" id="L318">            db.endTransaction();</span>
+        }
+<span class="nc" id="L320">    }</span>
+
+    /*
+     * purge older/unattached data - use purgeAsync() to do this in the background
+     */
+    private static void purge() {
+<span class="nc" id="L326">        SQLiteDatabase db = getWritableDb();</span>
+<span class="nc" id="L327">        db.beginTransaction();</span>
+        try {
+<span class="nc" id="L329">            int numPostsDeleted = ReaderPostTable.purge(db);</span>
+
+            // don't bother purging other data unless posts were purged
+<span class="nc bnc" id="L332" title="All 2 branches missed.">            if (numPostsDeleted &gt; 0) {</span>
+<span class="nc" id="L333">                AppLog.i(T.READER, String.format(Locale.ENGLISH, &quot;%d total posts purged&quot;, numPostsDeleted));</span>
+
+                // purge unattached comments
+<span class="nc" id="L336">                int numCommentsDeleted = ReaderCommentTable.purge(db);</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">                if (numCommentsDeleted &gt; 0) {</span>
+<span class="nc" id="L338">                    AppLog.i(T.READER, String.format(Locale.ENGLISH, &quot;%d comments purged&quot;, numCommentsDeleted));</span>
+                }
+
+                // purge unattached likes
+<span class="nc" id="L342">                int numLikesDeleted = ReaderLikeTable.purge(db);</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">                if (numLikesDeleted &gt; 0) {</span>
+<span class="nc" id="L344">                    AppLog.i(T.READER, String.format(Locale.ENGLISH, &quot;%d likes purged&quot;, numLikesDeleted));</span>
+                }
+
+                // purge unattached thumbnails
+<span class="nc" id="L348">                int numThumbsPurged = ReaderThumbnailTable.purge(db);</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">                if (numThumbsPurged &gt; 0) {</span>
+<span class="nc" id="L350">                    AppLog.i(T.READER, String.format(Locale.ENGLISH, &quot;%d thumbnails purged&quot;, numThumbsPurged));</span>
+                }
+            }
+<span class="nc" id="L353">            db.setTransactionSuccessful();</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">            if (numPostsDeleted &gt; 0) {</span>
+<span class="nc" id="L355">                EventBus.getDefault().post(ReaderPostTableActionEnded.INSTANCE);</span>
+            }
+        } finally {
+<span class="nc" id="L358">            db.endTransaction();</span>
+        }
+<span class="nc" id="L360">    }</span>
+
+    public static void purgeAsync() {
+<span class="nc" id="L363">        new Thread() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L366">                purge();</span>
+<span class="nc" id="L367">            }</span>
+<span class="nc" id="L368">        }.start();</span>
+<span class="nc" id="L369">    }</span>
+
+    /*
+     * used during development to copy database to external storage so we can access it via DDMS
+     */
+    private void copyDatabase(SQLiteDatabase db) {
+<span class="nc" id="L375">        String copyFrom = db.getPath();</span>
+<span class="nc" id="L376">        String copyTo = WordPress.getContext().getExternalFilesDir(null).getAbsolutePath() + &quot;/&quot; + DB_NAME;</span>
+
+        try {
+<span class="nc" id="L379">            InputStream input = new FileInputStream(copyFrom);</span>
+<span class="nc" id="L380">            OutputStream output = new FileOutputStream(copyTo);</span>
+
+<span class="nc" id="L382">            byte[] buffer = new byte[1024];</span>
+            int length;
+<span class="nc bnc" id="L384" title="All 2 branches missed.">            while ((length = input.read(buffer)) &gt; 0) {</span>
+<span class="nc" id="L385">                output.write(buffer, 0, length);</span>
+            }
+
+<span class="nc" id="L388">            output.flush();</span>
+<span class="nc" id="L389">            output.close();</span>
+<span class="nc" id="L390">            input.close();</span>
+<span class="nc" id="L391">        } catch (IOException e) {</span>
+<span class="nc" id="L392">            AppLog.e(T.DB, &quot;failed to copy reader database&quot;, e);</span>
+<span class="nc" id="L393">        }</span>
+<span class="nc" id="L394">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

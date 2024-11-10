@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ModalLayoutPickerViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.mlp</a> &gt; <span class="el_source">ModalLayoutPickerViewModel.kt</span></div><h1>ModalLayoutPickerViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.viewmodel.mlp
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.BuildConfig
+import org.wordpress.android.R.string
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.SiteActionBuilder
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.fluxc.store.SiteStore.FetchBlockLayoutsPayload
+import org.wordpress.android.fluxc.store.SiteStore.OnBlockLayoutsFetched
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.layoutpicker.LayoutModel
+import org.wordpress.android.ui.layoutpicker.LayoutPickerUiState.Content
+import org.wordpress.android.ui.layoutpicker.LayoutPickerUiState.Error
+import org.wordpress.android.ui.layoutpicker.LayoutPickerUiState.Loading
+import org.wordpress.android.ui.layoutpicker.LayoutPickerViewModel
+import org.wordpress.android.ui.mlp.ModalLayoutPickerDimensionProvider
+import org.wordpress.android.ui.layoutpicker.toLayoutCategories
+import org.wordpress.android.ui.layoutpicker.toLayoutModels
+import org.wordpress.android.ui.mlp.ModalLayoutPickerTracker
+import org.wordpress.android.ui.mlp.SupportedBlocksProvider
+import org.wordpress.android.ui.mysite.SelectedSiteRepository
+import org.wordpress.android.util.DisplayUtilsWrapper
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import javax.inject.Inject
+import javax.inject.Named
+
+/**
+ * Implements the Modal Layout Picker view model
+ */
+<span class="nc" id="L40">class ModalLayoutPickerViewModel @Inject constructor(</span>
+<span class="nc" id="L41">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L42">    private val siteStore: SiteStore,</span>
+<span class="nc" id="L43">    private val selectedSiteRepository: SelectedSiteRepository,</span>
+<span class="nc" id="L44">    private val supportedBlocksProvider: SupportedBlocksProvider,</span>
+<span class="nc" id="L45">    private val thumbDimensionProvider: ModalLayoutPickerDimensionProvider,</span>
+<span class="nc" id="L46">    private val displayUtilsWrapper: DisplayUtilsWrapper,</span>
+<span class="nc" id="L47">    override val networkUtils: NetworkUtilsWrapper,</span>
+<span class="nc" id="L48">    private val analyticsTracker: ModalLayoutPickerTracker,</span>
+<span class="nc" id="L49">    @Named(BG_THREAD) override val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L50">    @Named(UI_THREAD) override val mainDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L51">) : LayoutPickerViewModel(mainDispatcher, bgDispatcher, networkUtils, analyticsTracker) {</span>
+    /**
+     * Tracks the Modal Layout Picker visibility state
+     */
+<span class="nc" id="L55">    private val _isModalLayoutPickerShowing = MutableLiveData&lt;Event&lt;Boolean&gt;&gt;()</span>
+<span class="nc" id="L56">    val isModalLayoutPickerShowing: LiveData&lt;Event&lt;Boolean&gt;&gt; = _isModalLayoutPickerShowing</span>
+
+    /**
+     * Create new page event
+     */
+<span class="nc" id="L61">    private val _onCreateNewPageRequested = SingleLiveEvent&lt;PageRequest.Create&gt;()</span>
+<span class="nc" id="L62">    val onCreateNewPageRequested: LiveData&lt;PageRequest.Create&gt; = _onCreateNewPageRequested</span>
+
+<span class="nc" id="L64">    private val site: SiteModel? by lazy {</span>
+<span class="nc" id="L65">        siteStore.getSiteByLocalId(selectedSiteRepository.getSelectedSiteLocalId(true))</span>
+    }
+
+<span class="nc" id="L68">    override val useCachedData: Boolean = true</span>
+<span class="nc" id="L69">    override val shouldUseMobileThumbnail = false</span>
+
+    override val selectedLayout: LayoutModel?
+<span class="nc bnc" id="L72" title="All 4 branches missed.">        get() = (uiState.value as? Content)?.let { state -&gt;</span>
+<span class="nc bnc" id="L73" title="All 4 branches missed.">            state.selectedLayoutSlug?.let { slug -&gt;</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">                site?.let { site -&gt;</span>
+<span class="nc" id="L75">                    siteStore.getBlockLayout(site, slug)</span>
+                }
+<span class="nc" id="L77">            }?.let { LayoutModel(it) }</span>
+<span class="nc" id="L78">        }</span>
+
+<span class="nc" id="L80">    sealed class PageRequest(val template: String?) {</span>
+<span class="nc" id="L81">        open class Create(template: String?, val title: String) : PageRequest(template)</span>
+<span class="nc" id="L82">        object Blank : Create(null, &quot;&quot;)</span>
+<span class="nc" id="L83">        class Preview(template: String?, val content: String, val site: SiteModel, val demoUrl: String?) : PageRequest(</span>
+<span class="nc" id="L84">                template</span>
+        )
+    }
+
+<span class="nc" id="L88">    init {</span>
+<span class="nc" id="L89">        dispatcher.register(this)</span>
+<span class="nc" id="L90">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L93">        dispatcher.unregister(this)</span>
+<span class="nc" id="L94">        super.onCleared()</span>
+<span class="nc" id="L95">    }</span>
+
+    override fun fetchLayouts(preferCache: Boolean) {
+<span class="nc" id="L98">        val selectedSite = site</span>
+<span class="nc bnc" id="L99" title="All 4 branches missed.">        if (!networkUtils.isNetworkAvailable() || selectedSite == null) {</span>
+<span class="nc" id="L100">            setErrorState()</span>
+<span class="nc" id="L101">            return</span>
+        }
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        if (!preferCache) {</span>
+<span class="nc" id="L104">            updateUiState(Loading)</span>
+        }
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        launch {</span>
+<span class="nc" id="L107">            val payload = FetchBlockLayoutsPayload(</span>
+<span class="nc" id="L108">                    selectedSite,</span>
+<span class="nc" id="L109">                    supportedBlocksProvider.fromAssets().supported,</span>
+<span class="nc" id="L110">                    thumbDimensionProvider.previewWidth.toFloat(),</span>
+<span class="nc" id="L111">                    thumbDimensionProvider.previewHeight.toFloat(),</span>
+<span class="nc" id="L112">                    thumbDimensionProvider.scale.toFloat(),</span>
+<span class="nc" id="L113">                    BuildConfig.DEBUG,</span>
+<span class="nc" id="L114">                    preferCache</span>
+            )
+<span class="nc" id="L116">            dispatcher.dispatch(SiteActionBuilder.newFetchBlockLayoutsAction(payload))</span>
+<span class="nc" id="L117">        }</span>
+<span class="nc" id="L118">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onBlockLayoutsFetched(event: OnBlockLayoutsFetched) {
+<span class="nc bnc" id="L122" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L123">            setErrorState()</span>
+        } else {
+<span class="nc" id="L125">            handleResponse(</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">                    (event.layouts ?: listOf()).toLayoutModels(),</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">                    (event.categories ?: listOf()).toLayoutCategories()</span>
+            )
+        }
+<span class="nc" id="L130">    }</span>
+
+    private fun setErrorState() {
+<span class="nc bnc" id="L133" title="All 2 branches missed.">        if (networkUtils.isNetworkAvailable()) {</span>
+<span class="nc" id="L134">            updateUiState(Error(string.mlp_error_title, string.mlp_error_subtitle))</span>
+        } else {
+<span class="nc" id="L136">            updateUiState(Error(string.mlp_network_error_title, string.mlp_network_error_subtitle))</span>
+        }
+<span class="nc" id="L138">    }</span>
+
+    /**
+     * Checks if the Modal Layout Picker can be shown
+     * at this point the only requirement is to have the block editor enabled
+     * @return true if the Modal Layout Picker can be shown
+     */
+<span class="nc" id="L145">    fun canShowModalLayoutPicker() = SiteUtils.isBlockEditorDefaultForNewPost(site)</span>
+
+    /**
+     * Triggers the create page flow and shows the MLP
+     */
+    fun createPageFlowTriggered() {
+<span class="nc" id="L151">        _isModalLayoutPickerShowing.value = Event(true)</span>
+<span class="nc" id="L152">        initializePreviewMode(displayUtilsWrapper.isTablet())</span>
+<span class="nc" id="L153">        fetchLayouts()</span>
+<span class="nc" id="L154">    }</span>
+
+    /**
+     * Dismisses the MLP
+     */
+    fun dismiss() {
+<span class="nc" id="L160">        _isModalLayoutPickerShowing.postValue(Event(false))</span>
+<span class="nc" id="L161">        updateUiState(Content())</span>
+<span class="nc" id="L162">    }</span>
+
+    /**
+     * Create page tapped
+     */
+    fun onCreatePageClicked() {
+<span class="nc" id="L168">        createPage()</span>
+<span class="nc" id="L169">        dismiss()</span>
+<span class="nc" id="L170">    }</span>
+
+    override fun onPreviewChooseTapped() {
+<span class="nc" id="L173">        super.onPreviewChooseTapped()</span>
+<span class="nc" id="L174">        onCreatePageClicked()</span>
+<span class="nc" id="L175">    }</span>
+
+    /**
+     * Triggers the creation of a new page
+     */
+    private fun createPage() {
+<span class="nc bnc" id="L181" title="All 2 branches missed.">        selectedLayout?.let { layout -&gt;</span>
+<span class="nc" id="L182">            _onCreateNewPageRequested.value = PageRequest.Create(layout.slug, layout.title)</span>
+<span class="nc" id="L183">            return</span>
+        }
+<span class="nc" id="L185">        _onCreateNewPageRequested.value = PageRequest.Blank</span>
+<span class="nc" id="L186">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

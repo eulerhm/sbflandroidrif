@@ -1,0 +1,714 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostUploadHandler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.uploads</a> &gt; <span class="el_source">PostUploadHandler.java</span></div><h1>PostUploadHandler.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.uploads;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.AsyncTask;
+import android.provider.MediaStore.Images;
+import android.provider.MediaStore.Video;
+import android.text.TextUtils;
+import android.util.SparseArray;
+
+import androidx.annotation.NonNull;
+
+import org.greenrobot.eventbus.EventBus;
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.jetbrains.annotations.NotNull;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.MediaActionBuilder;
+import org.wordpress.android.fluxc.generated.PostActionBuilder;
+import org.wordpress.android.fluxc.model.MediaModel;
+import org.wordpress.android.fluxc.model.MediaModel.MediaUploadState;
+import org.wordpress.android.fluxc.model.PostImmutableModel;
+import org.wordpress.android.fluxc.model.PostModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.model.post.PostStatus;
+import org.wordpress.android.fluxc.store.MediaStore;
+import org.wordpress.android.fluxc.store.MediaStore.UploadMediaPayload;
+import org.wordpress.android.fluxc.store.PostStore;
+import org.wordpress.android.fluxc.store.PostStore.OnPostUploaded;
+import org.wordpress.android.fluxc.store.PostStore.RemotePostPayload;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.ui.posts.PostUtils;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.ui.uploads.AutoSavePostIfNotDraftResult.FetchPostStatusFailed;
+import org.wordpress.android.ui.uploads.AutoSavePostIfNotDraftResult.PostAutoSaveFailed;
+import org.wordpress.android.ui.uploads.AutoSavePostIfNotDraftResult.PostAutoSaved;
+import org.wordpress.android.ui.uploads.AutoSavePostIfNotDraftResult.PostIsDraftInRemote;
+import org.wordpress.android.ui.uploads.PostEvents.PostUploadStarted;
+import org.wordpress.android.ui.utils.UiHelpers;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.FluxCUtils;
+import org.wordpress.android.util.MediaUtils;
+import org.wordpress.android.util.SiteUtils;
+import org.wordpress.android.util.SqlUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+import org.wordpress.android.util.helpers.MediaFile;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.inject.Inject;
+
+public class PostUploadHandler implements UploadHandler&lt;PostModel&gt;, OnAutoSavePostIfNotDraftCallback {
+<span class="nc" id="L69">    private static ArrayList&lt;PostModel&gt; sQueuedPostsList = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L70">    private static Set&lt;Integer&gt; sFirstPublishPosts = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L71">    private static PostModel sCurrentUploadingPost = null;</span>
+    private static Map&lt;String, Object&gt; sCurrentUploadingPostAnalyticsProperties;
+
+    private PostUploadNotifier mPostUploadNotifier;
+<span class="nc" id="L75">    private UploadPostTask mCurrentTask = null;</span>
+
+<span class="nc" id="L77">    private SparseArray&lt;CountDownLatch&gt; mMediaLatchMap = new SparseArray&lt;&gt;();</span>
+
+    @Inject Dispatcher mDispatcher;
+    @Inject SiteStore mSiteStore;
+    @Inject PostStore mPostStore;
+    @Inject MediaStore mMediaStore;
+    @Inject UiHelpers mUiHelpers;
+    @Inject UploadActionUseCase mUploadActionUseCase;
+    @Inject AutoSavePostIfNotDraftUseCase mAutoSavePostIfNotDraftUseCase;
+    @Inject PostMediaHandler mPostMediaHandler;
+
+<span class="nc" id="L88">    PostUploadHandler(PostUploadNotifier postUploadNotifier) {</span>
+<span class="nc" id="L89">        ((WordPress) WordPress.getContext().getApplicationContext()).component().inject(this);</span>
+<span class="nc" id="L90">        AppLog.i(T.POSTS, &quot;PostUploadHandler &gt; Created&quot;);</span>
+<span class="nc" id="L91">        mDispatcher.register(this);</span>
+<span class="nc" id="L92">        mPostUploadNotifier = postUploadNotifier;</span>
+<span class="nc" id="L93">    }</span>
+
+    void unregister() {
+<span class="nc" id="L96">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L97">    }</span>
+
+    @Override
+    public boolean hasInProgressUploads() {
+<span class="nc bnc" id="L101" title="All 4 branches missed.">        return mCurrentTask != null || !sQueuedPostsList.isEmpty();</span>
+    }
+
+    @Override
+    public void cancelInProgressUploads() {
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        if (mCurrentTask != null) {</span>
+<span class="nc" id="L107">            AppLog.i(T.POSTS, &quot;PostUploadHandler &gt; Cancelling current upload task&quot;);</span>
+<span class="nc" id="L108">            mCurrentTask.cancel(true);</span>
+        }
+<span class="nc" id="L110">    }</span>
+
+    @Override
+    public void upload(@NonNull PostModel post) {
+<span class="nc" id="L114">        synchronized (sQueuedPostsList) {</span>
+            // first check whether there was an old version of this Post still enqueued waiting
+            // for being uploaded
+<span class="nc bnc" id="L117" title="All 2 branches missed.">            for (PostModel queuedPost : sQueuedPostsList) {</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">                if (queuedPost.getId() == post.getId()) {</span>
+                    // we found an older version, so let's remove it and replace it with the newest copy
+<span class="nc" id="L120">                    sQueuedPostsList.remove(queuedPost);</span>
+<span class="nc" id="L121">                    break;</span>
+                }
+<span class="nc" id="L123">            }</span>
+<span class="nc" id="L124">            sQueuedPostsList.add(post);</span>
+<span class="nc" id="L125">        }</span>
+<span class="nc" id="L126">        uploadNextPost();</span>
+<span class="nc" id="L127">    }</span>
+
+    void registerPostForAnalyticsTracking(int postId) {
+<span class="nc" id="L130">        synchronized (sFirstPublishPosts) {</span>
+<span class="nc" id="L131">            sFirstPublishPosts.add(postId);</span>
+<span class="nc" id="L132">        }</span>
+<span class="nc" id="L133">    }</span>
+
+    void unregisterPostForAnalyticsTracking(int postId) {
+<span class="nc" id="L136">        synchronized (sFirstPublishPosts) {</span>
+<span class="nc" id="L137">            sFirstPublishPosts.remove(postId);</span>
+<span class="nc" id="L138">        }</span>
+<span class="nc" id="L139">    }</span>
+
+    static boolean isPostUploadingOrQueued(PostImmutableModel post) {
+<span class="nc bnc" id="L142" title="All 6 branches missed.">        return post != null &amp;&amp; (isPostUploading(post) || isPostQueued(post));</span>
+    }
+
+    static boolean isPostQueued(PostImmutableModel post) {
+<span class="nc bnc" id="L146" title="All 2 branches missed.">        if (post == null) {</span>
+<span class="nc" id="L147">            return false;</span>
+        }
+
+        // Check the list of posts waiting to be uploaded
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        if (sQueuedPostsList.size() &gt; 0) {</span>
+<span class="nc" id="L152">            synchronized (sQueuedPostsList) {</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">                for (PostModel queuedPost : sQueuedPostsList) {</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">                    if (queuedPost.getId() == post.getId()) {</span>
+<span class="nc" id="L155">                        return true;</span>
+                    }
+<span class="nc" id="L157">                }</span>
+<span class="nc" id="L158">            }</span>
+        }
+<span class="nc" id="L160">        return false;</span>
+    }
+
+    static boolean isPostUploading(PostImmutableModel post) {
+<span class="nc bnc" id="L164" title="All 6 branches missed.">        return post != null &amp;&amp; sCurrentUploadingPost != null &amp;&amp; sCurrentUploadingPost.getId() == post.getId();</span>
+    }
+
+    static boolean hasPendingOrInProgressPostUploads() {
+<span class="nc bnc" id="L168" title="All 4 branches missed.">        return sCurrentUploadingPost != null || !sQueuedPostsList.isEmpty();</span>
+    }
+
+    private void uploadNextPost() {
+<span class="nc" id="L172">        synchronized (sQueuedPostsList) {</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">            if (mCurrentTask == null) { // make sure nothing is running</span>
+<span class="nc" id="L174">                sCurrentUploadingPost = null;</span>
+<span class="nc" id="L175">                sCurrentUploadingPostAnalyticsProperties = null;</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">                if (sQueuedPostsList.size() &gt; 0) {</span>
+<span class="nc" id="L177">                    sCurrentUploadingPost = sQueuedPostsList.remove(0);</span>
+<span class="nc" id="L178">                    mCurrentTask = new UploadPostTask();</span>
+<span class="nc" id="L179">                    mCurrentTask.executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, sCurrentUploadingPost);</span>
+                } else {
+<span class="nc" id="L181">                    AppLog.i(T.POSTS, &quot;PostUploadHandler &gt; Completed&quot;);</span>
+                }
+            }
+<span class="nc" id="L184">        }</span>
+<span class="nc" id="L185">    }</span>
+
+    private void finishUpload() {
+<span class="nc" id="L188">        synchronized (sQueuedPostsList) {</span>
+<span class="nc" id="L189">            mCurrentTask = null;</span>
+<span class="nc" id="L190">            sCurrentUploadingPost = null;</span>
+<span class="nc" id="L191">            sCurrentUploadingPostAnalyticsProperties = null;</span>
+<span class="nc" id="L192">        }</span>
+<span class="nc" id="L193">        uploadNextPost();</span>
+<span class="nc" id="L194">    }</span>
+
+<span class="nc" id="L196">    private enum UploadPostTaskResult {</span>
+<span class="nc" id="L197">        PUSH_POST_DISPATCHED, ERROR, NOTHING_TO_UPLOAD, AUTO_SAVE_OR_UPDATE_DRAFT</span>
+    }
+
+    @SuppressLint(&quot;StaticFieldLeak&quot;)
+<span class="nc" id="L201">    private class UploadPostTask extends AsyncTask&lt;PostModel, Boolean, UploadPostTaskResult&gt; {</span>
+        private Context mContext;
+
+        private PostModel mPost;
+        private SiteModel mSite;
+
+<span class="nc" id="L207">        private String mErrorMessage = &quot;&quot;;</span>
+<span class="nc" id="L208">        private boolean mIsMediaError = false;</span>
+<span class="nc" id="L209">        private long mFeaturedImageID = -1;</span>
+
+        // Used for analytics
+        private boolean mHasImage, mHasVideo, mHasCategory;
+
+        @Override
+        protected void onPostExecute(UploadPostTaskResult result) {
+<span class="nc bnc" id="L216" title="All 3 branches missed.">            switch (result) {</span>
+                case ERROR:
+<span class="nc" id="L218">                    mPostUploadNotifier.incrementUploadedPostCountFromForegroundNotification(mPost);</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">                    if (mSite != null) {</span>
+<span class="nc" id="L220">                        mPostUploadNotifier.updateNotificationErrorForPost(mPost, mSite, mErrorMessage, 0);</span>
+                    } else {
+<span class="nc" id="L222">                        AppLog.e(T.POSTS, &quot;Site cannot be null&quot;);</span>
+                    }
+<span class="nc" id="L224">                    finishUpload();</span>
+<span class="nc" id="L225">                    break;</span>
+                case NOTHING_TO_UPLOAD:
+                    // we need to force increment the uploaded count as we know the post was enqueued twice. If we
+                    // didn't force incremented it, the `PostUploadNotifier.isPostAlreadyInPostCount()` would return
+                    // true and we'd end up with a dangling upload notification.
+<span class="nc" id="L230">                    mPostUploadNotifier.incrementUploadedPostCountFromForegroundNotification(mPost, true);</span>
+<span class="nc" id="L231">                    finishUpload();</span>
+<span class="nc" id="L232">                    break;</span>
+                case PUSH_POST_DISPATCHED:
+                    // will be handled in OnPostChanged
+                    break;
+            }
+<span class="nc" id="L237">        }</span>
+
+        @Override
+        protected UploadPostTaskResult doInBackground(PostModel... posts) {
+<span class="nc" id="L241">            mContext = WordPress.getContext();</span>
+<span class="nc" id="L242">            mPost = posts[0];</span>
+
+<span class="nc" id="L244">            mSite = mSiteStore.getSiteByLocalId(mPost.getLocalSiteId());</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">            if (mSite == null) {</span>
+<span class="nc" id="L246">                mErrorMessage = mContext.getString(R.string.blog_not_found);</span>
+<span class="nc" id="L247">                return UploadPostTaskResult.ERROR;</span>
+            }
+
+<span class="nc bnc" id="L250" title="All 2 branches missed.">            if (TextUtils.isEmpty(mPost.getStatus())) {</span>
+<span class="nc" id="L251">                mPost.setStatus(PostStatus.PUBLISHED.toString());</span>
+            }
+
+<span class="nc" id="L254">            String content = mPost.getContent();</span>
+            // Get rid of ZERO WIDTH SPACE character that the Visual editor can insert
+            // at the beginning of the content.
+            // http://www.fileformat.info/info/unicode/char/200b/index.htm
+            // See: https://github.com/wordpress-mobile/WordPress-Android/issues/5009
+<span class="nc bnc" id="L259" title="All 4 branches missed.">            if (content.length() &gt; 0 &amp;&amp; content.charAt(0) == '\u200B') {</span>
+<span class="nc" id="L260">                content = content.substring(1, content.length());</span>
+            }
+<span class="nc" id="L262">            content = processPostMedia(content);</span>
+<span class="nc" id="L263">            mPost.setContent(content);</span>
+
+            // If media file upload failed, let's stop here and prompt the user
+<span class="nc bnc" id="L266" title="All 2 branches missed.">            if (mIsMediaError) {</span>
+<span class="nc" id="L267">                return UploadPostTaskResult.ERROR;</span>
+            }
+
+<span class="nc bnc" id="L270" title="All 2 branches missed.">            if (mPost.getCategoryIdList().size() &gt; 0) {</span>
+<span class="nc" id="L271">                mHasCategory = true;</span>
+            }
+
+            // Track analytics only if the post is newly published
+<span class="nc bnc" id="L275" title="All 2 branches missed.">            if (sFirstPublishPosts.contains(mPost.getId())) {</span>
+<span class="nc" id="L276">                prepareUploadAnalytics(mPost.getContent());</span>
+            }
+
+<span class="nc" id="L279">            EventBus.getDefault().post(new PostUploadStarted(mPost));</span>
+
+<span class="nc" id="L281">            RemotePostPayload payload = new RemotePostPayload(mPost, mSite);</span>
+<span class="nc" id="L282">            payload.isFirstTimePublish = sFirstPublishPosts.contains(mPost.getId());</span>
+
+<span class="nc bnc" id="L284" title="All 5 branches missed.">            switch (mUploadActionUseCase.getUploadAction(mPost)) {</span>
+                case UPLOAD:
+<span class="nc" id="L286">                    AppLog.d(T.POSTS, &quot;PostUploadHandler - UPLOAD. Post: &quot; + mPost.getTitle());</span>
+<span class="nc" id="L287">                    mDispatcher.dispatch(PostActionBuilder.newPushPostAction(payload));</span>
+<span class="nc" id="L288">                    break;</span>
+                case UPLOAD_AS_DRAFT:
+<span class="nc" id="L290">                    mPost.setStatus(PostStatus.DRAFT.toString());</span>
+<span class="nc" id="L291">                    AppLog.d(T.POSTS, &quot;PostUploadHandler - UPLOAD_AS_DRAFT. Post: &quot; + mPost.getTitle());</span>
+<span class="nc" id="L292">                    mDispatcher.dispatch(PostActionBuilder.newPushPostAction(payload));</span>
+<span class="nc" id="L293">                    break;</span>
+                case REMOTE_AUTO_SAVE:
+<span class="nc" id="L295">                    AppLog.d(T.POSTS, &quot;PostUploadHandler - REMOTE_AUTO_SAVE. Post: &quot; + mPost.getTitle());</span>
+<span class="nc" id="L296">                    mAutoSavePostIfNotDraftUseCase.autoSavePostOrUpdateDraft(payload, PostUploadHandler.this);</span>
+<span class="nc" id="L297">                    return UploadPostTaskResult.AUTO_SAVE_OR_UPDATE_DRAFT;</span>
+                case DO_NOTHING:
+<span class="nc" id="L299">                    AppLog.d(T.POSTS, &quot;PostUploadHandler - DO_NOTHING. Post: &quot; + mPost.getTitle());</span>
+                    // A single post might be enqueued twice for upload. It might cause some side-effects when the
+                    // post is a local draft.
+                    // The first upload request pushes the post to the server and sets `isLocalDraft` to `false`.
+                    // The second request would have invoked `Remote_auto_save` on a post which didn't contain any local
+                    // changes - they were uploaded during the first upload request.
+                    // This branch takes care of this situations and simply ignores the second request.
+<span class="nc" id="L306">                    return UploadPostTaskResult.NOTHING_TO_UPLOAD;</span>
+            }
+<span class="nc" id="L308">            return UploadPostTaskResult.PUSH_POST_DISPATCHED;</span>
+        }
+
+        private boolean hasGallery() {
+<span class="nc" id="L312">            Pattern galleryTester = Pattern.compile(&quot;\\[.*?gallery.*?\\]&quot;);</span>
+<span class="nc" id="L313">            Matcher matcher = galleryTester.matcher(mPost.getContent());</span>
+<span class="nc" id="L314">            return matcher.find();</span>
+        }
+
+        private void prepareUploadAnalytics(String postContent) {
+            // Other methods (like 'uploadNextPost') synchronize over `sQueuedPostsList` before setting
+            // `sCurrentUploadingPostAnalyticsProperties` to null. Make sure racing conditions are avoid here
+            // by synchronizing over sQueuedPostsList.
+            // See https://github.com/wordpress-mobile/WordPress-Android/issues/7990
+<span class="nc" id="L322">            synchronized (sQueuedPostsList) {</span>
+                // Calculate the words count
+<span class="nc" id="L324">                sCurrentUploadingPostAnalyticsProperties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L325">                sCurrentUploadingPostAnalyticsProperties</span>
+<span class="nc" id="L326">                        .put(&quot;word_count&quot;, AnalyticsUtils.getWordCount(mPost.getContent()));</span>
+                // Add the editor source
+<span class="nc" id="L328">                int siteLocalId = mPost.getLocalSiteId();</span>
+<span class="nc bnc" id="L329" title="All 2 branches missed.">                if (siteLocalId != -1) {</span>
+                    // Site found, use it
+<span class="nc" id="L331">                    SiteModel selectedSite = mSiteStore.getSiteByLocalId(siteLocalId);</span>
+                    // If saved site exist, then add info
+<span class="nc bnc" id="L333" title="All 2 branches missed.">                    if (selectedSite != null) {</span>
+<span class="nc" id="L334">                        sCurrentUploadingPostAnalyticsProperties.put(&quot;editor_source&quot;,</span>
+                                // making sure to reuse the same logic for both showing Gutenberg and tracking.
+                                // Note that mIsNewPost is not available as a flag-logic per se outside of
+                                // EditPostActivity, but the check will pass anyway as long as Gutenberg is enabled
+                                // and the PostModel contains Gutenberg blocks.
+                                // As a proxy to mIsNewPost, we're using postModel.isLocalDraft(). The choice is
+                                // loosely made knowing the other check (&quot;contains blocks&quot;) is in place.
+                                // NOTE: added now first check if this post contains a WP Story and mark it created
+                                // like so.
+<span class="nc bnc" id="L343" title="All 2 branches missed.">                                PostUtils.contentContainsWPStoryGutenbergBlocks(mPost.getContent())</span>
+<span class="nc" id="L344">                                        ? SiteUtils.WP_STORIES_CREATOR_NAME</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">                                        : (PostUtils.shouldShowGutenbergEditor(</span>
+<span class="nc" id="L346">                                                    mPost.isLocalDraft(), mPost.getContent(), selectedSite</span>
+<span class="nc" id="L347">                                                ) ? SiteUtils.GB_EDITOR_NAME : SiteUtils.AZTEC_EDITOR_NAME));</span>
+                    }
+                }
+<span class="nc bnc" id="L350" title="All 2 branches missed.">                if (hasGallery()) {</span>
+<span class="nc" id="L351">                    sCurrentUploadingPostAnalyticsProperties.put(&quot;with_galleries&quot;, true);</span>
+                }
+<span class="nc bnc" id="L353" title="All 2 branches missed.">                if (!mHasImage) {</span>
+                    // Check if there is a img tag in the post. Media added in any editor other than legacy.
+<span class="nc" id="L355">                    String imageTagsPattern = &quot;&lt;img[^&gt;]+src\\s*=\\s*[\&quot;]([^\&quot;]+)[\&quot;][^&gt;]*&gt;&quot;;</span>
+<span class="nc" id="L356">                    Pattern pattern = Pattern.compile(imageTagsPattern);</span>
+<span class="nc" id="L357">                    Matcher matcher = pattern.matcher(postContent);</span>
+<span class="nc" id="L358">                    mHasImage = matcher.find();</span>
+                }
+<span class="nc bnc" id="L360" title="All 2 branches missed.">                if (mHasImage) {</span>
+<span class="nc" id="L361">                    sCurrentUploadingPostAnalyticsProperties.put(&quot;with_photos&quot;, true);</span>
+                }
+<span class="nc bnc" id="L363" title="All 2 branches missed.">                if (!mHasVideo) {</span>
+                    // Check if there is a video tag in the post. Media added in any editor other than legacy.
+<span class="nc" id="L365">                    String videoTagsPattern =</span>
+                            &quot;&lt;video[^&gt;]+src\\s*=\\s*[\&quot;]([^\&quot;]+)[\&quot;][^&gt;]*&gt;|\\[wpvideo\\s+([^\\]]+)\\]&quot;;
+<span class="nc" id="L367">                    Pattern pattern = Pattern.compile(videoTagsPattern);</span>
+<span class="nc" id="L368">                    Matcher matcher = pattern.matcher(postContent);</span>
+<span class="nc" id="L369">                    mHasVideo = matcher.find();</span>
+                }
+<span class="nc bnc" id="L371" title="All 2 branches missed.">                if (mHasVideo) {</span>
+<span class="nc" id="L372">                    sCurrentUploadingPostAnalyticsProperties.put(&quot;with_videos&quot;, true);</span>
+                }
+<span class="nc bnc" id="L374" title="All 2 branches missed.">                if (mHasCategory) {</span>
+<span class="nc" id="L375">                    sCurrentUploadingPostAnalyticsProperties.put(&quot;with_categories&quot;, true);</span>
+                }
+<span class="nc bnc" id="L377" title="All 2 branches missed.">                if (!mPost.getTagNameList().isEmpty()) {</span>
+<span class="nc" id="L378">                    sCurrentUploadingPostAnalyticsProperties.put(&quot;with_tags&quot;, true);</span>
+                }
+<span class="nc" id="L380">            }</span>
+<span class="nc" id="L381">        }</span>
+
+        /**
+         * Finds media in post content, uploads them, and returns the HTML to insert in the post
+         */
+        private String processPostMedia(String postContent) {
+<span class="nc" id="L387">            String imageTagsPattern = &quot;&lt;img[^&gt;]+android-uri\\s*=\\s*['\&quot;]([^'\&quot;]+)['\&quot;][^&gt;]*&gt;&quot;;</span>
+<span class="nc" id="L388">            Pattern pattern = Pattern.compile(imageTagsPattern);</span>
+<span class="nc" id="L389">            Matcher matcher = pattern.matcher(postContent);</span>
+
+<span class="nc" id="L391">            int totalMediaItems = 0;</span>
+<span class="nc" id="L392">            List&lt;String&gt; imageTags = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">            while (matcher.find()) {</span>
+<span class="nc" id="L394">                imageTags.add(matcher.group());</span>
+<span class="nc" id="L395">                totalMediaItems++;</span>
+            }
+
+<span class="nc bnc" id="L398" title="All 2 branches missed.">            for (String tag : imageTags) {</span>
+<span class="nc" id="L399">                Pattern p = Pattern.compile(&quot;android-uri=\&quot;([^\&quot;]+)\&quot;&quot;);</span>
+<span class="nc" id="L400">                Matcher m = p.matcher(tag);</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">                if (m.find()) {</span>
+<span class="nc" id="L402">                    String imageUri = m.group(1);</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">                    if (!imageUri.equals(&quot;&quot;)) {</span>
+<span class="nc" id="L404">                        MediaModel mediaModel = mMediaStore.getMediaForPostWithPath(mPost, imageUri);</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                        if (mediaModel == null) {</span>
+<span class="nc" id="L406">                            mIsMediaError = true;</span>
+<span class="nc" id="L407">                            continue;</span>
+                        }
+<span class="nc" id="L409">                        MediaFile mediaFile = FluxCUtils.mediaFileFromMediaModel(mediaModel);</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">                        if (mediaFile != null) {</span>
+<span class="nc" id="L411">                            mPostUploadNotifier.addMediaInfoToForegroundNotification(mediaModel);</span>
+
+                            String mediaUploadOutput;
+<span class="nc bnc" id="L414" title="All 2 branches missed.">                            if (mediaFile.isVideo()) {</span>
+<span class="nc" id="L415">                                mHasVideo = true;</span>
+<span class="nc" id="L416">                                mediaUploadOutput = uploadVideo(mediaFile);</span>
+                            } else {
+<span class="nc" id="L418">                                mHasImage = true;</span>
+<span class="nc" id="L419">                                mediaUploadOutput = uploadImage(mediaFile);</span>
+                            }
+
+<span class="nc bnc" id="L422" title="All 2 branches missed.">                            if (mediaUploadOutput != null) {</span>
+<span class="nc" id="L423">                                postContent = postContent.replace(tag, mediaUploadOutput);</span>
+                            } else {
+<span class="nc" id="L425">                                postContent = postContent.replace(tag, &quot;&quot;);</span>
+<span class="nc" id="L426">                                mIsMediaError = true;</span>
+                            }
+                        }
+                    }
+                }
+<span class="nc" id="L431">            }</span>
+
+<span class="nc" id="L433">            return postContent;</span>
+        }
+
+        private String uploadImage(MediaFile mediaFile) {
+<span class="nc" id="L437">            AppLog.i(T.POSTS, &quot;PostUploadHandler &gt; UploadImage: &quot; + mediaFile.getFilePath());</span>
+
+<span class="nc bnc" id="L439" title="All 2 branches missed.">            if (mediaFile.getFilePath() == null) {</span>
+<span class="nc" id="L440">                return null;</span>
+            }
+
+<span class="nc" id="L443">            Uri imageUri = Uri.parse(mediaFile.getFilePath());</span>
+<span class="nc" id="L444">            File imageFile = null;</span>
+
+<span class="nc bnc" id="L446" title="All 2 branches missed.">            if (imageUri.toString().contains(&quot;content:&quot;)) {</span>
+<span class="nc" id="L447">                String[] projection = new String[]{Images.Media._ID, Images.Media.DATA, Images.Media.MIME_TYPE};</span>
+
+<span class="nc" id="L449">                Cursor cur = mContext.getContentResolver().query(imageUri, projection, null, null, null);</span>
+<span class="nc bnc" id="L450" title="All 4 branches missed.">                if (cur != null &amp;&amp; cur.moveToFirst()) {</span>
+<span class="nc" id="L451">                    int dataColumn = cur.getColumnIndex(Images.Media.DATA);</span>
+
+<span class="nc" id="L453">                    String thumbData = cur.getString(dataColumn);</span>
+<span class="nc" id="L454">                    imageFile = new File(thumbData);</span>
+<span class="nc" id="L455">                    mediaFile.setFilePath(imageFile.getPath());</span>
+                }
+<span class="nc" id="L457">                SqlUtils.closeCursor(cur);</span>
+<span class="nc" id="L458">            } else { // file is not in media library</span>
+<span class="nc" id="L459">                String path = imageUri.toString().replace(&quot;file://&quot;, &quot;&quot;);</span>
+<span class="nc" id="L460">                imageFile = new File(path);</span>
+<span class="nc" id="L461">                mediaFile.setFilePath(path);</span>
+            }
+
+            // check if the file exists
+<span class="nc bnc" id="L465" title="All 2 branches missed.">            if (imageFile == null) {</span>
+<span class="nc" id="L466">                mErrorMessage = mContext.getString(R.string.file_not_found);</span>
+<span class="nc" id="L467">                return null;</span>
+            }
+
+<span class="nc" id="L470">            String fullSizeUrl = uploadImageFile(mediaFile, mSite);</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">            if (fullSizeUrl == null) {</span>
+<span class="nc" id="L472">                mErrorMessage = mContext.getString(R.string.error_media_upload);</span>
+<span class="nc" id="L473">                return null;</span>
+            }
+
+<span class="nc" id="L476">            return mediaFile.getImageHtmlForUrls(fullSizeUrl, null, false);</span>
+        }
+
+        @SuppressLint(&quot;InlinedApi&quot;)
+        private String uploadVideo(MediaFile mediaFile) {
+            // create temp file for media upload
+<span class="nc" id="L482">            String tempFileName = &quot;wp-&quot; + System.currentTimeMillis();</span>
+            try {
+<span class="nc" id="L484">                mContext.openFileOutput(tempFileName, Context.MODE_PRIVATE);</span>
+<span class="nc" id="L485">            } catch (FileNotFoundException e) {</span>
+<span class="nc" id="L486">                mErrorMessage = mContext.getResources().getString(R.string.file_error_create);</span>
+<span class="nc" id="L487">                return null;</span>
+<span class="nc" id="L488">            }</span>
+
+<span class="nc bnc" id="L490" title="All 2 branches missed.">            if (mediaFile.getFilePath() == null) {</span>
+<span class="nc" id="L491">                mErrorMessage = mContext.getString(R.string.error_media_upload);</span>
+<span class="nc" id="L492">                return null;</span>
+            }
+
+<span class="nc" id="L495">            Uri videoUri = Uri.parse(mediaFile.getFilePath());</span>
+<span class="nc" id="L496">            File videoFile = null;</span>
+<span class="nc" id="L497">            String mimeType = &quot;&quot;, xRes = &quot;&quot;, yRes = &quot;&quot;;</span>
+
+<span class="nc bnc" id="L499" title="All 2 branches missed.">            if (videoUri.toString().contains(&quot;content:&quot;)) {</span>
+<span class="nc" id="L500">                String[] projection = new String[]{Video.Media._ID, Video.Media.DATA, Video.Media.MIME_TYPE,</span>
+                        Video.Media.RESOLUTION};
+<span class="nc" id="L502">                Cursor cur = mContext.getContentResolver().query(videoUri, projection, null, null, null);</span>
+
+<span class="nc bnc" id="L504" title="All 4 branches missed.">                if (cur != null &amp;&amp; cur.moveToFirst()) {</span>
+<span class="nc" id="L505">                    int dataColumn = cur.getColumnIndex(Video.Media.DATA);</span>
+<span class="nc" id="L506">                    int mimeTypeColumn = cur.getColumnIndex(Video.Media.MIME_TYPE);</span>
+<span class="nc" id="L507">                    int resolutionColumn = cur.getColumnIndex(Video.Media.RESOLUTION);</span>
+
+<span class="nc" id="L509">                    mediaFile = new MediaFile();</span>
+
+<span class="nc" id="L511">                    String thumbData = cur.getString(dataColumn);</span>
+<span class="nc" id="L512">                    mimeType = cur.getString(mimeTypeColumn);</span>
+
+<span class="nc" id="L514">                    videoFile = new File(thumbData);</span>
+<span class="nc" id="L515">                    mediaFile.setFilePath(videoFile.getPath());</span>
+<span class="nc" id="L516">                    String resolution = cur.getString(resolutionColumn);</span>
+<span class="nc bnc" id="L517" title="All 2 branches missed.">                    if (resolution != null) {</span>
+<span class="nc" id="L518">                        String[] resolutions = resolution.split(&quot;x&quot;);</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">                        if (resolutions.length &gt;= 2) {</span>
+<span class="nc" id="L520">                            xRes = resolutions[0];</span>
+<span class="nc" id="L521">                            yRes = resolutions[1];</span>
+                        }
+<span class="nc" id="L523">                    } else {</span>
+                        // Default resolution
+<span class="nc" id="L525">                        xRes = &quot;640&quot;;</span>
+<span class="nc" id="L526">                        yRes = &quot;480&quot;;</span>
+                    }
+                }
+<span class="nc" id="L529">                SqlUtils.closeCursor(cur);</span>
+<span class="nc" id="L530">            } else { // file is not in media library</span>
+<span class="nc" id="L531">                String filePath = videoUri.toString().replace(&quot;file://&quot;, &quot;&quot;);</span>
+<span class="nc" id="L532">                mediaFile.setFilePath(filePath);</span>
+<span class="nc" id="L533">                videoFile = new File(filePath);</span>
+            }
+
+<span class="nc bnc" id="L536" title="All 2 branches missed.">            if (videoFile == null) {</span>
+<span class="nc" id="L537">                mErrorMessage = mContext.getResources().getString(R.string.error_media_upload);</span>
+<span class="nc" id="L538">                return null;</span>
+            }
+
+<span class="nc bnc" id="L541" title="All 2 branches missed.">            if (TextUtils.isEmpty(mimeType)) {</span>
+<span class="nc" id="L542">                mimeType = MediaUtils.getMediaFileMimeType(videoFile);</span>
+            }
+
+<span class="nc" id="L545">            CountDownLatch countDownLatch = new CountDownLatch(1);</span>
+<span class="nc" id="L546">            UploadMediaPayload payload = new UploadMediaPayload(</span>
+                    mSite,
+<span class="nc" id="L548">                    FluxCUtils.mediaModelFromMediaFile(mediaFile),</span>
+<span class="nc" id="L549">                    AppPrefs.isStripImageLocation()</span>
+            );
+<span class="nc" id="L551">            mDispatcher.dispatch(MediaActionBuilder.newUploadMediaAction(payload));</span>
+
+            try {
+<span class="nc" id="L554">                mMediaLatchMap.put(mediaFile.getId(), countDownLatch);</span>
+<span class="nc" id="L555">                countDownLatch.await();</span>
+<span class="nc" id="L556">            } catch (InterruptedException e) {</span>
+<span class="nc" id="L557">                AppLog.e(T.POSTS, &quot;PostUploadHandler &gt; CountDownLatch await interrupted for media file: &quot;</span>
+<span class="nc" id="L558">                                  + mediaFile.getId() + &quot; - &quot; + e);</span>
+<span class="nc" id="L559">                mIsMediaError = true;</span>
+<span class="nc" id="L560">            }</span>
+
+<span class="nc" id="L562">            MediaModel finishedMedia = mMediaStore.getMediaWithLocalId(mediaFile.getId());</span>
+
+<span class="nc bnc" id="L564" title="All 4 branches missed.">            if (finishedMedia == null || finishedMedia.getUploadState() == null</span>
+<span class="nc bnc" id="L565" title="All 2 branches missed.">                || !finishedMedia.getUploadState().equals(MediaUploadState.UPLOADED.toString())) {</span>
+<span class="nc" id="L566">                mIsMediaError = true;</span>
+<span class="nc" id="L567">                return null;</span>
+            }
+
+<span class="nc bnc" id="L570" title="All 2 branches missed.">            if (!TextUtils.isEmpty(finishedMedia.getVideoPressGuid())) {</span>
+<span class="nc" id="L571">                return &quot;[wpvideo &quot; + finishedMedia.getVideoPressGuid() + &quot;]\n&quot;;</span>
+            } else {
+<span class="nc" id="L573">                return String.format(</span>
+                        &quot;&lt;video width=\&quot;%s\&quot; height=\&quot;%s\&quot; controls=\&quot;controls\&quot;&gt;&lt;source src=\&quot;%s\&quot; type=\&quot;%s\&quot; /&gt;&quot;
+                        + &quot;&lt;a href=\&quot;%s\&quot;&gt;Click to view video&lt;/a&gt;.&lt;/video&gt;&quot;,
+<span class="nc" id="L576">                        xRes, yRes, finishedMedia.getUrl(), mimeType, finishedMedia.getUrl());</span>
+            }
+        }
+
+        private String uploadImageFile(MediaFile mediaFile, SiteModel site) {
+<span class="nc" id="L581">            CountDownLatch countDownLatch = new CountDownLatch(1);</span>
+<span class="nc" id="L582">            UploadMediaPayload payload = new UploadMediaPayload(</span>
+                    site,
+<span class="nc" id="L584">                    FluxCUtils.mediaModelFromMediaFile(mediaFile),</span>
+<span class="nc" id="L585">                    AppPrefs.isStripImageLocation()</span>
+            );
+<span class="nc" id="L587">            mDispatcher.dispatch(MediaActionBuilder.newUploadMediaAction(payload));</span>
+
+            try {
+<span class="nc" id="L590">                mMediaLatchMap.put(mediaFile.getId(), countDownLatch);</span>
+<span class="nc" id="L591">                countDownLatch.await();</span>
+<span class="nc" id="L592">            } catch (InterruptedException e) {</span>
+<span class="nc" id="L593">                AppLog.e(T.POSTS, &quot;PostUploadHandler &gt; CountDownLatch await interrupted for media file: &quot;</span>
+<span class="nc" id="L594">                                  + mediaFile.getId() + &quot; - &quot; + e);</span>
+<span class="nc" id="L595">                mIsMediaError = true;</span>
+<span class="nc" id="L596">            }</span>
+
+<span class="nc" id="L598">            MediaModel finishedMedia = mMediaStore.getMediaWithLocalId(mediaFile.getId());</span>
+
+<span class="nc bnc" id="L600" title="All 4 branches missed.">            if (finishedMedia == null || finishedMedia.getUploadState() == null</span>
+<span class="nc bnc" id="L601" title="All 2 branches missed.">                || !finishedMedia.getUploadState().equals(MediaUploadState.UPLOADED.toString())) {</span>
+<span class="nc" id="L602">                mIsMediaError = true;</span>
+<span class="nc" id="L603">                return null;</span>
+            }
+
+<span class="nc" id="L606">            String pictureURL = finishedMedia.getUrl();</span>
+
+<span class="nc bnc" id="L608" title="All 2 branches missed.">            if (mediaFile.isFeatured()) {</span>
+<span class="nc" id="L609">                mFeaturedImageID = finishedMedia.getMediaId();</span>
+<span class="nc bnc" id="L610" title="All 2 branches missed.">                if (!mediaFile.isFeaturedInPost()) {</span>
+<span class="nc" id="L611">                    return &quot;&quot;;</span>
+                }
+            }
+
+<span class="nc" id="L615">            return pictureURL;</span>
+        }
+    }
+
+    @Override
+    public void handleAutoSavePostIfNotDraftResult(@NotNull AutoSavePostIfNotDraftResult result) {
+<span class="nc" id="L621">        PostModel post = result.getPost();</span>
+<span class="nc bnc" id="L622" title="All 6 branches missed.">        if (result instanceof FetchPostStatusFailed</span>
+            || result instanceof PostAutoSaveFailed
+            || result instanceof PostAutoSaved) {
+            /*
+             * If we fail to check the status of the post or auto-save fails, we deliberately don't show an error
+             * notification since it's not a user initiated action. We'll retry the action later on.
+             */
+<span class="nc" id="L629">            mPostUploadNotifier.incrementUploadedPostCountFromForegroundNotification(post);</span>
+<span class="nc" id="L630">            finishUpload();</span>
+<span class="nc bnc" id="L631" title="All 2 branches missed.">        } else if (result instanceof PostIsDraftInRemote) {</span>
+            /*
+             * If the post is a draft in remote, we'll update it directly instead of auto-saving it. Please see
+             * documentation of `AutoSavePostIfNotDraftUseCase` for details.
+             *
+             * We opted not to restore the current status after the post is uploaded to avoid its complexity and to
+             * replicate `UPLOAD_AS_DRAFT`. We may change this in the future.
+             */
+<span class="nc" id="L639">            post.setStatus(PostStatus.DRAFT.toString());</span>
+<span class="nc" id="L640">            SiteModel site = mSiteStore.getSiteByLocalId(post.getLocalSiteId());</span>
+<span class="nc" id="L641">            mDispatcher.dispatch(PostActionBuilder.newPushPostAction(new RemotePostPayload(post, site)));</span>
+<span class="nc" id="L642">        } else {</span>
+<span class="nc" id="L643">            throw new IllegalStateException(&quot;All AutoSavePostIfNotDraftResult types must be handled&quot;);</span>
+        }
+<span class="nc" id="L645">    }</span>
+
+    /**
+     * Has priority 9 on OnPostUploaded events, which ensures that PostUploadHandler is the first to receive
+     * and process OnPostUploaded events, before they trickle down to other subscribers.
+     */
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN, priority = 9)
+    public void onPostUploaded(OnPostUploaded event) {
+        // check if the event is related to the PostModel that is being uploaded by PostUploadHandler
+<span class="nc bnc" id="L655" title="All 2 branches missed.">        if (!isPostUploading(event.post)) {</span>
+<span class="nc" id="L656">            return;</span>
+        }
+<span class="nc" id="L658">        SiteModel site = mSiteStore.getSiteByLocalId(event.post.getLocalSiteId());</span>
+
+<span class="nc bnc" id="L660" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L661">            AppLog.w(T.POSTS, &quot;PostUploadHandler &gt; Post upload failed. &quot; + event.error.type + &quot;: &quot;</span>
+                              + event.error.message);
+<span class="nc" id="L663">            Context context = WordPress.getContext();</span>
+<span class="nc" id="L664">            String errorMessage = mUiHelpers.getTextOfUiString(context,</span>
+<span class="nc" id="L665">                    UploadUtils.getErrorMessageResIdFromPostError(PostStatus.fromPost(event.post), event.post.isPage(),</span>
+<span class="nc" id="L666">                            event.error, mUploadActionUseCase.isEligibleForAutoUpload(site, event.post))).toString();</span>
+<span class="nc" id="L667">            String notificationMessage = UploadUtils.getErrorMessage(context, event.post.isPage(), errorMessage, false);</span>
+<span class="nc" id="L668">            mPostUploadNotifier.removePostInfoFromForegroundNotification(event.post,</span>
+<span class="nc" id="L669">                    mMediaStore.getMediaForPost(event.post));</span>
+<span class="nc" id="L670">            mPostUploadNotifier.incrementUploadedPostCountFromForegroundNotification(event.post);</span>
+<span class="nc" id="L671">            mPostUploadNotifier.updateNotificationErrorForPost(event.post, site, notificationMessage, 0);</span>
+<span class="nc" id="L672">            sFirstPublishPosts.remove(event.post.getId());</span>
+<span class="nc" id="L673">        } else {</span>
+<span class="nc" id="L674">            mPostUploadNotifier.incrementUploadedPostCountFromForegroundNotification(event.post);</span>
+<span class="nc" id="L675">            boolean isFirstTimePublish = sFirstPublishPosts.remove(event.post.getId());</span>
+<span class="nc bnc" id="L676" title="All 2 branches missed.">            if (site != null) {</span>
+<span class="nc" id="L677">                mPostUploadNotifier.updateNotificationSuccessForPost(event.post, site, isFirstTimePublish);</span>
+<span class="nc" id="L678">                mPostMediaHandler.updateMediaWithoutPostId(site, event.post);</span>
+            } else {
+<span class="nc" id="L680">                AppLog.e(T.POSTS, &quot;Cannot update notification success without a site&quot;);</span>
+            }
+<span class="nc bnc" id="L682" title="All 2 branches missed.">            if (isFirstTimePublish) {</span>
+<span class="nc bnc" id="L683" title="All 2 branches missed.">                if (sCurrentUploadingPostAnalyticsProperties != null) {</span>
+<span class="nc" id="L684">                    sCurrentUploadingPostAnalyticsProperties.put(&quot;post_id&quot;, event.post.getRemotePostId());</span>
+                } else {
+<span class="nc" id="L686">                    sCurrentUploadingPostAnalyticsProperties = new HashMap&lt;&gt;();</span>
+                }
+<span class="nc" id="L688">                PostUtils.addPostTypeAndPostFormatToAnalyticsProperties(</span>
+                        event.post, sCurrentUploadingPostAnalyticsProperties);
+<span class="nc" id="L690">                sCurrentUploadingPostAnalyticsProperties.put(AnalyticsUtils.HAS_GUTENBERG_BLOCKS_KEY,</span>
+<span class="nc" id="L691">                        PostUtils.contentContainsGutenbergBlocks(event.post.getContent()));</span>
+<span class="nc" id="L692">                sCurrentUploadingPostAnalyticsProperties.put(AnalyticsUtils.HAS_WP_STORIES_BLOCKS_KEY,</span>
+<span class="nc" id="L693">                        PostUtils.contentContainsWPStoryGutenbergBlocks(event.post.getContent()));</span>
+<span class="nc" id="L694">                sCurrentUploadingPostAnalyticsProperties</span>
+<span class="nc" id="L695">                        .put(AnalyticsUtils.PROMPT_ID, event.post.getAnsweredPromptId());</span>
+<span class="nc" id="L696">                AnalyticsUtils.trackWithSiteDetails(Stat.EDITOR_PUBLISHED_POST,</span>
+<span class="nc" id="L697">                        mSiteStore.getSiteByLocalId(event.post.getLocalSiteId()),</span>
+                        sCurrentUploadingPostAnalyticsProperties);
+            }
+<span class="nc" id="L700">            synchronized (sQueuedPostsList) {</span>
+<span class="nc bnc" id="L701" title="All 2 branches missed.">                for (PostModel post : sQueuedPostsList) {</span>
+<span class="nc bnc" id="L702" title="All 2 branches missed.">                    if (post.getId() == event.post.getId()) {</span>
+                        // Check if a new version of the post we've just uploaded is in the queue and update its state
+<span class="nc" id="L704">                        post.setRemotePostId(event.post.getRemotePostId());</span>
+<span class="nc" id="L705">                        post.setIsLocalDraft(false);</span>
+                    }
+<span class="nc" id="L707">                }</span>
+<span class="nc" id="L708">            }</span>
+        }
+
+<span class="nc" id="L711">        finishUpload();</span>
+<span class="nc" id="L712">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

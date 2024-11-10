@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StoryMediaSaveUploadBridge.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.stories.media</a> &gt; <span class="el_source">StoryMediaSaveUploadBridge.kt</span></div><h1>StoryMediaSaveUploadBridge.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.stories.media
+
+import android.content.Context
+import android.net.Uri
+import androidx.lifecycle.Lifecycle.Event.ON_CREATE
+import androidx.lifecycle.Lifecycle.Event.ON_DESTROY
+import androidx.lifecycle.LifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.OnLifecycleEvent
+import com.wordpress.stories.compose.frame.StorySaveEvents.StorySaveResult
+import com.wordpress.stories.compose.story.StoryFrameItem
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode.MAIN
+import org.wordpress.android.R.string
+import org.wordpress.android.WordPress
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.PostImmutableModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.posts.EditPostActivity.OnPostUpdatedFromUIListener
+import org.wordpress.android.ui.posts.EditPostRepository
+import org.wordpress.android.ui.posts.PostUtilsWrapper
+import org.wordpress.android.ui.posts.SavePostToDbUseCase
+import org.wordpress.android.ui.posts.editor.media.AddLocalMediaToPostUseCase
+import org.wordpress.android.ui.posts.editor.media.EditorMediaListener
+import org.wordpress.android.ui.stories.SaveStoryGutenbergBlockUseCase
+import org.wordpress.android.ui.stories.StoriesTrackerHelper
+import org.wordpress.android.ui.stories.StoryComposerActivity
+import org.wordpress.android.ui.stories.StoryRepositoryWrapper
+import org.wordpress.android.ui.stories.prefs.StoriesPrefs
+import org.wordpress.android.ui.stories.prefs.StoriesPrefs.TempId
+import org.wordpress.android.ui.uploads.UploadServiceFacade
+import org.wordpress.android.util.EventBusWrapper
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.ToastUtils
+import org.wordpress.android.util.ToastUtils.Duration.LONG
+import org.wordpress.android.util.helpers.MediaFile
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.CoroutineContext
+
+/*
+ * StoryMediaSaveUploadBridge listens for StorySaveResult events triggered from the StorySaveService, and
+ * then transforms its result data into something the UploadService can use to upload the Story frame media
+ * first, then obtain the media Ids and collect them, and finally create a Post with the Story block
+ * with the obtained media Ids.
+ * This is different than uploading media to a regular Post because we don't need to replace the URLs for final Urls as
+ * we do in Aztec / Gutenberg.
+ */
+<span class="fc" id="L55">class StoryMediaSaveUploadBridge @Inject constructor(</span>
+<span class="fc" id="L56">    private val addLocalMediaToPostUseCase: AddLocalMediaToPostUseCase,</span>
+<span class="fc" id="L57">    private val savePostToDbUseCase: SavePostToDbUseCase,</span>
+<span class="fc" id="L58">    private val storiesPrefs: StoriesPrefs,</span>
+<span class="fc" id="L59">    private val uploadService: UploadServiceFacade,</span>
+<span class="fc" id="L60">    private val networkUtils: NetworkUtilsWrapper,</span>
+<span class="fc" id="L61">    private val postUtils: PostUtilsWrapper,</span>
+<span class="fc" id="L62">    private val eventBusWrapper: EventBusWrapper,</span>
+<span class="fc" id="L63">    private val storyRepositoryWrapper: StoryRepositoryWrapper,</span>
+<span class="fc" id="L64">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher</span>
+) : CoroutineScope, LifecycleObserver {
+    // region Fields
+<span class="fc" id="L67">    private var job: Job = Job()</span>
+    private lateinit var appContext: Context
+
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L71">        get() = mainDispatcher + job</span>
+
+<span class="nc bnc" id="L73" title="All 2 branches missed.">    @Inject lateinit var editPostRepository: EditPostRepository</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">    @Inject lateinit var storiesTrackerHelper: StoriesTrackerHelper</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">    @Inject lateinit var saveStoryGutenbergBlockUseCase: SaveStoryGutenbergBlockUseCase</span>
+
+    @Suppress(&quot;unused&quot;)
+    @OnLifecycleEvent(ON_CREATE)
+    fun onCreate(source: LifecycleOwner) {
+<span class="nc" id="L80">        eventBusWrapper.register(this)</span>
+<span class="nc" id="L81">    }</span>
+
+    @Suppress(&quot;unused&quot;)
+    @OnLifecycleEvent(ON_DESTROY)
+    fun onDestroy(source: LifecycleOwner) {
+        // note: not sure whether this is ever going to get called if we attach it to the lifecycle of the Application
+        // class, but leaving it here prepared for the case when this class is attached to some other LifeCycleOwner
+        // other than the Application.
+<span class="nc" id="L89">        cancelAddMediaToEditorActions()</span>
+<span class="nc" id="L90">        eventBusWrapper.unregister(this)</span>
+<span class="nc" id="L91">    }</span>
+
+    fun init(context: Context) {
+<span class="fc" id="L94">        appContext = context</span>
+<span class="fc" id="L95">    }</span>
+
+    // region Adding new composed / processed frames to a Story post
+    private fun addNewStoryFrameMediaItemsToPostAndUploadAsync(site: SiteModel, saveResult: StorySaveResult) {
+        // let's invoke the UploadService and enqueue all the files that were saved by the FrameSaveService
+<span class="nc" id="L100">        val frames = storyRepositoryWrapper.getStoryAtIndex(saveResult.storyIndex).frames</span>
+<span class="nc" id="L101">        addNewMediaItemsInStoryFramesToPostAsync(site, frames, saveResult.isEditMode)</span>
+<span class="nc" id="L102">    }</span>
+
+    private fun addNewMediaItemsInStoryFramesToPostAsync(
+        site: SiteModel,
+        frames: List&lt;StoryFrameItem&gt;,
+        isEditMode: Boolean
+    ) {
+<span class="nc" id="L109">        val uriList = frames.map { Uri.fromFile(it.composedFrameFile) }</span>
+
+        // this is similar to addNewMediaItemsToEditorAsync in EditorMedia
+<span class="nc" id="L112">        launch {</span>
+<span class="nc" id="L113">            val localEditorMediaListener = object : EditorMediaListener {</span>
+                override fun appendMediaFiles(mediaFiles: Map&lt;String, MediaFile&gt;) {
+<span class="nc bnc" id="L115" title="All 2 branches missed.">                    if (!isEditMode) {</span>
+<span class="nc" id="L116">                        saveStoryGutenbergBlockUseCase.assignAltOnEachMediaFile(frames, ArrayList(mediaFiles.values))</span>
+<span class="nc" id="L117">                        saveStoryGutenbergBlockUseCase.buildJetpackStoryBlockInPost(</span>
+<span class="nc" id="L118">                                editPostRepository,</span>
+<span class="nc" id="L119">                                ArrayList(mediaFiles.values)</span>
+                        )
+                    } else {
+                        // no op: in edit mode, we're handling replacing of the block's mediaFiles in Gutenberg
+                    }
+<span class="nc" id="L124">                }</span>
+
+                override fun getImmutablePost(): PostImmutableModel {
+<span class="nc" id="L127">                    return editPostRepository.getPost()!!</span>
+                }
+
+                override fun syncPostObjectWithUiAndSaveIt(listener: OnPostUpdatedFromUIListener?) {
+                    // no op
+                    // WARNING: don't remove this, we need to call the listener no matter what, so save &amp; upload actually happen
+<span class="nc bnc" id="L133" title="All 2 branches missed.">                    listener?.onPostUpdatedFromUI(null)</span>
+<span class="nc" id="L134">                }</span>
+
+                override fun advertiseImageOptimization(listener: () -&gt; Unit) {
+                    // no op
+<span class="nc" id="L138">                }</span>
+
+                override fun onMediaModelsCreatedFromOptimizedUris(oldUriToMediaFiles: Map&lt;Uri, MediaModel&gt;) {
+                    // in order to support Story editing capabilities, we save a serialized version of the Story slides
+                    // after their composedFrameFiles have been processed.
+
+                    // here we change the ids on the actual StoryFrameItems, and also update the flattened / composed image
+                    // urls with the new URLs which may have been replaced after image optimization
+                    // find the MediaModel for a given Uri from composedFrameFile
+<span class="nc bnc" id="L147" title="All 2 branches missed.">                    for (frame in frames) {</span>
+                        // if the old URI in frame.composedFrameFile exists as a key in the passed map, then update that
+                        // value with the new (probably optimized) URL and also keep track of the new id.
+<span class="nc" id="L150">                        val oldUri = Uri.fromFile(frame.composedFrameFile)</span>
+<span class="nc" id="L151">                        val mediaModel = oldUriToMediaFiles.get(oldUri)</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">                        mediaModel?.let {</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">                            val oldTemporaryId = frame.id ?: &quot;&quot;</span>
+<span class="nc" id="L154">                            frame.id = it.id.toString()</span>
+
+                            // set alt text on MediaModel too
+<span class="nc" id="L157">                            mediaModel.alt = StoryFrameItem.getAltTextFromFrameAddedViews(frame)</span>
+
+                            // if prefs has this Slide with the temporary key, replace it
+                            // if not, let's now save the new slide with the local key
+<span class="nc bnc" id="L161" title="All 2 branches missed.">                            storiesPrefs.replaceTempMediaIdKeyedSlideWithLocalMediaIdKeyedSlide(</span>
+<span class="nc" id="L162">                                    TempId(oldTemporaryId),</span>
+<span class="nc" id="L163">                                    LocalId(it.id),</span>
+<span class="nc" id="L164">                                    it.localSiteId.toLong()</span>
+<span class="nc" id="L165">                            ) ?: storiesPrefs.saveSlideWithLocalId(</span>
+<span class="nc" id="L166">                                    it.localSiteId.toLong(),</span>
+                                    // use the local id to save the original, will be replaced later
+                                    // with mediaModel.mediaId after uploading to the remote site
+<span class="nc" id="L169">                                    LocalId(it.id),</span>
+<span class="nc" id="L170">                                    frame</span>
+                            )
+
+                            // for editMode, we'll need to tell the Gutenberg Editor to replace their mediaFiles
+                            // ids with the new MediaModel local ids are created so, broadcasting the event.
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                            if (isEditMode) {</span>
+                                // finally send the event that this frameId has changed
+<span class="nc" id="L177">                                eventBusWrapper.postSticky(</span>
+<span class="nc" id="L178">                                        StoryFrameMediaModelCreatedEvent(</span>
+<span class="nc" id="L179">                                                oldTemporaryId,</span>
+<span class="nc" id="L180">                                                it.id,</span>
+<span class="nc" id="L181">                                                oldUri.toString(),</span>
+<span class="nc" id="L182">                                                frame</span>
+                                        )
+                                )
+                            }
+<span class="nc" id="L186">                        }</span>
+                    }
+<span class="nc" id="L188">                }</span>
+
+                override fun showVideoDurationLimitWarning(fileName: String) {
+<span class="nc" id="L191">                    ToastUtils.showToast(</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">                            appContext,</span>
+<span class="nc" id="L193">                            string.error_media_video_duration_exceeds_limit,</span>
+<span class="nc" id="L194">                            LONG</span>
+                    )
+<span class="nc" id="L196">                }</span>
+            }
+
+<span class="nc" id="L199">            addLocalMediaToPostUseCase.addNewMediaToEditorAsync(</span>
+<span class="nc" id="L200">                    uriList,</span>
+<span class="nc" id="L201">                    site,</span>
+<span class="nc" id="L202">                    freshlyTaken = false, // we don't care about this</span>
+<span class="nc" id="L203">                    editorMediaListener = localEditorMediaListener,</span>
+<span class="nc" id="L204">                    doUploadAfterAdding = true,</span>
+<span class="nc" id="L205">                    trackEvent = false // Already tracked event when media were first added to the story</span>
+            )
+
+            // only save this post if we're not currently in edit mode
+            // In edit mode, we'll let the Gutenberg editor save the edited block if / when needed.
+<span class="nc bnc" id="L210" title="All 2 branches missed.">            if (!isEditMode) {</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">                postUtils.preparePostForPublish(requireNotNull(editPostRepository.getEditablePost()), site)</span>
+<span class="nc" id="L212">                savePostToDbUseCase.savePostToDb(editPostRepository, site)</span>
+
+<span class="nc bnc" id="L214" title="All 2 branches missed.">                if (networkUtils.isNetworkAvailable()) {</span>
+<span class="nc" id="L215">                    postUtils.trackSavePostAnalytics(</span>
+<span class="nc" id="L216">                            editPostRepository.getPost(),</span>
+<span class="nc" id="L217">                            site</span>
+                    )
+<span class="nc bnc" id="L219" title="All 2 branches missed.">                    uploadService.uploadPost(appContext, editPostRepository.id, true)</span>
+                    // SAVED_ONLINE
+<span class="nc" id="L221">                    storiesTrackerHelper.trackStoryPostSavedEvent(uriList.size, site, false)</span>
+                } else {
+                    // SAVED_LOCALLY
+<span class="nc" id="L224">                    storiesTrackerHelper.trackStoryPostSavedEvent(uriList.size, site, true)</span>
+                    // no op, when network is available the offline mode in WPAndroid will gather the queued Post
+                    // and try to upload.
+                }
+            }
+<span class="nc" id="L229">        }</span>
+<span class="nc" id="L230">    }</span>
+    // endregion
+
+    private fun cancelAddMediaToEditorActions() {
+<span class="nc" id="L234">        job.cancel()</span>
+<span class="nc" id="L235">    }</span>
+
+    @Subscribe(sticky = true, threadMode = MAIN)
+    fun onEventMainThread(event: StorySaveResult) {
+        // track event
+<span class="nc" id="L240">        storiesTrackerHelper.trackStorySaveResultEvent(event)</span>
+
+<span class="nc bnc" id="L242" title="All 2 branches missed.">        event.metadata?.let {</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">            val site = it.getSerializable(WordPress.SITE) as SiteModel</span>
+<span class="nc" id="L244">            val story = storyRepositoryWrapper.getStoryAtIndex(event.storyIndex)</span>
+<span class="nc" id="L245">            saveStoryGutenbergBlockUseCase.saveNewLocalFilesToStoriesPrefsTempSlides(</span>
+<span class="nc" id="L246">                    site,</span>
+<span class="nc" id="L247">                    event.storyIndex,</span>
+<span class="nc" id="L248">                    story.frames</span>
+            )
+
+            // only trigger the bridge preparation and the UploadService if the Story is now complete
+            // otherwise we can be receiving successful retry events for individual frames we shouldn't care about just
+            // yet.
+<span class="nc bnc" id="L254" title="All 4 branches missed.">            if (isStorySavingComplete(event) &amp;&amp; !event.isRetry) {</span>
+                // only remove it if it was successful - we want to keep it and show a snackbar once when the user
+                // comes back to the app if it wasn't, see MySiteFragment for details.
+<span class="nc" id="L257">                eventBusWrapper.removeStickyEvent(event)</span>
+<span class="nc" id="L258">                editPostRepository.loadPostByLocalPostId(it.getInt(StoryComposerActivity.KEY_POST_LOCAL_ID))</span>
+                // media upload tracking already in addLocalMediaToPostUseCase.addNewMediaToEditorAsync
+<span class="nc" id="L260">                addNewStoryFrameMediaItemsToPostAndUploadAsync(site, event)</span>
+            }
+<span class="nc" id="L262">        }</span>
+<span class="nc" id="L263">    }</span>
+
+    private fun isStorySavingComplete(event: StorySaveResult): Boolean {
+<span class="nc bnc" id="L266" title="All 2 branches missed.">        return (event.isSuccess() &amp;&amp;</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">                event.frameSaveResult.size == storyRepositoryWrapper.getStoryAtIndex(event.storyIndex).frames.size)</span>
+    }
+
+<span class="nc" id="L270">    data class StoryFrameMediaModelCreatedEvent(</span>
+<span class="nc" id="L271">        val oldId: String,</span>
+<span class="nc" id="L272">        val newId: Int,</span>
+<span class="nc" id="L273">        val oldUrl: String,</span>
+<span class="nc" id="L274">        val frame: StoryFrameItem</span>
+    )
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

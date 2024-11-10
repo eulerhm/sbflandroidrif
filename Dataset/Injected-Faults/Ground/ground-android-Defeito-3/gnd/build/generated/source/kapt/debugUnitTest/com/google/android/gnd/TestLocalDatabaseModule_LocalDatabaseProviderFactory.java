@@ -1,0 +1,40 @@
+package com.google.android.gnd;
+
+import android.content.Context;
+import com.google.android.gnd.persistence.local.room.LocalDatabase;
+import dagger.internal.DaggerGenerated;
+import dagger.internal.Factory;
+import dagger.internal.Preconditions;
+import javax.annotation.Generated;
+import javax.inject.Provider;
+
+@DaggerGenerated
+@Generated(
+    value = "dagger.internal.codegen.ComponentProcessor",
+    comments = "https://dagger.dev"
+)
+@SuppressWarnings({
+    "unchecked",
+    "rawtypes"
+})
+public final class TestLocalDatabaseModule_LocalDatabaseProviderFactory implements Factory<LocalDatabase> {
+  private final Provider<Context> contextProvider;
+
+  public TestLocalDatabaseModule_LocalDatabaseProviderFactory(Provider<Context> contextProvider) {
+    this.contextProvider = contextProvider;
+  }
+
+  @Override
+  public LocalDatabase get() {
+    return localDatabaseProvider(contextProvider.get());
+  }
+
+  public static TestLocalDatabaseModule_LocalDatabaseProviderFactory create(
+      Provider<Context> contextProvider) {
+    return new TestLocalDatabaseModule_LocalDatabaseProviderFactory(contextProvider);
+  }
+
+  public static LocalDatabase localDatabaseProvider(Context context) {
+    return Preconditions.checkNotNullFromProvides(TestLocalDatabaseModule.localDatabaseProvider(context));
+  }
+}

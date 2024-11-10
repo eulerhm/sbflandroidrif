@@ -1,0 +1,852 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderPostAdapter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.adapters</a> &gt; <span class="el_source">ReaderPostAdapter.java</span></div><h1>ReaderPostAdapter.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.adapters;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
+import android.os.AsyncTask;
+import android.text.Spannable;
+import android.text.SpannableStringBuilder;
+import android.text.style.StyleSpan;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.RecyclerView;
+
+import org.jetbrains.annotations.NotNull;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.datasets.ReaderPostTable;
+import org.wordpress.android.datasets.ReaderTagTable;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.models.ReaderPost;
+import org.wordpress.android.models.ReaderPostDiscoverData;
+import org.wordpress.android.models.ReaderPostList;
+import org.wordpress.android.models.ReaderTag;
+import org.wordpress.android.ui.reader.ReaderActivityLauncher;
+import org.wordpress.android.ui.reader.ReaderConstants;
+import org.wordpress.android.ui.reader.ReaderInterfaces;
+import org.wordpress.android.ui.reader.ReaderInterfaces.OnFollowListener;
+import org.wordpress.android.ui.reader.ReaderInterfaces.OnPostListItemButtonListener;
+import org.wordpress.android.ui.reader.ReaderTypes;
+import org.wordpress.android.ui.reader.ReaderTypes.ReaderPostListType;
+import org.wordpress.android.ui.reader.actions.ReaderActions;
+import org.wordpress.android.ui.reader.actions.ReaderTagActions;
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState;
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderPostUiState;
+import org.wordpress.android.ui.reader.discover.ReaderPostCardActionType;
+import org.wordpress.android.ui.reader.discover.ReaderPostMoreButtonUiStateBuilder;
+import org.wordpress.android.ui.reader.discover.ReaderPostUiStateBuilder;
+import org.wordpress.android.ui.reader.discover.viewholders.ReaderPostViewHolder;
+import org.wordpress.android.ui.reader.models.ReaderBlogIdPostId;
+import org.wordpress.android.ui.reader.tracker.ReaderTab;
+import org.wordpress.android.ui.reader.tracker.ReaderTracker;
+import org.wordpress.android.ui.reader.utils.ReaderXPostUtils;
+import org.wordpress.android.ui.reader.views.ReaderGapMarkerView;
+import org.wordpress.android.ui.reader.views.ReaderSiteHeaderView;
+import org.wordpress.android.ui.reader.views.ReaderTagHeaderView;
+import org.wordpress.android.ui.reader.views.ReaderTagHeaderViewUiState.ReaderTagHeaderUiState;
+import org.wordpress.android.ui.reader.views.uistates.FollowButtonUiState;
+import org.wordpress.android.ui.utils.UiHelpers;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.ColorUtils;
+import org.wordpress.android.util.extensions.ContextExtensionsKt;
+import org.wordpress.android.util.DisplayUtils;
+import org.wordpress.android.util.GravatarUtils;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.SiteUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.image.BlavatarShape;
+import org.wordpress.android.util.image.ImageManager;
+import org.wordpress.android.util.image.ImageType;
+
+import java.util.HashSet;
+
+import javax.inject.Inject;
+
+import kotlin.Unit;
+import kotlin.jvm.functions.Function0;
+import kotlin.jvm.functions.Function1;
+import kotlin.jvm.functions.Function2;
+import kotlin.jvm.functions.Function3;
+
+public class ReaderPostAdapter extends RecyclerView.Adapter&lt;RecyclerView.ViewHolder&gt; {
+    private final ImageManager mImageManager;
+    private final UiHelpers mUiHelpers;
+    private ReaderTag mCurrentTag;
+    private long mCurrentBlogId;
+    private long mCurrentFeedId;
+<span class="nc" id="L86">    private int mGapMarkerPosition = -1;</span>
+
+    private final int mPhotonWidth;
+    private final int mPhotonHeight;
+    private final int mAvatarSzSmall;
+
+    private boolean mCanRequestMorePosts;
+
+    @NonNull private final ReaderTypes.ReaderPostListType mPostListType;
+    @NonNull private String mSource;
+<span class="nc" id="L96">    private final ReaderPostList mPosts = new ReaderPostList();</span>
+<span class="nc" id="L97">    private final HashSet&lt;String&gt; mRenderedIds = new HashSet&lt;&gt;();</span>
+
+    private ReaderInterfaces.OnPostListItemButtonListener mOnPostListItemButtonListener;
+    private ReaderInterfaces.OnFollowListener mFollowListener;
+    private ReaderInterfaces.OnPostSelectedListener mPostSelectedListener;
+    private ReaderInterfaces.DataLoadedListener mDataLoadedListener;
+    private ReaderActions.DataRequestedListener mDataRequestedListener;
+    private ReaderSiteHeaderView.OnBlogInfoLoadedListener mBlogInfoLoadedListener;
+
+    // the large &quot;tbl_posts.text&quot; column is unused here, so skip it when querying
+    private static final boolean EXCLUDE_TEXT_COLUMN = true;
+    private static final int MAX_ROWS = ReaderConstants.READER_MAX_POSTS_TO_DISPLAY;
+
+    private static final int VIEW_TYPE_POST = 0;
+    private static final int VIEW_TYPE_XPOST = 1;
+    private static final int VIEW_TYPE_SITE_HEADER = 2;
+    private static final int VIEW_TYPE_TAG_HEADER = 3;
+    private static final int VIEW_TYPE_GAP_MARKER = 4;
+    private static final int VIEW_TYPE_REMOVED_POST = 5;
+
+    private static final long ITEM_ID_HEADER = -1L;
+    private static final long ITEM_ID_GAP_MARKER = -2L;
+
+    private static final float READER_FEATURED_IMAGE_ASPECT_RATIO = 16 / 9f;
+
+    private final boolean mIsMainReader;
+
+    @Inject AccountStore mAccountStore;
+    @Inject SiteStore mSiteStore;
+    @Inject ReaderPostUiStateBuilder mReaderPostUiStateBuilder;
+    @Inject ReaderPostMoreButtonUiStateBuilder mReaderPostMoreButtonUiStateBuilder;
+    @Inject ReaderTracker mReaderTracker;
+
+    public String getSource() {
+<span class="nc" id="L131">        return mSource;</span>
+    }
+
+    /*
+     * cross-post
+     */
+    private class ReaderXPostViewHolder extends RecyclerView.ViewHolder {
+        private final ImageView mImgAvatar;
+        private final ImageView mImgBlavatar;
+        private final TextView mTxtTitle;
+        private final TextView mTxtSubtitle;
+
+<span class="nc" id="L143">        ReaderXPostViewHolder(View itemView) {</span>
+<span class="nc" id="L144">            super(itemView);</span>
+<span class="nc" id="L145">            View postContainer = itemView.findViewById(R.id.post_container);</span>
+<span class="nc" id="L146">            mImgAvatar = itemView.findViewById(R.id.image_avatar);</span>
+<span class="nc" id="L147">            mImgBlavatar = itemView.findViewById(R.id.image_blavatar);</span>
+<span class="nc" id="L148">            mTxtTitle = itemView.findViewById(R.id.text_title);</span>
+<span class="nc" id="L149">            mTxtSubtitle = itemView.findViewById(R.id.text_subtitle);</span>
+
+<span class="nc" id="L151">            postContainer.setOnClickListener(v -&gt; {</span>
+<span class="nc" id="L152">                int position = getAdapterPosition();</span>
+<span class="nc" id="L153">                ReaderPost post = getItem(position);</span>
+<span class="nc bnc" id="L154" title="All 4 branches missed.">                if (mPostSelectedListener != null &amp;&amp; post != null) {</span>
+<span class="nc" id="L155">                    mPostSelectedListener.onPostSelected(post);</span>
+                }
+<span class="nc" id="L157">            });</span>
+<span class="nc" id="L158">        }</span>
+    }
+
+    private static class ReaderRemovedPostViewHolder extends RecyclerView.ViewHolder {
+        final View mPostContainer;
+
+        private final ViewGroup mRemovedPostContainer;
+        private final TextView mTxtRemovedPostTitle;
+        private final TextView mUndoRemoveAction;
+
+        ReaderRemovedPostViewHolder(View itemView) {
+<span class="nc" id="L169">            super(itemView);</span>
+<span class="nc" id="L170">            mPostContainer = itemView.findViewById(R.id.post_container);</span>
+<span class="nc" id="L171">            mTxtRemovedPostTitle = itemView.findViewById(R.id.removed_post_title);</span>
+<span class="nc" id="L172">            mRemovedPostContainer = itemView.findViewById(R.id.removed_item_container);</span>
+<span class="nc" id="L173">            mUndoRemoveAction = itemView.findViewById(R.id.undo_remove);</span>
+<span class="nc" id="L174">        }</span>
+    }
+
+    private static class SiteHeaderViewHolder extends RecyclerView.ViewHolder {
+        private final ReaderSiteHeaderView mSiteHeaderView;
+
+        SiteHeaderViewHolder(View itemView) {
+<span class="nc" id="L181">            super(itemView);</span>
+<span class="nc" id="L182">            mSiteHeaderView = (ReaderSiteHeaderView) itemView;</span>
+<span class="nc" id="L183">        }</span>
+    }
+
+    private static class TagHeaderViewHolder extends RecyclerView.ViewHolder {
+        private final ReaderTagHeaderView mTagHeaderView;
+
+        TagHeaderViewHolder(View itemView) {
+<span class="nc" id="L190">            super(itemView);</span>
+<span class="nc" id="L191">            mTagHeaderView = (ReaderTagHeaderView) itemView;</span>
+<span class="nc" id="L192">        }</span>
+
+        public void onBind(ReaderTagHeaderUiState uiState) {
+<span class="nc" id="L195">            mTagHeaderView.updateUi(uiState);</span>
+<span class="nc" id="L196">        }</span>
+    }
+
+    private static class GapMarkerViewHolder extends RecyclerView.ViewHolder {
+        private final ReaderGapMarkerView mGapMarkerView;
+
+        GapMarkerViewHolder(View itemView) {
+<span class="nc" id="L203">            super(itemView);</span>
+<span class="nc" id="L204">            mGapMarkerView = (ReaderGapMarkerView) itemView;</span>
+<span class="nc" id="L205">        }</span>
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+<span class="nc bnc" id="L210" title="All 4 branches missed.">        if (position == 0 &amp;&amp; hasSiteHeader()) {</span>
+            // first item is a ReaderSiteHeaderView
+<span class="nc" id="L212">            return VIEW_TYPE_SITE_HEADER;</span>
+<span class="nc bnc" id="L213" title="All 4 branches missed.">        } else if (position == 0 &amp;&amp; hasTagHeader()) {</span>
+            // first item is a ReaderTagHeaderView
+<span class="nc" id="L215">            return VIEW_TYPE_TAG_HEADER;</span>
+<span class="nc bnc" id="L216" title="All 2 branches missed.">        } else if (position == mGapMarkerPosition) {</span>
+<span class="nc" id="L217">            return VIEW_TYPE_GAP_MARKER;</span>
+        } else {
+<span class="nc" id="L219">            ReaderPost post = getItem(position);</span>
+<span class="nc bnc" id="L220" title="All 4 branches missed.">            if (post != null &amp;&amp; post.isXpost()) {</span>
+<span class="nc" id="L221">                return VIEW_TYPE_XPOST;</span>
+<span class="nc bnc" id="L222" title="All 6 branches missed.">            } else if (post != null &amp;&amp; isBookmarksList() &amp;&amp; !post.isBookmarked) {</span>
+<span class="nc" id="L223">                return VIEW_TYPE_REMOVED_POST;</span>
+            } else {
+<span class="nc" id="L225">                return VIEW_TYPE_POST;</span>
+            }
+        }
+    }
+
+    @Override
+    public @NonNull RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+<span class="nc" id="L232">        Context context = parent.getContext();</span>
+        View postView;
+<span class="nc bnc" id="L234" title="All 6 branches missed.">        switch (viewType) {</span>
+            case VIEW_TYPE_SITE_HEADER:
+<span class="nc" id="L236">                ReaderSiteHeaderView readerSiteHeaderView = new ReaderSiteHeaderView(context);</span>
+<span class="nc" id="L237">                readerSiteHeaderView.setOnFollowListener(mFollowListener);</span>
+<span class="nc" id="L238">                return new SiteHeaderViewHolder(readerSiteHeaderView);</span>
+
+            case VIEW_TYPE_TAG_HEADER:
+<span class="nc" id="L241">                return new TagHeaderViewHolder(new ReaderTagHeaderView(context));</span>
+
+            case VIEW_TYPE_GAP_MARKER:
+<span class="nc" id="L244">                return new GapMarkerViewHolder(new ReaderGapMarkerView(context));</span>
+
+            case VIEW_TYPE_XPOST:
+<span class="nc" id="L247">                postView = LayoutInflater.from(context).inflate(R.layout.reader_cardview_xpost, parent, false);</span>
+<span class="nc" id="L248">                return new ReaderXPostViewHolder(postView);</span>
+            case VIEW_TYPE_REMOVED_POST:
+<span class="nc" id="L250">                postView = LayoutInflater.from(context).inflate(R.layout.reader_cardview_removed_post, parent, false);</span>
+<span class="nc" id="L251">                return new ReaderRemovedPostViewHolder(postView);</span>
+            default:
+<span class="nc" id="L253">                return new ReaderPostViewHolder(mUiHelpers, mImageManager, mReaderTracker, parent);</span>
+        }
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
+<span class="nc bnc" id="L259" title="All 2 branches missed.">        if (holder instanceof ReaderPostViewHolder) {</span>
+<span class="nc" id="L260">            renderPost(position, (ReaderPostViewHolder) holder, false);</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">        } else if (holder instanceof ReaderXPostViewHolder) {</span>
+<span class="nc" id="L262">            renderXPost(position, (ReaderXPostViewHolder) holder);</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">        } else if (holder instanceof ReaderRemovedPostViewHolder) {</span>
+<span class="nc" id="L264">            renderRemovedPost(position, (ReaderRemovedPostViewHolder) holder);</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        } else if (holder instanceof SiteHeaderViewHolder) {</span>
+<span class="nc" id="L266">            SiteHeaderViewHolder siteHolder = (SiteHeaderViewHolder) holder;</span>
+<span class="nc" id="L267">            siteHolder.mSiteHeaderView.setOnBlogInfoLoadedListener(mBlogInfoLoadedListener);</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">            if (isDiscover()) {</span>
+<span class="nc" id="L269">                siteHolder.mSiteHeaderView.loadBlogInfo(</span>
+                        ReaderConstants.DISCOVER_SITE_ID,
+                        0,
+                        mSource
+                );
+            } else {
+<span class="nc" id="L275">                siteHolder.mSiteHeaderView.loadBlogInfo(</span>
+                        mCurrentBlogId,
+                        mCurrentFeedId,
+                        mSource
+                );
+            }
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        } else if (holder instanceof TagHeaderViewHolder) {</span>
+<span class="nc" id="L282">            TagHeaderViewHolder tagHolder = (TagHeaderViewHolder) holder;</span>
+<span class="nc" id="L283">            renderTagHeader(mCurrentTag, tagHolder, true);</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">        } else if (holder instanceof GapMarkerViewHolder) {</span>
+<span class="nc" id="L285">            GapMarkerViewHolder gapHolder = (GapMarkerViewHolder) holder;</span>
+<span class="nc" id="L286">            gapHolder.mGapMarkerView.setCurrentTag(mCurrentTag);</span>
+        }
+<span class="nc" id="L288">    }</span>
+
+    private void renderTagHeader(
+            ReaderTag currentTag,
+            TagHeaderViewHolder tagHolder,
+            Boolean isFollowButtonEnabled
+    ) {
+<span class="nc bnc" id="L295" title="All 2 branches missed.">        if (currentTag == null) {</span>
+<span class="nc" id="L296">            return;</span>
+        }
+<span class="nc" id="L298">        Function0&lt;Unit&gt; onFollowButtonClicked = () -&gt; {</span>
+<span class="nc" id="L299">            toggleFollowButton(tagHolder.itemView.getContext(), currentTag, tagHolder);</span>
+<span class="nc" id="L300">            return Unit.INSTANCE;</span>
+        };
+
+<span class="nc" id="L303">        ReaderTagHeaderUiState uiState = new ReaderTagHeaderUiState(</span>
+<span class="nc" id="L304">                currentTag.getLabel(),</span>
+                new FollowButtonUiState(
+                        onFollowButtonClicked,
+<span class="nc" id="L307">                        ReaderTagTable.isFollowedTagName(currentTag.getTagSlug()),</span>
+<span class="nc" id="L308">                        isFollowButtonEnabled,</span>
+                        true
+                )
+        );
+<span class="nc" id="L312">        tagHolder.onBind(uiState);</span>
+<span class="nc" id="L313">    }</span>
+
+    private void toggleFollowButton(
+            Context context,
+            @NotNull ReaderTag currentTag,
+            TagHeaderViewHolder tagHolder
+    ) {
+<span class="nc bnc" id="L320" title="All 2 branches missed.">        if (!NetworkUtils.checkConnection(context)) {</span>
+<span class="nc" id="L321">            return;</span>
+        }
+
+<span class="nc bnc" id="L324" title="All 2 branches missed.">        final boolean isAskingToFollow = !ReaderTagTable.isFollowedTagName(currentTag.getTagSlug());</span>
+
+<span class="nc" id="L326">        final String slugForTracking = currentTag.getTagSlug();</span>
+
+<span class="nc" id="L328">        ReaderActions.ActionListener listener = succeeded -&gt; {</span>
+<span class="nc bnc" id="L329" title="All 2 branches missed.">            if (!succeeded) {</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">                int errResId = isAskingToFollow ? R.string.reader_toast_err_add_tag</span>
+<span class="nc" id="L331">                        : R.string.reader_toast_err_remove_tag;</span>
+<span class="nc" id="L332">                ToastUtils.showToast(context, errResId);</span>
+<span class="nc" id="L333">            } else {</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">                if (isAskingToFollow) {</span>
+<span class="nc" id="L335">                    mReaderTracker.trackTag(</span>
+                            AnalyticsTracker.Stat.READER_TAG_FOLLOWED,
+                            slugForTracking,
+                            mSource
+                    );
+                } else {
+<span class="nc" id="L341">                    mReaderTracker.trackTag(</span>
+                            AnalyticsTracker.Stat.READER_TAG_UNFOLLOWED,
+                            slugForTracking,
+                            mSource
+                    );
+                }
+            }
+<span class="nc" id="L348">            renderTagHeader(currentTag, tagHolder, true);</span>
+<span class="nc" id="L349">        };</span>
+
+        boolean success;
+<span class="nc" id="L352">        boolean isLoggedIn = mAccountStore.hasAccessToken();</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">        if (isAskingToFollow) {</span>
+<span class="nc" id="L354">            success = ReaderTagActions.addTag(mCurrentTag, listener, isLoggedIn);</span>
+        } else {
+<span class="nc" id="L356">            success = ReaderTagActions.deleteTag(mCurrentTag, listener, isLoggedIn);</span>
+        }
+
+<span class="nc bnc" id="L359" title="All 4 branches missed.">        if (isLoggedIn &amp;&amp; success) {</span>
+<span class="nc" id="L360">            renderTagHeader(currentTag, tagHolder, false);</span>
+        }
+<span class="nc" id="L362">    }</span>
+
+    private void renderXPost(int position, ReaderXPostViewHolder holder) {
+<span class="nc" id="L365">        final ReaderPost post = getItem(position);</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">        if (post == null) {</span>
+<span class="nc" id="L367">            return;</span>
+        }
+
+<span class="nc" id="L370">        mImageManager</span>
+<span class="nc" id="L371">                .loadIntoCircle(holder.mImgAvatar, ImageType.AVATAR,</span>
+<span class="nc" id="L372">                        GravatarUtils.fixGravatarUrl(post.getPostAvatar(), mAvatarSzSmall));</span>
+
+<span class="nc" id="L374">        mImageManager.loadIntoCircle(holder.mImgBlavatar,</span>
+<span class="nc" id="L375">                SiteUtils.getSiteImageType(post.isP2orA8C(), BlavatarShape.CIRCULAR),</span>
+<span class="nc" id="L376">                GravatarUtils.fixGravatarUrl(post.getBlogImageUrl(), mAvatarSzSmall));</span>
+
+<span class="nc" id="L378">        holder.mTxtTitle.setText(ReaderXPostUtils.getXPostTitle(post));</span>
+<span class="nc" id="L379">        holder.mTxtSubtitle.setText(ReaderXPostUtils.getXPostSubtitleHtml(post));</span>
+
+<span class="nc" id="L381">        checkLoadMore(position);</span>
+<span class="nc" id="L382">    }</span>
+
+    private void renderRemovedPost(final int position, final ReaderRemovedPostViewHolder holder) {
+<span class="nc" id="L385">        final ReaderPost post = getItem(position);</span>
+<span class="nc" id="L386">        final Context context = holder.mRemovedPostContainer.getContext();</span>
+<span class="nc" id="L387">        holder.mTxtRemovedPostTitle.setText(createTextForRemovedPostContainer(post, context));</span>
+<span class="nc" id="L388">        Drawable drawable =</span>
+<span class="nc" id="L389">                ColorUtils.applyTintToDrawable(context, R.drawable.ic_undo_white_24dp,</span>
+<span class="nc" id="L390">                        ContextExtensionsKt.getColorResIdFromAttribute(context, R.attr.colorPrimary));</span>
+<span class="nc" id="L391">        holder.mUndoRemoveAction.setCompoundDrawablesWithIntrinsicBounds(drawable, null, null, null);</span>
+<span class="nc" id="L392">        holder.mPostContainer.setOnClickListener(v -&gt; undoPostUnbookmarked(post));</span>
+<span class="nc" id="L393">    }</span>
+
+    private void undoPostUnbookmarked(final ReaderPost post) {
+<span class="nc bnc" id="L396" title="All 2 branches missed.">        if (!post.isBookmarked) {</span>
+<span class="nc" id="L397">            mOnPostListItemButtonListener.onButtonClicked(post, ReaderPostCardActionType.BOOKMARK);</span>
+        }
+<span class="nc" id="L399">    }</span>
+
+    private void renderPost(final int position, final ReaderPostViewHolder holder, boolean showMoreMenu) {
+<span class="nc" id="L402">        final ReaderPost post = getItem(position);</span>
+<span class="nc" id="L403">        ReaderPostListType postListType = getPostListType();</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">        if (post == null) {</span>
+<span class="nc" id="L405">            return;</span>
+        }
+<span class="nc" id="L407">        Context ctx = holder.getViewContext();</span>
+<span class="nc" id="L408">        Function3&lt;Long, Long, ReaderPostCardActionType, Unit&gt; onButtonClicked =</span>
+                (postId, blogId, type) -&gt; {
+<span class="nc" id="L410">                    mOnPostListItemButtonListener.onButtonClicked(post, type);</span>
+<span class="nc" id="L411">                    renderPost(position, holder, false);</span>
+<span class="nc" id="L412">                    return Unit.INSTANCE;</span>
+                };
+<span class="nc" id="L414">        Function2&lt;Long, Long, Unit&gt; onItemClicked = (postId, blogId) -&gt; {</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">            if (mPostSelectedListener != null) {</span>
+<span class="nc" id="L416">                mPostSelectedListener.onPostSelected(post);</span>
+            }
+<span class="nc" id="L418">            return Unit.INSTANCE;</span>
+        };
+<span class="nc" id="L420">        Function1&lt;ReaderCardUiState, Unit&gt; onItemRendered = (item) -&gt; {</span>
+<span class="nc" id="L421">            checkLoadMore(position);</span>
+
+            // if we haven't already rendered this post and it has a &quot;railcar&quot; attached to it, add it
+            // to the rendered list and record the TrainTracks render event
+<span class="nc bnc" id="L425" title="All 4 branches missed.">            if (post.hasRailcar() &amp;&amp; !mRenderedIds.contains(post.getPseudoId())) {</span>
+<span class="nc" id="L426">                mRenderedIds.add(post.getPseudoId());</span>
+<span class="nc" id="L427">                mReaderTracker.trackRailcar(post.getRailcarJson());</span>
+            }
+<span class="nc" id="L429">            return Unit.INSTANCE;</span>
+        };
+<span class="nc" id="L431">        Function2&lt;Long, Long, Unit&gt; onDiscoverSectionClicked = (postId, blogId) -&gt; {</span>
+<span class="nc" id="L432">            ReaderPostDiscoverData discoverData = post.getDiscoverData();</span>
+<span class="nc bnc" id="L433" title="All 3 branches missed.">            switch (discoverData.getDiscoverType()) {</span>
+                case EDITOR_PICK:
+<span class="nc bnc" id="L435" title="All 2 branches missed.">                    if (mPostSelectedListener != null) {</span>
+<span class="nc" id="L436">                        mPostSelectedListener.onPostSelected(post);</span>
+                    }
+                    break;
+                case SITE_PICK:
+<span class="nc bnc" id="L440" title="All 2 branches missed.">                    if (discoverData.getBlogId() != 0) {</span>
+<span class="nc" id="L441">                        ReaderActivityLauncher.showReaderBlogPreview(</span>
+                                ctx,
+<span class="nc" id="L443">                                discoverData.getBlogId(),</span>
+<span class="nc" id="L444">                                post.isFollowedByCurrentUser,</span>
+                                mSource,
+                                mReaderTracker
+                        );
+<span class="nc bnc" id="L448" title="All 2 branches missed.">                    } else if (discoverData.hasBlogUrl()) {</span>
+<span class="nc" id="L449">                        ReaderActivityLauncher.openUrl(ctx, discoverData.getBlogUrl());</span>
+                    }
+                    break;
+                case OTHER:
+                    // noop
+                    break;
+            }
+<span class="nc" id="L456">            return Unit.INSTANCE;</span>
+        };
+<span class="nc" id="L458">        Function1&lt;ReaderPostUiState, Unit&gt; onMoreButtonClicked = (uiState) -&gt; {</span>
+<span class="nc" id="L459">            renderPost(position, holder, true);</span>
+<span class="nc" id="L460">            return Unit.INSTANCE;</span>
+        };
+
+<span class="nc" id="L463">        Function1&lt;ReaderPostUiState, Unit&gt; onMoreDismissed = (uiState) -&gt; {</span>
+<span class="nc" id="L464">            renderPost(position, holder, false);</span>
+<span class="nc" id="L465">            return Unit.INSTANCE;</span>
+        };
+
+<span class="nc" id="L468">        Function2&lt;Long, Long, Unit&gt; onVideoOverlayClicked = (postId, blogId) -&gt; {</span>
+<span class="nc" id="L469">            ReaderActivityLauncher.showReaderVideoViewer(ctx, post.getFeaturedVideo());</span>
+<span class="nc" id="L470">            return Unit.INSTANCE;</span>
+        };
+
+<span class="nc" id="L473">        Function2&lt;Long, Long, Unit&gt; onPostHeaderClicked = (postId, blogId) -&gt; {</span>
+<span class="nc" id="L474">            ReaderActivityLauncher.showReaderBlogPreview(</span>
+                    ctx,
+                    post,
+                    mSource,
+                    mReaderTracker
+            );
+<span class="nc" id="L480">            return Unit.INSTANCE;</span>
+        };
+
+<span class="nc" id="L483">        Function1&lt;String, Unit&gt; onTagItemClicked = (tagSlug) -&gt; {</span>
+            // noop
+<span class="nc" id="L485">            return Unit.INSTANCE;</span>
+        };
+
+<span class="nc" id="L488">        ReaderPostUiState uiState = mReaderPostUiStateBuilder</span>
+<span class="nc" id="L489">                .mapPostToUiStateBlocking(</span>
+                        mSource,
+                        post,
+                        false,
+                        mPhotonWidth,
+                        mPhotonHeight,
+                        postListType,
+                        onButtonClicked,
+                        onItemClicked,
+                        onItemRendered,
+                        onDiscoverSectionClicked,
+                        onMoreButtonClicked,
+                        onMoreDismissed,
+                        onVideoOverlayClicked,
+                        onPostHeaderClicked,
+                        onTagItemClicked,
+<span class="nc bnc" id="L505" title="All 2 branches missed.">                        showMoreMenu ? mReaderPostMoreButtonUiStateBuilder</span>
+<span class="nc" id="L506">                                .buildMoreMenuItemsBlocking(post, onButtonClicked) : null</span>
+                );
+<span class="nc" id="L508">        holder.onBind(uiState);</span>
+<span class="nc" id="L509">    }</span>
+
+    /*
+     * if we're nearing the end of the posts, fire request to load more
+     */
+    private void checkLoadMore(int position) {
+<span class="nc bnc" id="L515" title="All 4 branches missed.">        if (mCanRequestMorePosts</span>
+            &amp;&amp; mDataRequestedListener != null
+<span class="nc bnc" id="L517" title="All 2 branches missed.">            &amp;&amp; (position &gt;= getItemCount() - 1)) {</span>
+<span class="nc" id="L518">            mDataRequestedListener.onRequestData();</span>
+        }
+<span class="nc" id="L520">    }</span>
+
+    // ********************************************************************************************
+
+    public ReaderPostAdapter(
+            Context context,
+            ReaderPostListType postListType,
+            ImageManager imageManager,
+            UiHelpers uiHelpers,
+            boolean isMainReader
+    ) {
+<span class="nc" id="L531">        super();</span>
+<span class="nc" id="L532">        ((WordPress) context.getApplicationContext()).component().inject(this);</span>
+<span class="nc" id="L533">        this.mImageManager = imageManager;</span>
+<span class="nc" id="L534">        mPostListType = postListType;</span>
+<span class="nc" id="L535">        mSource = mReaderTracker.getSource(mPostListType);</span>
+<span class="nc" id="L536">        mUiHelpers = uiHelpers;</span>
+<span class="nc" id="L537">        mAvatarSzSmall = context.getResources().getDimensionPixelSize(R.dimen.avatar_sz_small);</span>
+<span class="nc" id="L538">        mIsMainReader = isMainReader;</span>
+
+<span class="nc" id="L540">        int displayWidth = DisplayUtils.getWindowPixelWidth(context);</span>
+<span class="nc" id="L541">        int cardMargin = context.getResources().getDimensionPixelSize(R.dimen.reader_card_margin);</span>
+<span class="nc" id="L542">        mPhotonWidth = displayWidth - (cardMargin * 2);</span>
+<span class="nc" id="L543">        mPhotonHeight = (int) (mPhotonWidth / READER_FEATURED_IMAGE_ASPECT_RATIO);</span>
+
+<span class="nc" id="L545">        setHasStableIds(true);</span>
+<span class="nc" id="L546">    }</span>
+
+    private boolean hasHeader() {
+<span class="nc bnc" id="L549" title="All 4 branches missed.">        return hasSiteHeader() || hasTagHeader();</span>
+    }
+
+    private boolean hasSiteHeader() {
+<span class="nc bnc" id="L553" title="All 6 branches missed.">        return !mIsMainReader &amp;&amp; (isDiscover() || getPostListType() == ReaderTypes.ReaderPostListType.BLOG_PREVIEW);</span>
+    }
+
+    private boolean hasTagHeader() {
+<span class="nc bnc" id="L557" title="All 4 branches missed.">        return (getPostListType() == ReaderPostListType.TAG_PREVIEW) &amp;&amp; !isEmpty();</span>
+    }
+
+    private boolean isDiscover() {
+<span class="nc bnc" id="L561" title="All 4 branches missed.">        return mCurrentTag != null &amp;&amp; mCurrentTag.isDiscover();</span>
+    }
+
+    public void setOnPostListItemButtonListener(OnPostListItemButtonListener listener) {
+<span class="nc" id="L565">        mOnPostListItemButtonListener = listener;</span>
+<span class="nc" id="L566">    }</span>
+
+    public void setOnFollowListener(OnFollowListener listener) {
+<span class="nc" id="L569">        mFollowListener = listener;</span>
+<span class="nc" id="L570">    }</span>
+
+    public void setOnPostSelectedListener(ReaderInterfaces.OnPostSelectedListener listener) {
+<span class="nc" id="L573">        mPostSelectedListener = listener;</span>
+<span class="nc" id="L574">    }</span>
+
+    public void setOnDataLoadedListener(ReaderInterfaces.DataLoadedListener listener) {
+<span class="nc" id="L577">        mDataLoadedListener = listener;</span>
+<span class="nc" id="L578">    }</span>
+
+    public void setOnDataRequestedListener(ReaderActions.DataRequestedListener listener) {
+<span class="nc" id="L581">        mDataRequestedListener = listener;</span>
+<span class="nc" id="L582">    }</span>
+
+    public void setOnBlogInfoLoadedListener(ReaderSiteHeaderView.OnBlogInfoLoadedListener listener) {
+<span class="nc" id="L585">        mBlogInfoLoadedListener = listener;</span>
+<span class="nc" id="L586">    }</span>
+
+    private ReaderTypes.ReaderPostListType getPostListType() {
+<span class="nc bnc" id="L589" title="All 2 branches missed.">        return (mPostListType != null ? mPostListType : ReaderTypes.DEFAULT_POST_LIST_TYPE);</span>
+    }
+
+    // used when the viewing tagged posts
+    public void setCurrentTag(ReaderTag tag) {
+<span class="nc" id="L594">        mSource = mReaderTracker.getSource(mPostListType, ReaderTab.transformTagToTab(tag));</span>
+<span class="nc bnc" id="L595" title="All 2 branches missed.">        if (!ReaderTag.isSameTag(tag, mCurrentTag)) {</span>
+<span class="nc" id="L596">            mCurrentTag = tag;</span>
+<span class="nc" id="L597">            mRenderedIds.clear();</span>
+<span class="nc" id="L598">            reload();</span>
+        }
+<span class="nc" id="L600">    }</span>
+
+    public boolean isCurrentTag(ReaderTag tag) {
+<span class="nc" id="L603">        return ReaderTag.isSameTag(tag, mCurrentTag);</span>
+    }
+
+    // used when the list type is ReaderPostListType.BLOG_PREVIEW
+    public void setCurrentBlogAndFeed(long blogId, long feedId) {
+<span class="nc bnc" id="L608" title="All 4 branches missed.">        if (blogId != mCurrentBlogId || feedId != mCurrentFeedId) {</span>
+<span class="nc" id="L609">            mCurrentBlogId = blogId;</span>
+<span class="nc" id="L610">            mCurrentFeedId = feedId;</span>
+<span class="nc" id="L611">            mRenderedIds.clear();</span>
+<span class="nc" id="L612">            reload();</span>
+        }
+<span class="nc" id="L614">    }</span>
+
+    public void clear() {
+<span class="nc" id="L617">        mGapMarkerPosition = -1;</span>
+<span class="nc bnc" id="L618" title="All 2 branches missed.">        if (!mPosts.isEmpty()) {</span>
+<span class="nc" id="L619">            mPosts.clear();</span>
+<span class="nc" id="L620">            notifyDataSetChanged();</span>
+        }
+<span class="nc" id="L622">    }</span>
+
+    public void refresh() {
+<span class="nc" id="L625">        loadPosts();</span>
+<span class="nc" id="L626">    }</span>
+
+    /*
+     * same as refresh() above but first clears the existing posts
+     */
+    public void reload() {
+<span class="nc" id="L632">        clear();</span>
+<span class="nc" id="L633">        loadPosts();</span>
+<span class="nc" id="L634">    }</span>
+
+    private void loadPosts() {
+<span class="nc bnc" id="L637" title="All 2 branches missed.">        if (mIsTaskRunning) {</span>
+<span class="nc" id="L638">            AppLog.w(AppLog.T.READER, &quot;reader posts task already running&quot;);</span>
+<span class="nc" id="L639">            return;</span>
+        }
+<span class="nc" id="L641">        new LoadPostsTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);</span>
+<span class="nc" id="L642">    }</span>
+
+    private ReaderPost getItem(int position) {
+<span class="nc bnc" id="L645" title="All 4 branches missed.">        if (position == getHeaderPosition() &amp;&amp; hasHeader()) {</span>
+<span class="nc" id="L646">            return null;</span>
+        }
+<span class="nc bnc" id="L648" title="All 2 branches missed.">        if (position == mGapMarkerPosition) {</span>
+<span class="nc" id="L649">            return null;</span>
+        }
+
+<span class="nc" id="L652">        int arrayPos = position - getItemPositionOffset();</span>
+
+<span class="nc bnc" id="L654" title="All 4 branches missed.">        if (mGapMarkerPosition &gt; -1 &amp;&amp; position &gt; mGapMarkerPosition) {</span>
+<span class="nc" id="L655">            arrayPos--;</span>
+        }
+
+<span class="nc bnc" id="L658" title="All 2 branches missed.">        if (mPosts.size() &lt;= arrayPos) {</span>
+<span class="nc" id="L659">            AppLog.d(T.READER, &quot;Trying to read an element out of bounds of the posts list&quot;);</span>
+<span class="nc" id="L660">            return null;</span>
+        }
+
+<span class="nc" id="L663">        return mPosts.get(arrayPos);</span>
+    }
+
+    private int getItemPositionOffset() {
+<span class="nc bnc" id="L667" title="All 2 branches missed.">        return hasHeader() ? 1 : 0;</span>
+    }
+
+    private int getHeaderPosition() {
+<span class="nc bnc" id="L671" title="All 2 branches missed.">        return hasHeader() ? 0 : -1;</span>
+    }
+
+    @Override
+    public int getItemCount() {
+<span class="nc" id="L676">        int size = mPosts.size();</span>
+<span class="nc bnc" id="L677" title="All 2 branches missed.">        if (mGapMarkerPosition != -1) {</span>
+<span class="nc" id="L678">            size++;</span>
+        }
+<span class="nc bnc" id="L680" title="All 2 branches missed.">        if (hasHeader()) {</span>
+<span class="nc" id="L681">            size++;</span>
+        }
+<span class="nc" id="L683">        return size;</span>
+    }
+
+    public boolean isEmpty() {
+<span class="nc bnc" id="L687" title="All 4 branches missed.">        return (mPosts == null || mPosts.size() == 0);</span>
+    }
+
+    private boolean isBookmarksList() {
+<span class="nc bnc" id="L691" title="All 4 branches missed.">        return (getPostListType() == ReaderPostListType.TAG_FOLLOWED</span>
+<span class="nc bnc" id="L692" title="All 2 branches missed.">                &amp;&amp; (mCurrentTag != null &amp;&amp; mCurrentTag.isBookmarked()));</span>
+    }
+
+    @Override
+    public long getItemId(int position) {
+<span class="nc bnc" id="L697" title="All 3 branches missed.">        switch (getItemViewType(position)) {</span>
+            case VIEW_TYPE_TAG_HEADER:
+            case VIEW_TYPE_SITE_HEADER:
+<span class="nc" id="L700">                return ITEM_ID_HEADER;</span>
+            case VIEW_TYPE_GAP_MARKER:
+<span class="nc" id="L702">                return ITEM_ID_GAP_MARKER;</span>
+            default:
+<span class="nc" id="L704">                ReaderPost post = getItem(position);</span>
+<span class="nc bnc" id="L705" title="All 2 branches missed.">                return post != null ? post.getStableId() : 0;</span>
+        }
+    }
+
+    /**
+     * Creates 'Removed [post title]' text, with the '[post title]' in bold.
+     */
+    @NonNull
+    private SpannableStringBuilder createTextForRemovedPostContainer(ReaderPost post, Context context) {
+<span class="nc" id="L714">        String removedString = context.getString(R.string.removed);</span>
+<span class="nc" id="L715">        String removedPostTitle = removedString + &quot; &quot; + post.getTitle();</span>
+<span class="nc" id="L716">        SpannableStringBuilder str = new SpannableStringBuilder(removedPostTitle);</span>
+<span class="nc" id="L717">        str.setSpan(new StyleSpan(Typeface.BOLD), removedString.length(), removedPostTitle.length(),</span>
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+<span class="nc" id="L719">        return str;</span>
+    }
+
+    public void setFollowStatusForBlog(long blogId, boolean isFollowing) {
+        ReaderPost post;
+<span class="nc bnc" id="L724" title="All 2 branches missed.">        for (int i = 0; i &lt; mPosts.size(); i++) {</span>
+<span class="nc" id="L725">            post = mPosts.get(i);</span>
+<span class="nc bnc" id="L726" title="All 4 branches missed.">            if (post.blogId == blogId &amp;&amp; post.isFollowedByCurrentUser != isFollowing) {</span>
+<span class="nc" id="L727">                post.isFollowedByCurrentUser = isFollowing;</span>
+<span class="nc" id="L728">                mPosts.set(i, post);</span>
+<span class="nc" id="L729">                notifyItemChanged(i);</span>
+            }
+        }
+<span class="nc" id="L732">    }</span>
+
+    public void removeGapMarker() {
+<span class="nc bnc" id="L735" title="All 2 branches missed.">        if (mGapMarkerPosition == -1) {</span>
+<span class="nc" id="L736">            return;</span>
+        }
+
+<span class="nc" id="L739">        int position = mGapMarkerPosition;</span>
+<span class="nc" id="L740">        mGapMarkerPosition = -1;</span>
+<span class="nc bnc" id="L741" title="All 2 branches missed.">        if (position &lt; getItemCount()) {</span>
+<span class="nc" id="L742">            notifyItemRemoved(position);</span>
+        }
+<span class="nc" id="L744">    }</span>
+
+    /*
+     * AsyncTask to load posts in the current tag
+     */
+<span class="nc" id="L749">    private boolean mIsTaskRunning = false;</span>
+
+    @SuppressLint(&quot;StaticFieldLeak&quot;)
+<span class="nc" id="L752">    private class LoadPostsTask extends AsyncTask&lt;Void, Void, Boolean&gt; {</span>
+        private ReaderPostList mAllPosts;
+
+        private boolean mCanRequestMorePostsTemp;
+        private int mGapMarkerPositionTemp;
+
+        @Override
+        protected void onPreExecute() {
+<span class="nc" id="L760">            mIsTaskRunning = true;</span>
+<span class="nc" id="L761">        }</span>
+
+        @Override
+        protected void onCancelled() {
+<span class="nc" id="L765">            mIsTaskRunning = false;</span>
+<span class="nc" id="L766">        }</span>
+
+        @Override
+        protected Boolean doInBackground(Void... params) {
+            int numExisting;
+<span class="nc bnc" id="L771" title="All 3 branches missed.">            switch (getPostListType()) {</span>
+                case TAG_PREVIEW:
+                case TAG_FOLLOWED:
+                case SEARCH_RESULTS:
+<span class="nc" id="L775">                    mAllPosts = ReaderPostTable.getPostsWithTag(mCurrentTag, MAX_ROWS, EXCLUDE_TEXT_COLUMN);</span>
+<span class="nc" id="L776">                    numExisting = ReaderPostTable.getNumPostsWithTag(mCurrentTag);</span>
+<span class="nc" id="L777">                    break;</span>
+                case BLOG_PREVIEW:
+<span class="nc bnc" id="L779" title="All 2 branches missed.">                    if (mCurrentFeedId != 0) {</span>
+<span class="nc" id="L780">                        mAllPosts = ReaderPostTable.getPostsInFeed(mCurrentFeedId, MAX_ROWS, EXCLUDE_TEXT_COLUMN);</span>
+<span class="nc" id="L781">                        numExisting = ReaderPostTable.getNumPostsInFeed(mCurrentFeedId);</span>
+                    } else {
+<span class="nc" id="L783">                        mAllPosts = ReaderPostTable.getPostsInBlog(mCurrentBlogId, MAX_ROWS, EXCLUDE_TEXT_COLUMN);</span>
+<span class="nc" id="L784">                        numExisting = ReaderPostTable.getNumPostsInBlog(mCurrentBlogId);</span>
+                    }
+<span class="nc" id="L786">                    break;</span>
+                default:
+<span class="nc" id="L788">                    return false;</span>
+            }
+
+<span class="nc bnc" id="L791" title="All 2 branches missed.">            if (mPosts.isSameListWithBookmark(mAllPosts)) {</span>
+<span class="nc" id="L792">                return false;</span>
+            }
+
+            // if we're not already displaying the max # posts, enable requesting more when
+            // the user scrolls to the end of the list
+<span class="nc bnc" id="L797" title="All 2 branches missed.">            mCanRequestMorePostsTemp = (numExisting &lt; ReaderConstants.READER_MAX_POSTS_TO_DISPLAY);</span>
+
+            // determine whether a gap marker exists - only applies to tagged posts
+<span class="nc" id="L800">            mGapMarkerPositionTemp = getGapMarkerPosition();</span>
+
+<span class="nc" id="L802">            return true;</span>
+        }
+
+        private int getGapMarkerPosition() {
+<span class="nc bnc" id="L806" title="All 2 branches missed.">            if (!getPostListType().isTagType()) {</span>
+<span class="nc" id="L807">                return -1;</span>
+            }
+
+<span class="nc" id="L810">            ReaderBlogIdPostId gapMarkerIds = ReaderPostTable.getGapMarkerIdsForTag(mCurrentTag);</span>
+<span class="nc bnc" id="L811" title="All 2 branches missed.">            if (gapMarkerIds == null) {</span>
+<span class="nc" id="L812">                return -1;</span>
+            }
+
+<span class="nc" id="L815">            int gapMarkerPostPosition = mAllPosts.indexOfIds(gapMarkerIds);</span>
+<span class="nc" id="L816">            int gapMarkerPosition = -1;</span>
+<span class="nc bnc" id="L817" title="All 2 branches missed.">            if (gapMarkerPostPosition &gt; -1) {</span>
+                // remove the gap marker if it's on the last post (edge case but
+                // it can happen following a purge)
+<span class="nc bnc" id="L820" title="All 2 branches missed.">                if (gapMarkerPostPosition == mAllPosts.size() - 1) {</span>
+<span class="nc" id="L821">                    AppLog.w(AppLog.T.READER, &quot;gap marker at/after last post, removed&quot;);</span>
+<span class="nc" id="L822">                    ReaderPostTable.removeGapMarkerForTag(mCurrentTag);</span>
+                } else {
+                    // we want the gap marker to appear *below* this post
+<span class="nc" id="L825">                    gapMarkerPosition = gapMarkerPostPosition + 1;</span>
+                    // increment it if there are custom items at the top of the list (header)
+<span class="nc" id="L827">                    gapMarkerPosition += getItemPositionOffset();</span>
+<span class="nc" id="L828">                    AppLog.d(AppLog.T.READER, &quot;gap marker at position &quot; + gapMarkerPostPosition);</span>
+                }
+            }
+<span class="nc" id="L831">            return gapMarkerPosition;</span>
+        }
+
+        @Override
+        protected void onPostExecute(Boolean result) {
+<span class="nc bnc" id="L836" title="All 2 branches missed.">            if (result) {</span>
+<span class="nc" id="L837">                ReaderPostAdapter.this.mGapMarkerPosition = mGapMarkerPositionTemp;</span>
+<span class="nc" id="L838">                ReaderPostAdapter.this.mCanRequestMorePosts = mCanRequestMorePostsTemp;</span>
+<span class="nc" id="L839">                mPosts.clear();</span>
+<span class="nc" id="L840">                mPosts.addAll(mAllPosts);</span>
+<span class="nc" id="L841">                notifyDataSetChanged();</span>
+            }
+
+<span class="nc bnc" id="L844" title="All 2 branches missed.">            if (mDataLoadedListener != null) {</span>
+<span class="nc" id="L845">                mDataLoadedListener.onDataLoaded(isEmpty());</span>
+            }
+
+<span class="nc" id="L848">            mIsTaskRunning = false;</span>
+<span class="nc" id="L849">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

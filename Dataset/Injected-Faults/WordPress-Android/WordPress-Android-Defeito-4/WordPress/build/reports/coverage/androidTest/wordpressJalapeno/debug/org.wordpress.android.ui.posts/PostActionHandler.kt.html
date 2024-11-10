@@ -1,0 +1,387 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostActionHandler.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts</a> &gt; <span class="el_source">PostActionHandler.kt</span></div><h1>PostActionHandler.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts
+
+import android.content.Intent
+import com.google.android.material.snackbar.Snackbar
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.PostActionBuilder
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.PostModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.post.PostStatus.DRAFT
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.fluxc.store.PostStore.RemotePostPayload
+import org.wordpress.android.ui.notifications.utils.PendingDraftsNotificationsUtils
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.posts.CriticalPostActionTracker.CriticalPostAction.DELETING_POST
+import org.wordpress.android.ui.posts.CriticalPostActionTracker.CriticalPostAction.MOVING_POST_TO_DRAFT
+import org.wordpress.android.ui.posts.CriticalPostActionTracker.CriticalPostAction.RESTORING_POST
+import org.wordpress.android.ui.posts.CriticalPostActionTracker.CriticalPostAction.TRASHING_POST
+import org.wordpress.android.ui.posts.CriticalPostActionTracker.CriticalPostAction.TRASHING_POST_WITH_LOCAL_CHANGES
+import org.wordpress.android.ui.posts.PostListAction.DismissPendingNotification
+import org.wordpress.android.ui.posts.PostListAction.PreviewPost
+import org.wordpress.android.ui.posts.PostListAction.RetryUpload
+import org.wordpress.android.ui.posts.PostListAction.ViewPost
+import org.wordpress.android.ui.posts.PostListAction.ViewStats
+import org.wordpress.android.ui.posts.PostUploadAction.CancelPostAndMediaUpload
+import org.wordpress.android.ui.posts.PostUploadAction.EditPostResult
+import org.wordpress.android.ui.posts.PostUploadAction.PublishPost
+import org.wordpress.android.ui.posts.RemotePreviewLogicHelper.RemotePreviewType
+import org.wordpress.android.ui.uploads.UploadService
+import org.wordpress.android.ui.uploads.UploadUtils
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.ToastUtils.Duration
+import org.wordpress.android.viewmodel.helpers.ToastMessageHolder
+import org.wordpress.android.widgets.PostListButtonType
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_CANCEL_PENDING_AUTO_UPLOAD
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_COPY
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_COPY_URL
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_DELETE
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_DELETE_PERMANENTLY
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_EDIT
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_MORE
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_MOVE_TO_DRAFT
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_PREVIEW
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_PUBLISH
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_RETRY
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_SHOW_MOVE_TRASHED_POST_TO_DRAFT_DIALOG
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_STATS
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_SUBMIT
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_SYNC
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_TRASH
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_VIEW
+
+/**
+ * This is a temporary class to make the PostListViewModel more manageable. Please feel free to refactor it any way
+ * you see fit.
+ */
+<span class="nc" id="L58">class PostActionHandler(</span>
+<span class="nc" id="L59">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L60">    private val site: SiteModel,</span>
+<span class="nc" id="L61">    private val postStore: PostStore,</span>
+<span class="nc" id="L62">    private val postListDialogHelper: PostListDialogHelper,</span>
+<span class="nc" id="L63">    private val doesPostHaveUnhandledConflict: (PostModel) -&gt; Boolean,</span>
+<span class="nc" id="L64">    private val hasUnhandledAutoSave: (PostModel) -&gt; Boolean,</span>
+<span class="nc" id="L65">    private val triggerPostListAction: (PostListAction) -&gt; Unit,</span>
+<span class="nc" id="L66">    private val triggerPostUploadAction: (PostUploadAction) -&gt; Unit,</span>
+<span class="nc" id="L67">    private val triggerPublishAction: (PostModel) -&gt; Unit,</span>
+<span class="nc" id="L68">    private val invalidateList: () -&gt; Unit,</span>
+<span class="nc" id="L69">    private val checkNetworkConnection: () -&gt; Boolean,</span>
+<span class="nc" id="L70">    private val showSnackbar: (SnackbarMessageHolder) -&gt; Unit,</span>
+<span class="nc" id="L71">    private val showToast: (ToastMessageHolder) -&gt; Unit,</span>
+<span class="nc" id="L72">    private val triggerPreviewStateUpdate: (PostListRemotePreviewState, PostInfoType) -&gt; Unit,</span>
+<span class="nc" id="L73">    private val copyPost: (SiteModel, PostModel, Boolean) -&gt; Unit</span>
+) {
+<span class="nc" id="L75">    private val criticalPostActionTracker = CriticalPostActionTracker(onStateChanged = {</span>
+<span class="nc" id="L76">        invalidateList.invoke()</span>
+<span class="nc" id="L77">    })</span>
+
+    fun handlePostButton(buttonType: PostListButtonType, post: PostModel, hasAutoSave: Boolean) {
+<span class="nc bnc" id="L80" title="All 16 branches missed.">        when (buttonType) {</span>
+<span class="nc" id="L81">            BUTTON_EDIT -&gt; editPostButtonAction(site, post)</span>
+<span class="nc" id="L82">            BUTTON_RETRY -&gt; triggerPostListAction.invoke(RetryUpload(post))</span>
+            BUTTON_MOVE_TO_DRAFT -&gt; {
+<span class="nc" id="L84">                moveTrashedPostToDraft(post)</span>
+            }
+            BUTTON_PUBLISH -&gt; {
+<span class="nc" id="L87">                triggerPublishAction.invoke(post)</span>
+            }
+            BUTTON_SYNC -&gt; {
+<span class="nc" id="L90">                postListDialogHelper.showSyncScheduledPostConfirmationDialog(post)</span>
+            }
+<span class="nc" id="L92">            BUTTON_SUBMIT -&gt; publishPost(post.id)</span>
+<span class="nc" id="L93">            BUTTON_VIEW -&gt; triggerPostListAction.invoke(ViewPost(site, post))</span>
+<span class="nc" id="L94">            BUTTON_PREVIEW -&gt; triggerPostListAction.invoke(</span>
+<span class="nc" id="L95">                    PreviewPost(</span>
+<span class="nc" id="L96">                            site = site,</span>
+<span class="nc" id="L97">                            post = post,</span>
+<span class="nc" id="L98">                            triggerPreviewStateUpdate = triggerPreviewStateUpdate,</span>
+<span class="nc" id="L99">                            showToast = showToast,</span>
+<span class="nc" id="L100">                            messageMediaUploading = ToastMessageHolder(</span>
+<span class="nc" id="L101">                                    R.string.editor_toast_uploading_please_wait,</span>
+<span class="nc" id="L102">                                    Duration.SHORT</span>
+                            )
+                    )
+            )
+<span class="nc" id="L106">            BUTTON_STATS -&gt; triggerPostListAction.invoke(ViewStats(site, post))</span>
+            BUTTON_TRASH -&gt; {
+<span class="nc" id="L108">                when {</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">                    post.isLocallyChanged -&gt; {</span>
+<span class="nc" id="L110">                        postListDialogHelper.showTrashPostWithLocalChangesConfirmationDialog(post)</span>
+                    }
+<span class="nc bnc" id="L112" title="All 2 branches missed.">                    hasAutoSave -&gt; {</span>
+<span class="nc" id="L113">                        postListDialogHelper.showTrashPostWithUnsavedChangesConfirmationDialog(post)</span>
+                    }
+<span class="nc" id="L115">                    else -&gt; trashPost(post)</span>
+                }
+            }
+<span class="nc" id="L118">            BUTTON_COPY -&gt; copyPost(site, post, true)</span>
+<span class="nc" id="L119">            BUTTON_COPY_URL -&gt; triggerPostListAction.invoke(copyUrlAction(post))</span>
+            BUTTON_DELETE, BUTTON_DELETE_PERMANENTLY -&gt; {
+<span class="nc" id="L121">                postListDialogHelper.showDeletePostConfirmationDialog(post)</span>
+            }
+            BUTTON_CANCEL_PENDING_AUTO_UPLOAD -&gt; {
+<span class="nc" id="L124">                cancelPendingAutoUpload(post)</span>
+            }
+            BUTTON_SHOW_MOVE_TRASHED_POST_TO_DRAFT_DIALOG -&gt; {
+<span class="nc" id="L127">                postListDialogHelper.showMoveTrashedPostToDraftDialog(post)</span>
+            }
+            BUTTON_MORE -&gt; {
+            } // do nothing - ui will show a popup window
+        }
+<span class="nc" id="L132">    }</span>
+
+<span class="nc" id="L134">    private fun copyUrlAction(post: PostModel) = PostListAction.CopyUrl(</span>
+<span class="nc" id="L135">            site = site,</span>
+<span class="nc" id="L136">            post = post,</span>
+<span class="nc" id="L137">            showSnackbar = showSnackbar,</span>
+<span class="nc" id="L138">            messageSuccess = SnackbarMessageHolder(</span>
+<span class="nc" id="L139">                    UiStringRes(R.string.post_link_copied_to_clipboard),</span>
+<span class="nc" id="L140">                    duration = Snackbar.LENGTH_SHORT,</span>
+<span class="nc" id="L141">                    isImportant = false</span>
+            ),
+<span class="nc" id="L143">            messageError = SnackbarMessageHolder(</span>
+<span class="nc" id="L144">                    UiStringRes(R.string.error_copy_to_clipboard),</span>
+<span class="nc" id="L145">                    duration = Snackbar.LENGTH_SHORT,</span>
+<span class="nc" id="L146">                    isImportant = false</span>
+            )
+<span class="nc" id="L148">    )</span>
+
+    private fun cancelPendingAutoUpload(post: PostModel) {
+<span class="nc" id="L151">        val msgRes = UploadUtils.cancelPendingAutoUpload(post, dispatcher)</span>
+<span class="nc" id="L152">        showSnackbar.invoke(SnackbarMessageHolder(UiStringRes(msgRes)))</span>
+<span class="nc" id="L153">    }</span>
+
+    fun newPost() {
+<span class="nc" id="L156">        triggerPostListAction(PostListAction.NewPost(site))</span>
+<span class="nc" id="L157">    }</span>
+
+    fun newStoryPost() {
+<span class="nc" id="L160">        triggerPostListAction(PostListAction.NewStoryPost(site))</span>
+<span class="nc" id="L161">    }</span>
+
+    fun handleEditPostResult(data: Intent?) {
+<span class="nc bnc" id="L164" title="All 2 branches missed.">        val localPostId = data?.getIntExtra(EditPostActivity.EXTRA_POST_LOCAL_ID, 0)</span>
+<span class="nc bnc" id="L165" title="All 4 branches missed.">        if (localPostId == null || localPostId == 0) {</span>
+<span class="nc" id="L166">            return</span>
+        }
+<span class="nc" id="L168">        val post = postStore.getPostByLocalPostId(localPostId)</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L170">            triggerPostUploadAction(EditPostResult(site, post, data) { publishPost(localPostId) })</span>
+        }
+<span class="nc" id="L172">    }</span>
+
+    fun handleRemotePreview(localPostId: Int, remotePreviewType: RemotePreviewType) {
+<span class="nc" id="L175">        val post = postStore.getPostByLocalPostId(localPostId)</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L177">            triggerPostListAction.invoke(PostListAction.RemotePreviewPost(site, post, remotePreviewType))</span>
+        }
+<span class="nc" id="L179">    }</span>
+
+    fun publishPost(localPostId: Int) {
+<span class="nc" id="L182">        val post = postStore.getPostByLocalPostId(localPostId)</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L184">            triggerPostUploadAction.invoke(PublishPost(dispatcher, site, post))</span>
+        }
+<span class="nc" id="L186">    }</span>
+
+    fun publishPost(post: PostModel) {
+<span class="nc" id="L189">        triggerPostUploadAction.invoke(PublishPost(dispatcher, site, post))</span>
+<span class="nc" id="L190">    }</span>
+
+    fun resolveConflictsAndEditPost(localPostId: Int) {
+<span class="nc" id="L193">        val post = postStore.getPostByLocalPostId(localPostId)</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L195">            performChecksAndEdit(site, post)</span>
+        }
+<span class="nc" id="L197">    }</span>
+
+    fun moveTrashedPostToDraft(localPostId: Int) {
+<span class="nc" id="L200">        val post = postStore.getPostByLocalPostId(localPostId)</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L202">            moveTrashedPostToDraft(post)</span>
+        }
+<span class="nc" id="L204">    }</span>
+
+    private fun moveTrashedPostToDraft(post: PostModel) {
+        /*
+         * We need network connection to move a post to remote draft. We can technically move it to the local drafts
+         * but that'll leave the trashed post in the remote which can be confusing.
+         */
+<span class="nc bnc" id="L211" title="All 2 branches missed.">        if (!checkNetworkConnection.invoke()) {</span>
+<span class="nc" id="L212">            return</span>
+        }
+<span class="nc" id="L214">        post.setStatus(DRAFT.toString())</span>
+<span class="nc" id="L215">        dispatcher.dispatch(PostActionBuilder.newPushPostAction(RemotePostPayload(post, site)))</span>
+
+<span class="nc" id="L217">        val localPostId = LocalId(post.id)</span>
+<span class="nc" id="L218">        criticalPostActionTracker.add(localPostId, MOVING_POST_TO_DRAFT)</span>
+
+<span class="nc" id="L220">        val snackBarHolder = SnackbarMessageHolder(</span>
+<span class="nc" id="L221">                message = UiStringRes(R.string.post_moving_to_draft),</span>
+                onDismissAction = {
+<span class="nc" id="L223">                    criticalPostActionTracker.remove(localPostId, MOVING_POST_TO_DRAFT)</span>
+<span class="nc" id="L224">                }</span>
+        )
+<span class="nc" id="L226">        showSnackbar.invoke(snackBarHolder)</span>
+<span class="nc" id="L227">    }</span>
+
+<span class="nc" id="L229">    private fun editPostButtonAction(site: SiteModel, post: PostModel) = performChecksAndEdit(site, post)</span>
+
+    private fun performChecksAndEdit(site: SiteModel, post: PostModel) {
+        // first of all, check whether this post is in Conflicted state with a more recent remote version
+<span class="nc bnc" id="L233" title="All 2 branches missed.">        if (doesPostHaveUnhandledConflict.invoke(post)) {</span>
+<span class="nc" id="L234">            postListDialogHelper.showConflictedPostResolutionDialog(post)</span>
+<span class="nc" id="L235">            return</span>
+        }
+
+        // Then check if an autosave revision is available
+<span class="nc bnc" id="L239" title="All 2 branches missed.">        if (hasUnhandledAutoSave.invoke(post)) {</span>
+<span class="nc" id="L240">            postListDialogHelper.showAutoSaveRevisionDialog(post)</span>
+<span class="nc" id="L241">            return</span>
+        }
+
+<span class="nc" id="L244">        editPost(site, post)</span>
+<span class="nc" id="L245">    }</span>
+
+    private fun editPost(site: SiteModel, post: PostModel) {
+<span class="nc bnc" id="L248" title="All 2 branches missed.">        if (UploadService.isPostUploadingOrQueued(post)) {</span>
+            // If the post is uploading media, allow the media to continue uploading, but don't upload the
+            // post itself when they finish (since we're about to edit it again)
+<span class="nc" id="L251">            UploadService.cancelQueuedPostUpload(post)</span>
+        }
+<span class="nc" id="L253">        triggerPostListAction.invoke(PostListAction.EditPost(site, post, loadAutoSaveRevision = false))</span>
+<span class="nc" id="L254">    }</span>
+
+    fun deletePost(localPostId: Int) {
+        // If post doesn't exist, nothing else to do
+<span class="nc bnc" id="L258" title="All 2 branches missed.">        val post = postStore.getPostByLocalPostId(localPostId) ?: return</span>
+<span class="nc" id="L259">        criticalPostActionTracker.add(LocalId(post.id), DELETING_POST)</span>
+
+<span class="nc" id="L261">        when {</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">            post.isLocalDraft -&gt; {</span>
+<span class="nc" id="L263">                val pushId = PendingDraftsNotificationsUtils.makePendingDraftNotificationId(post.id)</span>
+<span class="nc" id="L264">                triggerPostListAction(DismissPendingNotification(pushId))</span>
+<span class="nc" id="L265">                dispatcher.dispatch(PostActionBuilder.newRemovePostAction(post))</span>
+            }
+            else -&gt; {
+<span class="nc" id="L268">                dispatcher.dispatch(PostActionBuilder.newDeletePostAction(RemotePostPayload(post, site)))</span>
+            }
+        }
+<span class="nc" id="L271">    }</span>
+
+    /**
+     * This function handles a post being deleted and removed. Since deleting remote posts will trigger both delete
+     * and remove actions we only want to remove the critical action when the post is actually successfully removed.
+     *
+     * It's possible to separate these into two methods that handles delete and remove. However, the fact that they
+     * follow the same approach and the tricky nature of delete action makes combining the actions like so makes our
+     * expectations clearer.
+     */
+    fun handlePostDeletedOrRemoved(localPostId: LocalId, isRemoved: Boolean, isError: Boolean) {
+<span class="nc bnc" id="L282" title="All 2 branches missed.">        if (criticalPostActionTracker.get(localPostId) != DELETING_POST) {</span>
+            /*
+             * This is an unexpected action and either it has already been handled or another critical action has
+             * been performed. In either case, safest action is to just ignore it.
+             */
+<span class="nc" id="L287">            return</span>
+        }
+<span class="nc bnc" id="L289" title="All 2 branches missed.">        if (isError) {</span>
+<span class="nc" id="L290">            showToast.invoke(ToastMessageHolder(R.string.error_deleting_post, Duration.SHORT))</span>
+        }
+<span class="nc bnc" id="L292" title="All 2 branches missed.">        if (isRemoved) {</span>
+<span class="nc" id="L293">            criticalPostActionTracker.remove(localPostId = localPostId, criticalPostAction = DELETING_POST)</span>
+        }
+<span class="nc" id="L295">    }</span>
+
+    fun trashPostWithLocalChanges(localPostId: Int) {
+        // If post doesn't exist, nothing else to do
+<span class="nc bnc" id="L299" title="All 2 branches missed.">        val post = postStore.getPostByLocalPostId(localPostId) ?: return</span>
+<span class="nc" id="L300">        trashPost(post, true)</span>
+<span class="nc" id="L301">    }</span>
+
+    fun trashPostWithUnsavedChanges(localPostId: Int) {
+<span class="nc bnc" id="L304" title="All 2 branches missed.">        val post = postStore.getPostByLocalPostId(localPostId) ?: return</span>
+<span class="nc" id="L305">        trashPost(post)</span>
+<span class="nc" id="L306">    }</span>
+
+<span class="nc" id="L308">    private fun trashPost(post: PostModel, hasLocalChanges: Boolean = false) {</span>
+        // We need network connection to trash a post
+<span class="nc bnc" id="L310" title="All 2 branches missed.">        if (!checkNetworkConnection()) {</span>
+<span class="nc" id="L311">            return</span>
+        }
+<span class="nc bnc" id="L313" title="All 2 branches missed.">        val criticalPostAction = if (hasLocalChanges) {</span>
+<span class="nc" id="L314">            TRASHING_POST_WITH_LOCAL_CHANGES</span>
+        } else {
+<span class="nc" id="L316">            TRASHING_POST</span>
+        }
+
+<span class="nc" id="L319">        showSnackbar.invoke(SnackbarMessageHolder(UiStringRes(R.string.post_trashing)))</span>
+<span class="nc" id="L320">        criticalPostActionTracker.add(localPostId = LocalId(post.id), criticalPostAction = criticalPostAction)</span>
+
+<span class="nc" id="L322">        triggerPostUploadAction.invoke(CancelPostAndMediaUpload(post))</span>
+<span class="nc" id="L323">        dispatcher.dispatch(PostActionBuilder.newDeletePostAction(RemotePostPayload(post, site)))</span>
+<span class="nc" id="L324">    }</span>
+
+    fun handlePostTrashed(localPostId: LocalId, isError: Boolean) {
+<span class="nc" id="L327">        val criticalAction = criticalPostActionTracker.get(localPostId)</span>
+<span class="nc bnc" id="L328" title="All 4 branches missed.">        if (criticalAction != TRASHING_POST &amp;&amp; criticalAction != TRASHING_POST_WITH_LOCAL_CHANGES) {</span>
+            /*
+             * This is an unexpected action and either it has already been handled or another critical action has
+             * been performed. In either case, safest action is to just ignore it.
+             */
+<span class="nc" id="L333">            return</span>
+        }
+<span class="nc" id="L335">        criticalPostActionTracker.remove(localPostId = localPostId, criticalPostAction = criticalAction)</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">        if (isError) {</span>
+<span class="nc" id="L337">            showToast.invoke(ToastMessageHolder(R.string.error_deleting_post, Duration.SHORT))</span>
+        } else {
+<span class="nc bnc" id="L339" title="All 3 branches missed.">            val snackBarHolder = when (criticalAction) {</span>
+<span class="nc" id="L340">                TRASHING_POST -&gt; SnackbarMessageHolder(</span>
+<span class="nc" id="L341">                        message = UiStringRes(R.string.post_trashed),</span>
+<span class="nc" id="L342">                        buttonTitle = UiStringRes(R.string.undo),</span>
+                        buttonAction = {
+<span class="nc" id="L344">                            val post = postStore.getPostByLocalPostId(localPostId.value)</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">                            if (post != null) {</span>
+<span class="nc" id="L346">                                restorePost(post)</span>
+                            }
+<span class="nc" id="L348">                        }</span>
+                )
+<span class="nc" id="L350">                TRASHING_POST_WITH_LOCAL_CHANGES -&gt; SnackbarMessageHolder(message = UiStringRes(R.string.post_trashed))</span>
+<span class="nc" id="L351">                else -&gt; throw IllegalStateException(&quot;Unexpected action in handlePostTrashed(): $criticalAction&quot;)</span>
+            }
+<span class="nc" id="L353">            showSnackbar.invoke(snackBarHolder)</span>
+        }
+<span class="nc" id="L355">    }</span>
+
+    private fun restorePost(post: PostModel) {
+        // We need network connection to restore a post
+<span class="nc bnc" id="L359" title="All 2 branches missed.">        if (!checkNetworkConnection.invoke()) {</span>
+<span class="nc" id="L360">            return</span>
+        }
+<span class="nc" id="L362">        showSnackbar.invoke(SnackbarMessageHolder(message = UiStringRes(R.string.post_restoring)))</span>
+<span class="nc" id="L363">        criticalPostActionTracker.add(localPostId = LocalId(post.id), criticalPostAction = RESTORING_POST)</span>
+<span class="nc" id="L364">        dispatcher.dispatch(PostActionBuilder.newRestorePostAction(RemotePostPayload(post, site)))</span>
+<span class="nc" id="L365">    }</span>
+
+    fun handlePostRestored(localPostId: LocalId, isError: Boolean) {
+<span class="nc bnc" id="L368" title="All 2 branches missed.">        if (criticalPostActionTracker.get(localPostId) != RESTORING_POST) {</span>
+            /*
+             * This is an unexpected action and either it has already been handled or another critical action has
+             * been performed. In either case, safest action is to just ignore it.
+             */
+<span class="nc" id="L373">            return</span>
+        }
+<span class="nc" id="L375">        criticalPostActionTracker.remove(localPostId = localPostId, criticalPostAction = RESTORING_POST)</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">        if (isError) {</span>
+<span class="nc" id="L377">            showToast.invoke(ToastMessageHolder(R.string.error_restoring_post, Duration.SHORT))</span>
+        } else {
+<span class="nc" id="L379">            showSnackbar.invoke(SnackbarMessageHolder(message = UiStringRes(R.string.post_restored)))</span>
+        }
+<span class="nc" id="L381">    }</span>
+
+    fun isPerformingCriticalAction(localPostId: LocalId): Boolean {
+<span class="nc" id="L384">        return criticalPostActionTracker.contains(localPostId)</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

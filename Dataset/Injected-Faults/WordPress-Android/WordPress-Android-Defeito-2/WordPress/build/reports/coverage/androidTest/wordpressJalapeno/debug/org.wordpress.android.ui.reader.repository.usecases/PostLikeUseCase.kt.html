@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostLikeUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.repository.usecases</a> &gt; <span class="el_source">PostLikeUseCase.kt</span></div><h1>PostLikeUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.repository.usecases
+
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.models.ReaderPost
+import org.wordpress.android.ui.reader.actions.ReaderActions.ActionListener
+import org.wordpress.android.ui.reader.actions.ReaderPostActionsWrapper
+import org.wordpress.android.ui.reader.repository.usecases.PostLikeUseCase.PostLikeState.AlreadyRunning
+import org.wordpress.android.ui.reader.repository.usecases.PostLikeUseCase.PostLikeState.Failed
+import org.wordpress.android.ui.reader.repository.usecases.PostLikeUseCase.PostLikeState.Failed.RequestFailed
+import org.wordpress.android.ui.reader.repository.usecases.PostLikeUseCase.PostLikeState.Success
+import org.wordpress.android.ui.reader.repository.usecases.PostLikeUseCase.PostLikeState.Unchanged
+import org.wordpress.android.ui.reader.tracker.ReaderTracker
+import org.wordpress.android.util.NetworkUtilsWrapper
+import javax.inject.Inject
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+
+<span class="nc" id="L22">class PostLikeUseCase @Inject constructor(</span>
+<span class="nc" id="L23">    private val readerPostActionsWrapper: ReaderPostActionsWrapper,</span>
+<span class="nc" id="L24">    private val readerTracker: ReaderTracker,</span>
+<span class="nc" id="L25">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L26">    private val networkUtilsWrapper: NetworkUtilsWrapper</span>
+) {
+    private val continuations:
+<span class="nc" id="L29">            MutableMap&lt;PostLikeRequest, Continuation&lt;PostLikeState&gt;?&gt; = mutableMapOf()</span>
+
+    suspend fun perform(
+        post: ReaderPost,
+        isAskingToLike: Boolean,
+        source: String
+<span class="nc" id="L35">    ) = flow {</span>
+<span class="nc" id="L36">        val wpComUserId = accountStore.account.userId</span>
+<span class="nc" id="L37">        val request = PostLikeRequest(post.postId, post.blogId, isAskingToLike, wpComUserId)</span>
+
+<span class="nc bnc" id="L39" title="All 2 branches missed.">        if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L40">            emit(Failed.NoNetwork)</span>
+<span class="nc" id="L41">            return@flow</span>
+        }
+
+        // There is already an action running for this request
+<span class="nc bnc" id="L45" title="All 2 branches missed.">        if (continuations[request] != null) {</span>
+<span class="nc" id="L46">            emit(AlreadyRunning)</span>
+<span class="nc" id="L47">            return@flow</span>
+        }
+
+        // track like event
+<span class="nc" id="L51">        trackEvent(request, post, source)</span>
+
+<span class="nc" id="L53">        handleLocalDb(post, request)</span>
+<span class="nc" id="L54">    }</span>
+
+    private fun trackEvent(
+        request: PostLikeRequest,
+        post: ReaderPost,
+        source: String
+    ) {
+<span class="nc bnc" id="L61" title="All 2 branches missed.">        if (request.isAskingToLike) {</span>
+<span class="nc bnc" id="L62" title="All 2 branches missed.">            val likedStat = if (source == ReaderTracker.SOURCE_POST_DETAIL) {</span>
+<span class="nc" id="L63">                AnalyticsTracker.Stat.READER_ARTICLE_DETAIL_LIKED</span>
+            } else {
+<span class="nc" id="L65">                AnalyticsTracker.Stat.READER_ARTICLE_LIKED</span>
+            }
+<span class="nc" id="L67">            readerTracker.trackPost(likedStat, post, source)</span>
+            // Consider a like to be enough to push a page view - solves a long-standing question
+            // from folks who ask 'why do I have more likes than page views?'.
+<span class="nc" id="L70">            readerPostActionsWrapper.bumpPageViewForPost(post)</span>
+        } else {
+<span class="nc bnc" id="L72" title="All 2 branches missed.">            val unLikedStat = if (source == ReaderTracker.SOURCE_POST_DETAIL) {</span>
+<span class="nc" id="L73">                AnalyticsTracker.Stat.READER_ARTICLE_DETAIL_UNLIKED</span>
+            } else {
+<span class="nc" id="L75">                AnalyticsTracker.Stat.READER_ARTICLE_UNLIKED</span>
+            }
+<span class="nc" id="L77">            readerTracker.trackPost(unLikedStat, post, source)</span>
+        }
+<span class="nc" id="L79">    }</span>
+
+<span class="nc" id="L81">    private suspend fun FlowCollector&lt;PostLikeState&gt;.handleLocalDb(</span>
+        post: ReaderPost,
+        request: PostLikeRequest
+    ) {
+<span class="nc" id="L85">        val response = readerPostActionsWrapper.performLikeActionLocal(</span>
+<span class="nc" id="L86">                post,</span>
+<span class="nc" id="L87">                request.isAskingToLike,</span>
+<span class="nc" id="L88">                request.wpComUserId</span>
+        )
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        if (response) {</span>
+<span class="nc" id="L91">            emit(PostLikeState.PostLikedInLocalDb)</span>
+<span class="nc" id="L92">            val postLikeState = performLikeAndWaitForResult(post, request)</span>
+<span class="nc" id="L93">            emit(postLikeState)</span>
+        } else {
+<span class="nc" id="L95">            emit(Unchanged)</span>
+        }
+<span class="nc" id="L97">    }</span>
+
+    private suspend fun performLikeAndWaitForResult(
+        post: ReaderPost,
+        request: PostLikeRequest
+    ): PostLikeState {
+<span class="nc" id="L103">        val actionListener = ActionListener { succeeded -&gt;</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">            val postLikeState = if (succeeded) {</span>
+<span class="nc" id="L105">                Success</span>
+            } else {
+<span class="nc" id="L107">                RequestFailed</span>
+            }
+<span class="nc bnc" id="L109" title="All 2 branches missed.">            continuations[request]?.resume(postLikeState)</span>
+<span class="nc" id="L110">            continuations[request] = null</span>
+<span class="nc" id="L111">        }</span>
+
+<span class="nc" id="L113">        return suspendCancellableCoroutine { cont -&gt;</span>
+<span class="nc" id="L114">            continuations[request] = cont</span>
+<span class="nc" id="L115">            readerPostActionsWrapper.performLikeActionRemote(</span>
+<span class="nc" id="L116">                    post,</span>
+<span class="nc" id="L117">                    request.isAskingToLike,</span>
+<span class="nc" id="L118">                    request.wpComUserId,</span>
+<span class="nc" id="L119">                    actionListener</span>
+            )
+<span class="nc" id="L121">        }</span>
+    }
+
+    sealed class PostLikeState {
+<span class="nc" id="L125">        object Success : PostLikeState()</span>
+<span class="nc" id="L126">        object PostLikedInLocalDb : PostLikeState()</span>
+<span class="nc" id="L127">        object AlreadyRunning : PostLikeState()</span>
+<span class="nc" id="L128">        object Unchanged : PostLikeState()</span>
+<span class="nc" id="L129">        sealed class Failed : PostLikeState() {</span>
+<span class="nc" id="L130">            object NoNetwork : Failed()</span>
+<span class="nc" id="L131">            object RequestFailed : Failed()</span>
+        }
+    }
+
+<span class="nc" id="L135">    data class PostLikeRequest(</span>
+<span class="nc" id="L136">        val postId: Long,</span>
+<span class="nc" id="L137">        val blogId: Long,</span>
+<span class="nc" id="L138">        val isAskingToLike: Boolean,</span>
+<span class="nc" id="L139">        val wpComUserId: Long</span>
+    )
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,478 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ThemeBrowserFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.themes</a> &gt; <span class="el_source">ThemeBrowserFragment.java</span></div><h1>ThemeBrowserFragment.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.themes;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.database.DataSetObserver;
+import android.os.Bundle;
+import android.text.TextUtils;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AbsListView.RecyclerListener;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.RelativeLayout;
+import android.widget.TextView;
+
+import androidx.appcompat.widget.SearchView;
+import androidx.fragment.app.Fragment;
+
+import com.google.android.material.elevation.ElevationOverlayProvider;
+
+import org.jetbrains.annotations.NotNull;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.model.ThemeModel;
+import org.wordpress.android.fluxc.store.QuickStartStore;
+import org.wordpress.android.fluxc.store.ThemeStore;
+import org.wordpress.android.ui.ActionableEmptyView;
+import org.wordpress.android.ui.plans.PlansConstants;
+import org.wordpress.android.ui.quickstart.QuickStartEvent;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.QuickStartUtils;
+import org.wordpress.android.util.QuickStartUtilsWrapper;
+import org.wordpress.android.util.StringUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+import org.wordpress.android.util.helpers.SwipeToRefreshHelper;
+import org.wordpress.android.util.image.ImageManager;
+import org.wordpress.android.widgets.HeaderGridView;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+import javax.inject.Inject;
+
+import static org.wordpress.android.util.WPSwipeToRefreshHelper.buildSwipeToRefreshHelper;
+
+/**
+ * A fragment display the themes on a grid view.
+ */
+<span class="nc" id="L58">public class ThemeBrowserFragment extends Fragment</span>
+        implements RecyclerListener, SearchView.OnQueryTextListener {
+<span class="nc" id="L60">    public static final String TAG = ThemeBrowserFragment.class.getName();</span>
+    private static final String KEY_LAST_SEARCH = &quot;last_search&quot;;
+
+    public static ThemeBrowserFragment newInstance(SiteModel site) {
+<span class="nc" id="L64">        ThemeBrowserFragment fragment = new ThemeBrowserFragment();</span>
+<span class="nc" id="L65">        Bundle bundle = new Bundle();</span>
+<span class="nc" id="L66">        bundle.putSerializable(WordPress.SITE, site);</span>
+<span class="nc" id="L67">        fragment.setArguments(bundle);</span>
+<span class="nc" id="L68">        return fragment;</span>
+    }
+
+    interface ThemeBrowserFragmentCallback {
+        void onActivateSelected(String themeId);
+
+        void onTryAndCustomizeSelected(String themeId);
+
+        void onViewSelected(String themeId);
+
+        void onDetailsSelected(String themeId);
+
+        void onSupportSelected(String themeId);
+
+        void onSwipeToRefresh();
+    }
+
+    private SwipeToRefreshHelper mSwipeToRefreshHelper;
+    private String mCurrentThemeId;
+    private String mLastSearch;
+
+    private HeaderGridView mGridView;
+    private RelativeLayout mEmptyView;
+    private ActionableEmptyView mActionableEmptyView;
+    private TextView mCurrentThemeTextView;
+    private View mHeaderCustomizeButton;
+
+    private ThemeBrowserAdapter mAdapter;
+    private boolean mShouldRefreshOnStart;
+    private TextView mEmptyTextView;
+    private SiteModel mSite;
+
+    private MenuItem mSearchMenuItem;
+    private SearchView mSearchView;
+
+    private ThemeBrowserFragmentCallback mCallback;
+    private QuickStartEvent mQuickStartEvent;
+
+    @Inject ThemeStore mThemeStore;
+    @Inject QuickStartStore mQuickStartStore;
+    @Inject Dispatcher mDispatcher;
+    @Inject ImageManager mImageManager;
+    @Inject QuickStartUtilsWrapper mQuickStartUtilsWrapper;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L114">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L115">        ((WordPress) getActivity().getApplication()).component().inject(this);</span>
+
+<span class="nc" id="L117">        mSite = (SiteModel) getArguments().getSerializable(WordPress.SITE);</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        if (mSite == null) {</span>
+<span class="nc" id="L119">            ToastUtils.showToast(getActivity(), R.string.blog_not_found, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L120">            getActivity().finish();</span>
+        }
+
+<span class="nc" id="L123">        setHasOptionsMenu(true);</span>
+
+<span class="nc bnc" id="L125" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L126">            mLastSearch = savedInstanceState.getString(KEY_LAST_SEARCH);</span>
+<span class="nc" id="L127">            mQuickStartEvent = savedInstanceState.getParcelable(QuickStartEvent.KEY);</span>
+        }
+<span class="nc" id="L129">    }</span>
+
+    @Override
+    public void onAttach(Activity activity) {
+<span class="nc" id="L133">        super.onAttach(activity);</span>
+        try {
+<span class="nc" id="L135">            mCallback = (ThemeBrowserFragmentCallback) activity;</span>
+<span class="nc" id="L136">        } catch (ClassCastException e) {</span>
+<span class="nc" id="L137">            throw new ClassCastException(activity.toString() + &quot; must implement ThemeBrowserFragmentCallback&quot;);</span>
+<span class="nc" id="L138">        }</span>
+<span class="nc" id="L139">    }</span>
+
+    @Override
+    public void onDetach() {
+<span class="nc" id="L143">        super.onDetach();</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">        if (mSearchView != null) {</span>
+<span class="nc" id="L145">            mSearchView.setOnQueryTextListener(null);</span>
+        }
+<span class="nc" id="L147">        mCallback = null;</span>
+<span class="nc" id="L148">    }</span>
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+<span class="nc" id="L152">        View view = inflater.inflate(R.layout.theme_browser_fragment, container, false);</span>
+
+<span class="nc" id="L154">        mActionableEmptyView = view.findViewById(R.id.actionable_empty_view);</span>
+<span class="nc" id="L155">        mEmptyTextView = view.findViewById(R.id.text_empty);</span>
+<span class="nc" id="L156">        mEmptyView = view.findViewById(R.id.empty_view);</span>
+
+<span class="nc" id="L158">        configureGridView(inflater, view);</span>
+<span class="nc" id="L159">        configureSwipeToRefresh(view);</span>
+
+<span class="nc" id="L161">        return view;</span>
+    }
+
+    private void showQuickStartFocusPoint() {
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        if (getView() == null) {</span>
+<span class="nc" id="L166">            return;</span>
+        }
+
+<span class="nc" id="L169">        mHeaderCustomizeButton.post(() -&gt; {</span>
+<span class="nc" id="L170">            int focusPointSize = getResources().getDimensionPixelOffset(R.dimen.quick_start_focus_point_size);</span>
+<span class="nc" id="L171">            int horizontalOffset = (mHeaderCustomizeButton.getWidth() / 2) - focusPointSize + getResources()</span>
+<span class="nc" id="L172">                    .getDimensionPixelOffset(R.dimen.quick_start_focus_point_bottom_nav_offset);</span>
+
+<span class="nc" id="L174">            QuickStartUtils.addQuickStartFocusPointAboveTheView((ViewGroup) getView(), mHeaderCustomizeButton,</span>
+                    horizontalOffset, 0);
+
+<span class="nc" id="L177">            mHeaderCustomizeButton.setPressed(true);</span>
+<span class="nc" id="L178">        });</span>
+<span class="nc" id="L179">    }</span>
+
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState) {
+<span class="nc" id="L183">        super.onActivityCreated(savedInstanceState);</span>
+
+<span class="nc" id="L185">        getAdapter().setThemeList(fetchThemes());</span>
+<span class="nc" id="L186">        mGridView.setAdapter(getAdapter());</span>
+<span class="nc" id="L187">    }</span>
+
+    @Override
+    public void onSaveInstanceState(@NotNull Bundle outState) {
+<span class="nc" id="L191">        super.onSaveInstanceState(outState);</span>
+<span class="nc bnc" id="L192" title="All 4 branches missed.">        if (mSearchMenuItem != null &amp;&amp; mSearchMenuItem.isActionViewExpanded()) {</span>
+<span class="nc" id="L193">            outState.putString(KEY_LAST_SEARCH, mSearchView.getQuery().toString());</span>
+        }
+<span class="nc" id="L195">        outState.putParcelable(QuickStartEvent.KEY, mQuickStartEvent);</span>
+<span class="nc" id="L196">    }</span>
+
+    @Override
+    public void onCreateOptionsMenu(@NotNull Menu menu, MenuInflater inflater) {
+<span class="nc" id="L200">        inflater.inflate(R.menu.search, menu);</span>
+
+<span class="nc" id="L202">        mSearchMenuItem = menu.findItem(R.id.menu_search);</span>
+<span class="nc" id="L203">        mSearchView = (SearchView) mSearchMenuItem.getActionView();</span>
+<span class="nc" id="L204">        mSearchView.setOnQueryTextListener(this);</span>
+<span class="nc" id="L205">        mSearchView.setMaxWidth(Integer.MAX_VALUE);</span>
+
+<span class="nc bnc" id="L207" title="All 2 branches missed.">        if (!TextUtils.isEmpty(mLastSearch)) {</span>
+<span class="nc" id="L208">            mSearchMenuItem.expandActionView();</span>
+<span class="nc" id="L209">            onQueryTextSubmit(mLastSearch);</span>
+<span class="nc" id="L210">            mSearchView.setQuery(mLastSearch, true);</span>
+        }
+<span class="nc" id="L212">    }</span>
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc bnc" id="L216" title="All 2 branches missed.">        if (item.getItemId() == R.id.menu_search) {</span>
+<span class="nc" id="L217">            AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.THEMES_ACCESSED_SEARCH, mSite);</span>
+<span class="nc" id="L218">            return true;</span>
+        }
+<span class="nc" id="L220">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    @Override
+    public boolean onQueryTextSubmit(String query) {
+<span class="nc" id="L225">        getAdapter().getFilter().filter(query);</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">        if (mSearchView != null) {</span>
+<span class="nc" id="L227">            mSearchView.clearFocus();</span>
+        }
+<span class="nc" id="L229">        return true;</span>
+    }
+
+    @Override
+    public boolean onQueryTextChange(String newText) {
+<span class="nc" id="L234">        getAdapter().getFilter().filter(newText);</span>
+<span class="nc" id="L235">        return true;</span>
+    }
+
+    @Override
+    public void onMovedToScrapHeap(View view) {
+        // cancel image fetch requests if the view has been moved to recycler.
+<span class="nc" id="L241">        ImageView niv = view.findViewById(R.id.theme_grid_item_image);</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">        if (niv != null) {</span>
+<span class="nc" id="L243">            mImageManager.cancelRequestAndClearImageView(niv);</span>
+        }
+<span class="nc" id="L245">    }</span>
+
+    TextView getCurrentThemeTextView() {
+<span class="nc" id="L248">        return mCurrentThemeTextView;</span>
+    }
+
+    void setCurrentThemeId(String currentThemeId) {
+<span class="nc" id="L252">        mCurrentThemeId = currentThemeId;</span>
+<span class="nc" id="L253">        refreshView();</span>
+<span class="nc" id="L254">    }</span>
+
+    private void addHeaderViews(LayoutInflater inflater) {
+<span class="nc" id="L257">        addMainHeader(inflater);</span>
+<span class="nc" id="L258">    }</span>
+
+    private void configureSwipeToRefresh(View view) {
+<span class="nc" id="L261">        mSwipeToRefreshHelper = buildSwipeToRefreshHelper(</span>
+<span class="nc" id="L262">                view.findViewById(R.id.ptr_layout),</span>
+                () -&gt; {
+<span class="nc bnc" id="L264" title="All 2 branches missed.">                    if (!isAdded()) {</span>
+<span class="nc" id="L265">                        return;</span>
+                    }
+<span class="nc bnc" id="L267" title="All 2 branches missed.">                    if (!NetworkUtils.checkConnection(getActivity())) {</span>
+<span class="nc" id="L268">                        mSwipeToRefreshHelper.setRefreshing(false);</span>
+<span class="nc" id="L269">                        mEmptyTextView.setText(R.string.no_network_title);</span>
+<span class="nc" id="L270">                        return;</span>
+                    }
+<span class="nc" id="L272">                    setRefreshing(true);</span>
+<span class="nc" id="L273">                    mCallback.onSwipeToRefresh();</span>
+<span class="nc" id="L274">                });</span>
+<span class="nc" id="L275">        mSwipeToRefreshHelper.setRefreshing(mShouldRefreshOnStart);</span>
+<span class="nc" id="L276">    }</span>
+
+    private void configureGridView(LayoutInflater inflater, View view) {
+<span class="nc" id="L279">        mGridView = view.findViewById(R.id.theme_listview);</span>
+<span class="nc" id="L280">        addHeaderViews(inflater);</span>
+<span class="nc" id="L281">        mGridView.setRecyclerListener(this);</span>
+<span class="nc" id="L282">    }</span>
+
+    private void addMainHeader(LayoutInflater inflater) {
+        @SuppressLint(&quot;InflateParams&quot;)
+<span class="nc" id="L286">        View header = inflater.inflate(R.layout.theme_grid_cardview_header, null);</span>
+
+        // inflater doesn't work with automatic elevation in night mode so we set card background color manually
+<span class="nc" id="L289">        View headerCardView = header.findViewById(R.id.header_card);</span>
+<span class="nc" id="L290">        ElevationOverlayProvider elevationOverlayProvider = new ElevationOverlayProvider(header.getContext());</span>
+<span class="nc" id="L291">        int elevatedSurfaceColor =</span>
+<span class="nc" id="L292">                elevationOverlayProvider.compositeOverlayWithThemeSurfaceColorIfNeeded(headerCardView.getElevation());</span>
+<span class="nc" id="L293">        headerCardView.setBackgroundColor(elevatedSurfaceColor);</span>
+
+<span class="nc" id="L295">        mCurrentThemeTextView = header.findViewById(R.id.header_theme_text);</span>
+
+<span class="nc" id="L297">        setThemeNameIfAlreadyAvailable();</span>
+<span class="nc" id="L298">        mHeaderCustomizeButton = header.findViewById(R.id.customize);</span>
+<span class="nc" id="L299">        mHeaderCustomizeButton.setOnClickListener(v -&gt; {</span>
+<span class="nc" id="L300">            AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.THEMES_CUSTOMIZE_ACCESSED, mSite);</span>
+<span class="nc" id="L301">            mCallback.onTryAndCustomizeSelected(mCurrentThemeId);</span>
+<span class="nc" id="L302">        });</span>
+
+<span class="nc" id="L304">        LinearLayout details = header.findViewById(R.id.details);</span>
+<span class="nc" id="L305">        details.setOnClickListener(v -&gt; mCallback.onDetailsSelected(mCurrentThemeId));</span>
+
+<span class="nc" id="L307">        LinearLayout support = header.findViewById(R.id.support);</span>
+<span class="nc" id="L308">        support.setOnClickListener(v -&gt; mCallback.onSupportSelected(mCurrentThemeId));</span>
+
+<span class="nc" id="L310">        mGridView.addHeaderView(header);</span>
+<span class="nc" id="L311">    }</span>
+
+
+    private void setThemeNameIfAlreadyAvailable() {
+<span class="nc" id="L315">        ThemeModel currentTheme = mThemeStore.getActiveThemeForSite(mSite);</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">        if (currentTheme != null) {</span>
+<span class="nc" id="L317">            mCurrentThemeTextView.setText(currentTheme.getName());</span>
+        }
+<span class="nc" id="L319">    }</span>
+
+    public void setRefreshing(boolean refreshing) {
+<span class="nc" id="L322">        mShouldRefreshOnStart = refreshing;</span>
+<span class="nc bnc" id="L323" title="All 2 branches missed.">        if (mSwipeToRefreshHelper != null) {</span>
+<span class="nc" id="L324">            mSwipeToRefreshHelper.setRefreshing(refreshing);</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">            if (!refreshing) {</span>
+<span class="nc" id="L326">                refreshView();</span>
+            }
+        }
+<span class="nc" id="L329">    }</span>
+
+    private void updateDisplay() {
+<span class="nc bnc" id="L332" title="All 4 branches missed.">        if (!isAdded() || getView() == null) {</span>
+<span class="nc" id="L333">            return;</span>
+        }
+
+<span class="nc bnc" id="L336" title="All 2 branches missed.">        boolean hasThemes = getAdapter().getUnfilteredCount() &gt; 0;</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">        boolean hasVisibleThemes = getAdapter().getCount() &gt; 0;</span>
+<span class="nc bnc" id="L338" title="All 4 branches missed.">        boolean hasNoMatchingThemes = hasThemes &amp;&amp; !hasVisibleThemes;</span>
+
+<span class="nc bnc" id="L340" title="All 2 branches missed.">        mEmptyView.setVisibility(!hasThemes ? View.VISIBLE : View.GONE);</span>
+<span class="nc bnc" id="L341" title="All 4 branches missed.">        if (!hasThemes &amp;&amp; !NetworkUtils.isNetworkAvailable(getActivity())) {</span>
+<span class="nc" id="L342">            mEmptyTextView.setText(R.string.no_network_title);</span>
+        }
+<span class="nc bnc" id="L344" title="All 2 branches missed.">        mGridView.setVisibility(hasVisibleThemes ? View.VISIBLE : View.GONE);</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">        mActionableEmptyView.setVisibility(hasNoMatchingThemes ? View.VISIBLE : View.GONE);</span>
+<span class="nc" id="L346">    }</span>
+
+    private List&lt;ThemeModel&gt; fetchThemes() {
+<span class="nc bnc" id="L349" title="All 2 branches missed.">        if (mSite == null) {</span>
+<span class="nc" id="L350">            return new ArrayList&lt;&gt;();</span>
+        }
+
+<span class="nc bnc" id="L353" title="All 2 branches missed.">        if (mSite.isWPCom()) {</span>
+<span class="nc" id="L354">            return getSortedWpComThemes();</span>
+        }
+
+<span class="nc" id="L357">        return getSortedJetpackThemes();</span>
+    }
+
+    private ThemeBrowserAdapter getAdapter() {
+<span class="nc bnc" id="L361" title="All 2 branches missed.">        if (mAdapter == null) {</span>
+<span class="nc" id="L362">            mAdapter = new ThemeBrowserAdapter(getActivity(), mSite.getPlanId(), mCallback, mImageManager);</span>
+<span class="nc" id="L363">            mAdapter.registerDataSetObserver(new ThemeDataSetObserver());</span>
+        }
+<span class="nc" id="L365">        return mAdapter;</span>
+    }
+
+    protected void refreshView() {
+<span class="nc" id="L369">        getAdapter().setThemeList(fetchThemes());</span>
+<span class="nc" id="L370">    }</span>
+
+    private List&lt;ThemeModel&gt; getSortedWpComThemes() {
+<span class="nc" id="L373">        List&lt;ThemeModel&gt; wpComThemes = mThemeStore.getWpComThemes();</span>
+
+        // first thing to do is attempt to find the active theme and move it to the front of the list
+<span class="nc" id="L376">        moveActiveThemeToFront(wpComThemes);</span>
+
+        // then remove all premium themes from the list with an exception for the active theme
+<span class="nc bnc" id="L379" title="All 2 branches missed.">        if (!shouldShowPremiumThemes()) {</span>
+<span class="nc" id="L380">            removeNonActivePremiumThemes(wpComThemes);</span>
+        }
+
+<span class="nc" id="L383">        return wpComThemes;</span>
+    }
+
+    private List&lt;ThemeModel&gt; getSortedJetpackThemes() {
+<span class="nc" id="L387">        List&lt;ThemeModel&gt; wpComThemes = mThemeStore.getWpComThemes();</span>
+<span class="nc" id="L388">        List&lt;ThemeModel&gt; uploadedThemes = mThemeStore.getThemesForSite(mSite);</span>
+
+        // put the active theme at the top of the uploaded themes list
+<span class="nc" id="L391">        moveActiveThemeToFront(uploadedThemes);</span>
+
+        // remove all premium themes from the WP.com themes list
+<span class="nc" id="L394">        removeNonActivePremiumThemes(wpComThemes);</span>
+
+        // remove uploaded themes from WP.com themes list (including active theme)
+<span class="nc" id="L397">        removeDuplicateThemes(wpComThemes, uploadedThemes);</span>
+
+<span class="nc" id="L399">        List&lt;ThemeModel&gt; allThemes = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L400">        allThemes.addAll(uploadedThemes);</span>
+<span class="nc" id="L401">        allThemes.addAll(wpComThemes);</span>
+<span class="nc" id="L402">        return allThemes;</span>
+    }
+
+    private void moveActiveThemeToFront(final List&lt;ThemeModel&gt; themes) {
+<span class="nc bnc" id="L406" title="All 6 branches missed.">        if (themes == null || themes.isEmpty() || TextUtils.isEmpty(mCurrentThemeId)) {</span>
+<span class="nc" id="L407">            return;</span>
+        }
+
+        // find the index of the active theme
+<span class="nc" id="L411">        int activeThemeIndex = 0;</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">        for (ThemeModel theme : themes) {</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">            if (mCurrentThemeId.equals(theme.getThemeId())) {</span>
+<span class="nc" id="L414">                theme.setActive(true);</span>
+<span class="nc" id="L415">                activeThemeIndex = themes.indexOf(theme);</span>
+<span class="nc" id="L416">                break;</span>
+            }
+<span class="nc" id="L418">        }</span>
+
+        // move active theme to front of list
+<span class="nc bnc" id="L421" title="All 2 branches missed.">        if (activeThemeIndex &gt; 0) {</span>
+<span class="nc" id="L422">            themes.add(0, themes.remove(activeThemeIndex));</span>
+        }
+<span class="nc" id="L424">    }</span>
+
+    private void removeNonActivePremiumThemes(final List&lt;ThemeModel&gt; themes) {
+<span class="nc bnc" id="L427" title="All 4 branches missed.">        if (themes == null || themes.isEmpty()) {</span>
+<span class="nc" id="L428">            return;</span>
+        }
+
+<span class="nc" id="L431">        Iterator&lt;ThemeModel&gt; iterator = themes.iterator();</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">        while (iterator.hasNext()) {</span>
+<span class="nc" id="L433">            ThemeModel theme = iterator.next();</span>
+<span class="nc bnc" id="L434" title="All 4 branches missed.">            if (!theme.isFree() &amp;&amp; !theme.getActive()) {</span>
+<span class="nc" id="L435">                iterator.remove();</span>
+            }
+<span class="nc" id="L437">        }</span>
+<span class="nc" id="L438">    }</span>
+
+    private void removeDuplicateThemes(final List&lt;ThemeModel&gt; wpComThemes, final List&lt;ThemeModel&gt; uploadedThemes) {
+<span class="nc bnc" id="L441" title="All 8 branches missed.">        if (wpComThemes == null || wpComThemes.isEmpty() || uploadedThemes == null || uploadedThemes.isEmpty()) {</span>
+<span class="nc" id="L442">            return;</span>
+        }
+
+<span class="nc bnc" id="L445" title="All 2 branches missed.">        for (ThemeModel uploadedTheme : uploadedThemes) {</span>
+<span class="nc" id="L446">            Iterator&lt;ThemeModel&gt; wpComIterator = wpComThemes.iterator();</span>
+<span class="nc bnc" id="L447" title="All 2 branches missed.">            while (wpComIterator.hasNext()) {</span>
+<span class="nc" id="L448">                ThemeModel wpComTheme = wpComIterator.next();</span>
+<span class="nc bnc" id="L449" title="All 2 branches missed.">                if (StringUtils.equals(wpComTheme.getThemeId(), uploadedTheme.getThemeId().replace(&quot;-wpcom&quot;, &quot;&quot;))) {</span>
+<span class="nc" id="L450">                    wpComIterator.remove();</span>
+<span class="nc" id="L451">                    break;</span>
+                }
+<span class="nc" id="L453">            }</span>
+<span class="nc" id="L454">        }</span>
+<span class="nc" id="L455">    }</span>
+
+    private boolean shouldShowPremiumThemes() {
+<span class="nc bnc" id="L458" title="All 2 branches missed.">        if (mSite == null) {</span>
+<span class="nc" id="L459">            return false;</span>
+        }
+<span class="nc" id="L461">        long planId = mSite.getPlanId();</span>
+<span class="nc bnc" id="L462" title="All 8 branches missed.">        return planId == PlansConstants.PREMIUM_PLAN_ID</span>
+               || planId == PlansConstants.BUSINESS_PLAN_ID
+               || planId == PlansConstants.JETPACK_PREMIUM_PLAN_ID
+               || planId == PlansConstants.JETPACK_BUSINESS_PLAN_ID;
+    }
+
+<span class="nc" id="L468">    private class ThemeDataSetObserver extends DataSetObserver {</span>
+        @Override public void onChanged() {
+<span class="nc" id="L470">            updateDisplay();</span>
+<span class="nc" id="L471">        }</span>
+
+        @Override public void onInvalidated() {
+<span class="nc" id="L474">            updateDisplay();</span>
+<span class="nc" id="L475">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

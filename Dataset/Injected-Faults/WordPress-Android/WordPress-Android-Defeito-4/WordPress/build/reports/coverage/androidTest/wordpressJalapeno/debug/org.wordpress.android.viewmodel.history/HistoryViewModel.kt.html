@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>HistoryViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.history</a> &gt; <span class="el_source">HistoryViewModel.kt</span></div><h1>HistoryViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.viewmodel.history
+
+import android.text.TextUtils
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.Observer
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.withContext
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.PostActionBuilder
+import org.wordpress.android.fluxc.model.PostModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.revisions.RevisionModel
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.fluxc.store.PostStore.FetchRevisionsPayload
+import org.wordpress.android.fluxc.store.PostStore.OnRevisionsFetched
+import org.wordpress.android.models.Person
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.history.HistoryListItem
+import org.wordpress.android.ui.history.HistoryListItem.Revision
+import org.wordpress.android.ui.people.utils.PeopleUtils
+import org.wordpress.android.ui.people.utils.PeopleUtils.FetchUsersCallback
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.viewmodel.ResourceProvider
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import org.wordpress.android.viewmodel.helpers.ConnectionStatus
+import org.wordpress.android.viewmodel.helpers.ConnectionStatus.AVAILABLE
+import javax.inject.Inject
+import javax.inject.Named
+
+@Suppress(&quot;TooManyFunctions&quot;)
+<span class="nc" id="L42">class HistoryViewModel @Inject constructor(</span>
+<span class="nc" id="L43">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L44">    private val resourceProvider: ResourceProvider,</span>
+<span class="nc" id="L45">    private val networkUtils: NetworkUtilsWrapper,</span>
+<span class="nc" id="L46">    private val postStore: PostStore,</span>
+    @Named(UI_THREAD) uiDispatcher: CoroutineDispatcher,
+<span class="nc" id="L48">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L49">    private val connectionStatus: LiveData&lt;ConnectionStatus&gt;</span>
+<span class="nc" id="L50">) : ScopedViewModel(uiDispatcher) {</span>
+    enum class HistoryListStatus {
+<span class="nc" id="L52">        DONE,</span>
+<span class="nc" id="L53">        ERROR,</span>
+<span class="nc" id="L54">        NO_NETWORK,</span>
+<span class="nc" id="L55">        FETCHING</span>
+    }
+
+<span class="nc" id="L58">    private val _listStatus = MutableLiveData&lt;HistoryListStatus&gt;()</span>
+    val listStatus: LiveData&lt;HistoryListStatus&gt;
+<span class="nc" id="L60">        get() = _listStatus</span>
+
+<span class="nc" id="L62">    private val _revisions = MutableLiveData&lt;List&lt;HistoryListItem&gt;&gt;()</span>
+    val revisions: LiveData&lt;List&lt;HistoryListItem&gt;&gt;
+<span class="nc" id="L64">        get() = _revisions</span>
+
+<span class="nc" id="L66">    private val _showDialog = SingleLiveEvent&lt;ShowDialogEvent&gt;()</span>
+    val showDialog: LiveData&lt;ShowDialogEvent&gt;
+<span class="nc" id="L68">        get() = _showDialog</span>
+
+    private var isStarted = false
+
+<span class="nc" id="L72">    private val revisionsList: MutableList&lt;Revision&gt; = mutableListOf()</span>
+    private lateinit var site: SiteModel
+
+<span class="nc" id="L75">    private val _post = MutableLiveData&lt;PostModel?&gt;()</span>
+<span class="nc" id="L76">    val post: LiveData&lt;PostModel?&gt; = _post</span>
+
+<span class="nc" id="L78">    private val lifecycleOwner = object : LifecycleOwner {</span>
+<span class="nc" id="L79">        val lifecycleRegistry = LifecycleRegistry(this)</span>
+        override fun getLifecycle(): Lifecycle {
+<span class="nc" id="L81">            return lifecycleRegistry</span>
+        }
+    }
+
+<span class="nc" id="L85">    init {</span>
+<span class="nc" id="L86">        lifecycleOwner.lifecycleRegistry.currentState = Lifecycle.State.CREATED</span>
+<span class="nc" id="L87">        dispatcher.register(this)</span>
+<span class="nc" id="L88">    }</span>
+
+    fun create(localPostId: Int, site: SiteModel) {
+<span class="nc bnc" id="L91" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L92">            return</span>
+        }
+<span class="nc" id="L94">        isStarted = true</span>
+<span class="nc" id="L95">        this.site = site</span>
+<span class="nc" id="L96">        connectionStatus.observe(lifecycleOwner, Observer {</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">            if (it == AVAILABLE) {</span>
+<span class="nc" id="L98">                fetchRevisions()</span>
+            }
+<span class="nc" id="L100">        })</span>
+<span class="nc" id="L101">        launch {</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">            val post: PostModel? = withContext(bgDispatcher) {</span>
+<span class="nc" id="L103">                postStore.getPostByLocalPostId(localPostId)</span>
+            }
+
+<span class="nc" id="L106">            revisionsList.clear()</span>
+<span class="nc" id="L107">            _revisions.value = emptyList()</span>
+
+<span class="nc" id="L109">            this@HistoryViewModel._post.value = post</span>
+
+<span class="nc" id="L111">            fetchRevisions()</span>
+
+<span class="nc" id="L113">            lifecycleOwner.lifecycleRegistry.currentState = Lifecycle.State.STARTED</span>
+<span class="nc" id="L114">        }</span>
+<span class="nc" id="L115">    }</span>
+
+    private fun createRevisionsList(revisions: List&lt;RevisionModel&gt;) {
+<span class="nc" id="L118">        var revisionAuthorsId = ArrayList&lt;String&gt;()</span>
+<span class="nc" id="L119">        revisions.forEach {</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">            if (!TextUtils.isEmpty(it.postAuthorId)) {</span>
+<span class="nc" id="L121">                revisionAuthorsId.add(it.postAuthorId!!)</span>
+            }
+<span class="nc" id="L123">        }</span>
+
+<span class="nc" id="L125">        revisionAuthorsId = ArrayList(revisionAuthorsId.distinct())</span>
+<span class="nc" id="L126">        _revisions.value = getHistoryListItemsFromRevisionModels(revisions)</span>
+
+<span class="nc bnc" id="L128" title="All 4 branches missed.">        if (revisionAuthorsId.isNotEmpty()) {</span>
+<span class="nc" id="L129">            fetchRevisionAuthorDetails(revisionAuthorsId)</span>
+        }
+<span class="nc" id="L131">    }</span>
+
+    private fun fetchRevisionAuthorDetails(authorsId: List&lt;String&gt;) {
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        PeopleUtils.fetchRevisionAuthorsDetails(site, authorsId, object : FetchUsersCallback {</span>
+            override fun onSuccess(peopleList: List&lt;Person&gt;, isEndOfList: Boolean) {
+<span class="nc bnc" id="L136" title="All 2 branches missed.">                val existingRevisions = _revisions.value ?: return</span>
+<span class="nc" id="L137">                val updatedRevisions = mutableListOf&lt;HistoryListItem&gt;()</span>
+<span class="nc" id="L138">                revisionsList.clear()</span>
+
+<span class="nc" id="L140">                existingRevisions.forEach { it -&gt;</span>
+<span class="nc" id="L141">                    var mutableRevision = it</span>
+
+<span class="nc bnc" id="L143" title="All 2 branches missed.">                    if (mutableRevision is Revision) {</span>
+                        // we shouldn't directly update items in MutableLiveData, as they will be updated downstream
+                        // and DiffUtil will not catch this change
+<span class="nc" id="L146">                        mutableRevision = mutableRevision.copy()</span>
+
+<span class="nc bnc" id="L148" title="All 2 branches missed.">                        val person = peopleList.firstOrNull { it.personID.toString() == mutableRevision.postAuthorId }</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">                        if (person != null) {</span>
+<span class="nc" id="L150">                            mutableRevision.authorAvatarURL = person.avatarUrl</span>
+<span class="nc" id="L151">                            mutableRevision.authorDisplayName = person.displayName</span>
+                        }
+
+<span class="nc" id="L154">                        revisionsList.add(mutableRevision)</span>
+                    }
+
+<span class="nc" id="L157">                    updatedRevisions.add(mutableRevision)</span>
+<span class="nc" id="L158">                }</span>
+
+<span class="nc" id="L160">                _revisions.postValue(updatedRevisions)</span>
+<span class="nc" id="L161">            }</span>
+
+            override fun onError() {
+<span class="nc" id="L164">                AppLog.e(T.API, &quot;Can't fetch details of revision authors&quot;)</span>
+<span class="nc" id="L165">            }</span>
+        })
+<span class="nc" id="L167">    }</span>
+
+    private fun fetchRevisions() {
+<span class="nc" id="L170">        val post = this.post.value</span>
+
+<span class="nc bnc" id="L172" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L173">            _listStatus.value = HistoryListStatus.FETCHING</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">            val payload = FetchRevisionsPayload(post, site)</span>
+<span class="nc" id="L175">            dispatcher.dispatch(PostActionBuilder.newFetchRevisionsAction(payload))</span>
+        } else {
+<span class="nc" id="L177">            _listStatus.value = HistoryListStatus.DONE</span>
+<span class="nc" id="L178">            createRevisionsList(emptyList())</span>
+        }
+<span class="nc" id="L180">    }</span>
+
+    private fun getHistoryListItemsFromRevisionModels(revisions: List&lt;RevisionModel&gt;): List&lt;HistoryListItem&gt; {
+<span class="nc" id="L183">        val items = mutableListOf&lt;HistoryListItem&gt;()</span>
+
+<span class="nc" id="L185">        revisions.forEach {</span>
+<span class="nc" id="L186">            val item = Revision(it)</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">            val last = items.lastOrNull() as? Revision</span>
+
+<span class="nc bnc" id="L189" title="All 4 branches missed.">            if (item.formattedDate != last?.formattedDate) {</span>
+<span class="nc" id="L190">                items.add(HistoryListItem.Header(item.formattedDate))</span>
+            }
+
+<span class="nc" id="L193">            items.add(item)</span>
+<span class="nc" id="L194">            revisionsList.add(item)</span>
+<span class="nc" id="L195">        }</span>
+
+<span class="nc bnc" id="L197" title="All 4 branches missed.">        if (revisions.isNotEmpty()) {</span>
+<span class="nc" id="L198">            val last = items.last() as Revision</span>
+<span class="nc bnc" id="L199" title="All 6 branches missed.">            val footer = if (post.value?.isPage == true) {</span>
+<span class="nc" id="L200">                resourceProvider.getString(R.string.history_footer_page, last.formattedDate, last.formattedTime)</span>
+            } else {
+<span class="nc" id="L202">                resourceProvider.getString(R.string.history_footer_post, last.formattedDate, last.formattedTime)</span>
+            }
+<span class="nc" id="L204">            items.add(HistoryListItem.Footer(footer))</span>
+        }
+
+<span class="nc" id="L207">        return items</span>
+    }
+
+    override fun onCleared() {
+<span class="nc" id="L211">        dispatcher.unregister(this)</span>
+<span class="nc" id="L212">        lifecycleOwner.lifecycleRegistry.currentState = Lifecycle.State.DESTROYED</span>
+<span class="nc" id="L213">        super.onCleared()</span>
+<span class="nc" id="L214">    }</span>
+
+    fun onItemClicked(item: HistoryListItem) {
+<span class="nc bnc" id="L217" title="All 2 branches missed.">        if (item is Revision) {</span>
+<span class="nc" id="L218">            _showDialog.value = ShowDialogEvent(item, revisionsList)</span>
+        }
+<span class="nc" id="L220">    }</span>
+
+    fun onPullToRefresh() {
+<span class="nc" id="L223">        fetchRevisions()</span>
+<span class="nc" id="L224">    }</span>
+
+    private fun saveRevisionsToLocalDB(post: PostModel, revisions: List&lt;RevisionModel&gt;) {
+<span class="nc" id="L227">        revisions.forEach {</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">            postStore.setLocalRevision(it, site, post)</span>
+<span class="nc" id="L229">        }</span>
+<span class="nc" id="L230">    }</span>
+
+    private fun removeRevisionsFromLocalDB(post: PostModel) {
+<span class="nc" id="L233">        postStore.deleteLocalRevisionOfAPostOrPage(post)</span>
+<span class="nc" id="L234">    }</span>
+
+<span class="nc" id="L236">    data class ShowDialogEvent(val historyListItem: HistoryListItem, val revisionsList: List&lt;Revision&gt;)</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    @SuppressWarnings(&quot;unused&quot;)
+    fun onRevisionsFetched(event: OnRevisionsFetched) {
+<span class="nc bnc" id="L241" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L242">            AppLog.e(T.API, &quot;An error occurred while fetching History revisions&quot;)</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">            if (networkUtils.isNetworkAvailable()) {</span>
+<span class="nc" id="L244">                _listStatus.value = HistoryListStatus.ERROR</span>
+            } else {
+<span class="nc" id="L246">                _listStatus.value = HistoryListStatus.NO_NETWORK</span>
+            }
+        } else {
+<span class="nc" id="L249">            _listStatus.value = HistoryListStatus.DONE</span>
+<span class="nc" id="L250">            createRevisionsList(event.revisionsModel.revisions)</span>
+<span class="nc" id="L251">            removeRevisionsFromLocalDB(event.post)</span>
+<span class="nc" id="L252">            saveRevisionsToLocalDB(event.post, event.revisionsModel.revisions)</span>
+        }
+<span class="nc" id="L254">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

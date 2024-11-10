@@ -1,0 +1,462 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MediaPreviewActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.media</a> &gt; <span class="el_source">MediaPreviewActivity.java</span></div><h1>MediaPreviewActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.media;
+
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.drawable.ColorDrawable;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Parcelable;
+import android.text.TextUtils;
+import android.util.SparseArray;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.animation.Animation;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.ActivityOptionsCompat;
+import androidx.core.content.ContextCompat;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentStatePagerAdapter;
+import androidx.fragment.app.FragmentTransaction;
+import androidx.viewpager.widget.ViewPager;
+
+import org.greenrobot.eventbus.EventBus;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.fluxc.model.MediaModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.MediaStore;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.util.AniUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.widgets.WPViewPagerTransformer;
+import org.wordpress.android.widgets.WPViewPagerTransformer.TransformType;
+
+import java.util.ArrayList;
+
+import javax.inject.Inject;
+
+<span class="nc" id="L46">public class MediaPreviewActivity extends LocaleAwareActivity implements MediaPreviewFragment.OnMediaTappedListener {</span>
+    private static final String ARG_ID_OR_URL_LIST = &quot;id_list&quot;;
+    private static final String ARG_PREVIEW_TYPE = &quot;preview_type&quot;;
+
+<span class="nc" id="L50">    enum PreviewType {</span>
+<span class="nc" id="L51">        SINGLE_ITEM,</span>
+<span class="nc" id="L52">        MULTI_MEDIA_IDS,</span>
+<span class="nc" id="L53">        MULTI_IMAGE_URLS;</span>
+
+        boolean isMulti() {
+<span class="nc bnc" id="L56" title="All 4 branches missed.">            return this == MULTI_MEDIA_IDS || this == MULTI_IMAGE_URLS;</span>
+        }
+    }
+
+    // will contain a list of media IDs when PreviewType = MULTI_MEDIA_IDS or a list of image URLs
+    // when PreviewType = MULTI_IMAGE_URLS
+    private ArrayList&lt;String&gt; mMediaIdOrUrlList;
+
+    // initial media item to show, based either on ID or URI
+    private int mMediaId;
+    private String mContentUri;
+
+    private int mLastPosition;
+    private PreviewType mPreviewType;
+
+    // note that mSite may be null
+    private SiteModel mSite;
+
+    private Toolbar mToolbar;
+    private ViewPager mViewPager;
+    private MediaPagerAdapter mPagerAdapter;
+
+    private static final long FADE_DELAY_MS = 3000;
+<span class="nc" id="L79">    private final Handler mFadeHandler = new Handler();</span>
+
+    @Inject MediaStore mMediaStore;
+
+    static class MediaPreviewSwiped {
+        final int mediaId;
+
+<span class="nc" id="L86">        MediaPreviewSwiped(int mediaId) {</span>
+<span class="nc" id="L87">            this.mediaId = mediaId;</span>
+<span class="nc" id="L88">        }</span>
+    }
+
+    /**
+     * @param context self explanatory
+     * @param site optional site this media is associated with
+     * @param contentUri URI of initial media - can be local or remote
+     */
+    public static void showPreview(@NonNull Context context,
+                                   @Nullable SiteModel site,
+                                   @NonNull String contentUri) {
+<span class="nc" id="L99">        Intent intent = new Intent(context, MediaPreviewActivity.class);</span>
+<span class="nc" id="L100">        intent.putExtra(MediaPreviewFragment.ARG_MEDIA_CONTENT_URI, contentUri);</span>
+<span class="nc" id="L101">        intent.putExtra(ARG_PREVIEW_TYPE, PreviewType.SINGLE_ITEM);</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">        if (site != null) {</span>
+<span class="nc" id="L103">            intent.putExtra(WordPress.SITE, site);</span>
+        }
+
+<span class="nc" id="L106">        startIntent(context, intent);</span>
+<span class="nc" id="L107">    }</span>
+
+    /**
+     * @param context self explanatory
+     * @param site optional site this media is associated with
+     * @param media initial media model to show
+     * @param mediaIdList optional list of media IDs to page through
+     */
+    public static void showPreview(@NonNull Context context,
+                                   @Nullable SiteModel site,
+                                   @NonNull MediaModel media,
+                                   @Nullable ArrayList&lt;String&gt; mediaIdList) {
+<span class="nc" id="L119">        Intent intent = new Intent(context, MediaPreviewActivity.class);</span>
+<span class="nc" id="L120">        intent.putExtra(MediaPreviewFragment.ARG_MEDIA_ID, media.getId());</span>
+<span class="nc" id="L121">        intent.putExtra(MediaPreviewFragment.ARG_MEDIA_CONTENT_URI, media.getUrl());</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">        if (site != null) {</span>
+<span class="nc" id="L123">            intent.putExtra(WordPress.SITE, site);</span>
+        }
+<span class="nc bnc" id="L125" title="All 4 branches missed.">        if (mediaIdList != null &amp;&amp; mediaIdList.size() &gt; 1) {</span>
+<span class="nc" id="L126">            intent.putStringArrayListExtra(ARG_ID_OR_URL_LIST, mediaIdList);</span>
+<span class="nc" id="L127">            intent.putExtra(ARG_PREVIEW_TYPE, PreviewType.MULTI_MEDIA_IDS);</span>
+        } else {
+<span class="nc" id="L129">            intent.putExtra(ARG_PREVIEW_TYPE, PreviewType.SINGLE_ITEM);</span>
+        }
+
+<span class="nc" id="L132">        startIntent(context, intent);</span>
+<span class="nc" id="L133">    }</span>
+
+    /**
+     * @param context self explanatory
+     * @param site optional site this media is associated with
+     * @param imageUrlList optional list of image URLs to page through
+     * @param contentUri URI of initial media
+     */
+    public static void showPreview(@NonNull Context context,
+                                   @Nullable SiteModel site,
+                                   @Nullable ArrayList&lt;String&gt; imageUrlList,
+                                   @NonNull String contentUri) {
+<span class="nc" id="L145">        Intent intent = new Intent(context, MediaPreviewActivity.class);</span>
+<span class="nc" id="L146">        intent.putExtra(MediaPreviewFragment.ARG_MEDIA_CONTENT_URI, contentUri);</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">        if (site != null) {</span>
+<span class="nc" id="L148">            intent.putExtra(WordPress.SITE, site);</span>
+        }
+<span class="nc bnc" id="L150" title="All 4 branches missed.">        if (imageUrlList != null &amp;&amp; imageUrlList.size() &gt; 1) {</span>
+<span class="nc" id="L151">            intent.putStringArrayListExtra(ARG_ID_OR_URL_LIST, imageUrlList);</span>
+<span class="nc" id="L152">            intent.putExtra(ARG_PREVIEW_TYPE, PreviewType.MULTI_IMAGE_URLS);</span>
+        } else {
+<span class="nc" id="L154">            intent.putExtra(ARG_PREVIEW_TYPE, PreviewType.SINGLE_ITEM);</span>
+        }
+
+<span class="nc" id="L157">        startIntent(context, intent);</span>
+<span class="nc" id="L158">    }</span>
+
+    private static void startIntent(Context context, Intent intent) {
+<span class="nc" id="L161">        ActivityOptionsCompat options = ActivityOptionsCompat.makeCustomAnimation(</span>
+                context,
+                R.anim.fade_in,
+                R.anim.fade_out);
+<span class="nc" id="L165">        ActivityCompat.startActivity(context, intent, options.toBundle());</span>
+<span class="nc" id="L166">    }</span>
+
+    @Override
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
+<span class="nc" id="L170">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L171">        ((WordPress) getApplication()).component().inject(this);</span>
+
+<span class="nc" id="L173">        setContentView(R.layout.media_preview_activity);</span>
+
+<span class="nc bnc" id="L175" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L176">            mSite = (SiteModel) savedInstanceState.getSerializable(WordPress.SITE);</span>
+<span class="nc" id="L177">            mMediaId = savedInstanceState.getInt(MediaPreviewFragment.ARG_MEDIA_ID);</span>
+<span class="nc" id="L178">            mContentUri = savedInstanceState.getString(MediaPreviewFragment.ARG_MEDIA_CONTENT_URI);</span>
+<span class="nc" id="L179">            mPreviewType = (PreviewType) savedInstanceState.getSerializable(ARG_PREVIEW_TYPE);</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">            if (savedInstanceState.containsKey(ARG_ID_OR_URL_LIST)) {</span>
+<span class="nc" id="L181">                mMediaIdOrUrlList = savedInstanceState.getStringArrayList(ARG_ID_OR_URL_LIST);</span>
+            }
+        } else {
+<span class="nc" id="L184">            mSite = (SiteModel) getIntent().getSerializableExtra(WordPress.SITE);</span>
+<span class="nc" id="L185">            mMediaId = getIntent().getIntExtra(MediaPreviewFragment.ARG_MEDIA_ID, 0);</span>
+<span class="nc" id="L186">            mContentUri = getIntent().getStringExtra(MediaPreviewFragment.ARG_MEDIA_CONTENT_URI);</span>
+<span class="nc" id="L187">            mPreviewType = (PreviewType) getIntent().getSerializableExtra(ARG_PREVIEW_TYPE);</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">            if (getIntent().hasExtra(ARG_ID_OR_URL_LIST)) {</span>
+<span class="nc" id="L189">                mMediaIdOrUrlList = getIntent().getStringArrayListExtra(ARG_ID_OR_URL_LIST);</span>
+            }
+        }
+
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        if (TextUtils.isEmpty(mContentUri)) {</span>
+<span class="nc" id="L194">            delayedFinish();</span>
+<span class="nc" id="L195">            return;</span>
+        }
+
+<span class="nc" id="L198">        mToolbar = findViewById(R.id.toolbar);</span>
+<span class="nc" id="L199">        int toolbarColor = ContextCompat.getColor(this, R.color.black_translucent_40);</span>
+        //noinspection deprecation
+<span class="nc" id="L201">        mToolbar.setBackgroundDrawable(new ColorDrawable(toolbarColor));</span>
+<span class="nc" id="L202">        setSupportActionBar(mToolbar);</span>
+<span class="nc" id="L203">        ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">        if (actionBar != null) {</span>
+<span class="nc" id="L205">            actionBar.setDisplayShowTitleEnabled(false);</span>
+<span class="nc" id="L206">            actionBar.setDisplayHomeAsUpEnabled(true);</span>
+        }
+
+<span class="nc" id="L209">        View fragmentContainer = findViewById(R.id.fragment_container);</span>
+<span class="nc" id="L210">        mViewPager = findViewById(R.id.viewpager);</span>
+
+        // use a ViewPager if we're passed a list of media, otherwise show a single fragment
+<span class="nc bnc" id="L213" title="All 2 branches missed.">        if (getPreviewType().isMulti()) {</span>
+<span class="nc" id="L214">            fragmentContainer.setVisibility(View.GONE);</span>
+<span class="nc" id="L215">            mViewPager.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L216">            setupViewPager();</span>
+        } else {
+<span class="nc" id="L218">            fragmentContainer.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L219">            mViewPager.setVisibility(View.GONE);</span>
+<span class="nc" id="L220">            showPreviewFragment();</span>
+        }
+
+<span class="nc" id="L223">        showToolbar();</span>
+<span class="nc" id="L224">        mFadeHandler.postDelayed(mFadeOutRunnable, FADE_DELAY_MS);</span>
+<span class="nc" id="L225">    }</span>
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc bnc" id="L229" title="All 2 branches missed.">        if (item.getItemId() == android.R.id.home) {</span>
+<span class="nc" id="L230">            onBackPressed();</span>
+<span class="nc" id="L231">            return true;</span>
+        }
+<span class="nc" id="L233">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    @Override
+    public void finish() {
+<span class="nc" id="L238">        super.finish();</span>
+<span class="nc" id="L239">        overridePendingTransition(R.anim.fade_in, R.anim.fade_out);</span>
+<span class="nc" id="L240">    }</span>
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+<span class="nc" id="L244">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L245">        outState.putSerializable(WordPress.SITE, mSite);</span>
+<span class="nc" id="L246">        outState.putInt(MediaPreviewFragment.ARG_MEDIA_ID, mMediaId);</span>
+<span class="nc" id="L247">        outState.putString(MediaPreviewFragment.ARG_MEDIA_CONTENT_URI, mContentUri);</span>
+<span class="nc" id="L248">        outState.putSerializable(ARG_PREVIEW_TYPE, mPreviewType);</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">        if (mMediaIdOrUrlList != null) {</span>
+<span class="nc" id="L250">            outState.putStringArrayList(ARG_ID_OR_URL_LIST, mMediaIdOrUrlList);</span>
+        }
+<span class="nc" id="L252">    }</span>
+
+    private void delayedFinish() {
+<span class="nc" id="L255">        ToastUtils.showToast(this, R.string.error_media_not_found);</span>
+<span class="nc" id="L256">        new Handler().postDelayed(new Runnable() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L259">                finish();</span>
+<span class="nc" id="L260">            }</span>
+        }, 1500);
+<span class="nc" id="L262">    }</span>
+
+    /*
+     * shows a single preview fragment within this activity - called when we can't use a ViewPager to swipe
+     * between media (ie: we're previewing a local file)
+     */
+    private void showPreviewFragment() {
+        MediaPreviewFragment fragment;
+<span class="nc" id="L270">        MediaModel media = mMediaStore.getMediaWithLocalId(mMediaId);</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">        if (media != null) {</span>
+<span class="nc" id="L272">            fragment = MediaPreviewFragment.newInstance(mSite, media, true);</span>
+        } else {
+<span class="nc" id="L274">            fragment = MediaPreviewFragment.newInstance(mSite, mContentUri, true);</span>
+        }
+<span class="nc" id="L276">        getSupportFragmentManager().beginTransaction()</span>
+<span class="nc" id="L277">                .replace(R.id.fragment_container, fragment, MediaPreviewFragment.TAG)</span>
+<span class="nc" id="L278">                .setTransition(FragmentTransaction.TRANSIT_FRAGMENT_FADE)</span>
+<span class="nc" id="L279">                .commit();</span>
+
+<span class="nc" id="L281">        fragment.setOnMediaTappedListener(this);</span>
+<span class="nc" id="L282">    }</span>
+
+<span class="nc" id="L284">    private final Runnable mFadeOutRunnable = new Runnable() {</span>
+        @Override
+        public void run() {
+<span class="nc bnc" id="L287" title="All 4 branches missed.">            if (!isFinishing() &amp;&amp; mToolbar.getVisibility() == View.VISIBLE) {</span>
+<span class="nc" id="L288">                AniUtils.startAnimation(mToolbar, R.anim.toolbar_fade_out_and_up, new Animation.AnimationListener() {</span>
+                    @Override
+                    public void onAnimationStart(Animation animation) {
+<span class="nc" id="L291">                    }</span>
+
+                    @Override
+                    public void onAnimationEnd(Animation animation) {
+<span class="nc" id="L295">                        mToolbar.setVisibility(View.GONE);</span>
+<span class="nc" id="L296">                    }</span>
+
+                    @Override
+                    public void onAnimationRepeat(Animation animation) {
+<span class="nc" id="L300">                    }</span>
+                });
+            }
+<span class="nc" id="L303">        }</span>
+    };
+
+    private void showToolbar() {
+<span class="nc bnc" id="L307" title="All 2 branches missed.">        if (!isFinishing()) {</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">            if (getPreviewType().isMulti()) {</span>
+<span class="nc" id="L309">                int position = mViewPager.getCurrentItem();</span>
+<span class="nc" id="L310">                int count = mPagerAdapter.getCount();</span>
+<span class="nc bnc" id="L311" title="All 2 branches missed.">                if (count &gt; 1) {</span>
+<span class="nc" id="L312">                    String title = String.format(</span>
+<span class="nc" id="L313">                            getString(R.string.media_preview_title),</span>
+<span class="nc" id="L314">                            position + 1,</span>
+<span class="nc" id="L315">                            count);</span>
+<span class="nc" id="L316">                    mToolbar.setTitle(title);</span>
+                }
+            }
+
+<span class="nc" id="L320">            mFadeHandler.removeCallbacks(mFadeOutRunnable);</span>
+<span class="nc" id="L321">            mFadeHandler.postDelayed(mFadeOutRunnable, FADE_DELAY_MS);</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">            if (mToolbar.getVisibility() != View.VISIBLE) {</span>
+<span class="nc" id="L323">                AniUtils.startAnimation(mToolbar, R.anim.toolbar_fade_in_and_down, new Animation.AnimationListener() {</span>
+                    @Override
+                    public void onAnimationStart(Animation animation) {
+<span class="nc" id="L326">                        mToolbar.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L327">                    }</span>
+
+                    @Override
+                    public void onAnimationEnd(Animation animation) {
+<span class="nc" id="L331">                    }</span>
+
+                    @Override
+                    public void onAnimationRepeat(Animation animation) {
+<span class="nc" id="L335">                    }</span>
+                });
+            }
+        }
+<span class="nc" id="L339">    }</span>
+
+    private PreviewType getPreviewType() {
+<span class="nc bnc" id="L342" title="All 2 branches missed.">        return mPreviewType != null ? mPreviewType : PreviewType.SINGLE_ITEM;</span>
+    }
+
+    private void setupViewPager() {
+<span class="nc" id="L346">        mPagerAdapter = new MediaPagerAdapter(getSupportFragmentManager());</span>
+<span class="nc" id="L347">        mViewPager.setAdapter(mPagerAdapter);</span>
+<span class="nc" id="L348">        mViewPager.setPageTransformer(false, new WPViewPagerTransformer(TransformType.SLIDE_OVER));</span>
+
+        // determine the position of the original media item so we can page to it immediately
+<span class="nc" id="L351">        int initialPos = 0;</span>
+<span class="nc bnc" id="L352" title="All 2 branches missed.">        String compareTo = getPreviewType() == PreviewType.MULTI_MEDIA_IDS ? Integer.toString(mMediaId) : mContentUri;</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">        if (compareTo != null) {</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">            for (int i = 0; i &lt; mMediaIdOrUrlList.size(); i++) {</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">                if (compareTo.equals(mMediaIdOrUrlList.get(i))) {</span>
+<span class="nc" id="L356">                    initialPos = i;</span>
+<span class="nc" id="L357">                    break;</span>
+                }
+            }
+        }
+
+<span class="nc" id="L362">        mViewPager.setCurrentItem(initialPos);</span>
+<span class="nc" id="L363">        mLastPosition = initialPos;</span>
+
+<span class="nc" id="L365">        mViewPager.addOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {</span>
+            @Override
+            public void onPageSelected(int position) {
+<span class="nc bnc" id="L368" title="All 3 branches missed.">                switch (getPreviewType()) {</span>
+                    case MULTI_MEDIA_IDS:
+<span class="nc" id="L370">                        mMediaId = Integer.valueOf(mMediaIdOrUrlList.get(position));</span>
+                        // fire event so settings activity shows the same media as this activity (user may have swiped)
+<span class="nc" id="L372">                        EventBus.getDefault().post(new MediaPreviewSwiped(mMediaId));</span>
+<span class="nc" id="L373">                        break;</span>
+                    case MULTI_IMAGE_URLS:
+<span class="nc" id="L375">                        mContentUri = mMediaIdOrUrlList.get(position);</span>
+                        break;
+                }
+<span class="nc" id="L378">                mLastPosition = position;</span>
+<span class="nc" id="L379">                showToolbar();</span>
+<span class="nc" id="L380">            }</span>
+        });
+<span class="nc" id="L382">    }</span>
+
+    /*
+     * make sure toolbar appears when user taps the media in the fragment
+     */
+    @Override
+    public void onMediaTapped() {
+<span class="nc" id="L389">        showToolbar();</span>
+<span class="nc" id="L390">    }</span>
+
+    class MediaPagerAdapter extends FragmentStatePagerAdapter {
+<span class="nc" id="L393">        private final SparseArray&lt;Fragment&gt; mFragmentMap = new SparseArray&lt;&gt;();</span>
+        private boolean mDidAutoPlay;
+
+<span class="nc" id="L396">        MediaPagerAdapter(FragmentManager fm) {</span>
+<span class="nc" id="L397">            super(fm, BEHAVIOR_RESUME_ONLY_CURRENT_FRAGMENT);</span>
+<span class="nc" id="L398">        }</span>
+
+        @Override
+        public Fragment getItem(int position) {
+            MediaPreviewFragment fragment;
+<span class="nc bnc" id="L403" title="All 3 branches missed.">            switch (getPreviewType()) {</span>
+                case MULTI_MEDIA_IDS:
+<span class="nc" id="L405">                    int id = Integer.valueOf(mMediaIdOrUrlList.get(position));</span>
+<span class="nc" id="L406">                    MediaModel media = mMediaStore.getMediaWithLocalId(id);</span>
+                    // make sure we autoplay the initial item (relevant only for audio/video)
+                    boolean autoPlay;
+<span class="nc bnc" id="L409" title="All 4 branches missed.">                    if (id == mMediaId &amp;&amp; !mDidAutoPlay) {</span>
+<span class="nc" id="L410">                        autoPlay = true;</span>
+<span class="nc" id="L411">                        mDidAutoPlay = true;</span>
+                    } else {
+<span class="nc" id="L413">                        autoPlay = false;</span>
+                    }
+<span class="nc" id="L415">                    fragment = MediaPreviewFragment.newInstance(mSite, media, autoPlay);</span>
+<span class="nc" id="L416">                    break;</span>
+                case MULTI_IMAGE_URLS:
+<span class="nc" id="L418">                    String imageUrl = mMediaIdOrUrlList.get(position);</span>
+<span class="nc" id="L419">                    fragment = MediaPreviewFragment.newInstance(null, imageUrl, false);</span>
+<span class="nc" id="L420">                    break;</span>
+                default:
+                    // should never get here
+<span class="nc" id="L423">                    throw new RuntimeException(&quot;Unhandled preview type&quot;);</span>
+            }
+
+<span class="nc" id="L426">            fragment.setOnMediaTappedListener(MediaPreviewActivity.this);</span>
+<span class="nc" id="L427">            return fragment;</span>
+        }
+
+        @Override
+        public int getCount() {
+<span class="nc bnc" id="L432" title="All 2 branches missed.">            return mMediaIdOrUrlList != null ? mMediaIdOrUrlList.size() : 0;</span>
+        }
+
+        @NonNull
+        @Override
+        public Object instantiateItem(ViewGroup container, int position) {
+<span class="nc" id="L438">            Object item = super.instantiateItem(container, position);</span>
+<span class="nc bnc" id="L439" title="All 2 branches missed.">            if (item instanceof Fragment) {</span>
+<span class="nc" id="L440">                mFragmentMap.put(position, (Fragment) item);</span>
+            }
+<span class="nc" id="L442">            return item;</span>
+        }
+
+        @Override
+        public void destroyItem(ViewGroup container, int position, Object object) {
+<span class="nc" id="L447">            mFragmentMap.remove(position);</span>
+<span class="nc" id="L448">            super.destroyItem(container, position, object);</span>
+<span class="nc" id="L449">        }</span>
+
+        @Override
+        public void restoreState(Parcelable state, ClassLoader loader) {
+            // work around https://code.google.com/p/android/issues/detail?id=42601
+            try {
+<span class="nc" id="L455">                super.restoreState(state, loader);</span>
+<span class="nc" id="L456">            } catch (IllegalStateException e) {</span>
+<span class="nc" id="L457">                AppLog.e(AppLog.T.MEDIA, e);</span>
+<span class="nc" id="L458">            }</span>
+<span class="nc" id="L459">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

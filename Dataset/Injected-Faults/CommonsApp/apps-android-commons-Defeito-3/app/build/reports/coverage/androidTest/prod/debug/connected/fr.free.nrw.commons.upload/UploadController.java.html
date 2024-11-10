@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UploadController.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.upload</a> &gt; <span class="el_source">UploadController.java</span></div><h1>UploadController.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.upload;
+
+import android.accounts.Account;
+import android.annotation.SuppressLint;
+import android.content.ComponentName;
+import android.content.ContentResolver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.content.res.AssetFileDescriptor;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.IBinder;
+import android.provider.MediaStore;
+import android.text.TextUtils;
+import androidx.work.OneTimeWorkRequest;
+import androidx.work.WorkManager;
+import fr.free.nrw.commons.Media;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.auth.SessionManager;
+import fr.free.nrw.commons.contributions.Contribution;
+import fr.free.nrw.commons.contributions.ContributionDao;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.settings.Prefs;
+import fr.free.nrw.commons.upload.worker.UploadWorker;
+import fr.free.nrw.commons.utils.ViewUtil;
+import io.reactivex.Single;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.Disposable;
+import io.reactivex.schedulers.Schedulers;
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Date;
+import javax.inject.Inject;
+import javax.inject.Singleton;
+import timber.log.Timber;
+
+@Singleton
+public class UploadController {
+
+    private final SessionManager sessionManager;
+    private final Context context;
+    private final JsonKvStore store;
+
+    @Inject
+    public UploadController(final SessionManager sessionManager,
+        final Context context,
+<span class="nc" id="L50">        final JsonKvStore store) {</span>
+<span class="nc" id="L51">        this.sessionManager = sessionManager;</span>
+<span class="nc" id="L52">        this.context = context;</span>
+<span class="nc" id="L53">        this.store = store;</span>
+<span class="nc" id="L54">    }</span>
+
+    /**
+     * Starts a new upload task.
+     *
+     * @param contribution the contribution object
+     */
+    @SuppressLint(&quot;StaticFieldLeak&quot;)
+    public void prepareMedia(final Contribution contribution) {
+        //Set creator, desc, and license
+
+        // If author name is enabled and set, use it
+<span class="nc" id="L66">        final Media media = contribution.getMedia();</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">        if (store.getBoolean(&quot;useAuthorName&quot;, false)) {</span>
+<span class="nc" id="L68">            final String authorName = store.getString(&quot;authorName&quot;, &quot;&quot;);</span>
+<span class="nc" id="L69">            media.setAuthor(authorName);</span>
+        }
+
+<span class="nc bnc" id="L72" title="All 2 branches missed.">        if (TextUtils.isEmpty(media.getAuthor())) {</span>
+<span class="nc" id="L73">            final Account currentAccount = sessionManager.getCurrentAccount();</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">            if (currentAccount == null) {</span>
+<span class="nc" id="L75">                Timber.d(&quot;Current account is null&quot;);</span>
+<span class="nc" id="L76">                ViewUtil.showLongToast(context, context.getString(R.string.user_not_logged_in));</span>
+<span class="nc" id="L77">                sessionManager.forceLogin(context);</span>
+<span class="nc" id="L78">                return;</span>
+            }
+<span class="nc" id="L80">            media.setAuthor(sessionManager.getUserName());</span>
+        }
+
+<span class="nc bnc" id="L83" title="All 2 branches missed.">        if (media.getFallbackDescription() == null) {</span>
+<span class="nc" id="L84">            media.setFallbackDescription(&quot;&quot;);</span>
+        }
+
+<span class="nc" id="L87">        final String license = store.getString(Prefs.DEFAULT_LICENSE, Prefs.Licenses.CC_BY_SA_3);</span>
+<span class="nc" id="L88">        media.setLicense(license);</span>
+
+<span class="nc" id="L90">        buildUpload(contribution);</span>
+<span class="nc" id="L91">    }</span>
+
+    /**
+     * Make the Contribution object ready to be uploaded
+     * @param contribution
+     * @return
+     */
+    private void buildUpload(final Contribution contribution) {
+<span class="nc" id="L99">        final ContentResolver contentResolver = context.getContentResolver();</span>
+
+<span class="nc" id="L101">        contribution.setDataLength(resolveDataLength(contentResolver, contribution));</span>
+
+<span class="nc" id="L103">        final String mimeType = resolveMimeType(contentResolver, contribution);</span>
+
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (mimeType != null) {</span>
+<span class="nc" id="L106">            Timber.d(&quot;MimeType is: %s&quot;, mimeType);</span>
+<span class="nc" id="L107">            contribution.setMimeType(mimeType);</span>
+<span class="nc bnc" id="L108" title="All 4 branches missed.">            if(mimeType.startsWith(&quot;image/&quot;) &amp;&amp; contribution.getDateCreated() == null){</span>
+<span class="nc" id="L109">                contribution.setDateCreated(resolveDateTakenOrNow(contentResolver, contribution));</span>
+            }
+        }
+<span class="nc" id="L112">    }</span>
+
+    private String resolveMimeType(final ContentResolver contentResolver, final Contribution contribution) {
+<span class="nc" id="L115">        final String mimeType = contribution.getMimeType();</span>
+<span class="nc bnc" id="L116" title="All 6 branches missed.">        if (mimeType == null || TextUtils.isEmpty(mimeType) || mimeType.endsWith(&quot;*&quot;)) {</span>
+<span class="nc" id="L117">            return contentResolver.getType(contribution.getLocalUri());</span>
+        }
+<span class="nc" id="L119">        return mimeType;</span>
+    }
+
+    private long resolveDataLength(final ContentResolver contentResolver, final Contribution contribution) {
+        try {
+<span class="nc bnc" id="L124" title="All 2 branches missed.">            if (contribution.getDataLength() &lt;= 0) {</span>
+<span class="nc" id="L125">                Timber.d(&quot;UploadController/doInBackground, contribution.getLocalUri():%s&quot;, contribution.getLocalUri());</span>
+<span class="nc" id="L126">                final AssetFileDescriptor assetFileDescriptor = contentResolver</span>
+<span class="nc" id="L127">                    .openAssetFileDescriptor(Uri.fromFile(new File(contribution.getLocalUri().getPath())), &quot;r&quot;);</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">                if (assetFileDescriptor != null) {</span>
+<span class="nc" id="L129">                    final long length = assetFileDescriptor.getLength();</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">                    return length != -1 ? length</span>
+<span class="nc" id="L131">                        : countBytes(contentResolver.openInputStream(contribution.getLocalUri()));</span>
+                }
+            }
+<span class="nc" id="L134">        } catch (final IOException | NullPointerException | SecurityException e) {</span>
+<span class="nc" id="L135">            Timber.e(e, &quot;Exception occurred while uploading image&quot;);</span>
+<span class="nc" id="L136">        }</span>
+<span class="nc" id="L137">        return contribution.getDataLength();</span>
+    }
+
+    private Date resolveDateTakenOrNow(final ContentResolver contentResolver, final Contribution contribution) {
+<span class="nc" id="L141">        Timber.d(&quot;local uri   %s&quot;, contribution.getLocalUri());</span>
+<span class="nc" id="L142">        try(final Cursor cursor = dateTakenCursor(contentResolver, contribution)) {</span>
+<span class="nc bnc" id="L143" title="All 6 branches missed.">            if (cursor != null &amp;&amp; cursor.getCount() != 0 &amp;&amp; cursor.getColumnCount() != 0) {</span>
+<span class="nc" id="L144">                cursor.moveToFirst();</span>
+<span class="nc" id="L145">                final Date dateCreated = new Date(cursor.getLong(0));</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">                if (dateCreated.after(new Date(0))) {</span>
+<span class="nc" id="L147">                    return dateCreated;</span>
+                }
+            }
+<span class="nc" id="L150">            return new Date();</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        }</span>
+    }
+
+    private Cursor dateTakenCursor(final ContentResolver contentResolver, final Contribution contribution) {
+<span class="nc" id="L155">        return contentResolver.query(contribution.getLocalUri(),</span>
+            new String[]{MediaStore.Images.ImageColumns.DATE_TAKEN}, null, null, null);
+    }
+
+
+    /**
+     * Counts the number of bytes in {@code stream}.
+     *
+     * @param stream the stream
+     * @return the number of bytes in {@code stream}
+     * @throws IOException if an I/O error occurs
+     */
+    private long countBytes(final InputStream stream) throws IOException {
+<span class="nc" id="L168">        long count = 0;</span>
+<span class="nc" id="L169">        final BufferedInputStream bis = new BufferedInputStream(stream);</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        while (bis.read() != -1) {</span>
+<span class="nc" id="L171">            count++;</span>
+        }
+<span class="nc" id="L173">        return count;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

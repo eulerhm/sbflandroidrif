@@ -1,0 +1,388 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StoriesEventListener.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts.editor</a> &gt; <span class="el_source">StoriesEventListener.kt</span></div><h1>StoriesEventListener.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts.editor
+
+import android.app.Activity
+import android.net.Uri
+import androidx.appcompat.app.AlertDialog.Builder
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.Lifecycle.State.CREATED
+import androidx.lifecycle.LifecycleObserver
+import androidx.lifecycle.OnLifecycleEvent
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.wordpress.stories.compose.frame.StorySaveEvents.FrameSaveCompleted
+import com.wordpress.stories.compose.frame.StorySaveEvents.FrameSaveFailed
+import com.wordpress.stories.compose.frame.StorySaveEvents.FrameSaveProgress
+import com.wordpress.stories.compose.frame.StorySaveEvents.FrameSaveStart
+import com.wordpress.stories.compose.frame.StorySaveEvents.StorySaveProcessStart
+import com.wordpress.stories.compose.frame.StorySaveEvents.StorySaveResult
+import com.wordpress.stories.compose.story.StoryIndex
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.R
+import org.wordpress.android.R.string
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.EDITOR_UPLOAD_MEDIA_RETRIED
+import org.wordpress.android.editor.EditorMediaUploadListener
+import org.wordpress.android.editor.gutenberg.StorySaveMediaListener
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.RemoteId
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.MediaModel.MediaUploadState.UPLOADED
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.MediaStore
+import org.wordpress.android.ui.ActivityLauncher
+import org.wordpress.android.ui.posts.EditPostRepository
+import org.wordpress.android.ui.posts.editor.media.EditorMedia
+import org.wordpress.android.ui.posts.editor.media.EditorMediaListener
+import org.wordpress.android.ui.stories.StoryRepositoryWrapper
+import org.wordpress.android.ui.stories.media.StoryMediaSaveUploadBridge.StoryFrameMediaModelCreatedEvent
+import org.wordpress.android.ui.stories.prefs.StoriesPrefs
+import org.wordpress.android.ui.stories.usecase.LoadStoryFromStoriesPrefsUseCase
+import org.wordpress.android.ui.uploads.UploadService
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T.MEDIA
+import org.wordpress.android.util.EventBusWrapper
+import org.wordpress.android.util.FluxCUtils
+import org.wordpress.android.util.StringUtils
+import java.util.ArrayList
+import java.util.HashMap
+import javax.inject.Inject
+
+<span class="nc" id="L51">class StoriesEventListener @Inject constructor(</span>
+<span class="nc" id="L52">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L53">    private val mediaStore: MediaStore,</span>
+<span class="nc" id="L54">    private val eventBusWrapper: EventBusWrapper,</span>
+<span class="nc" id="L55">    private val editorMedia: EditorMedia,</span>
+<span class="nc" id="L56">    private val loadStoryFromStoriesPrefsUseCase: LoadStoryFromStoriesPrefsUseCase,</span>
+<span class="nc" id="L57">    private val storiesPrefs: StoriesPrefs,</span>
+<span class="nc" id="L58">    private val storyRepositoryWrapper: StoryRepositoryWrapper</span>
+) : LifecycleObserver {
+    private lateinit var lifecycle: Lifecycle
+    private lateinit var site: SiteModel
+    private lateinit var editPostRepository: EditPostRepository
+    private var storySaveMediaListener: StorySaveMediaListener? = null
+<span class="nc" id="L64">    var storiesSavingInProgress = HashSet&lt;StoryIndex&gt;()</span>
+        private set
+
+<span class="nc" id="L67">    data class StoryFrameMediaUploadedEvent(</span>
+<span class="nc" id="L68">        val localId: LocalId,</span>
+<span class="nc" id="L69">        val assignedMediaId: RemoteId,</span>
+<span class="nc" id="L70">        val oldUrl: String,</span>
+<span class="nc" id="L71">        val newUrl: String</span>
+    )
+
+    fun startListening() {
+<span class="nc bnc" id="L75" title="All 2 branches missed.">        if (!eventBusWrapper.isRegistered(this)) {</span>
+<span class="nc" id="L76">            dispatcher.register(this)</span>
+<span class="nc" id="L77">            eventBusWrapper.register(this)</span>
+        }
+<span class="nc" id="L79">    }</span>
+
+    fun pauseListening() {
+<span class="nc bnc" id="L82" title="All 2 branches missed.">        if (eventBusWrapper.isRegistered(this)) {</span>
+<span class="nc" id="L83">            dispatcher.unregister(this)</span>
+<span class="nc" id="L84">            eventBusWrapper.unregister(this)</span>
+        }
+<span class="nc" id="L86">    }</span>
+
+    /**
+     * Handles the [Lifecycle.Event.ON_DESTROY] event to cleanup the registration for dispatcher and removing the
+     * observer for lifecycle   .
+     */
+    @OnLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+    private fun onDestroy() {
+<span class="nc bnc" id="L94" title="All 2 branches missed.">        lifecycle.removeObserver(this)</span>
+<span class="nc" id="L95">        pauseListening()</span>
+<span class="nc" id="L96">    }</span>
+
+    fun start(
+        lifecycle: Lifecycle,
+        site: SiteModel,
+        editPostRepository: EditPostRepository,
+        editorMediaListener: EditorMediaListener
+    ) {
+<span class="nc" id="L104">        this.site = site</span>
+<span class="nc" id="L105">        this.editPostRepository = editPostRepository</span>
+<span class="nc" id="L106">        this.lifecycle = lifecycle</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">        this.lifecycle.addObserver(this)</span>
+<span class="nc" id="L108">        this.editorMedia.start(site, editorMediaListener)</span>
+<span class="nc" id="L109">    }</span>
+
+    fun setSaveMediaListener(newListener: StorySaveMediaListener) {
+<span class="nc" id="L112">        storySaveMediaListener = newListener</span>
+<span class="nc" id="L113">    }</span>
+
+    fun postStoryMediaUploadedEvent(mediaModel: MediaModel) {
+        // if this is a Story media item, then make sure to keep up with the StoriesPrefs serialized slides
+        // this looks for the slide saved with the local id key (media.getId()), and re-converts it to
+        // mediaId.
+        // Also: we don't need to worry about checking if this mediaModel corresponds to a media upload
+        // within a story block in this post: we will only replace items for which a local-keyed frame has
+        // been created before, which can only happen when using the Story Creator.
+<span class="nc" id="L122">        storiesPrefs.replaceLocalMediaIdKeyedSlideWithRemoteMediaIdKeyedSlide(</span>
+<span class="nc" id="L123">                mediaModel.getId(),</span>
+<span class="nc" id="L124">                mediaModel.getMediaId(),</span>
+<span class="nc" id="L125">                mediaModel.localSiteId.toLong()</span>
+        )
+
+        // also, let's post a sticky event for StoriesEventListener to catch - if the listener is not yet
+        // registered, it will be listening to this event as needed when Gutenberg is re-attached and ready
+        // to process events
+        // see subscriber method fun onStoryFrameMediaUploadedEvent(event: StoryFrameMediaUploadedEvent) below
+<span class="nc" id="L132">        eventBusWrapper.postSticky(</span>
+<span class="nc" id="L133">                StoryFrameMediaUploadedEvent(</span>
+<span class="nc" id="L134">                        LocalId(mediaModel.id),</span>
+<span class="nc" id="L135">                        RemoteId(mediaModel.mediaId),</span>
+<span class="nc" id="L136">                        &quot;&quot;,</span>
+<span class="nc" id="L137">                        mediaModel.url</span>
+                )
+        )
+<span class="nc" id="L140">    }</span>
+
+    // Story Frame Save Service events
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onStoryFrameSaveStart(event: FrameSaveStart) {
+<span class="nc bnc" id="L145" title="All 4 branches missed.">        if (!lifecycle.currentState.isAtLeast(CREATED)) {</span>
+<span class="nc" id="L146">            return</span>
+        }
+<span class="nc" id="L148">        val localMediaId = event.frameId.toString()</span>
+<span class="nc" id="L149">        val progress = storyRepositoryWrapper.getCurrentStorySaveProgress(event.storyIndex, 0.0f)</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">        storySaveMediaListener?.onMediaSaveReattached(localMediaId, progress)</span>
+<span class="nc" id="L151">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onStoryFrameSaveProgress(event: FrameSaveProgress) {
+<span class="nc bnc" id="L155" title="All 4 branches missed.">        if (!lifecycle.currentState.isAtLeast(CREATED)) {</span>
+<span class="nc" id="L156">            return</span>
+        }
+<span class="nc" id="L158">        val localMediaId = event.frameId.toString()</span>
+<span class="nc" id="L159">        val progress: Float = storyRepositoryWrapper.getCurrentStorySaveProgress(</span>
+<span class="nc" id="L160">                event.storyIndex,</span>
+<span class="nc" id="L161">                event.progress</span>
+        )
+<span class="nc bnc" id="L163" title="All 2 branches missed.">        storySaveMediaListener?.onMediaSaveProgress(localMediaId, progress)</span>
+<span class="nc" id="L164">    }</span>
+
+    @Subscribe(sticky = true, threadMode = ThreadMode.MAIN)
+    fun onStoryFrameSaveCompleted(event: FrameSaveCompleted) {
+<span class="nc" id="L168">        eventBusWrapper.removeStickyEvent(event)</span>
+        // in onStoryFrameSaveCompleted we should always get a frameId that has the TEMPORARY_ID_PREFIX prefix
+        // for Stories being edited only
+        // otherwise we can exit
+<span class="nc bnc" id="L172" title="All 2 branches missed.">        if (event.frameId == null) return</span>
+
+<span class="nc bnc" id="L174" title="All 4 branches missed.">        if (!lifecycle.currentState.isAtLeast(CREATED)) {</span>
+<span class="nc" id="L175">            return</span>
+        }
+<span class="nc" id="L177">        val localMediaId = event.frameId</span>
+
+<span class="nc" id="L179">        val (frames) = storyRepositoryWrapper.getStoryAtIndex(event.storyIndex)</span>
+
+        // first, update the media's url
+<span class="nc" id="L182">        val frame = frames[event.frameIndex]</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        storySaveMediaListener?.onMediaSaveSucceeded(</span>
+<span class="nc" id="L184">                localMediaId,</span>
+<span class="nc" id="L185">                Uri.fromFile(frame.composedFrameFile).toString()</span>
+        )
+
+        // now update progress
+<span class="nc" id="L189">        val totalProgress: Float = storyRepositoryWrapper.getCurrentStorySaveProgress(</span>
+<span class="nc" id="L190">                event.storyIndex,</span>
+<span class="nc" id="L191">                0.0f</span>
+        )
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        storySaveMediaListener?.onMediaSaveProgress(localMediaId, totalProgress)</span>
+<span class="nc" id="L194">    }</span>
+
+    @Subscribe(sticky = true, threadMode = ThreadMode.MAIN)
+    fun onStoryFrameMediaIdChanged(event: StoryFrameMediaModelCreatedEvent) {
+<span class="nc" id="L198">        eventBusWrapper.removeStickyEvent(event)</span>
+<span class="nc bnc" id="L199" title="All 4 branches missed.">        if (!lifecycle.currentState.isAtLeast(CREATED)) {</span>
+<span class="nc" id="L200">            return</span>
+        }
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        storySaveMediaListener?.onMediaModelCreatedForFile(event.oldId, event.newId.toString(), event.oldUrl)</span>
+<span class="nc" id="L203">    }</span>
+
+    @Subscribe(sticky = true, threadMode = ThreadMode.MAIN)
+    fun onStoryFrameSaveFailed(event: FrameSaveFailed) {
+<span class="nc" id="L207">        eventBusWrapper.removeStickyEvent(event)</span>
+<span class="nc bnc" id="L208" title="All 4 branches missed.">        if (!lifecycle.currentState.isAtLeast(CREATED)) {</span>
+<span class="nc" id="L209">            return</span>
+        }
+<span class="nc" id="L211">        val localMediaId = event.frameId.toString()</span>
+        // just update progress, we may have still some other frames in this story that need be saved.
+        // we will send the Failed signal once all the Story frames have been processed (see onStorySaveProcessFinished)
+<span class="nc" id="L214">        val progress: Float = storyRepositoryWrapper.getCurrentStorySaveProgress(event.storyIndex, 0.0f)</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">        storySaveMediaListener?.onMediaSaveReattached(localMediaId, progress)</span>
+        // storySaveMediaListener?.onMediaSaveFailed(localMediaId)
+<span class="nc" id="L217">    }</span>
+
+    @Subscribe(sticky = true, threadMode = ThreadMode.MAIN)
+    fun onStorySaveProcessFinished(event: StorySaveResult) {
+<span class="nc" id="L221">        eventBusWrapper.removeStickyEvent(event)</span>
+<span class="nc" id="L222">        storiesSavingInProgress.remove(event.storyIndex)</span>
+<span class="nc bnc" id="L223" title="All 4 branches missed.">        if (!lifecycle.currentState.isAtLeast(CREATED)) {</span>
+<span class="nc" id="L224">            return</span>
+        }
+<span class="nc" id="L226">        val story = storyRepositoryWrapper.getStoryAtIndex(event.storyIndex)</span>
+<span class="nc bnc" id="L227" title="All 4 branches missed.">        if (!event.isRetry &amp;&amp; event.frameSaveResult.size == story.frames.size) {</span>
+            // take the first frame IDs and mediaUri
+<span class="nc" id="L229">            val localMediaId = story.frames[0].id.toString()</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">            storySaveMediaListener?.onStorySaveResult(localMediaId, event.isSuccess())</span>
+        }
+<span class="nc" id="L232">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onStorySaveStart(event: StorySaveProcessStart) {
+<span class="nc" id="L236">        storiesSavingInProgress.add(event.storyIndex)</span>
+<span class="nc" id="L237">    }</span>
+
+    // Story media Upload specific event - we trigger this from within this class so it can be handled appropriately
+    // and doesn't miss the target as regular FluxC upload events would if Gutenberg is not yet prepared
+    @Subscribe(sticky = true, threadMode = ThreadMode.MAIN)
+    fun onStoryFrameMediaUploadedEvent(event: StoryFrameMediaUploadedEvent) {
+<span class="nc" id="L243">        eventBusWrapper.removeStickyEvent(event)</span>
+<span class="nc bnc" id="L244" title="All 4 branches missed.">        if (!lifecycle.currentState.isAtLeast(CREATED)) {</span>
+<span class="nc" id="L245">            return</span>
+        }
+<span class="nc bnc" id="L247" title="All 2 branches missed.">        storySaveMediaListener?.onStoryMediaSavedToRemote(</span>
+<span class="nc" id="L248">                event.localId.value.toString(),</span>
+<span class="nc" id="L249">                event.assignedMediaId.value.toString(),</span>
+<span class="nc" id="L250">                event.oldUrl,</span>
+<span class="nc" id="L251">                event.newUrl</span>
+        )
+<span class="nc" id="L253">    }</span>
+
+    // Editor load / cancel events
+    fun onRequestMediaFilesEditorLoad(
+        activity: Activity,
+        postId: LocalId,
+        networkErrorOnLastMediaFetchAttempt: Boolean,
+        mediaFiles: ArrayList&lt;Any&gt;,
+        blockId: String
+    ): Boolean {
+<span class="nc bnc" id="L263" title="All 2 branches missed.">        if (mediaFiles.isEmpty()) {</span>
+<span class="nc" id="L264">            ActivityLauncher.editEmptyStoryForResult(</span>
+<span class="nc" id="L265">                    activity,</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">                    site,</span>
+<span class="nc" id="L267">                    postId,</span>
+<span class="nc" id="L268">                    storyRepositoryWrapper.getCurrentStoryIndex(),</span>
+<span class="nc" id="L269">                    blockId</span>
+            )
+<span class="nc" id="L271">            return false</span>
+        }
+
+<span class="nc" id="L274">        val reCreateStoryResult = loadStoryFromStoriesPrefsUseCase</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">                .loadStoryFromMemoryOrRecreateFromPrefs(site, mediaFiles)</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">        if (!reCreateStoryResult.noSlidesLoaded) {</span>
+            // Story instance loaded or re-created! Load it onto the StoryComposer for editing now
+<span class="nc" id="L278">            ActivityLauncher.editStoryForResult(</span>
+<span class="nc" id="L279">                    activity,</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">                    site,</span>
+<span class="nc" id="L281">                    postId,</span>
+<span class="nc" id="L282">                    reCreateStoryResult.storyIndex,</span>
+<span class="nc" id="L283">                    reCreateStoryResult.allStorySlidesAreEditable,</span>
+<span class="nc" id="L284">                    true,</span>
+<span class="nc" id="L285">                    blockId</span>
+            )
+        } else {
+            // unfortunately we couldn't even load the remote media Ids indicated by the StoryBlock so we can't allow
+            // editing at this time :(
+<span class="nc bnc" id="L290" title="All 2 branches missed.">            if (networkErrorOnLastMediaFetchAttempt) {</span>
+                // there was an error fetching media when we were loading the editor,
+                // we *may* still have a possibility, tell the user they may try refreshing the media again
+<span class="nc" id="L293">                val builder: Builder = MaterialAlertDialogBuilder(</span>
+<span class="nc" id="L294">                        activity</span>
+                )
+<span class="nc" id="L296">                builder.setTitle(activity.getString(R.string.dialog_edit_story_unavailable_title))</span>
+<span class="nc" id="L297">                builder.setMessage(activity.getString(R.string.dialog_edit_story_unavailable_message))</span>
+<span class="nc" id="L298">                builder.setPositiveButton(R.string.dialog_button_ok) { dialog, id -&gt;</span>
+<span class="nc" id="L299">                    dialog.dismiss()</span>
+<span class="nc" id="L300">                }</span>
+<span class="nc" id="L301">                val dialog = builder.create()</span>
+<span class="nc" id="L302">                dialog.show()</span>
+            } else {
+                // unrecoverable error, nothing we can do, inform the user :(.
+<span class="nc" id="L305">                val builder: Builder = MaterialAlertDialogBuilder(</span>
+<span class="nc" id="L306">                        activity</span>
+                )
+<span class="nc" id="L308">                builder.setTitle(activity.getString(R.string.dialog_edit_story_unrecoverable_title))</span>
+<span class="nc" id="L309">                builder.setMessage(activity.getString(R.string.dialog_edit_story_unrecoverable_message))</span>
+<span class="nc" id="L310">                builder.setPositiveButton(R.string.dialog_button_ok) { dialog, id -&gt; dialog.dismiss() }</span>
+<span class="nc" id="L311">                val dialog = builder.create()</span>
+<span class="nc" id="L312">                dialog.show()</span>
+            }
+        }
+<span class="nc" id="L315">        return reCreateStoryResult.noSlidesLoaded</span>
+    }
+
+    fun onCancelUploadForMediaCollection(mediaFiles: ArrayList&lt;Any&gt;) {
+        // just cancel upload for each media
+<span class="nc bnc" id="L320" title="All 2 branches missed.">        for (mediaFile in mediaFiles) {</span>
+<span class="nc" id="L321">            val localMediaId = StringUtils.stringToInt(</span>
+<span class="nc" id="L322">                    (mediaFile as HashMap&lt;String?, Any?&gt;)[&quot;id&quot;].toString(), 0</span>
+            )
+<span class="nc bnc" id="L324" title="All 2 branches missed.">            if (localMediaId != 0) {</span>
+<span class="nc" id="L325">                editorMedia.cancelMediaUploadAsync(localMediaId, false)</span>
+            }
+        }
+<span class="nc" id="L328">    }</span>
+
+    fun onRetryUploadForMediaCollection(
+        activity: Activity,
+        mediaFiles: ArrayList&lt;Any&gt;,
+        editorMediaUploadListener: EditorMediaUploadListener?
+    ) {
+<span class="nc" id="L335">        val mediaIdsToRetry = ArrayList&lt;Int&gt;()</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">        for (mediaFile in mediaFiles) {</span>
+<span class="nc" id="L337">            val localMediaId = StringUtils.stringToInt(</span>
+<span class="nc" id="L338">                    (mediaFile as HashMap&lt;String?, Any?&gt;)[&quot;id&quot;].toString(), 0</span>
+            )
+<span class="nc bnc" id="L340" title="All 2 branches missed.">            if (localMediaId != 0) {</span>
+<span class="nc" id="L341">                val media: MediaModel? = mediaStore.getMediaWithLocalId(localMediaId)</span>
+                // if we find at least one item in the mediaFiles collection passed
+                // for which we don't have a local MediaModel, just tell the user and bail
+<span class="nc bnc" id="L344" title="All 2 branches missed.">                if (media == null) {</span>
+<span class="nc" id="L345">                    AppLog.e(</span>
+<span class="nc" id="L346">                            MEDIA,</span>
+<span class="nc" id="L347">                            &quot;Can't find media with local id: $localMediaId&quot;</span>
+                    )
+<span class="nc" id="L349">                    val builder: Builder = MaterialAlertDialogBuilder(</span>
+<span class="nc" id="L350">                            activity</span>
+                    )
+<span class="nc" id="L352">                    builder.setTitle(activity.getString(string.cannot_retry_deleted_media_item_fatal))</span>
+<span class="nc" id="L353">                    builder.setPositiveButton(string.ok) { dialog, id -&gt; dialog.dismiss() }</span>
+<span class="nc" id="L354">                    val dialog = builder.create()</span>
+<span class="nc" id="L355">                    dialog.show()</span>
+<span class="nc" id="L356">                    return</span>
+                }
+<span class="nc bnc" id="L358" title="All 4 branches missed.">                if (media.url != null &amp;&amp; media.uploadState == UPLOADED.toString()) {</span>
+                    // Note: we should actually do this when the editor fragment starts instead of waiting for user
+                    // input.
+                    // Notify the editor fragment upload was successful and it should replace the local url by the
+                    // remote url.
+<span class="nc bnc" id="L363" title="All 2 branches missed.">                    editorMediaUploadListener?.onMediaUploadSucceeded(</span>
+<span class="nc" id="L364">                            media.id.toString(),</span>
+<span class="nc" id="L365">                            FluxCUtils.mediaFileFromMediaModel(media)</span>
+                    )
+                } else {
+<span class="nc" id="L368">                    UploadService.cancelFinalNotification(</span>
+<span class="nc" id="L369">                            activity,</span>
+<span class="nc bnc" id="L370" title="All 2 branches missed.">                            editPostRepository.getPost()</span>
+                    )
+<span class="nc bnc" id="L372" title="All 2 branches missed.">                    UploadService.cancelFinalNotificationForMedia(activity, site)</span>
+<span class="nc" id="L373">                    mediaIdsToRetry.add(localMediaId)</span>
+                }
+            }
+        }
+
+<span class="nc bnc" id="L378" title="All 2 branches missed.">        if (!mediaIdsToRetry.isEmpty()) {</span>
+<span class="nc" id="L379">            editorMedia.retryFailedMediaAsync(mediaIdsToRetry)</span>
+        }
+<span class="nc" id="L381">        AnalyticsTracker.track(EDITOR_UPLOAD_MEDIA_RETRIED)</span>
+<span class="nc" id="L382">    }</span>
+
+    fun onCancelSaveForMediaCollection(mediaFiles: ArrayList&lt;Any&gt;) {
+        // TODO implement cancelling save process for media collection
+<span class="nc" id="L386">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

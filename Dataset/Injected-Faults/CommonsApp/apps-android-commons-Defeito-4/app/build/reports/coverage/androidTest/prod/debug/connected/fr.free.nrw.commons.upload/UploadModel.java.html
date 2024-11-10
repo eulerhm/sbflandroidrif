@@ -1,0 +1,272 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>UploadModel.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.upload</a> &gt; <span class="el_source">UploadModel.java</span></div><h1>UploadModel.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.upload;
+
+import android.content.Context;
+import android.net.Uri;
+import fr.free.nrw.commons.Media;
+import fr.free.nrw.commons.auth.SessionManager;
+import fr.free.nrw.commons.contributions.Contribution;
+import fr.free.nrw.commons.filepicker.UploadableFile;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.nearby.Place;
+import fr.free.nrw.commons.settings.Prefs;
+import fr.free.nrw.commons.upload.depicts.DepictsFragment;
+import fr.free.nrw.commons.upload.structure.depictions.DepictedItem;
+import io.reactivex.Observable;
+import io.reactivex.Single;
+import io.reactivex.disposables.CompositeDisposable;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Singleton;
+import org.jetbrains.annotations.NotNull;
+import timber.log.Timber;
+
+@Singleton
+public class UploadModel {
+
+    private final JsonKvStore store;
+    private final List&lt;String&gt; licenses;
+    private final Context context;
+    private String license;
+    private final Map&lt;String, String&gt; licensesByName;
+<span class="nc" id="L37">    private final List&lt;UploadItem&gt; items = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L38">    private final CompositeDisposable compositeDisposable = new CompositeDisposable();</span>
+
+    private final SessionManager sessionManager;
+    private final FileProcessor fileProcessor;
+    private final ImageProcessingService imageProcessingService;
+<span class="nc" id="L43">    private final List&lt;String&gt; selectedCategories = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L44">    private final List&lt;DepictedItem&gt; selectedDepictions = new ArrayList&lt;&gt;();</span>
+    /**
+     * Existing depicts which are selected
+     */
+<span class="nc" id="L48">    private List&lt;String&gt; selectedExistingDepictions = new ArrayList&lt;&gt;();</span>
+
+    @Inject
+    UploadModel(@Named(&quot;licenses&quot;) final List&lt;String&gt; licenses,
+            @Named(&quot;default_preferences&quot;) final JsonKvStore store,
+            @Named(&quot;licenses_by_name&quot;) final Map&lt;String, String&gt; licensesByName,
+            final Context context,
+            final SessionManager sessionManager,
+            final FileProcessor fileProcessor,
+<span class="nc" id="L57">            final ImageProcessingService imageProcessingService) {</span>
+<span class="nc" id="L58">        this.licenses = licenses;</span>
+<span class="nc" id="L59">        this.store = store;</span>
+<span class="nc" id="L60">        this.license = store.getString(Prefs.DEFAULT_LICENSE, Prefs.Licenses.CC_BY_SA_3);</span>
+<span class="nc" id="L61">        this.licensesByName = licensesByName;</span>
+<span class="nc" id="L62">        this.context = context;</span>
+<span class="nc" id="L63">        this.sessionManager = sessionManager;</span>
+<span class="nc" id="L64">        this.fileProcessor = fileProcessor;</span>
+<span class="nc" id="L65">        this.imageProcessingService = imageProcessingService;</span>
+<span class="nc" id="L66">    }</span>
+
+    /**
+     * cleanup the resources, I am Singleton, preparing for fresh upload
+     */
+    public void cleanUp() {
+<span class="nc" id="L72">        compositeDisposable.clear();</span>
+<span class="nc" id="L73">        fileProcessor.cleanup();</span>
+<span class="nc" id="L74">        items.clear();</span>
+<span class="nc" id="L75">        selectedCategories.clear();</span>
+<span class="nc" id="L76">        selectedDepictions.clear();</span>
+<span class="nc" id="L77">        selectedExistingDepictions.clear();</span>
+<span class="nc" id="L78">    }</span>
+
+    public void setSelectedCategories(List&lt;String&gt; selectedCategories) {
+<span class="nc" id="L81">        this.selectedCategories.clear();</span>
+<span class="nc" id="L82">        this.selectedCategories.addAll(selectedCategories);</span>
+<span class="nc" id="L83">    }</span>
+
+    /**
+     * pre process a one item at a time
+     */
+    public Observable&lt;UploadItem&gt; preProcessImage(final UploadableFile uploadableFile,
+        final Place place,
+        final SimilarImageInterface similarImageInterface,
+        LatLng inAppPictureLocation) {
+<span class="nc" id="L92">        return Observable.just(</span>
+<span class="nc" id="L93">            createAndAddUploadItem(uploadableFile, place, similarImageInterface, inAppPictureLocation));</span>
+    }
+
+    public Single&lt;Integer&gt; getImageQuality(final UploadItem uploadItem, LatLng inAppPictureLocation) {
+<span class="nc" id="L97">        return imageProcessingService.validateImage(uploadItem, inAppPictureLocation);</span>
+    }
+
+    private UploadItem createAndAddUploadItem(final UploadableFile uploadableFile,
+        final Place place,
+        final SimilarImageInterface similarImageInterface,
+        LatLng inAppPictureLocation) {
+<span class="nc" id="L104">        final UploadableFile.DateTimeWithSource dateTimeWithSource = uploadableFile</span>
+<span class="nc" id="L105">                .getFileCreatedDate(context);</span>
+<span class="nc" id="L106">        long fileCreatedDate = -1;</span>
+<span class="nc" id="L107">        String createdTimestampSource = &quot;&quot;;</span>
+<span class="nc" id="L108">        String fileCreatedDateString = &quot;&quot;;</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">        if (dateTimeWithSource != null) {</span>
+<span class="nc" id="L110">            fileCreatedDate = dateTimeWithSource.getEpochDate();</span>
+<span class="nc" id="L111">            fileCreatedDateString = dateTimeWithSource.getDateString();</span>
+<span class="nc" id="L112">            createdTimestampSource = dateTimeWithSource.getSource();</span>
+        }
+<span class="nc" id="L114">        Timber.d(&quot;File created date is %d&quot;, fileCreatedDate);</span>
+<span class="nc" id="L115">        final ImageCoordinates imageCoordinates = fileProcessor</span>
+<span class="nc" id="L116">                .processFileCoordinates(similarImageInterface, uploadableFile.getFilePath(),</span>
+                    inAppPictureLocation);
+<span class="nc" id="L118">        final UploadItem uploadItem = new UploadItem(</span>
+<span class="nc" id="L119">            Uri.parse(uploadableFile.getFilePath()),</span>
+<span class="nc" id="L120">                uploadableFile.getMimeType(context), imageCoordinates, place, fileCreatedDate,</span>
+                createdTimestampSource,
+<span class="nc" id="L122">                uploadableFile.getContentUri(),</span>
+                fileCreatedDateString);
+
+        // If an uploadItem of the same uploadableFile has been created before, we return that.
+        // This is to avoid multiple instances of uploadItem of same file passed around.
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        if (items.contains(uploadItem)) {</span>
+<span class="nc" id="L128">            return items.get(items.indexOf(uploadItem));</span>
+        }
+
+<span class="nc bnc" id="L131" title="All 2 branches missed.">        if (place != null) {</span>
+<span class="nc" id="L132">            uploadItem.getUploadMediaDetails().set(0, new UploadMediaDetail(place));</span>
+        }
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        if (!items.contains(uploadItem)) {</span>
+<span class="nc" id="L135">            items.add(uploadItem);</span>
+        }
+<span class="nc" id="L137">        return uploadItem;</span>
+    }
+
+    public int getCount() {
+<span class="nc" id="L141">        return items.size();</span>
+    }
+
+    public List&lt;UploadItem&gt; getUploads() {
+<span class="nc" id="L145">        return items;</span>
+    }
+
+    public List&lt;String&gt; getLicenses() {
+<span class="nc" id="L149">        return licenses;</span>
+    }
+
+    public String getSelectedLicense() {
+<span class="nc" id="L153">        return license;</span>
+    }
+
+    public void setSelectedLicense(final String licenseName) {
+<span class="nc" id="L157">        this.license = licensesByName.get(licenseName);</span>
+<span class="nc" id="L158">        store.putString(Prefs.DEFAULT_LICENSE, license);</span>
+<span class="nc" id="L159">    }</span>
+
+    public Observable&lt;Contribution&gt; buildContributions() {
+<span class="nc" id="L162">        return Observable.fromIterable(items).map(item -&gt;</span>
+        {
+<span class="nc" id="L164">            String imageSHA1 = FileUtils.getSHA1(context.getContentResolver().openInputStream(item.getContentUri()));</span>
+
+<span class="nc" id="L166">            final Contribution contribution = new Contribution(</span>
+<span class="nc" id="L167">                item, sessionManager, newListOf(selectedDepictions), newListOf(selectedCategories), imageSHA1);</span>
+
+<span class="nc" id="L169">            contribution.setHasInvalidLocation(item.hasInvalidLocation());</span>
+
+<span class="nc" id="L171">            Timber.d(&quot;Created timestamp while building contribution is %s, %s&quot;,</span>
+<span class="nc" id="L172">                item.getCreatedTimestamp(),</span>
+<span class="nc" id="L173">                new Date(item.getCreatedTimestamp()));</span>
+
+<span class="nc bnc" id="L175" title="All 2 branches missed.">            if (item.getCreatedTimestamp() != -1L) {</span>
+<span class="nc" id="L176">                contribution.setDateCreated(new Date(item.getCreatedTimestamp()));</span>
+<span class="nc" id="L177">                contribution.setDateCreatedSource(item.getCreatedTimestampSource());</span>
+                //Set the date only if you have it, else the upload service is gonna try it the other way
+            }
+
+<span class="nc bnc" id="L181" title="All 2 branches missed.">            if (contribution.getWikidataPlace() != null) {</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">                if (item.isWLMUpload()) {</span>
+<span class="nc" id="L183">                    contribution.getWikidataPlace().setMonumentUpload(true);</span>
+                } else {
+<span class="nc" id="L185">                    contribution.getWikidataPlace().setMonumentUpload(false);</span>
+                }
+            }
+<span class="nc" id="L188">            contribution.setCountryCode(item.getCountryCode());</span>
+<span class="nc" id="L189">            return contribution;</span>
+        });
+    }
+
+    public void deletePicture(final String filePath) {
+<span class="nc" id="L194">        final Iterator&lt;UploadItem&gt; iterator = items.iterator();</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">        while (iterator.hasNext()) {</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">            if (iterator.next().getMediaUri().toString().contains(filePath)) {</span>
+<span class="nc" id="L197">                iterator.remove();</span>
+<span class="nc" id="L198">                break;</span>
+            }
+        }
+<span class="nc bnc" id="L201" title="All 2 branches missed.">        if (items.isEmpty()) {</span>
+<span class="nc" id="L202">            cleanUp();</span>
+        }
+<span class="nc" id="L204">    }</span>
+
+    public List&lt;UploadItem&gt; getItems() {
+<span class="nc" id="L207">        return items;</span>
+    }
+
+    public void onDepictItemClicked(DepictedItem depictedItem, Media media) {
+<span class="nc bnc" id="L211" title="All 2 branches missed.">        if (media == null) {</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">            if (depictedItem.isSelected()) {</span>
+<span class="nc" id="L213">                selectedDepictions.add(depictedItem);</span>
+            } else {
+<span class="nc" id="L215">                selectedDepictions.remove(depictedItem);</span>
+            }
+        } else {
+<span class="nc bnc" id="L218" title="All 2 branches missed.">            if (depictedItem.isSelected()) {</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">                if (media.getDepictionIds().contains(depictedItem.getId())) {</span>
+<span class="nc" id="L220">                    selectedExistingDepictions.add(depictedItem.getId());</span>
+                } else {
+<span class="nc" id="L222">                    selectedDepictions.add(depictedItem);</span>
+                }
+            } else {
+<span class="nc bnc" id="L225" title="All 2 branches missed.">                if (media.getDepictionIds().contains(depictedItem.getId())) {</span>
+<span class="nc" id="L226">                    selectedExistingDepictions.remove(depictedItem.getId());</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">                    if (!media.getDepictionIds().contains(depictedItem.getId())) {</span>
+<span class="nc" id="L228">                        final List&lt;String&gt; depictsList = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L229">                        depictsList.add(depictedItem.getId());</span>
+<span class="nc" id="L230">                        depictsList.addAll(media.getDepictionIds());</span>
+<span class="nc" id="L231">                        media.setDepictionIds(depictsList);</span>
+<span class="nc" id="L232">                    }</span>
+                } else {
+<span class="nc" id="L234">                    selectedDepictions.remove(depictedItem);</span>
+                }
+            }
+        }
+<span class="nc" id="L238">    }</span>
+
+    @NotNull
+    private &lt;T&gt; List&lt;T&gt; newListOf(final List&lt;T&gt; items) {
+<span class="nc bnc" id="L242" title="All 2 branches missed.">        return items != null ? new ArrayList&lt;&gt;(items) : new ArrayList&lt;&gt;();</span>
+    }
+
+    public void useSimilarPictureCoordinates(final ImageCoordinates imageCoordinates, final int uploadItemIndex) {
+<span class="nc" id="L246">        fileProcessor.prePopulateCategoriesAndDepictionsBy(imageCoordinates);</span>
+<span class="nc" id="L247">        items.get(uploadItemIndex).setGpsCoords(imageCoordinates);</span>
+<span class="nc" id="L248">    }</span>
+
+    public List&lt;DepictedItem&gt; getSelectedDepictions() {
+<span class="nc" id="L251">        return selectedDepictions;</span>
+    }
+
+    /**
+     * Provides selected existing depicts
+     *
+     * @return selected existing depicts
+     */
+    public List&lt;String&gt; getSelectedExistingDepictions() {
+<span class="nc" id="L260">        return selectedExistingDepictions;</span>
+    }
+
+    /**
+     * Initialize existing depicts
+     *
+     * @param selectedExistingDepictions existing depicts
+     */
+    public void setSelectedExistingDepictions(final List&lt;String&gt; selectedExistingDepictions) {
+<span class="nc" id="L269">        this.selectedExistingDepictions = selectedExistingDepictions;</span>
+<span class="nc" id="L270">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

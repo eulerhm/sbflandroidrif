@@ -1,0 +1,535 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ZendeskHelper.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.support</a> &gt; <span class="el_source">ZendeskHelper.kt</span></div><h1>ZendeskHelper.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.support
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.telephony.TelephonyManager
+import androidx.preference.PreferenceManager
+import com.zendesk.logger.Logger
+import com.zendesk.service.ErrorResponse
+import com.zendesk.service.ZendeskCallback
+import org.wordpress.android.R
+import org.wordpress.android.WordPress
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.login.BuildConfig
+import org.wordpress.android.ui.accounts.HelpActivity.Origin
+import org.wordpress.android.ui.notifications.utils.NotificationsUtils
+import org.wordpress.android.ui.prefs.AppPrefs
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.BuildConfigWrapper
+import org.wordpress.android.util.DeviceUtils
+import org.wordpress.android.util.LanguageUtils
+import org.wordpress.android.util.NetworkUtils
+import org.wordpress.android.util.PackageUtils
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.extensions.currentLocale
+import org.wordpress.android.util.extensions.logInformation
+import org.wordpress.android.util.extensions.stateLogInformation
+import org.wordpress.android.util.validateEmail
+import zendesk.configurations.Configuration
+import zendesk.core.AnonymousIdentity
+import zendesk.core.Identity
+import zendesk.core.PushRegistrationProvider
+import zendesk.core.Zendesk
+import zendesk.support.CustomField
+import zendesk.support.Support
+import zendesk.support.request.RequestActivity
+import zendesk.support.requestlist.RequestListActivity
+import java.util.Timer
+import kotlin.concurrent.schedule
+
+private const val zendeskNeedsToBeEnabledError = &quot;Zendesk needs to be setup before this method can be called&quot;
+private const val enablePushNotificationsDelayAfterIdentityChange: Long = 2500
+
+<span class="fc" id="L48">class ZendeskHelper(</span>
+<span class="fc" id="L49">    private val accountStore: AccountStore,</span>
+<span class="fc" id="L50">    private val siteStore: SiteStore,</span>
+<span class="fc" id="L51">    private val supportHelper: SupportHelper,</span>
+<span class="fc" id="L52">    private val buildConfigWrapper: BuildConfigWrapper</span>
+) {
+    private val zendeskInstance: Zendesk
+<span class="fc" id="L55">        get() = Zendesk.INSTANCE</span>
+
+    private val isZendeskEnabled: Boolean
+<span class="fc" id="L58">        get() = zendeskInstance.isInitialized</span>
+
+    private val zendeskPushRegistrationProvider: PushRegistrationProvider?
+<span class="nc bnc" id="L61" title="All 2 branches missed.">        get() = zendeskInstance.provider()?.pushRegistrationProvider()</span>
+
+<span class="fc" id="L63">    private val timer: Timer by lazy {</span>
+<span class="fc" id="L64">        Timer()</span>
+    }
+
+    /**
+     * These two properties are used to keep track of the Zendesk identity set. Since we allow users' to change their
+     * supportEmail and reset their identity on logout, we need to ensure that the correct identity is set all times.
+     * Check [requireIdentity], [refreshIdentity] &amp; [clearIdentity] for more details about how Zendesk identity works.
+     */
+    private var supportEmail: String? = null
+    private var supportName: String? = null
+
+    /**
+     * Although rare, Zendesk SDK might reset the identity due to a 401 error. This seems to happen if the identity
+     * is changed and another Zendesk action happens before the identity change could be completed. In order to avoid
+     * such issues, we check both Zendesk identity and the [supportEmail] to decide whether identity is set.
+     */
+    private fun isIdentitySet(): Boolean {
+<span class="nc bnc" id="L81" title="All 2 branches missed.">        val hasValidEmail = supportEmail?.let { validateEmail(it) } ?: false</span>
+<span class="nc bnc" id="L82" title="All 4 branches missed.">        val identityEmail = (zendeskInstance.identity as? AnonymousIdentity)?.email</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">        val hasIdentityWithValidEmail = identityEmail?.let { validateEmail(it) } ?: false</span>
+<span class="nc bnc" id="L84" title="All 4 branches missed.">        return hasValidEmail &amp;&amp; hasIdentityWithValidEmail</span>
+    }
+
+    /**
+     * This function sets up the Zendesk singleton instance with the passed in credentials. This step is required
+     * for the rest of Zendesk functions to work and it should only be called once, probably during the Application
+     * setup. It'll also enable Zendesk logs for DEBUG builds.
+     */
+    @JvmOverloads
+<span class="fc" id="L93">    fun setupZendesk(</span>
+        context: Context,
+        zendeskUrl: String,
+        applicationId: String,
+        oauthClientId: String,
+<span class="fc" id="L98">        enableLogs: Boolean = BuildConfig.DEBUG</span>
+    ) {
+<span class="pc bpc" id="L100" title="2 of 4 branches missed.">        require(!isZendeskEnabled) {</span>
+<span class="nc" id="L101">            &quot;Zendesk shouldn't be initialized more than once!&quot;</span>
+        }
+<span class="pc bpc" id="L103" title="6 of 12 branches missed.">        if (zendeskUrl.isEmpty() || applicationId.isEmpty() || oauthClientId.isEmpty()) {</span>
+<span class="nc" id="L104">            return</span>
+        }
+<span class="fc" id="L106">        zendeskInstance.init(context, zendeskUrl, applicationId, oauthClientId)</span>
+<span class="fc" id="L107">        Logger.setLoggable(enableLogs)</span>
+<span class="fc" id="L108">        Support.INSTANCE.init(zendeskInstance)</span>
+<span class="fc" id="L109">        refreshIdentity()</span>
+<span class="fc" id="L110">    }</span>
+
+    /**
+     * This function creates a new ticket. It'll force a valid identity, so if the user doesn't have one set, a dialog
+     * will be shown where the user will need to enter an email and a name. If they cancel the dialog, the ticket
+     * creation will be canceled as well. A Zendesk configuration is passed in as it's required for ticket creation.
+     */
+    @JvmOverloads
+<span class="nc" id="L118">    fun createNewTicket(</span>
+        context: Context,
+        origin: Origin?,
+        selectedSite: SiteModel?,
+<span class="nc" id="L122">        extraTags: List&lt;String&gt;? = null</span>
+    ) {
+<span class="nc bnc" id="L124" title="All 2 branches missed.">        require(isZendeskEnabled) {</span>
+<span class="nc" id="L125">            zendeskNeedsToBeEnabledError</span>
+        }
+<span class="nc" id="L127">        requireIdentity(context, selectedSite) {</span>
+<span class="nc" id="L128">            AnalyticsTracker.track(Stat.SUPPORT_NEW_REQUEST_VIEWED)</span>
+<span class="nc" id="L129">            RequestActivity.builder()</span>
+<span class="nc" id="L130">                .show(</span>
+<span class="nc" id="L131">                    context,</span>
+<span class="nc" id="L132">                    buildZendeskConfig(</span>
+<span class="nc" id="L133">                        context,</span>
+<span class="nc" id="L134">                        siteStore.sites,</span>
+<span class="nc" id="L135">                        origin,</span>
+<span class="nc" id="L136">                        selectedSite,</span>
+<span class="nc" id="L137">                        extraTags,</span>
+<span class="nc" id="L138">                        buildConfigWrapper</span>
+                    )
+                )
+<span class="nc" id="L141">        }</span>
+<span class="nc" id="L142">    }</span>
+
+    /**
+     * This function shows the user's ticket list. It'll force a valid identity, so if the user doesn't have one set,
+     * a dialog will be shown where the user will need to enter an email and a name. If they cancel the dialog,
+     * ticket list will not be shown. A Zendesk configuration is passed in as it's required for ticket creation.
+     */
+<span class="nc" id="L149">    fun showAllTickets(</span>
+        context: Context,
+        origin: Origin?,
+<span class="nc" id="L152">        selectedSite: SiteModel? = null,</span>
+<span class="nc" id="L153">        extraTags: List&lt;String&gt;? = null</span>
+    ) {
+<span class="nc bnc" id="L155" title="All 2 branches missed.">        require(isZendeskEnabled) {</span>
+<span class="nc" id="L156">            zendeskNeedsToBeEnabledError</span>
+        }
+<span class="nc" id="L158">        requireIdentity(context, selectedSite) {</span>
+<span class="nc" id="L159">            AnalyticsTracker.track(Stat.SUPPORT_TICKET_LIST_VIEWED)</span>
+<span class="nc" id="L160">            RequestListActivity.builder()</span>
+<span class="nc" id="L161">                .show(</span>
+<span class="nc" id="L162">                    context,</span>
+<span class="nc" id="L163">                    buildZendeskConfig(</span>
+<span class="nc" id="L164">                        context,</span>
+<span class="nc" id="L165">                        siteStore.sites,</span>
+<span class="nc" id="L166">                        origin,</span>
+<span class="nc" id="L167">                        selectedSite,</span>
+<span class="nc" id="L168">                        extraTags,</span>
+<span class="nc" id="L169">                        buildConfigWrapper</span>
+                    )
+                )
+<span class="nc" id="L172">        }</span>
+<span class="nc" id="L173">    }</span>
+
+    /**
+     * This function refreshes the Zendesk's request activity if it's currently being displayed. It'll return true if
+     * it's successful. We'll use the return value to decide whether to show a push notification or not.
+     */
+    fun refreshRequest(context: Context, requestId: String?): Boolean =
+<span class="nc" id="L180">            Support.INSTANCE.refreshRequest(requestId, context)</span>
+
+    /**
+     * This function should be called when the user logs out of WordPress.com. Push notifications are only available
+     * for WordPress.com users, so they'll be disabled. We'll also clear the Zendesk identity of the user on logout
+     * and it will need to be set again when the user wants to create a new ticket.
+     */
+    fun reset() {
+<span class="nc" id="L188">        disablePushNotifications()</span>
+<span class="nc" id="L189">        clearIdentity()</span>
+<span class="nc" id="L190">    }</span>
+
+    /**
+     * This function will enable push notifications for Zendesk. Both a Zendesk identity and a valid push
+     * notification device token is required. If either doesn't exist, the request will simply be ignored.
+     */
+    fun enablePushNotifications() {
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        require(isZendeskEnabled) {</span>
+<span class="nc" id="L198">            zendeskNeedsToBeEnabledError</span>
+        }
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        if (!isIdentitySet()) {</span>
+            // identity should be set before registering the device token
+<span class="nc" id="L202">            return</span>
+        }
+        // The device token will not be available if the user is not logged in, so this check serves two purposes
+<span class="nc bnc" id="L205" title="All 2 branches missed.">        wpcomPushNotificationDeviceToken?.let { deviceToken -&gt;</span>
+<span class="nc bnc" id="L206" title="All 2 branches missed.">            zendeskPushRegistrationProvider?.registerWithDeviceIdentifier(</span>
+<span class="nc" id="L207">                    deviceToken,</span>
+<span class="nc" id="L208">                    object : ZendeskCallback&lt;String&gt;() {</span>
+                        override fun onSuccess(result: String?) {
+<span class="nc" id="L210">                            AppLog.v(T.SUPPORT, &quot;Zendesk push notifications successfully enabled!&quot;)</span>
+<span class="nc" id="L211">                        }</span>
+
+                        override fun onError(errorResponse: ErrorResponse?) {
+<span class="nc" id="L214">                            AppLog.v(T.SUPPORT, &quot;Enabling Zendesk push notifications failed with&quot; +</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">                                    &quot; error: ${errorResponse?.reason}&quot;)</span>
+<span class="nc" id="L216">                        }</span>
+                    })
+        }
+<span class="nc" id="L219">    }</span>
+
+    /**
+     * This function will disable push notifications for Zendesk.
+     */
+    private fun disablePushNotifications() {
+<span class="nc bnc" id="L225" title="All 2 branches missed.">        require(isZendeskEnabled) {</span>
+<span class="nc" id="L226">            zendeskNeedsToBeEnabledError</span>
+        }
+<span class="nc bnc" id="L228" title="All 2 branches missed.">        if (!isIdentitySet()) {</span>
+            // identity should be set before removing the device token
+<span class="nc" id="L230">            return</span>
+        }
+<span class="nc bnc" id="L232" title="All 2 branches missed.">        zendeskPushRegistrationProvider?.unregisterDevice(</span>
+<span class="nc" id="L233">                object : ZendeskCallback&lt;Void&gt;() {</span>
+                    override fun onSuccess(response: Void?) {
+<span class="nc" id="L235">                        AppLog.v(T.SUPPORT, &quot;Zendesk push notifications successfully disabled!&quot;)</span>
+<span class="nc" id="L236">                    }</span>
+
+                    override fun onError(errorResponse: ErrorResponse?) {
+<span class="nc" id="L239">                        AppLog.v(T.SUPPORT, &quot;Disabling Zendesk push notifications failed with&quot; +</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">                                &quot; error: ${errorResponse?.reason}&quot;)</span>
+<span class="nc" id="L241">                    }</span>
+                })
+<span class="nc" id="L243">    }</span>
+
+    /**
+     * This function provides a way to change the support email for the Zendesk identity. Due to the way Zendesk
+     * anonymous identity works, this will reset the users' tickets.
+     */
+    fun setSupportEmail(email: String?) {
+<span class="nc" id="L250">        AppPrefs.setSupportEmail(email)</span>
+<span class="nc" id="L251">        refreshIdentity()</span>
+<span class="nc" id="L252">    }</span>
+
+    /**
+     * This is a helper function which provides an easy way to make sure a Zendesk identity is set before running a
+     * piece of code. It'll check the existence of the identity and call the callback if it's already available.
+     * Otherwise, it'll show a dialog for the user to enter an email and name through a helper function which then
+     * will be used to set the identity and call the callback. It'll also try to enable the push notifications.
+     */
+    private fun requireIdentity(
+        context: Context,
+        selectedSite: SiteModel?,
+        onIdentitySet: () -&gt; Unit
+    ) {
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (isIdentitySet()) {</span>
+            // identity already available
+<span class="nc" id="L267">            onIdentitySet()</span>
+<span class="nc" id="L268">            return</span>
+        }
+<span class="nc bnc" id="L270" title="All 6 branches missed.">        if (!AppPrefs.getSupportEmail().isNullOrEmpty()) {</span>
+            /**
+             * Zendesk SDK reset the identity, but we already know the email of the user, we can simply refresh
+             * the identity. Check out the documentation for [isIdentitySet] for more details.
+             */
+<span class="nc" id="L275">            refreshIdentity()</span>
+<span class="nc" id="L276">            onIdentitySet()</span>
+<span class="nc" id="L277">            return</span>
+        }
+<span class="nc" id="L279">        val (emailSuggestion, nameSuggestion) = supportHelper</span>
+<span class="nc" id="L280">                .getSupportEmailAndNameSuggestion(accountStore.account, selectedSite)</span>
+<span class="nc" id="L281">        supportHelper.showSupportIdentityInputDialog(context, emailSuggestion, nameSuggestion) { email, name -&gt;</span>
+<span class="nc" id="L282">            AppPrefs.setSupportEmail(email)</span>
+<span class="nc" id="L283">            AppPrefs.setSupportName(name)</span>
+<span class="nc" id="L284">            refreshIdentity()</span>
+<span class="nc" id="L285">            onIdentitySet()</span>
+<span class="nc" id="L286">        }</span>
+<span class="nc" id="L287">    }</span>
+
+    /**
+     * This is a helper function that'll ensure the Zendesk identity is set with the credentials from AppPrefs.
+     */
+    private fun refreshIdentity() {
+<span class="pc bpc" id="L293" title="1 of 2 branches missed.">        require(isZendeskEnabled) {</span>
+<span class="nc" id="L294">            zendeskNeedsToBeEnabledError</span>
+        }
+<span class="fc" id="L296">        val email = AppPrefs.getSupportEmail()</span>
+<span class="fc" id="L297">        val name = AppPrefs.getSupportName()</span>
+        /**
+         * We refresh the Zendesk identity if the email or the name has been updated. We also check whether
+         * Zendesk SDK has cleared the identity. Check out the documentation for [isIdentitySet] for more details.
+         */
+<span class="pc bpc" id="L302" title="5 of 6 branches missed.">        if (supportEmail != email || supportName != name || zendeskInstance.identity == null) {</span>
+<span class="fc" id="L303">            supportEmail = email</span>
+<span class="fc" id="L304">            supportName = name</span>
+<span class="fc" id="L305">            zendeskInstance.setIdentity(createZendeskIdentity(email, name))</span>
+
+            /**
+             * When we change the identity in Zendesk, it seems tobe making an asynchronous call to a server to
+             * receive a different access token. During this time, if there is a call to Zendesk with the previous
+             * access token, it could fail with a 401 error which seems to be clearing the identity. In order to avoid
+             * such cases, we put a delay on enabling push notifications for the new identity.
+             *
+             * [enablePushNotifications] will check if the identity is set, before making the actual call, so if the
+             * identity is cleared through [clearIdentity], this  call will simply be ignored.
+             */
+<span class="fc" id="L316">            timer.schedule(enablePushNotificationsDelayAfterIdentityChange) {</span>
+                enablePushNotifications()
+            }
+        }
+<span class="fc" id="L320">    }</span>
+
+    /**
+     * This is a helper function to clear the Zendesk identity. It'll remove the credentials from AppPrefs and update
+     * the Zendesk identity with a new anonymous one without an email or name. Due to the way Zendesk anonymous identity
+     * works, this will clear all the users' tickets.
+     */
+    private fun clearIdentity() {
+<span class="nc" id="L328">        AppPrefs.removeSupportEmail()</span>
+<span class="nc" id="L329">        AppPrefs.removeSupportName()</span>
+<span class="nc" id="L330">        refreshIdentity()</span>
+<span class="nc" id="L331">    }</span>
+}
+
+// Helpers
+
+/**
+ * This is a helper function which builds a `UiConfig` through helpers to be used during ticket creation.
+ */
+@Suppress(&quot;LongParameterList&quot;)
+<span class="nc" id="L340">private fun buildZendeskConfig(</span>
+    context: Context,
+    allSites: List&lt;SiteModel&gt;?,
+    origin: Origin?,
+<span class="nc" id="L344">    selectedSite: SiteModel? = null,</span>
+<span class="nc" id="L345">    extraTags: List&lt;String&gt;? = null,</span>
+    buildConfigWrapper: BuildConfigWrapper
+): Configuration {
+<span class="nc" id="L348">    val ticketSubject = context.getString(R.string.support_ticket_subject)</span>
+<span class="nc" id="L349">    return RequestActivity.builder()</span>
+<span class="nc" id="L350">        .withTicketForm(</span>
+<span class="nc" id="L351">            TicketFieldIds.form,</span>
+<span class="nc" id="L352">            buildZendeskCustomFields(context, allSites, selectedSite, buildConfigWrapper)</span>
+        )
+<span class="nc" id="L354">        .withRequestSubject(ticketSubject)</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">        .withTags(buildZendeskTags(allSites, selectedSite, origin ?: Origin.UNKNOWN, extraTags))</span>
+<span class="nc" id="L356">        .config()</span>
+}
+
+/**
+ * This is a helper function which builds a list of `CustomField`s which will be used during ticket creation. They
+ * will be used to fill the custom fields we have setup in Zendesk UI for Happiness Engineers.
+ */
+private fun buildZendeskCustomFields(
+    context: Context,
+    allSites: List&lt;SiteModel&gt;?,
+    selectedSite: SiteModel?,
+    buildConfigWrapper: BuildConfigWrapper
+): List&lt;CustomField&gt; {
+<span class="nc bnc" id="L369" title="All 2 branches missed.">    val currentSiteInformation = if (selectedSite != null) {</span>
+<span class="nc" id="L370">        &quot;${SiteUtils.getHomeURLOrHostName(selectedSite)} (${selectedSite.stateLogInformation})&quot;</span>
+    } else {
+<span class="nc" id="L372">        &quot;not_selected&quot;</span>
+    }
+
+<span class="nc bnc" id="L375" title="All 2 branches missed.">    val sourcePlatform = if (buildConfigWrapper.isJetpackApp) {</span>
+<span class="nc" id="L376">        ZendeskConstants.jp_sourcePlatform</span>
+    } else {
+<span class="nc" id="L378">        ZendeskConstants.wp_sourcePlatform</span>
+    }
+
+<span class="nc" id="L381">    val customFields = arrayListOf(</span>
+<span class="nc" id="L382">        CustomField(TicketFieldIds.appVersion, PackageUtils.getVersionName(context)),</span>
+<span class="nc" id="L383">        CustomField(TicketFieldIds.blogList, getCombinedLogInformationOfSites(allSites)),</span>
+<span class="nc" id="L384">        CustomField(TicketFieldIds.currentSite, currentSiteInformation),</span>
+<span class="nc" id="L385">        CustomField(TicketFieldIds.deviceFreeSpace, DeviceUtils.getTotalAvailableMemorySize()),</span>
+<span class="nc" id="L386">        CustomField(TicketFieldIds.logs, AppLog.toPlainText(context)),</span>
+<span class="nc" id="L387">        CustomField(TicketFieldIds.networkInformation, getNetworkInformation(context)),</span>
+<span class="nc" id="L388">        CustomField(TicketFieldIds.appLanguage, LanguageUtils.getPatchedCurrentDeviceLanguage(context)),</span>
+<span class="nc" id="L389">        CustomField(TicketFieldIds.sourcePlatform, sourcePlatform)</span>
+    )
+
+<span class="nc bnc" id="L392" title="All 4 branches missed.">    selectedSite?.zendeskPlan?.let { customFields.add(CustomField(TicketFieldIds.highestPlan, it)) }</span>
+
+<span class="nc" id="L394">    return customFields</span>
+}
+
+/**
+ * This is a helper function which creates an anonymous Zendesk identity with the email and name passed in. They can
+ * both be `null` as they are not required for a valid identity.
+ *
+ * An important thing to note is that whenever a different set of values are passed in, a different identity will be
+ * created which will reset the ticket list for the user. So, for example, even if the passed in email is the same,
+ * if the name is different, it'll reset Zendesk's local DB.
+ *
+ * This is currently the way we handle identity for Zendesk, but it's possible that we may switch to a JWT based
+ * authentication which will avoid the resetting issue, but will mean that we'll need to involve our own servers in the
+ * authentication. More information can be found in their documentation:
+ * https://developer.zendesk.com/embeddables/docs/android-support-sdk/sdk_set_identity#setting-a-unique-identity
+ */
+private fun createZendeskIdentity(email: String?, name: String?): Identity {
+<span class="fc" id="L411">    val identity = AnonymousIdentity.Builder()</span>
+<span class="pc bpc" id="L412" title="3 of 6 branches missed.">    if (!email.isNullOrEmpty()) {</span>
+<span class="nc" id="L413">        identity.withEmailIdentifier(email)</span>
+    }
+<span class="pc bpc" id="L415" title="3 of 6 branches missed.">    if (!name.isNullOrEmpty()) {</span>
+<span class="nc" id="L416">        identity.withNameIdentifier(name)</span>
+    }
+<span class="fc" id="L418">    return identity.build()</span>
+}
+
+/**
+ * This is a small helper function which just joins the `logInformation` of all the sites passed in with a separator.
+ */
+private fun getCombinedLogInformationOfSites(allSites: List&lt;SiteModel&gt;?): String {
+<span class="nc bnc" id="L425" title="All 2 branches missed.">    allSites?.let {</span>
+<span class="nc" id="L426">        return it.joinToString(separator = ZendeskConstants.blogSeparator) { site -&gt; site.logInformation }</span>
+    }
+<span class="nc" id="L428">    return ZendeskConstants.noneValue</span>
+}
+
+/**
+ * This is a helper function which returns a set of pre-defined tags depending on some conditions. It accepts a list of
+ * custom tags to be added for special cases.
+ */
+<span class="nc" id="L435">private fun buildZendeskTags(</span>
+    allSites: List&lt;SiteModel&gt;?,
+<span class="nc" id="L437">    selectedSite: SiteModel? = null,</span>
+    origin: Origin,
+    extraTags: List&lt;String&gt;?
+): List&lt;String&gt; {
+<span class="nc" id="L441">    val tags = ArrayList&lt;String&gt;()</span>
+<span class="nc bnc" id="L442" title="All 2 branches missed.">    allSites?.let {</span>
+        // Add wpcom tag if at least one site is WordPress.com site
+<span class="nc bnc" id="L444" title="All 4 branches missed.">        if (it.any { site -&gt; site.isWPCom }) {</span>
+<span class="nc" id="L445">            tags.add(ZendeskConstants.wpComTag)</span>
+        }
+
+        // Add Jetpack tag if at least one site is Jetpack connected. Even if a site is Jetpack connected,
+        // it does not necessarily mean that user is connected with the REST API, but we don't care about that here
+<span class="nc bnc" id="L450" title="All 4 branches missed.">        if (it.any { site -&gt; site.isJetpackConnected }) {</span>
+<span class="nc" id="L451">            tags.add(ZendeskConstants.jetpackTag)</span>
+        }
+<span class="nc" id="L453">    }</span>
+<span class="nc" id="L454">    tags.add(origin.toString())</span>
+    // Add Android tag to make it easier to filter tickets by platform
+<span class="nc" id="L456">    tags.add(ZendeskConstants.platformTag)</span>
+
+<span class="nc bnc" id="L458" title="All 2 branches missed.">    extraTags?.let {</span>
+<span class="nc" id="L459">        tags.addAll(it)</span>
+    }
+
+<span class="nc bnc" id="L462" title="All 10 branches missed.">    selectedSite?.zendeskAddOns?.takeIf { it.isNotEmpty() }?.let { tags.addAll(it.split(&quot;,&quot;)) }</span>
+
+    // Add selectedSiteSelfHostedTag if selected site is self-hosted irrespective of the connection type
+<span class="nc bnc" id="L465" title="All 2 branches missed.">    selectedSite?.let {</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">        val isSelectedSiteSelfHosted = !SiteUtils.isAccessedViaWPComRest(it) ||</span>
+<span class="nc bnc" id="L467" title="All 4 branches missed.">                (it.isJetpackConnected &amp;&amp; !it.isWPComAtomic)</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">        if (isSelectedSiteSelfHosted) tags.add(ZendeskConstants.selectedSiteSelfHostedTag)</span>
+<span class="nc" id="L469">    }</span>
+
+<span class="nc" id="L471">    return tags</span>
+}
+
+/**
+ * This is a helper function which returns information about the network state of the app to be sent to Zendesk, which
+ * could prove useful for the Happiness Engineers while debugging the users' issues.
+ */
+private fun getNetworkInformation(context: Context): String {
+<span class="nc bnc" id="L479" title="All 2 branches missed.">    val networkType = when (NetworkUtils.getActiveNetworkInfo(context)?.type) {</span>
+<span class="nc bnc" id="L480" title="All 4 branches missed.">        ConnectivityManager.TYPE_WIFI -&gt; ZendeskConstants.networkWifi</span>
+<span class="nc bnc" id="L481" title="All 4 branches missed.">        ConnectivityManager.TYPE_MOBILE -&gt; ZendeskConstants.networkWWAN</span>
+<span class="nc" id="L482">        else -&gt; ZendeskConstants.unknownValue</span>
+    }
+<span class="nc" id="L484">    val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager?</span>
+<span class="nc bnc" id="L485" title="All 4 branches missed.">    val carrierName = telephonyManager?.networkOperatorName ?: ZendeskConstants.unknownValue</span>
+<span class="nc bnc" id="L486" title="All 4 branches missed.">    val countryCodeLabel = telephonyManager?.networkCountryIso ?: ZendeskConstants.unknownValue</span>
+<span class="nc" id="L487">    return listOf(</span>
+<span class="nc" id="L488">            &quot;${ZendeskConstants.networkTypeLabel} $networkType&quot;,</span>
+<span class="nc" id="L489">            &quot;${ZendeskConstants.networkCarrierLabel} $carrierName&quot;,</span>
+<span class="nc" id="L490">            &quot;${ZendeskConstants.networkCountryCodeLabel} ${countryCodeLabel.toUpperCase(context.currentLocale)}&quot;</span>
+<span class="nc" id="L491">    ).joinToString(separator = &quot;\n&quot;)</span>
+}
+
+private val wpcomPushNotificationDeviceToken: String?
+    get() {
+<span class="nc" id="L496">        val preferences = PreferenceManager.getDefaultSharedPreferences(WordPress.getContext())</span>
+<span class="nc" id="L497">        return preferences.getString(NotificationsUtils.WPCOM_PUSH_DEVICE_TOKEN, null)</span>
+    }
+
+private object ZendeskConstants {
+    const val blogSeparator = &quot;\n----------\n&quot;
+    const val jetpackTag = &quot;jetpack&quot;
+    const val selectedSiteSelfHostedTag = &quot;selected_site_self_hosted&quot;
+    const val networkWifi = &quot;WiFi&quot;
+    const val networkWWAN = &quot;Mobile&quot;
+    const val networkTypeLabel = &quot;Network Type:&quot;
+    const val networkCarrierLabel = &quot;Carrier:&quot;
+    const val networkCountryCodeLabel = &quot;Country Code:&quot;
+    const val noneValue = &quot;none&quot;
+    // We rely on this platform tag to filter tickets in Zendesk
+    const val platformTag = &quot;Android&quot;
+    const val jp_sourcePlatform = &quot;mobile_-_jp_android&quot;
+    const val wp_sourcePlatform = &quot;mobile_-_android&quot;
+    const val wpComTag = &quot;wpcom&quot;
+    const val unknownValue = &quot;unknown&quot;
+}
+
+private object TicketFieldIds {
+    const val appVersion = 360000086866L
+    const val blogList = 360000087183L
+    const val deviceFreeSpace = 360000089123L
+    const val form = 360000010286L
+    const val logs = 22871957L
+    const val networkInformation = 360000086966L
+    const val currentSite = 360000103103L
+    const val appLanguage = 360008583691L
+    const val sourcePlatform = 360009311651L
+    const val highestPlan = 25175963L
+}
+
+object ZendeskExtraTags {
+    const val connectingJetpack = &quot;connecting_jetpack&quot;
+    const val gutenbergIsDefault = &quot;mobile_gutenberg_is_default&quot;
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

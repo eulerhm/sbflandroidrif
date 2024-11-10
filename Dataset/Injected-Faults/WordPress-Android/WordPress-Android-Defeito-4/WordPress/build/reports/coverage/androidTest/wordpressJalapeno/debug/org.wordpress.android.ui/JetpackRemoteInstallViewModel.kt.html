@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>JetpackRemoteInstallViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui</a> &gt; <span class="el_source">JetpackRemoteInstallViewModel.kt</span></div><h1>JetpackRemoteInstallViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.ViewModel
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.INSTALL_JETPACK_REMOTE_RESTART
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.INSTALL_JETPACK_REMOTE_START
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.JetpackActionBuilder
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.JetpackStore
+import org.wordpress.android.fluxc.store.JetpackStore.OnJetpackInstalled
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.ui.JetpackRemoteInstallViewModel.JetpackResultActionData.Action
+import org.wordpress.android.ui.JetpackRemoteInstallViewModel.JetpackResultActionData.Action.CONNECT
+import org.wordpress.android.ui.JetpackRemoteInstallViewModel.JetpackResultActionData.Action.LOGIN
+import org.wordpress.android.ui.JetpackRemoteInstallViewModel.JetpackResultActionData.Action.MANUAL_INSTALL
+import org.wordpress.android.ui.JetpackRemoteInstallViewState.Error
+import org.wordpress.android.ui.JetpackRemoteInstallViewState.Installed
+import org.wordpress.android.ui.JetpackRemoteInstallViewState.Start
+import org.wordpress.android.ui.JetpackRemoteInstallViewState.Type
+import org.wordpress.android.ui.JetpackRemoteInstallViewState.Type.ERROR
+import org.wordpress.android.ui.JetpackRemoteInstallViewState.Type.INSTALLED
+import org.wordpress.android.ui.JetpackRemoteInstallViewState.Type.INSTALLING
+import org.wordpress.android.ui.JetpackRemoteInstallViewState.Type.START
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import javax.inject.Inject
+
+private const val INVALID_CREDENTIALS = &quot;INVALID_CREDENTIALS&quot;
+private const val FORBIDDEN = &quot;FORBIDDEN&quot;
+private const val INSTALL_FAILURE = &quot;INSTALL_FAILURE&quot;
+private const val INSTALL_RESPONSE_ERROR = &quot;INSTALL_RESPONSE_ERROR&quot;
+private const val LOGIN_FAILURE = &quot;LOGIN_FAILURE&quot;
+private const val SITE_IS_JETPACK = &quot;SITE_IS_JETPACK&quot;
+private const val ACTIVATION_ON_INSTALL_FAILURE = &quot;ACTIVATION_ON_INSTALL_FAILURE&quot;
+private const val ACTIVATION_RESPONSE_ERROR = &quot;ACTIVATION_RESPONSE_ERROR&quot;
+private const val ACTIVATION_FAILURE = &quot;ACTIVATION_FAILURE&quot;
+<span class="nc" id="L42">private val BLOCKING_FAILURES = listOf(</span>
+<span class="nc" id="L43">        FORBIDDEN,</span>
+<span class="nc" id="L44">        INSTALL_FAILURE,</span>
+<span class="nc" id="L45">        INSTALL_RESPONSE_ERROR,</span>
+<span class="nc" id="L46">        LOGIN_FAILURE,</span>
+<span class="nc" id="L47">        INVALID_CREDENTIALS,</span>
+<span class="nc" id="L48">        ACTIVATION_ON_INSTALL_FAILURE,</span>
+<span class="nc" id="L49">        ACTIVATION_RESPONSE_ERROR,</span>
+<span class="nc" id="L50">        ACTIVATION_FAILURE</span>
+)
+private const val CONTEXT = &quot;JetpackRemoteInstall&quot;
+private const val EMPTY_TYPE = &quot;EMPTY_TYPE&quot;
+private const val EMPTY_MESSAGE = &quot;EMPTY_MESSAGE&quot;
+
+class JetpackRemoteInstallViewModel
+<span class="nc" id="L57">@Inject constructor(</span>
+<span class="nc" id="L58">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L59">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L60">    private val siteStore: SiteStore,</span>
+    /**
+     * JetpackStore needs to be injected here as otherwise FluxC doesn't accept emitted events.
+     */
+<span class="nc" id="L64">    @Suppress(&quot;unused&quot;) private val jetpackStore: JetpackStore</span>
+<span class="nc" id="L65">) : ViewModel() {</span>
+<span class="nc" id="L66">    private val mutableViewState = MutableLiveData&lt;JetpackRemoteInstallViewState&gt;()</span>
+<span class="nc" id="L67">    val liveViewState: LiveData&lt;JetpackRemoteInstallViewState&gt; = mutableViewState</span>
+<span class="nc" id="L68">    private val mutableActionOnResult = SingleLiveEvent&lt;JetpackResultActionData&gt;()</span>
+<span class="nc" id="L69">    val liveActionOnResult: LiveData&lt;JetpackResultActionData&gt; = mutableActionOnResult</span>
+    private var siteModel: SiteModel? = null
+
+<span class="nc" id="L72">    init {</span>
+<span class="nc" id="L73">        dispatcher.register(this)</span>
+<span class="nc" id="L74">    }</span>
+
+    fun start(site: SiteModel, type: Type?) {
+<span class="nc" id="L77">        siteModel = site</span>
+        // Init state only if it's empty
+<span class="nc bnc" id="L79" title="All 2 branches missed.">        if (mutableViewState.value == null) {</span>
+<span class="nc" id="L80">            mutableViewState.value = type.toState(site)</span>
+        }
+<span class="nc" id="L82">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L85">        super.onCleared()</span>
+<span class="nc" id="L86">        dispatcher.unregister(this)</span>
+<span class="nc" id="L87">    }</span>
+
+    fun onLogin(siteId: Int) {
+<span class="nc" id="L90">        connect(siteId)</span>
+<span class="nc" id="L91">    }</span>
+
+    private fun Type?.toState(site: SiteModel): JetpackRemoteInstallViewState {
+<span class="nc bnc" id="L94" title="All 2 branches missed.">        if (this == null) {</span>
+<span class="nc" id="L95">            return Start { start(site) }</span>
+        }
+<span class="nc bnc" id="L97" title="All 4 branches missed.">        return when (this) {</span>
+<span class="nc" id="L98">            START -&gt; Start { start(site) }</span>
+            INSTALLING -&gt; {
+<span class="nc" id="L100">                startRemoteInstall(site)</span>
+<span class="nc" id="L101">                JetpackRemoteInstallViewState.Installing</span>
+            }
+<span class="nc" id="L103">            INSTALLED -&gt; Installed { connect(site.id) }</span>
+<span class="nc" id="L104">            ERROR -&gt; Error { restart(site) }</span>
+        }
+    }
+
+    private fun start(site: SiteModel) {
+<span class="nc" id="L109">        AnalyticsTracker.track(INSTALL_JETPACK_REMOTE_START)</span>
+<span class="nc" id="L110">        startRemoteInstall(site)</span>
+<span class="nc" id="L111">    }</span>
+
+    private fun restart(site: SiteModel) {
+<span class="nc" id="L114">        AnalyticsTracker.track(INSTALL_JETPACK_REMOTE_RESTART)</span>
+<span class="nc" id="L115">        startRemoteInstall(site)</span>
+<span class="nc" id="L116">    }</span>
+
+    private fun connect(siteId: Int) {
+<span class="nc" id="L119">        val hasAccessToken = accountStore.hasAccessToken()</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">        val action = if (hasAccessToken) {</span>
+<span class="nc" id="L121">            AnalyticsTracker.track(AnalyticsTracker.Stat.INSTALL_JETPACK_REMOTE_CONNECT)</span>
+<span class="nc" id="L122">            CONNECT</span>
+        } else {
+<span class="nc" id="L124">            AnalyticsTracker.track(AnalyticsTracker.Stat.INSTALL_JETPACK_REMOTE_LOGIN)</span>
+<span class="nc" id="L125">            LOGIN</span>
+        }
+<span class="nc" id="L127">        triggerResultAction(siteId, action, hasAccessToken)</span>
+<span class="nc" id="L128">    }</span>
+
+    private fun startRemoteInstall(site: SiteModel) {
+<span class="nc" id="L131">        mutableViewState.postValue(JetpackRemoteInstallViewState.Installing)</span>
+<span class="nc" id="L132">        dispatcher.dispatch(JetpackActionBuilder.newInstallJetpackAction(site))</span>
+<span class="nc" id="L133">    }</span>
+
+<span class="nc" id="L135">    private fun triggerResultAction(</span>
+        siteId: Int,
+        action: Action,
+<span class="nc" id="L138">        hasAccessToken: Boolean = accountStore.hasAccessToken()</span>
+    ) {
+<span class="nc" id="L140">        mutableActionOnResult.postValue(</span>
+<span class="nc" id="L141">                JetpackResultActionData(</span>
+<span class="nc" id="L142">                        siteStore.getSiteByLocalId(siteId)!!,</span>
+<span class="nc" id="L143">                        hasAccessToken,</span>
+<span class="nc" id="L144">                        action</span>
+                )
+        )
+<span class="nc" id="L147">    }</span>
+
+    // Network Callbacks
+    @Subscribe(threadMode = ThreadMode.BACKGROUND)
+    @SuppressWarnings(&quot;unused&quot;)
+    fun onEventsUpdated(event: OnJetpackInstalled) {
+<span class="nc bnc" id="L153" title="All 2 branches missed.">        val site = siteModel ?: return</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L155">            AnalyticsTracker.track(</span>
+<span class="nc" id="L156">                    AnalyticsTracker.Stat.INSTALL_JETPACK_REMOTE_FAILED,</span>
+<span class="nc" id="L157">                    CONTEXT,</span>
+<span class="nc bnc" id="L158" title="All 4 branches missed.">                    event.error?.apiError ?: EMPTY_TYPE,</span>
+<span class="nc bnc" id="L159" title="All 4 branches missed.">                    event.error?.message ?: EMPTY_MESSAGE</span>
+            )
+<span class="nc" id="L161">            when {</span>
+<span class="nc bnc" id="L162" title="All 4 branches missed.">                event.error?.apiError == SITE_IS_JETPACK -&gt; {</span>
+<span class="nc" id="L163">                    AnalyticsTracker.track(AnalyticsTracker.Stat.INSTALL_JETPACK_REMOTE_COMPLETED)</span>
+<span class="nc" id="L164">                    mutableViewState.postValue(Installed { connect(site.id) })</span>
+                }
+<span class="nc bnc" id="L166" title="All 4 branches missed.">                BLOCKING_FAILURES.contains(event.error?.apiError) -&gt; {</span>
+<span class="nc" id="L167">                    AnalyticsTracker.track(AnalyticsTracker.Stat.INSTALL_JETPACK_REMOTE_START_MANUAL_FLOW)</span>
+<span class="nc" id="L168">                    triggerResultAction(site.id, MANUAL_INSTALL)</span>
+                }
+<span class="nc" id="L170">                else -&gt; mutableViewState.postValue(Error {</span>
+<span class="nc" id="L171">                    restart(site)</span>
+<span class="nc" id="L172">                })</span>
+            }
+<span class="nc" id="L174">            return</span>
+        }
+<span class="nc bnc" id="L176" title="All 2 branches missed.">        if (event.success) {</span>
+<span class="nc" id="L177">            AnalyticsTracker.track(AnalyticsTracker.Stat.INSTALL_JETPACK_REMOTE_COMPLETED)</span>
+<span class="nc" id="L178">            mutableViewState.postValue(Installed { connect(site.id) })</span>
+        } else {
+<span class="nc" id="L180">            AnalyticsTracker.track(AnalyticsTracker.Stat.INSTALL_JETPACK_REMOTE_FAILED)</span>
+<span class="nc" id="L181">            mutableViewState.postValue(Error { restart(site) })</span>
+        }
+<span class="nc" id="L183">    }</span>
+
+<span class="nc" id="L185">    data class JetpackResultActionData(val site: SiteModel, val loggedIn: Boolean, val action: Action) {</span>
+        enum class Action {
+<span class="nc" id="L187">            LOGIN, MANUAL_INSTALL, CONNECT</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

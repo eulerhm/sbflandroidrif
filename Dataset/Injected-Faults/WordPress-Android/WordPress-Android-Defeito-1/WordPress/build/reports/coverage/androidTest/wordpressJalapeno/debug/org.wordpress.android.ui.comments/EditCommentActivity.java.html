@@ -1,0 +1,378 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EditCommentActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.comments</a> &gt; <span class="el_source">EditCommentActivity.java</span></div><h1>EditCommentActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.comments;
+
+import android.app.Dialog;
+import android.app.ProgressDialog;
+import android.content.Intent;
+import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.EditText;
+import android.widget.ProgressBar;
+
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.widget.Toolbar;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.jetbrains.annotations.NotNull;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.datasets.NotificationsTable;
+import org.wordpress.android.fluxc.action.CommentAction;
+import org.wordpress.android.fluxc.generated.CommentActionBuilder;
+import org.wordpress.android.fluxc.model.CommentModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.CommentStore.OnCommentChanged;
+import org.wordpress.android.fluxc.store.CommentStore.RemoteCommentPayload;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.models.Note;
+import org.wordpress.android.ui.ActivityId;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.ui.comments.unified.CommentsStoreAdapter;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.EditTextUtils;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.ToastUtils;
+
+import javax.inject.Inject;
+
+/**
+ * @deprecated
+ * Comments are being refactored as part of Comments Unification project. If you are adding any
+ * features or modifying this class, please ping develric or klymyam
+ */
+@Deprecated
+<span class="nc" id="L53">public class EditCommentActivity extends LocaleAwareActivity {</span>
+    static final String KEY_COMMENT = &quot;KEY_COMMENT&quot;;
+    static final String KEY_NOTE_ID = &quot;KEY_NOTE_ID&quot;;
+
+    private static final int ID_DIALOG_SAVING = 0;
+    private static final String ARG_CANCEL_EDITING_COMMENT_DIALOG_VISIBLE = &quot;cancel_editing_comment_dialog_visible&quot;;
+
+    private SiteModel mSite;
+    private CommentModel mComment;
+    private Note mNote;
+    private boolean mFetchingComment;
+
+    private AlertDialog mCancelEditCommentDialog;
+
+    @Inject CommentsStoreAdapter mCommentsStoreAdapter;
+    @Inject SiteStore mSiteStore;
+
+    @Override
+    public void onCreate(Bundle icicle) {
+<span class="nc" id="L72">        super.onCreate(icicle);</span>
+<span class="nc" id="L73">        ((WordPress) getApplication()).component().inject(this);</span>
+
+<span class="nc" id="L75">        setContentView(R.layout.comment_edit_activity);</span>
+<span class="nc" id="L76">        Toolbar toolbar = findViewById(R.id.toolbar_main);</span>
+<span class="nc" id="L77">        setSupportActionBar(toolbar);</span>
+<span class="nc" id="L78">        ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L79" title="All 2 branches missed.">        if (actionBar != null) {</span>
+<span class="nc" id="L80">            actionBar.setDisplayShowTitleEnabled(true);</span>
+<span class="nc" id="L81">            actionBar.setDisplayHomeAsUpEnabled(true);</span>
+        }
+
+<span class="nc" id="L84">        loadComment(getIntent());</span>
+
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        if (icicle != null) {</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">            if (icicle.getBoolean(ARG_CANCEL_EDITING_COMMENT_DIALOG_VISIBLE, false)) {</span>
+<span class="nc" id="L88">                cancelEditCommentConfirmation();</span>
+            }
+        }
+
+<span class="nc" id="L92">        ActivityId.trackLastActivity(ActivityId.COMMENT_EDITOR);</span>
+<span class="nc" id="L93">    }</span>
+
+    @Override
+    public void onStart() {
+<span class="nc" id="L97">        super.onStart();</span>
+<span class="nc" id="L98">        mCommentsStoreAdapter.register(this);</span>
+<span class="nc" id="L99">    }</span>
+
+    @Override
+    protected void onSaveInstanceState(@NotNull Bundle outState) {
+<span class="nc" id="L103">        super.onSaveInstanceState(outState);</span>
+
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (mCancelEditCommentDialog != null) {</span>
+<span class="nc" id="L106">            outState.putBoolean(ARG_CANCEL_EDITING_COMMENT_DIALOG_VISIBLE, mCancelEditCommentDialog.isShowing());</span>
+        }
+<span class="nc" id="L108">    }</span>
+
+    @Override
+    public void onStop() {
+<span class="nc" id="L112">        mCommentsStoreAdapter.unregister(this);</span>
+<span class="nc" id="L113">        super.onStop();</span>
+<span class="nc" id="L114">    }</span>
+
+    private void loadComment(Intent intent) {
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        if (intent == null) {</span>
+<span class="nc" id="L118">            showErrorAndFinish();</span>
+<span class="nc" id="L119">            return;</span>
+        }
+
+<span class="nc" id="L122">        mSite = (SiteModel) intent.getSerializableExtra(WordPress.SITE);</span>
+<span class="nc" id="L123">        mComment = (CommentModel) intent.getSerializableExtra(KEY_COMMENT);</span>
+<span class="nc" id="L124">        final String noteId = intent.getStringExtra(KEY_NOTE_ID);</span>
+
+        // If the noteId is passed, load the comment from the note
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        if (noteId != null) {</span>
+<span class="nc" id="L128">            loadCommentFromNote(noteId);</span>
+<span class="nc" id="L129">            return;</span>
+        }
+
+        // Else make sure the comment has been passed
+<span class="nc bnc" id="L133" title="All 2 branches missed.">        if (mComment == null) {</span>
+<span class="nc" id="L134">            showErrorAndFinish();</span>
+<span class="nc" id="L135">            return;</span>
+        }
+<span class="nc" id="L137">        configureViews();</span>
+<span class="nc" id="L138">    }</span>
+
+    private void loadCommentFromNote(String noteId) {
+<span class="nc" id="L141">        mNote = NotificationsTable.getNoteById(noteId);</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">        if (mNote != null) {</span>
+<span class="nc" id="L143">            setFetchProgressVisible(true);</span>
+<span class="nc" id="L144">            mSite = mSiteStore.getSiteBySiteId(mNote.getSiteId());</span>
+<span class="nc" id="L145">            RemoteCommentPayload payload = new RemoteCommentPayload(mSite, mNote.getCommentId());</span>
+<span class="nc" id="L146">            mFetchingComment = true;</span>
+<span class="nc" id="L147">            mCommentsStoreAdapter.dispatch(CommentActionBuilder.newFetchCommentAction(payload));</span>
+<span class="nc" id="L148">        } else {</span>
+<span class="nc" id="L149">            showErrorAndFinish();</span>
+        }
+<span class="nc" id="L151">    }</span>
+
+    private void showErrorAndFinish() {
+<span class="nc" id="L154">        ToastUtils.showToast(this, R.string.error_load_comment);</span>
+<span class="nc" id="L155">        finish();</span>
+<span class="nc" id="L156">    }</span>
+
+    private void configureViews() {
+<span class="nc" id="L159">        final EditText editContent = this.findViewById(R.id.edit_comment_content);</span>
+<span class="nc" id="L160">        editContent.setText(mComment.getContent());</span>
+
+        // show error when comment content is empty
+<span class="nc" id="L163">        editContent.addTextChangedListener(new TextWatcher() {</span>
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+<span class="nc" id="L166">            }</span>
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+<span class="nc" id="L170">            }</span>
+
+            @Override
+            public void afterTextChanged(Editable s) {
+<span class="nc bnc" id="L174" title="All 2 branches missed.">                boolean hasError = (editContent.getError() != null);</span>
+<span class="nc bnc" id="L175" title="All 4 branches missed.">                boolean hasText = (s != null &amp;&amp; s.length() &gt; 0);</span>
+<span class="nc bnc" id="L176" title="All 4 branches missed.">                if (!hasText &amp;&amp; !hasError) {</span>
+<span class="nc" id="L177">                    editContent.setError(getString(R.string.content_required));</span>
+<span class="nc bnc" id="L178" title="All 4 branches missed.">                } else if (hasText &amp;&amp; hasError) {</span>
+<span class="nc" id="L179">                    editContent.setError(null);</span>
+                }
+<span class="nc" id="L181">            }</span>
+        });
+<span class="nc" id="L183">    }</span>
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+<span class="nc" id="L187">        super.onCreateOptionsMenu(menu);</span>
+<span class="nc" id="L188">        MenuInflater inflater = getMenuInflater();</span>
+<span class="nc" id="L189">        inflater.inflate(R.menu.edit_comment, menu);</span>
+<span class="nc" id="L190">        return true;</span>
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(final MenuItem item) {
+<span class="nc" id="L195">        int i = item.getItemId();</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">        if (i == android.R.id.home) {</span>
+<span class="nc" id="L197">            onBackPressed();</span>
+<span class="nc" id="L198">            return true;</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">        } else if (i == R.id.menu_save_comment) {</span>
+<span class="nc" id="L200">            saveComment();</span>
+<span class="nc" id="L201">            return true;</span>
+        } else {
+<span class="nc" id="L203">            return super.onOptionsItemSelected(item);</span>
+        }
+    }
+
+    private String getEditTextStr(int resId) {
+<span class="nc" id="L208">        final EditText edit = findViewById(resId);</span>
+<span class="nc" id="L209">        return EditTextUtils.getText(edit);</span>
+    }
+
+    private void saveComment() {
+        // make sure comment content was entered
+<span class="nc" id="L214">        final EditText editContent = findViewById(R.id.edit_comment_content);</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">        if (EditTextUtils.isEmpty(editContent)) {</span>
+<span class="nc" id="L216">            editContent.setError(getString(R.string.content_required));</span>
+<span class="nc" id="L217">            return;</span>
+        }
+
+        // return immediately if comment hasn't changed
+<span class="nc bnc" id="L221" title="All 2 branches missed.">        if (!isCommentEdited()) {</span>
+<span class="nc" id="L222">            ToastUtils.showToast(this, R.string.toast_comment_unedited);</span>
+<span class="nc" id="L223">            return;</span>
+        }
+
+        // make sure we have an active connection
+<span class="nc bnc" id="L227" title="All 2 branches missed.">        if (!NetworkUtils.checkConnection(this)) {</span>
+<span class="nc" id="L228">            return;</span>
+        }
+
+<span class="nc" id="L231">        showSaveDialog();</span>
+<span class="nc" id="L232">        mComment.setContent(getEditTextStr(R.id.edit_comment_content));</span>
+<span class="nc" id="L233">        mCommentsStoreAdapter.dispatch(CommentActionBuilder</span>
+<span class="nc" id="L234">                .newPushCommentAction(new RemoteCommentPayload(mSite, mComment)));</span>
+<span class="nc" id="L235">    }</span>
+
+    /*
+     * returns true if user made any changes to the comment
+     */
+    private boolean isCommentEdited() {
+<span class="nc bnc" id="L241" title="All 2 branches missed.">        if (mComment == null) {</span>
+<span class="nc" id="L242">            return false;</span>
+        }
+<span class="nc" id="L244">        final String content = getEditTextStr(R.id.edit_comment_content);</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">        return !content.equals(mComment.getContent());</span>
+    }
+
+    @Override
+    protected Dialog onCreateDialog(int id) {
+<span class="nc bnc" id="L250" title="All 2 branches missed.">        if (id == ID_DIALOG_SAVING) {</span>
+<span class="nc" id="L251">            ProgressDialog savingDialog = new ProgressDialog(this);</span>
+<span class="nc" id="L252">            savingDialog.setMessage(getResources().getText(R.string.saving_changes));</span>
+<span class="nc" id="L253">            savingDialog.setIndeterminate(true);</span>
+<span class="nc" id="L254">            savingDialog.setCancelable(true);</span>
+<span class="nc" id="L255">            return savingDialog;</span>
+        }
+<span class="nc" id="L257">        return super.onCreateDialog(id);</span>
+    }
+
+    private void showSaveDialog() {
+<span class="nc" id="L261">        showDialog(ID_DIALOG_SAVING);</span>
+<span class="nc" id="L262">    }</span>
+
+    private void dismissSaveDialog() {
+        try {
+<span class="nc" id="L266">            dismissDialog(ID_DIALOG_SAVING);</span>
+<span class="nc" id="L267">        } catch (IllegalArgumentException e) {</span>
+            // dialog doesn't exist
+<span class="nc" id="L269">        }</span>
+<span class="nc" id="L270">    }</span>
+
+    private void showEditErrorAlert() {
+<span class="nc" id="L273">        MaterialAlertDialogBuilder dialogBuilder = new MaterialAlertDialogBuilder(this);</span>
+<span class="nc" id="L274">        dialogBuilder.setTitle(getResources().getText(R.string.error));</span>
+<span class="nc" id="L275">        dialogBuilder.setMessage(R.string.error_edit_comment);</span>
+<span class="nc" id="L276">        dialogBuilder.setPositiveButton(android.R.string.ok, (dialog1, whichButton) -&gt; {</span>
+            // just close the dialog
+<span class="nc" id="L278">        });</span>
+<span class="nc" id="L279">        dialogBuilder.setCancelable(true);</span>
+<span class="nc" id="L280">        dialogBuilder.create().show();</span>
+<span class="nc" id="L281">    }</span>
+
+    private void setFetchProgressVisible(boolean progressVisible) {
+<span class="nc" id="L284">        final ProgressBar progress = findViewById(R.id.edit_comment_progress);</span>
+<span class="nc" id="L285">        final View editContainer = findViewById(R.id.edit_comment_container);</span>
+
+<span class="nc bnc" id="L287" title="All 4 branches missed.">        if (progress == null || editContainer == null) {</span>
+<span class="nc" id="L288">            return;</span>
+        }
+
+<span class="nc bnc" id="L291" title="All 2 branches missed.">        progress.setVisibility(progressVisible ? View.VISIBLE : View.GONE);</span>
+<span class="nc bnc" id="L292" title="All 2 branches missed.">        editContainer.setVisibility(progressVisible ? View.GONE : View.VISIBLE);</span>
+<span class="nc" id="L293">    }</span>
+
+    @Override
+    public void onBackPressed() {
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        if (isCommentEdited()) {</span>
+<span class="nc" id="L298">            cancelEditCommentConfirmation();</span>
+        } else {
+<span class="nc" id="L300">            super.onBackPressed();</span>
+        }
+<span class="nc" id="L302">    }</span>
+
+    private void cancelEditCommentConfirmation() {
+<span class="nc bnc" id="L305" title="All 2 branches missed.">        if (mCancelEditCommentDialog != null) {</span>
+<span class="nc" id="L306">            mCancelEditCommentDialog.show();</span>
+<span class="nc" id="L307">            return;</span>
+        }
+
+<span class="nc" id="L310">        MaterialAlertDialogBuilder dialogBuilder = new MaterialAlertDialogBuilder(this);</span>
+<span class="nc" id="L311">        dialogBuilder.setTitle(getResources().getText(R.string.cancel_edit));</span>
+<span class="nc" id="L312">        dialogBuilder.setMessage(getResources().getText(R.string.sure_to_cancel_edit_comment));</span>
+<span class="nc" id="L313">        dialogBuilder.setPositiveButton(getResources().getText(R.string.yes),</span>
+<span class="nc" id="L314">                (dialog, whichButton) -&gt; finish());</span>
+<span class="nc" id="L315">        dialogBuilder.setNegativeButton(</span>
+<span class="nc" id="L316">                getResources().getText(R.string.no),</span>
+                (dialog, whichButton) -&gt; {
+                    // just close the dialog
+<span class="nc" id="L319">                });</span>
+<span class="nc" id="L320">        dialogBuilder.setCancelable(true);</span>
+
+<span class="nc" id="L322">        mCancelEditCommentDialog = dialogBuilder.create();</span>
+<span class="nc" id="L323">        mCancelEditCommentDialog.show();</span>
+<span class="nc" id="L324">    }</span>
+
+    private void onCommentPushed(OnCommentChanged event) {
+<span class="nc bnc" id="L327" title="All 2 branches missed.">        if (isFinishing()) {</span>
+<span class="nc" id="L328">            return;</span>
+        }
+
+<span class="nc" id="L331">        dismissSaveDialog();</span>
+
+<span class="nc bnc" id="L333" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L334">            AppLog.i(T.TESTS, &quot;event error type: &quot; + event.error.type + &quot; - message: &quot; + event.error.message);</span>
+<span class="nc" id="L335">            showEditErrorAlert();</span>
+<span class="nc" id="L336">            return;</span>
+        }
+
+<span class="nc" id="L339">        setResult(RESULT_OK);</span>
+<span class="nc" id="L340">        finish();</span>
+<span class="nc" id="L341">    }</span>
+
+    private void onCommentFetched(OnCommentChanged event) {
+<span class="nc bnc" id="L344" title="All 4 branches missed.">        if (isFinishing() || !mFetchingComment) {</span>
+<span class="nc" id="L345">            return;</span>
+        }
+<span class="nc" id="L347">        mFetchingComment = false;</span>
+<span class="nc" id="L348">        setFetchProgressVisible(false);</span>
+
+<span class="nc bnc" id="L350" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L351">            AppLog.i(T.TESTS, &quot;event error type: &quot; + event.error.type + &quot; - message: &quot; + event.error.message);</span>
+<span class="nc" id="L352">            showErrorAndFinish();</span>
+<span class="nc" id="L353">            return;</span>
+        }
+
+<span class="nc bnc" id="L356" title="All 2 branches missed.">        if (mNote != null) {</span>
+<span class="nc" id="L357">            mComment = mCommentsStoreAdapter.getCommentBySiteAndRemoteId(mSite, mNote.getCommentId());</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">        } else if (mComment != null) {</span>
+            // Reload the comment
+<span class="nc" id="L360">            mComment = mCommentsStoreAdapter.getCommentByLocalId(mComment.getId());</span>
+        }
+<span class="nc" id="L362">        configureViews();</span>
+<span class="nc" id="L363">    }</span>
+
+    // OnChanged events
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onCommentChanged(OnCommentChanged event) {
+<span class="nc bnc" id="L370" title="All 2 branches missed.">        if (event.causeOfChange == CommentAction.FETCH_COMMENT) {</span>
+<span class="nc" id="L371">            onCommentFetched(event);</span>
+        }
+<span class="nc bnc" id="L373" title="All 2 branches missed.">        if (event.causeOfChange == CommentAction.PUSH_COMMENT) {</span>
+<span class="nc" id="L374">            onCommentPushed(event);</span>
+        }
+<span class="nc" id="L376">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

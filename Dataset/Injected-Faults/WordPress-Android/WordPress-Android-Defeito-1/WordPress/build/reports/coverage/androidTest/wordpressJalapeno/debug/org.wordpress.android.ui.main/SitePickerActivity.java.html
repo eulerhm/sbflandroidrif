@@ -1,0 +1,872 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SitePickerActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.main</a> &gt; <span class="el_source">SitePickerActivity.java</span></div><h1>SitePickerActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.main;
+
+import android.app.Activity;
+import android.app.Dialog;
+import android.app.DialogFragment;
+import android.content.Intent;
+import android.os.Bundle;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.ArrayAdapter;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.view.ActionMode;
+import androidx.appcompat.widget.SearchView;
+import androidx.appcompat.widget.Toolbar;
+import androidx.lifecycle.ViewModelProvider;
+import androidx.recyclerview.widget.DefaultItemAnimator;
+import androidx.recyclerview.widget.LinearLayoutManager;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.wordpress.android.BuildConfig;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.SiteActionBuilder;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.fluxc.store.SiteStore.OnSiteChanged;
+import org.wordpress.android.fluxc.store.SiteStore.OnSiteRemoved;
+import org.wordpress.android.fluxc.store.StatsStore;
+import org.wordpress.android.ui.ActionableEmptyView;
+import org.wordpress.android.ui.ActivityId;
+import org.wordpress.android.ui.ActivityLauncher;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.ui.RequestCodes;
+import org.wordpress.android.ui.main.SitePickerAdapter.SiteList;
+import org.wordpress.android.ui.main.SitePickerAdapter.SitePickerMode;
+import org.wordpress.android.ui.main.SitePickerAdapter.SiteRecord;
+import org.wordpress.android.ui.mysite.SelectedSiteRepository;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.ui.prefs.EmptyViewRecyclerView;
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationSource;
+import org.wordpress.android.util.AccessibilityUtils;
+import org.wordpress.android.util.ActivityUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.BuildConfigWrapper;
+import org.wordpress.android.util.DeviceUtils;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.SiteUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.helpers.Debouncer;
+import org.wordpress.android.util.helpers.SwipeToRefreshHelper;
+import org.wordpress.android.viewmodel.main.SitePickerViewModel;
+import org.wordpress.android.viewmodel.main.SitePickerViewModel.Action.ContinueReblogTo;
+import org.wordpress.android.viewmodel.main.SitePickerViewModel.Action.NavigateToState;
+import org.wordpress.android.widgets.WPDialogSnackbar;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+
+import javax.inject.Inject;
+
+import static org.wordpress.android.util.WPSwipeToRefreshHelper.buildSwipeToRefreshHelper;
+
+<span class="nc" id="L81">public class SitePickerActivity extends LocaleAwareActivity</span>
+        implements SitePickerAdapter.OnSiteClickListener,
+        SitePickerAdapter.OnSelectedCountChangedListener,
+        SearchView.OnQueryTextListener {
+    public static final String KEY_SITE_LOCAL_ID = &quot;local_id&quot;;
+    public static final String KEY_SITE_CREATED_BUT_NOT_FETCHED = &quot;key_site_created_but_not_fetched&quot;;
+    public static final String KEY_SITE_TITLE_TASK_COMPLETED = &quot;key_site_title_task_completed&quot;;
+
+    public static final String KEY_SITE_PICKER_MODE = &quot;key_site_picker_mode&quot;;
+
+    private static final String KEY_IS_IN_SEARCH_MODE = &quot;is_in_search_mode&quot;;
+    private static final String KEY_LAST_SEARCH = &quot;last_search&quot;;
+    private static final String KEY_REFRESHING = &quot;refreshing_sites&quot;;
+
+    // Used for preserving selection states after configuration change.
+    private static final String KEY_SELECTED_POSITIONS = &quot;selected_positions&quot;;
+    private static final String KEY_IS_IN_EDIT_MODE = &quot;is_in_edit_mode&quot;;
+    private static final String KEY_IS_SHOW_MENU_ENABLED = &quot;is_show_menu_enabled&quot;;
+    private static final String KEY_IS_HIDE_MENU_ENABLED = &quot;is_hide_menu_enabled&quot;;
+
+    private static final String ARG_SITE_CREATION_SOURCE = &quot;ARG_SITE_CREATION_SOURCE&quot;;
+    private static final String SOURCE = &quot;source&quot;;
+    private static final String TRACK_PROPERTY_STATE = &quot;state&quot;;
+    private static final String TRACK_PROPERTY_STATE_EDIT = &quot;edit&quot;;
+    private static final String TRACK_PROPERTY_STATE_DONE = &quot;done&quot;;
+    private static final String TRACK_PROPERTY_BLOG_ID = &quot;blog_id&quot;;
+    private static final String TRACK_PROPERTY_VISIBLE = &quot;visible&quot;;
+
+    private SitePickerAdapter mAdapter;
+    private EmptyViewRecyclerView mRecycleView;
+    private SwipeToRefreshHelper mSwipeToRefreshHelper;
+    private ActionMode mActionMode;
+    private ActionMode mReblogActionMode;
+    private MenuItem mMenuEdit;
+    private MenuItem mMenuAdd;
+    private MenuItem mMenuSearch;
+    private SearchView mSearchView;
+    private int mCurrentLocalId;
+    private SitePickerMode mSitePickerMode;
+<span class="nc" id="L120">    private final Debouncer mDebouncer = new Debouncer();</span>
+    private SitePickerViewModel mViewModel;
+
+<span class="nc" id="L123">    private HashSet&lt;Integer&gt; mSelectedPositions = new HashSet&lt;&gt;();</span>
+    private boolean mIsInEditMode;
+
+<span class="nc" id="L126">    private boolean mShowMenuEnabled = false;</span>
+<span class="nc" id="L127">    private boolean mHideMenuEnabled = false;</span>
+
+
+    @Inject AccountStore mAccountStore;
+    @Inject SiteStore mSiteStore;
+    @Inject Dispatcher mDispatcher;
+    @Inject StatsStore mStatsStore;
+    @Inject ViewModelProvider.Factory mViewModelFactory;
+    @Inject BuildConfigWrapper mBuildConfigWrapper;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L139">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L140">        ((WordPress) getApplication()).component().inject(this);</span>
+
+<span class="nc" id="L142">        mViewModel = new ViewModelProvider(this, mViewModelFactory).get(SitePickerViewModel.class);</span>
+
+<span class="nc" id="L144">        setContentView(R.layout.site_picker_activity);</span>
+<span class="nc" id="L145">        restoreSavedInstanceState(savedInstanceState);</span>
+<span class="nc" id="L146">        setupActionBar();</span>
+<span class="nc" id="L147">        setupRecycleView();</span>
+
+<span class="nc" id="L149">        initSwipeToRefreshHelper(findViewById(android.R.id.content));</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L151">            mSwipeToRefreshHelper.setRefreshing(savedInstanceState.getBoolean(KEY_REFRESHING, false));</span>
+        } else {
+<span class="nc" id="L153">            AnalyticsTracker.track(Stat.SITE_SWITCHER_DISPLAYED);</span>
+        }
+
+<span class="nc bnc" id="L156" title="All 2 branches missed.">        if (mSitePickerMode.isReblogMode()) {</span>
+<span class="nc" id="L157">            mViewModel.getOnActionTriggered().observe(</span>
+                    this,
+<span class="nc" id="L159">                    unitEvent -&gt; unitEvent.applyIfNotHandled(action -&gt; {</span>
+<span class="nc bnc" id="L160" title="All 4 branches missed.">                        switch (action.getActionType()) {</span>
+                            case NAVIGATE_TO_STATE:
+<span class="nc bnc" id="L162" title="All 3 branches missed.">                                switch (((NavigateToState) action).getNavigateState()) {</span>
+                                    case TO_SITE_SELECTED:
+<span class="nc" id="L164">                                        mSitePickerMode = SitePickerMode.REBLOG_CONTINUE_MODE;</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">                                        if (getAdapter().getIsInSearchMode()) {</span>
+<span class="nc" id="L166">                                            disableSearchMode();</span>
+                                        }
+
+<span class="nc bnc" id="L169" title="All 2 branches missed.">                                        if (mReblogActionMode == null) {</span>
+<span class="nc" id="L170">                                            startSupportActionMode(new ReblogActionModeCallback());</span>
+                                        }
+
+<span class="nc" id="L173">                                        SiteRecord site = ((NavigateToState) action).getSiteForReblog();</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">                                        if (site != null) {</span>
+<span class="nc" id="L175">                                            mReblogActionMode.setTitle(site.getBlogNameOrHomeURL());</span>
+                                        }
+                                        break;
+                                    case TO_NO_SITE_SELECTED:
+<span class="nc" id="L179">                                        mSitePickerMode = SitePickerMode.REBLOG_SELECT_MODE;</span>
+<span class="nc" id="L180">                                        getAdapter().clearReblogSelection();</span>
+                                        break;
+                                }
+<span class="nc" id="L183">                                break;</span>
+                            case CONTINUE_REBLOG_TO:
+<span class="nc" id="L185">                                SiteRecord siteToReblog = ((ContinueReblogTo) action).getSiteForReblog();</span>
+<span class="nc" id="L186">                                selectSiteAndFinish(siteToReblog);</span>
+<span class="nc" id="L187">                                break;</span>
+                            case ASK_FOR_SITE_SELECTION:
+<span class="nc bnc" id="L189" title="All 2 branches missed.">                                if (BuildConfig.DEBUG) {</span>
+<span class="nc" id="L190">                                    throw new IllegalStateException(</span>
+                                            &quot;SitePickerActivity &gt; Selected site was null while attempting to reblog&quot;
+                                    );
+                                } else {
+<span class="nc" id="L194">                                    AppLog.e(</span>
+                                            AppLog.T.READER,
+                                            &quot;SitePickerActivity &gt; Selected site was null while attempting to reblog&quot;
+                                    );
+<span class="nc" id="L198">                                    ToastUtils.showToast(this, R.string.site_picker_ask_site_select);</span>
+                                }
+                                break;
+                        }
+<span class="nc" id="L202">                        return null;</span>
+                    }));
+        }
+
+        // If the picker is already in editing mode from previous configuration, re-enable the editing mode.
+<span class="nc bnc" id="L207" title="All 2 branches missed.">        if (mIsInEditMode) {</span>
+<span class="nc" id="L208">            startEditingVisibility();</span>
+        }
+<span class="nc" id="L210">    }</span>
+
+    @Override
+    public void onResume() {
+<span class="nc" id="L214">        super.onResume();</span>
+<span class="nc" id="L215">        ActivityId.trackLastActivity(ActivityId.SITE_PICKER);</span>
+<span class="nc" id="L216">    }</span>
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+<span class="nc" id="L220">        outState.putInt(KEY_SITE_LOCAL_ID, mCurrentLocalId);</span>
+<span class="nc" id="L221">        outState.putBoolean(KEY_IS_IN_SEARCH_MODE, getAdapter().getIsInSearchMode());</span>
+<span class="nc" id="L222">        outState.putString(KEY_LAST_SEARCH, getAdapter().getLastSearch());</span>
+<span class="nc" id="L223">        outState.putBoolean(KEY_REFRESHING, mSwipeToRefreshHelper.isRefreshing());</span>
+<span class="nc" id="L224">        outState.putSerializable(KEY_SITE_PICKER_MODE, mSitePickerMode);</span>
+
+<span class="nc" id="L226">        outState.putSerializable(KEY_SELECTED_POSITIONS, getAdapter().getSelectedPositions());</span>
+<span class="nc" id="L227">        outState.putBoolean(KEY_IS_IN_EDIT_MODE, mIsInEditMode);</span>
+<span class="nc" id="L228">        outState.putBoolean(KEY_IS_SHOW_MENU_ENABLED, mShowMenuEnabled);</span>
+<span class="nc" id="L229">        outState.putBoolean(KEY_IS_HIDE_MENU_ENABLED, mHideMenuEnabled);</span>
+
+<span class="nc" id="L231">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L232">    }</span>
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+<span class="nc" id="L236">        super.onCreateOptionsMenu(menu);</span>
+<span class="nc" id="L237">        getMenuInflater().inflate(R.menu.site_picker, menu);</span>
+<span class="nc" id="L238">        mMenuSearch = menu.findItem(R.id.menu_search);</span>
+<span class="nc" id="L239">        mMenuEdit = menu.findItem(R.id.menu_edit);</span>
+<span class="nc" id="L240">        mMenuAdd = menu.findItem(R.id.menu_add);</span>
+<span class="nc" id="L241">        return true;</span>
+    }
+
+    @Override
+    public boolean onPrepareOptionsMenu(Menu menu) {
+<span class="nc" id="L246">        super.onPrepareOptionsMenu(menu);</span>
+<span class="nc" id="L247">        updateMenuItemVisibility();</span>
+<span class="nc" id="L248">        setupSearchView();</span>
+<span class="nc" id="L249">        return true;</span>
+    }
+
+    private void updateMenuItemVisibility() {
+<span class="nc bnc" id="L253" title="All 6 branches missed.">        if (mMenuAdd == null || mMenuEdit == null || mMenuSearch == null) {</span>
+<span class="nc" id="L254">            return;</span>
+        }
+
+<span class="nc bnc" id="L257" title="All 2 branches missed.">        if (getAdapter().getIsInSearchMode()</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">            || mSitePickerMode.isReblogMode()</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">            || mSitePickerMode.isBloggingPromptsMode()) {</span>
+<span class="nc" id="L260">            mMenuEdit.setVisible(false);</span>
+<span class="nc" id="L261">            mMenuAdd.setVisible(false);</span>
+        } else {
+            // don't allow editing visibility unless there are multiple wp.com and jetpack sites
+<span class="nc bnc" id="L264" title="All 2 branches missed.">            mMenuEdit.setVisible(mSiteStore.getSitesAccessedViaWPComRestCount() &gt; 1);</span>
+<span class="nc" id="L265">            mMenuAdd.setVisible(mBuildConfigWrapper.isSiteCreationEnabled());</span>
+        }
+
+        // no point showing search if there aren't multiple blogs
+<span class="nc bnc" id="L269" title="All 2 branches missed.">        mMenuSearch.setVisible(mSiteStore.getSitesCount() &gt; 1);</span>
+<span class="nc" id="L270">    }</span>
+
+    @Override
+    public boolean onOptionsItemSelected(final MenuItem item) {
+<span class="nc" id="L274">        int itemId = item.getItemId();</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">        if (itemId == android.R.id.home) {</span>
+<span class="nc" id="L276">            AnalyticsTracker.track(Stat.SITE_SWITCHER_DISMISSED);</span>
+<span class="nc" id="L277">            onBackPressed();</span>
+<span class="nc" id="L278">            return true;</span>
+<span class="nc bnc" id="L279" title="All 2 branches missed.">        } else if (itemId == R.id.menu_edit) {</span>
+<span class="nc" id="L280">            AnalyticsTracker.track(Stat.SITE_SWITCHER_TOGGLED_EDIT_TAPPED,</span>
+<span class="nc" id="L281">                    Collections.singletonMap(TRACK_PROPERTY_STATE, TRACK_PROPERTY_STATE_EDIT));</span>
+<span class="nc" id="L282">            startEditingVisibility();</span>
+<span class="nc" id="L283">            return true;</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">        } else if (itemId == R.id.menu_add) {</span>
+<span class="nc" id="L285">            AnalyticsTracker.track(Stat.SITE_SWITCHER_ADD_SITE_TAPPED);</span>
+<span class="nc" id="L286">            addSite(this, mAccountStore.hasAccessToken(), SiteCreationSource.MY_SITE);</span>
+<span class="nc" id="L287">            return true;</span>
+<span class="nc bnc" id="L288" title="All 2 branches missed.">        } else if (itemId == R.id.continue_flow) {</span>
+<span class="nc" id="L289">            mViewModel.onContinueFlowSelected();</span>
+        }
+<span class="nc" id="L291">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+<span class="nc" id="L296">        super.onActivityResult(requestCode, resultCode, data);</span>
+
+<span class="nc bnc" id="L298" title="All 2 branches missed.">        switch (requestCode) {</span>
+            case RequestCodes.ADD_ACCOUNT:
+            case RequestCodes.CREATE_SITE:
+<span class="nc bnc" id="L301" title="All 2 branches missed.">                if (resultCode == RESULT_OK) {</span>
+<span class="nc" id="L302">                    debounceLoadSites();</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                    if (data == null) {</span>
+<span class="nc" id="L304">                        data = new Intent();</span>
+                    }
+<span class="nc bnc" id="L306" title="All 2 branches missed.">                    if (data.getBooleanExtra(KEY_SITE_CREATED_BUT_NOT_FETCHED, false)) {</span>
+<span class="nc" id="L307">                        showSiteCreatedButNotFetchedSnackbar();</span>
+                    } else {
+<span class="nc" id="L309">                        data.putExtra(WPMainActivity.ARG_CREATE_SITE, RequestCodes.CREATE_SITE);</span>
+<span class="nc" id="L310">                        setResult(resultCode, data);</span>
+<span class="nc" id="L311">                        finish();</span>
+                    }
+                }
+                break;
+        }
+
+        // Enable the block editor on sites created on mobile
+<span class="nc bnc" id="L318" title="All 2 branches missed.">        switch (requestCode) {</span>
+            case RequestCodes.CREATE_SITE:
+<span class="nc bnc" id="L320" title="All 2 branches missed.">                if (data != null) {</span>
+<span class="nc" id="L321">                    int newSiteLocalID = data.getIntExtra(</span>
+                            SitePickerActivity.KEY_SITE_LOCAL_ID,
+                            SelectedSiteRepository.UNAVAILABLE
+                    );
+<span class="nc" id="L325">                    SiteUtils.enableBlockEditorOnSiteCreation(mDispatcher, mSiteStore, newSiteLocalID);</span>
+                }
+                break;
+        }
+<span class="nc" id="L329">    }</span>
+
+    @Override
+    protected void onStop() {
+<span class="nc" id="L333">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L334">        mDebouncer.shutdown();</span>
+<span class="nc" id="L335">        super.onStop();</span>
+<span class="nc" id="L336">    }</span>
+
+    @Override
+    protected void onStart() {
+<span class="nc" id="L340">        super.onStart();</span>
+<span class="nc" id="L341">        mDispatcher.register(this);</span>
+<span class="nc" id="L342">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onSiteRemoved(OnSiteRemoved event) {
+<span class="nc bnc" id="L347" title="All 2 branches missed.">        if (!event.isError()) {</span>
+<span class="nc" id="L348">            debounceLoadSites();</span>
+        } else {
+            // shouldn't happen
+<span class="nc" id="L351">            AppLog.e(AppLog.T.DB, &quot;Encountered unexpected error while attempting to remove site: &quot; + event.error);</span>
+<span class="nc" id="L352">            ToastUtils.showToast(this, R.string.site_picker_remove_site_error);</span>
+        }
+<span class="nc" id="L354">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onSiteChanged(OnSiteChanged event) {
+<span class="nc bnc" id="L359" title="All 2 branches missed.">        if (mSwipeToRefreshHelper.isRefreshing()) {</span>
+<span class="nc" id="L360">            mSwipeToRefreshHelper.setRefreshing(false);</span>
+        }
+<span class="nc" id="L362">        debounceLoadSites();</span>
+<span class="nc" id="L363">    }</span>
+
+    private void debounceLoadSites() {
+<span class="nc" id="L366">        mDebouncer.debounce(Void.class, () -&gt; {</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">            if (!isFinishing()) {</span>
+<span class="nc" id="L368">                getAdapter().loadSites();</span>
+            }
+<span class="nc" id="L370">        }, 200, TimeUnit.MILLISECONDS);</span>
+<span class="nc" id="L371">    }</span>
+
+    private void initSwipeToRefreshHelper(View view) {
+<span class="nc bnc" id="L374" title="All 2 branches missed.">        if (view == null) {</span>
+<span class="nc" id="L375">            return;</span>
+        }
+<span class="nc" id="L377">        mSwipeToRefreshHelper = buildSwipeToRefreshHelper(</span>
+<span class="nc" id="L378">                view.findViewById(R.id.ptr_layout),</span>
+                () -&gt; {
+<span class="nc bnc" id="L380" title="All 2 branches missed.">                    if (isFinishing()) {</span>
+<span class="nc" id="L381">                        return;</span>
+                    }
+<span class="nc bnc" id="L383" title="All 4 branches missed.">                    if (!NetworkUtils.checkConnection(SitePickerActivity.this) || !mAccountStore.hasAccessToken()) {</span>
+<span class="nc" id="L384">                        mSwipeToRefreshHelper.setRefreshing(false);</span>
+<span class="nc" id="L385">                        return;</span>
+                    }
+<span class="nc" id="L387">                    mDispatcher.dispatch(SiteActionBuilder.newFetchSitesAction(SiteUtils.getFetchSitesPayload()));</span>
+<span class="nc" id="L388">                }</span>
+        );
+<span class="nc" id="L390">    }</span>
+
+    private void setupRecycleView() {
+<span class="nc" id="L393">        mRecycleView = findViewById(R.id.recycler_view);</span>
+<span class="nc" id="L394">        mRecycleView.setLayoutManager(new LinearLayoutManager(this));</span>
+<span class="nc" id="L395">        mRecycleView.setScrollBarStyle(View.SCROLLBARS_OUTSIDE_OVERLAY);</span>
+
+<span class="nc bnc" id="L397" title="All 2 branches missed.">        mRecycleView.setItemAnimator(mSitePickerMode.isReblogMode() ? new DefaultItemAnimator() : null);</span>
+
+<span class="nc" id="L399">        mRecycleView.setAdapter(getAdapter());</span>
+
+<span class="nc" id="L401">        ActionableEmptyView actionableEmptyView = findViewById(R.id.actionable_empty_view);</span>
+<span class="nc" id="L402">        actionableEmptyView.updateLayoutForSearch(true, 0);</span>
+<span class="nc" id="L403">        mRecycleView.setEmptyView(actionableEmptyView);</span>
+<span class="nc" id="L404">    }</span>
+
+    private void restoreSavedInstanceState(Bundle savedInstanceState) {
+<span class="nc" id="L407">        boolean isInSearchMode = false;</span>
+<span class="nc" id="L408">        String lastSearch = &quot;&quot;;</span>
+
+<span class="nc bnc" id="L410" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L411">            mCurrentLocalId = savedInstanceState.getInt(KEY_SITE_LOCAL_ID);</span>
+<span class="nc" id="L412">            isInSearchMode = savedInstanceState.getBoolean(KEY_IS_IN_SEARCH_MODE);</span>
+<span class="nc" id="L413">            lastSearch = savedInstanceState.getString(KEY_LAST_SEARCH);</span>
+<span class="nc" id="L414">            mSitePickerMode = (SitePickerMode) savedInstanceState.getSerializable(KEY_SITE_PICKER_MODE);</span>
+
+<span class="nc" id="L416">            mSelectedPositions = (HashSet&lt;Integer&gt;) savedInstanceState.getSerializable(KEY_SELECTED_POSITIONS);</span>
+<span class="nc" id="L417">            mIsInEditMode = savedInstanceState.getBoolean(KEY_IS_IN_EDIT_MODE);</span>
+<span class="nc" id="L418">            mShowMenuEnabled = savedInstanceState.getBoolean(KEY_IS_SHOW_MENU_ENABLED);</span>
+<span class="nc" id="L419">            mHideMenuEnabled = savedInstanceState.getBoolean(KEY_IS_HIDE_MENU_ENABLED);</span>
+<span class="nc bnc" id="L420" title="All 2 branches missed.">        } else if (getIntent() != null) {</span>
+<span class="nc" id="L421">            mCurrentLocalId = getIntent().getIntExtra(KEY_SITE_LOCAL_ID, SelectedSiteRepository.UNAVAILABLE);</span>
+<span class="nc" id="L422">            mSitePickerMode = (SitePickerMode) getIntent().getSerializableExtra(KEY_SITE_PICKER_MODE);</span>
+        }
+
+<span class="nc" id="L425">        setNewAdapter(lastSearch, isInSearchMode);</span>
+<span class="nc" id="L426">    }</span>
+
+    private void setupActionBar() {
+<span class="nc" id="L429">        Toolbar toolbar = findViewById(R.id.toolbar_main);</span>
+<span class="nc" id="L430">        setSupportActionBar(toolbar);</span>
+<span class="nc" id="L431">        ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">        if (actionBar != null) {</span>
+<span class="nc" id="L433">            actionBar.setHomeButtonEnabled(true);</span>
+<span class="nc" id="L434">            actionBar.setDisplayHomeAsUpEnabled(true);</span>
+<span class="nc" id="L435">            actionBar.setTitle(R.string.site_picker_title);</span>
+
+<span class="nc bnc" id="L437" title="All 4 branches missed.">            if (mSitePickerMode == SitePickerMode.REBLOG_CONTINUE_MODE &amp;&amp; mReblogActionMode == null) {</span>
+<span class="nc" id="L438">                mViewModel.onRefreshReblogActionMode();</span>
+            }
+        }
+<span class="nc" id="L441">    }</span>
+
+    private void setIsInSearchModeAndSetNewAdapter(boolean isInSearchMode) {
+<span class="nc" id="L444">        String lastSearch = getAdapter().getLastSearch();</span>
+<span class="nc" id="L445">        setNewAdapter(lastSearch, isInSearchMode);</span>
+<span class="nc" id="L446">    }</span>
+
+    private SitePickerAdapter getAdapter() {
+<span class="nc bnc" id="L449" title="All 2 branches missed.">        if (mAdapter == null) {</span>
+<span class="nc" id="L450">            setNewAdapter(&quot;&quot;, false);</span>
+        }
+<span class="nc" id="L452">        return mAdapter;</span>
+    }
+
+    private void setNewAdapter(String lastSearch, boolean isInSearchMode) {
+<span class="nc" id="L456">        mAdapter = new SitePickerAdapter(</span>
+                this,
+                R.layout.site_picker_listitem,
+                mCurrentLocalId,
+                lastSearch,
+                isInSearchMode,
+<span class="nc" id="L462">                new SitePickerAdapter.OnDataLoadedListener() {</span>
+                    @Override
+                    public void onBeforeLoad(boolean isEmpty) {
+<span class="nc bnc" id="L465" title="All 2 branches missed.">                        if (isEmpty) {</span>
+<span class="nc" id="L466">                            showProgress(true);</span>
+                        }
+<span class="nc" id="L468">                    }</span>
+
+                    @Override
+                    public void onAfterLoad() {
+<span class="nc" id="L472">                        showProgress(false);</span>
+<span class="nc bnc" id="L473" title="All 4 branches missed.">                        if (mSitePickerMode == SitePickerMode.REBLOG_CONTINUE_MODE &amp;&amp; !isInSearchMode) {</span>
+<span class="nc" id="L474">                            mAdapter.findAndSelect(mCurrentLocalId);</span>
+<span class="nc" id="L475">                            int scrollPos = mAdapter.getItemPosByLocalId(mCurrentLocalId);</span>
+<span class="nc bnc" id="L476" title="All 4 branches missed.">                            if (scrollPos &gt; -1 &amp;&amp; mRecycleView != null) {</span>
+<span class="nc" id="L477">                                mRecycleView.scrollToPosition(scrollPos);</span>
+                            }
+                        }
+<span class="nc" id="L480">                    }</span>
+                },
+                mSitePickerMode,
+                mIsInEditMode);
+<span class="nc" id="L484">        mAdapter.setOnSiteClickListener(this);</span>
+<span class="nc" id="L485">        mAdapter.setOnSelectedCountChangedListener(this);</span>
+<span class="nc" id="L486">    }</span>
+
+    private void saveSiteVisibility(SiteRecord siteRecord) {
+<span class="nc" id="L489">        Set&lt;SiteRecord&gt; siteRecords = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L490">        siteRecords.add(siteRecord);</span>
+<span class="nc" id="L491">        saveSitesVisibility(siteRecords);</span>
+<span class="nc" id="L492">    }</span>
+
+    private void saveSitesVisibility(Set&lt;SiteRecord&gt; changeSet) {
+<span class="nc" id="L495">        boolean skippedCurrentSite = false;</span>
+<span class="nc" id="L496">        String currentSiteName = null;</span>
+<span class="nc" id="L497">        SiteList hiddenSites = getAdapter().getHiddenSites();</span>
+<span class="nc" id="L498">        List&lt;SiteModel&gt; siteList = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L499" title="All 2 branches missed.">        for (SiteRecord siteRecord : changeSet) {</span>
+<span class="nc" id="L500">            SiteModel siteModel = mSiteStore.getSiteByLocalId(siteRecord.getLocalId());</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">            if (hiddenSites.contains(siteRecord)) {</span>
+<span class="nc bnc" id="L502" title="All 2 branches missed.">                if (siteRecord.getLocalId() == mCurrentLocalId) {</span>
+<span class="nc" id="L503">                    skippedCurrentSite = true;</span>
+<span class="nc" id="L504">                    currentSiteName = siteRecord.getBlogNameOrHomeURL();</span>
+<span class="nc" id="L505">                    continue;</span>
+                }
+<span class="nc" id="L507">                siteModel.setIsVisible(false);</span>
+                // Remove stats data for hidden sites
+<span class="nc" id="L509">                mStatsStore.deleteSiteData(siteModel);</span>
+            } else {
+<span class="nc" id="L511">                siteModel.setIsVisible(true);</span>
+            }
+            // Save the site
+<span class="nc" id="L514">            mDispatcher.dispatch(SiteActionBuilder.newUpdateSiteAction(siteModel));</span>
+<span class="nc" id="L515">            siteList.add(siteModel);</span>
+<span class="nc" id="L516">            trackVisibility(Long.toString(siteModel.getSiteId()), siteModel.isVisible());</span>
+<span class="nc" id="L517">        }</span>
+
+<span class="nc" id="L519">        updateVisibilityOfSitesOnRemote(siteList);</span>
+
+        // let user know the current site wasn't hidden
+<span class="nc bnc" id="L522" title="All 2 branches missed.">        if (skippedCurrentSite) {</span>
+<span class="nc" id="L523">            String cantHideCurrentSite = getString(R.string.site_picker_cant_hide_current_site);</span>
+<span class="nc" id="L524">            ToastUtils.showToast(this,</span>
+<span class="nc" id="L525">                    String.format(cantHideCurrentSite, currentSiteName),</span>
+                    ToastUtils.Duration.LONG);
+        }
+<span class="nc" id="L528">    }</span>
+
+    private void updateVisibilityOfSitesOnRemote(List&lt;SiteModel&gt; siteList) {
+        // Example json format for the request: {&quot;sites&quot;:{&quot;100001&quot;:{&quot;visible&quot;:false}}}
+<span class="nc" id="L532">        JSONObject jsonObject = new JSONObject();</span>
+        try {
+<span class="nc" id="L534">            JSONObject sites = new JSONObject();</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">            for (SiteModel siteModel : siteList) {</span>
+<span class="nc" id="L536">                JSONObject visible = new JSONObject();</span>
+<span class="nc" id="L537">                visible.put(&quot;visible&quot;, siteModel.isVisible());</span>
+<span class="nc" id="L538">                sites.put(Long.toString(siteModel.getSiteId()), visible);</span>
+<span class="nc" id="L539">            }</span>
+<span class="nc" id="L540">            jsonObject.put(&quot;sites&quot;, sites);</span>
+<span class="nc" id="L541">        } catch (JSONException e) {</span>
+<span class="nc" id="L542">            AppLog.e(AppLog.T.API, &quot;Could not build me/sites json object&quot;);</span>
+<span class="nc" id="L543">        }</span>
+
+<span class="nc bnc" id="L545" title="All 2 branches missed.">        if (jsonObject.length() == 0) {</span>
+<span class="nc" id="L546">            return;</span>
+        }
+
+<span class="nc" id="L549">        WordPress.getRestClientUtilsV1_1().post(&quot;me/sites&quot;, jsonObject, null,</span>
+<span class="nc" id="L550">                response -&gt; AppLog.v(AppLog.T.API, &quot;Site visibility successfully updated&quot;),</span>
+<span class="nc" id="L551">                volleyError -&gt; AppLog</span>
+<span class="nc" id="L552">                        .e(AppLog.T.API, &quot;An error occurred while updating site visibility: &quot; + volleyError));</span>
+<span class="nc" id="L553">    }</span>
+
+    private void updateActionModeTitle() {
+<span class="nc bnc" id="L556" title="All 2 branches missed.">        if (mActionMode != null) {</span>
+<span class="nc" id="L557">            int numSelected = getAdapter().getNumSelected();</span>
+<span class="nc" id="L558">            String cabSelected = getString(R.string.cab_selected);</span>
+<span class="nc" id="L559">            mActionMode.setTitle(String.format(cabSelected, numSelected));</span>
+        }
+<span class="nc" id="L561">    }</span>
+
+    private void setupSearchView() {
+<span class="nc" id="L564">        mSearchView = (SearchView) mMenuSearch.getActionView();</span>
+<span class="nc" id="L565">        mSearchView.setMaxWidth(Integer.MAX_VALUE);</span>
+
+<span class="nc" id="L567">        mMenuSearch.setOnActionExpandListener(new MenuItem.OnActionExpandListener() {</span>
+            @Override
+            public boolean onMenuItemActionExpand(MenuItem item) {
+<span class="nc bnc" id="L570" title="All 2 branches missed.">                if (!getAdapter().getIsInSearchMode()) {</span>
+<span class="nc" id="L571">                    enableSearchMode();</span>
+<span class="nc" id="L572">                    mMenuEdit.setVisible(false);</span>
+<span class="nc" id="L573">                    mMenuAdd.setVisible(false);</span>
+
+<span class="nc" id="L575">                    mSearchView.setOnQueryTextListener(SitePickerActivity.this);</span>
+                }
+
+<span class="nc" id="L578">                return true;</span>
+            }
+
+            @Override
+            public boolean onMenuItemActionCollapse(MenuItem item) {
+<span class="nc" id="L583">                disableSearchMode();</span>
+<span class="nc" id="L584">                mSearchView.setOnQueryTextListener(null);</span>
+<span class="nc" id="L585">                return true;</span>
+            }
+        });
+
+<span class="nc" id="L589">        setQueryIfInSearch();</span>
+<span class="nc" id="L590">    }</span>
+
+    private void setQueryIfInSearch() {
+<span class="nc bnc" id="L593" title="All 2 branches missed.">        if (getAdapter().getIsInSearchMode()) {</span>
+<span class="nc" id="L594">            mMenuSearch.expandActionView();</span>
+<span class="nc" id="L595">            mSearchView.setOnQueryTextListener(SitePickerActivity.this);</span>
+<span class="nc" id="L596">            mSearchView.setQuery(getAdapter().getLastSearch(), true);</span>
+        }
+<span class="nc" id="L598">    }</span>
+
+    private void enableSearchMode() {
+<span class="nc" id="L601">        setIsInSearchModeAndSetNewAdapter(true);</span>
+<span class="nc" id="L602">        mRecycleView.swapAdapter(getAdapter(), true);</span>
+<span class="nc" id="L603">    }</span>
+
+    private void disableSearchMode() {
+<span class="nc" id="L606">        hideSoftKeyboard();</span>
+<span class="nc" id="L607">        setIsInSearchModeAndSetNewAdapter(false);</span>
+<span class="nc" id="L608">        mRecycleView.swapAdapter(getAdapter(), true);</span>
+<span class="nc" id="L609">        invalidateOptionsMenu();</span>
+<span class="nc" id="L610">    }</span>
+
+    private void hideSoftKeyboard() {
+<span class="nc bnc" id="L613" title="All 2 branches missed.">        if (!DeviceUtils.getInstance().hasHardwareKeyboard(this)) {</span>
+<span class="nc" id="L614">            ActivityUtils.hideKeyboardForced(mSearchView);</span>
+        }
+<span class="nc" id="L616">    }</span>
+
+    @Override
+    public void onSelectedCountChanged(int numSelected) {
+<span class="nc bnc" id="L620" title="All 2 branches missed.">        if (mActionMode != null) {</span>
+<span class="nc" id="L621">            updateActionModeTitle();</span>
+<span class="nc bnc" id="L622" title="All 2 branches missed.">            mShowMenuEnabled = getAdapter().getNumHiddenSelected() &gt; 0;</span>
+<span class="nc bnc" id="L623" title="All 2 branches missed.">            mHideMenuEnabled = getAdapter().getNumVisibleSelected() &gt; 0;</span>
+<span class="nc" id="L624">            mActionMode.invalidate();</span>
+        }
+<span class="nc" id="L626">    }</span>
+
+    @Override
+    public boolean onSiteLongClick(final SiteRecord siteRecord) {
+<span class="nc" id="L630">        final SiteModel site = mSiteStore.getSiteByLocalId(siteRecord.getLocalId());</span>
+<span class="nc bnc" id="L631" title="All 2 branches missed.">        if (site == null) {</span>
+<span class="nc" id="L632">            return false;</span>
+        }
+<span class="nc bnc" id="L634" title="All 2 branches missed.">        if (site.isUsingWpComRestApi()) {</span>
+<span class="nc bnc" id="L635" title="All 2 branches missed.">            if (mActionMode != null) {</span>
+<span class="nc" id="L636">                return false;</span>
+            }
+<span class="nc" id="L638">            startEditingVisibility();</span>
+        } else {
+<span class="nc" id="L640">            showRemoveSelfHostedSiteDialog(site);</span>
+        }
+
+<span class="nc" id="L643">        return true;</span>
+    }
+
+    @Override
+    public void onSiteClick(SiteRecord siteRecord) {
+<span class="nc bnc" id="L648" title="All 2 branches missed.">        if (mSitePickerMode.isReblogMode()) {</span>
+<span class="nc" id="L649">            mCurrentLocalId = siteRecord.getLocalId();</span>
+<span class="nc" id="L650">            mViewModel.onSiteForReblogSelected(siteRecord);</span>
+<span class="nc bnc" id="L651" title="All 2 branches missed.">        } else if (mActionMode == null) {</span>
+<span class="nc" id="L652">            selectSiteAndFinish(siteRecord);</span>
+        }
+<span class="nc" id="L654">    }</span>
+
+    @Override
+    public boolean onQueryTextSubmit(String s) {
+<span class="nc" id="L658">        hideSoftKeyboard();</span>
+<span class="nc" id="L659">        return true;</span>
+    }
+
+    @Override
+    public boolean onQueryTextChange(String s) {
+<span class="nc bnc" id="L664" title="All 2 branches missed.">        if (getAdapter().getIsInSearchMode()) {</span>
+<span class="nc" id="L665">            AnalyticsTracker.track(Stat.SITE_SWITCHER_SEARCH_PERFORMED);</span>
+<span class="nc" id="L666">            getAdapter().setLastSearch(s);</span>
+<span class="nc" id="L667">            getAdapter().searchSites(s);</span>
+        }
+<span class="nc" id="L669">        return true;</span>
+    }
+
+    public void showProgress(boolean show) {
+<span class="nc bnc" id="L673" title="All 2 branches missed.">        findViewById(R.id.progress).setVisibility(show ? View.VISIBLE : View.GONE);</span>
+<span class="nc" id="L674">    }</span>
+
+    private void selectSiteAndFinish(SiteRecord siteRecord) {
+<span class="nc" id="L677">        hideSoftKeyboard();</span>
+<span class="nc" id="L678">        AppPrefs.addRecentlyPickedSiteId(siteRecord.getLocalId());</span>
+<span class="nc" id="L679">        setResult(RESULT_OK, new Intent().putExtra(KEY_SITE_LOCAL_ID, siteRecord.getLocalId()));</span>
+        // If the site is hidden, make sure to make it visible
+<span class="nc bnc" id="L681" title="All 2 branches missed.">        if (siteRecord.isHidden()) {</span>
+<span class="nc" id="L682">            siteRecord.setHidden(false);</span>
+<span class="nc" id="L683">            saveSiteVisibility(siteRecord);</span>
+        }
+<span class="nc" id="L685">        finish();</span>
+<span class="nc" id="L686">    }</span>
+
+<span class="nc" id="L688">    private final class ReblogActionModeCallback implements ActionMode.Callback {</span>
+        @Override
+        public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+<span class="nc" id="L691">            mReblogActionMode = mode;</span>
+<span class="nc" id="L692">            mode.getMenuInflater().inflate(R.menu.site_picker_reblog_action_mode, menu);</span>
+<span class="nc" id="L693">            return true;</span>
+        }
+
+        @Override
+        public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+<span class="nc" id="L698">            return true;</span>
+        }
+
+        @Override
+        public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+<span class="nc" id="L703">            int itemId = item.getItemId();</span>
+
+<span class="nc bnc" id="L705" title="All 2 branches missed.">            if (itemId == R.id.continue_flow) {</span>
+<span class="nc" id="L706">                mViewModel.onContinueFlowSelected();</span>
+            }
+
+<span class="nc" id="L709">            return true;</span>
+        }
+
+        @Override
+        public void onDestroyActionMode(ActionMode mode) {
+<span class="nc" id="L714">            mViewModel.onReblogActionBackSelected();</span>
+<span class="nc" id="L715">            mReblogActionMode = null;</span>
+<span class="nc" id="L716">        }</span>
+    }
+
+<span class="nc" id="L719">    private final class ActionModeCallback implements ActionMode.Callback {</span>
+        private boolean mHasChanges;
+        private Set&lt;SiteRecord&gt; mChangeSet;
+
+        @Override
+        public boolean onCreateActionMode(ActionMode actionMode, Menu menu) {
+<span class="nc" id="L725">            mActionMode = actionMode;</span>
+<span class="nc" id="L726">            mHasChanges = false;</span>
+<span class="nc" id="L727">            mChangeSet = new HashSet&lt;&gt;();</span>
+<span class="nc" id="L728">            updateActionModeTitle();</span>
+<span class="nc" id="L729">            actionMode.getMenuInflater().inflate(R.menu.site_picker_action_mode, menu);</span>
+<span class="nc" id="L730">            return true;</span>
+        }
+
+        @Override
+        public boolean onPrepareActionMode(ActionMode actionMode, Menu menu) {
+<span class="nc" id="L735">            MenuItem mnuShow = menu.findItem(R.id.menu_show);</span>
+<span class="nc" id="L736">            mnuShow.setEnabled(mShowMenuEnabled);</span>
+
+<span class="nc" id="L738">            MenuItem mnuHide = menu.findItem(R.id.menu_hide);</span>
+<span class="nc" id="L739">            mnuHide.setEnabled(mHideMenuEnabled);</span>
+
+<span class="nc" id="L741">            MenuItem mnuSelectAll = menu.findItem(R.id.menu_select_all);</span>
+<span class="nc bnc" id="L742" title="All 2 branches missed.">            mnuSelectAll.setEnabled(getAdapter().getNumSelected() != getAdapter().getItemCount());</span>
+
+<span class="nc" id="L744">            MenuItem mnuDeselectAll = menu.findItem(R.id.menu_deselect_all);</span>
+<span class="nc bnc" id="L745" title="All 2 branches missed.">            mnuDeselectAll.setEnabled(getAdapter().getNumSelected() &gt; 0);</span>
+
+<span class="nc" id="L747">            return true;</span>
+        }
+
+        @Override
+        public boolean onActionItemClicked(ActionMode actionMode, MenuItem menuItem) {
+<span class="nc" id="L752">            int itemId = menuItem.getItemId();</span>
+<span class="nc bnc" id="L753" title="All 2 branches missed.">            if (itemId == R.id.menu_show) {</span>
+<span class="nc" id="L754">                Set&lt;SiteRecord&gt; changeSet = getAdapter().setVisibilityForSelectedSites(true);</span>
+<span class="nc" id="L755">                mChangeSet.addAll(changeSet);</span>
+<span class="nc" id="L756">                mHasChanges = true;</span>
+<span class="nc" id="L757">                mActionMode.finish();</span>
+<span class="nc bnc" id="L758" title="All 2 branches missed.">            } else if (itemId == R.id.menu_hide) {</span>
+<span class="nc" id="L759">                Set&lt;SiteRecord&gt; changeSet = getAdapter().setVisibilityForSelectedSites(false);</span>
+<span class="nc" id="L760">                mChangeSet.addAll(changeSet);</span>
+<span class="nc" id="L761">                mHasChanges = true;</span>
+<span class="nc" id="L762">                mActionMode.finish();</span>
+<span class="nc bnc" id="L763" title="All 2 branches missed.">            } else if (itemId == R.id.menu_select_all) {</span>
+<span class="nc" id="L764">                getAdapter().selectAll();</span>
+<span class="nc bnc" id="L765" title="All 2 branches missed.">            } else if (itemId == R.id.menu_deselect_all) {</span>
+<span class="nc" id="L766">                getAdapter().deselectAll();</span>
+            }
+<span class="nc" id="L768">            return true;</span>
+        }
+
+        @Override
+        public void onDestroyActionMode(ActionMode actionMode) {
+<span class="nc bnc" id="L773" title="All 2 branches missed.">            if (mHasChanges) {</span>
+<span class="nc" id="L774">                saveSitesVisibility(mChangeSet);</span>
+            }
+<span class="nc" id="L776">            AnalyticsTracker.track(Stat.SITE_SWITCHER_TOGGLED_EDIT_TAPPED,</span>
+<span class="nc" id="L777">                    Collections.singletonMap(TRACK_PROPERTY_STATE, TRACK_PROPERTY_STATE_DONE));</span>
+<span class="nc" id="L778">            getAdapter().setEnableEditMode(false, mSelectedPositions);</span>
+<span class="nc" id="L779">            mActionMode = null;</span>
+<span class="nc" id="L780">            mIsInEditMode = false;</span>
+<span class="nc" id="L781">            mSelectedPositions.clear();</span>
+<span class="nc" id="L782">        }</span>
+    }
+
+    public static void addSite(Activity activity, boolean hasAccessToken, SiteCreationSource source) {
+<span class="nc bnc" id="L786" title="All 2 branches missed.">        if (hasAccessToken) {</span>
+            if (!BuildConfig.ENABLE_ADD_SELF_HOSTED_SITE) {
+                ActivityLauncher.newBlogForResult(activity, source);
+            } else {
+                // user is signed into wordpress app, so use the dialog to enable choosing whether to
+                // create a new wp.com blog or add a self-hosted one
+<span class="nc" id="L792">                showAddSiteDialog(activity, source);</span>
+            }
+        } else {
+            // user doesn't have an access token, so simply enable adding self-hosted
+<span class="nc" id="L796">            ActivityLauncher.addSelfHostedSiteForResult(activity);</span>
+        }
+<span class="nc" id="L798">    }</span>
+
+    private static void showAddSiteDialog(Activity activity, SiteCreationSource source) {
+<span class="nc" id="L801">        DialogFragment dialog = new AddSiteDialog();</span>
+<span class="nc" id="L802">        Bundle args = new Bundle();</span>
+<span class="nc" id="L803">        args.putString(ARG_SITE_CREATION_SOURCE, source.getLabel());</span>
+<span class="nc" id="L804">        dialog.setArguments(args);</span>
+<span class="nc" id="L805">        dialog.show(activity.getFragmentManager(), AddSiteDialog.ADD_SITE_DIALOG_TAG);</span>
+<span class="nc" id="L806">    }</span>
+
+    /*
+     * dialog which appears after user taps &quot;Add site&quot; - enables choosing whether to create
+     * a new wp.com blog or add an existing self-hosted one
+     */
+<span class="nc" id="L812">    public static class AddSiteDialog extends DialogFragment {</span>
+        static final String ADD_SITE_DIALOG_TAG = &quot;add_site_dialog&quot;;
+
+        @NonNull
+        @Override
+        public Dialog onCreateDialog(Bundle savedInstanceState) {
+<span class="nc" id="L818">            SiteCreationSource source =</span>
+<span class="nc" id="L819">                    SiteCreationSource.fromString(getArguments().getString(ARG_SITE_CREATION_SOURCE));</span>
+<span class="nc" id="L820">            CharSequence[] items =</span>
+<span class="nc" id="L821">                    {getString(R.string.site_picker_create_wpcom),</span>
+<span class="nc" id="L822">                            getString(R.string.site_picker_add_self_hosted)};</span>
+<span class="nc" id="L823">            MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(getActivity());</span>
+<span class="nc" id="L824">            builder.setTitle(R.string.site_picker_add_site);</span>
+<span class="nc" id="L825">            builder.setAdapter(</span>
+<span class="nc" id="L826">                    new ArrayAdapter&lt;&gt;(getActivity(), R.layout.add_new_site_dialog_item, R.id.text, items),</span>
+                    (dialog, which) -&gt; {
+<span class="nc bnc" id="L828" title="All 2 branches missed.">                        if (which == 0) {</span>
+<span class="nc" id="L829">                            ActivityLauncher.newBlogForResult(getActivity(), source);</span>
+                        } else {
+<span class="nc" id="L831">                            ActivityLauncher.addSelfHostedSiteForResult(getActivity());</span>
+                        }
+<span class="nc" id="L833">                    });</span>
+
+<span class="nc" id="L835">            AnalyticsTracker.track(Stat.ADD_SITE_ALERT_DISPLAYED, Collections.singletonMap(SOURCE, source.getLabel()));</span>
+<span class="nc" id="L836">            return builder.create();</span>
+        }
+    }
+
+    private void startEditingVisibility() {
+<span class="nc" id="L841">        mRecycleView.setItemAnimator(new DefaultItemAnimator());</span>
+<span class="nc" id="L842">        getAdapter().setEnableEditMode(true, mSelectedPositions);</span>
+<span class="nc" id="L843">        startSupportActionMode(new ActionModeCallback());</span>
+<span class="nc" id="L844">        mIsInEditMode = true;</span>
+<span class="nc" id="L845">    }</span>
+
+    private void showRemoveSelfHostedSiteDialog(@NonNull final SiteModel site) {
+<span class="nc" id="L848">        MaterialAlertDialogBuilder dialogBuilder = new MaterialAlertDialogBuilder(this);</span>
+<span class="nc" id="L849">        dialogBuilder.setTitle(getResources().getText(R.string.remove_account));</span>
+<span class="nc" id="L850">        dialogBuilder.setMessage(getResources().getText(R.string.sure_to_remove_account));</span>
+<span class="nc" id="L851">        dialogBuilder.setPositiveButton(getResources().getText(R.string.yes),</span>
+<span class="nc" id="L852">                (dialog, whichButton) -&gt; mDispatcher.dispatch(SiteActionBuilder.newRemoveSiteAction(site)));</span>
+<span class="nc" id="L853">        dialogBuilder.setNegativeButton(getResources().getText(R.string.no), null);</span>
+<span class="nc" id="L854">        dialogBuilder.setCancelable(false);</span>
+<span class="nc" id="L855">        dialogBuilder.create().show();</span>
+<span class="nc" id="L856">    }</span>
+
+    private void showSiteCreatedButNotFetchedSnackbar() {
+<span class="nc" id="L859">        int duration = AccessibilityUtils</span>
+<span class="nc" id="L860">                .getSnackbarDuration(this, getResources().getInteger(R.integer.site_creation_snackbar_duration));</span>
+<span class="nc" id="L861">        String message = getString(R.string.site_created_but_not_fetched_snackbar_message);</span>
+<span class="nc" id="L862">        WPDialogSnackbar.make(findViewById(R.id.coordinatorLayout), message, duration).show();</span>
+<span class="nc" id="L863">    }</span>
+
+    private void trackVisibility(String blogId, boolean isVisible) {
+<span class="nc" id="L866">        Map&lt;String, String&gt; props = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L867">        props.put(TRACK_PROPERTY_BLOG_ID, blogId);</span>
+<span class="nc bnc" id="L868" title="All 2 branches missed.">        props.put(TRACK_PROPERTY_VISIBLE, isVisible ? &quot;1&quot; : &quot;0&quot;);</span>
+<span class="nc" id="L869">        AnalyticsTracker.track(Stat.SITE_SWITCHER_TOGGLE_BLOG_VISIBLE, props);</span>
+<span class="nc" id="L870">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

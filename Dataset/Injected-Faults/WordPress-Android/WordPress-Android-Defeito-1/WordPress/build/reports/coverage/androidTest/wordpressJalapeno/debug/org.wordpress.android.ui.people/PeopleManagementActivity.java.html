@@ -1,0 +1,678 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PeopleManagementActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.people</a> &gt; <span class="el_source">PeopleManagementActivity.java</span></div><h1>PeopleManagementActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.people;
+
+import android.content.DialogInterface;
+import android.os.Bundle;
+import android.view.MenuItem;
+
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.app.AlertDialog;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentTransaction;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+
+import org.greenrobot.eventbus.EventBus;
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.datasets.PeopleTable;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.SiteActionBuilder;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.fluxc.store.SiteStore.OnUserRolesChanged;
+import org.wordpress.android.models.PeopleListFilter;
+import org.wordpress.android.models.Person;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.ui.people.utils.PeopleUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+
+import java.util.List;
+
+import javax.inject.Inject;
+
+<span class="nc" id="L40">public class PeopleManagementActivity extends LocaleAwareActivity</span>
+        implements PeopleListFragment.OnPersonSelectedListener, PeopleListFragment.OnFetchPeopleListener {
+    private static final String KEY_PEOPLE_LIST_FRAGMENT = &quot;people-list-fragment&quot;;
+    private static final String KEY_PERSON_DETAIL_FRAGMENT = &quot;person-detail-fragment&quot;;
+    private static final String KEY_PEOPLE_INVITE_FRAGMENT = &quot;people-invite-fragment&quot;;
+    private static final String KEY_TITLE = &quot;page-title&quot;;
+
+    private static final String KEY_USERS_END_OF_LIST_REACHED = &quot;users-end-of-list-reached&quot;;
+    private static final String KEY_FOLLOWERS_END_OF_LIST_REACHED = &quot;followers-end-of-list-reached&quot;;
+    private static final String KEY_EMAIL_FOLLOWERS_END_OF_LIST_REACHED = &quot;email-followers-end-of-list-reached&quot;;
+    private static final String KEY_VIEWERS_END_OF_LIST_REACHED = &quot;viewers-end-of-list-reached&quot;;
+
+    private static final String KEY_USERS_FETCH_REQUEST_IN_PROGRESS = &quot;users-fetch-request-in-progress&quot;;
+    private static final String KEY_FOLLOWERS_FETCH_REQUEST_IN_PROGRESS = &quot;followers-fetch-request-in-progress&quot;;
+    private static final String KEY_EMAIL_FOLLOWERS_FETCH_REQUEST_IN_PROGRESS =
+            &quot;email-followers-fetch-request-in-progress&quot;;
+    private static final String KEY_VIEWERS_FETCH_REQUEST_IN_PROGRESS = &quot;viewers-fetch-request-in-progress&quot;;
+
+    private static final String KEY_HAS_REFRESHED_USERS = &quot;has-refreshed-users&quot;;
+    private static final String KEY_HAS_REFRESHED_FOLLOWERS = &quot;has-refreshed-followers&quot;;
+    private static final String KEY_HAS_REFRESHED_EMAIL_FOLLOWERS = &quot;has-refreshed-email-followers&quot;;
+    private static final String KEY_HAS_REFRESHED_VIEWERS = &quot;has-refreshed-viewers&quot;;
+
+    private static final String KEY_FOLLOWERS_LAST_FETCHED_PAGE = &quot;followers-last-fetched-page&quot;;
+    private static final String KEY_EMAIL_FOLLOWERS_LAST_FETCHED_PAGE = &quot;email-followers-last-fetched-page&quot;;
+
+    // End of list reached variables will be true when there is no more data to fetch
+    private boolean mUsersEndOfListReached;
+    private boolean mFollowersEndOfListReached;
+    private boolean mEmailFollowersEndOfListReached;
+    private boolean mViewersEndOfListReached;
+
+    // We only allow the lists to be refreshed once to avoid syncing and jumping animation issues
+    private boolean mHasRefreshedUsers;
+    private boolean mHasRefreshedFollowers;
+    private boolean mHasRefreshedEmailFollowers;
+    private boolean mHasRefreshedViewers;
+
+    // If we are currently making a request for a certain filter
+    private boolean mUsersFetchRequestInProgress;
+    private boolean mFollowersFetchRequestInProgress;
+    private boolean mEmailFollowersFetchRequestInProgress;
+    private boolean mViewersFetchRequestInProgress;
+
+    // Keep track of the last page we received from remote
+    private int mFollowersLastFetchedPage;
+    private int mEmailFollowersLastFetchedPage;
+
+    @Inject Dispatcher mDispatcher;
+    @Inject AccountStore mAccountStore;
+
+    private SiteModel mSite;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L95">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L96">        ((WordPress) getApplication()).component().inject(this);</span>
+<span class="nc" id="L97">        mDispatcher.register(this);</span>
+
+<span class="nc" id="L99">        setContentView(R.layout.people_management_activity);</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L101">            mSite = (SiteModel) getIntent().getSerializableExtra(WordPress.SITE);</span>
+        } else {
+<span class="nc" id="L103">            mSite = (SiteModel) savedInstanceState.getSerializable(WordPress.SITE);</span>
+        }
+
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        if (mSite == null) {</span>
+<span class="nc" id="L107">            ToastUtils.showToast(this, R.string.blog_not_found, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L108">            finish();</span>
+<span class="nc" id="L109">            return;</span>
+        }
+
+        // Fetch the user roles to get ready
+<span class="nc" id="L113">        mDispatcher.dispatch(SiteActionBuilder.newFetchUserRolesAction(mSite));</span>
+
+<span class="nc" id="L115">        FragmentManager fragmentManager = getSupportFragmentManager();</span>
+
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+            // only delete cached people if there is a connection
+<span class="nc bnc" id="L119" title="All 2 branches missed.">            if (NetworkUtils.isNetworkAvailable(this)) {</span>
+<span class="nc" id="L120">                PeopleTable.deletePeopleExceptForFirstPage(mSite.getId());</span>
+            }
+
+<span class="nc" id="L123">            PeopleListFragment peopleListFragment = PeopleListFragment.newInstance(mSite);</span>
+<span class="nc" id="L124">            peopleListFragment.setOnPersonSelectedListener(this);</span>
+<span class="nc" id="L125">            peopleListFragment.setOnFetchPeopleListener(this);</span>
+
+<span class="nc" id="L127">            mUsersEndOfListReached = false;</span>
+<span class="nc" id="L128">            mFollowersEndOfListReached = false;</span>
+<span class="nc" id="L129">            mEmailFollowersEndOfListReached = false;</span>
+<span class="nc" id="L130">            mViewersEndOfListReached = false;</span>
+
+<span class="nc" id="L132">            mHasRefreshedUsers = false;</span>
+<span class="nc" id="L133">            mHasRefreshedFollowers = false;</span>
+<span class="nc" id="L134">            mHasRefreshedEmailFollowers = false;</span>
+<span class="nc" id="L135">            mHasRefreshedViewers = false;</span>
+
+<span class="nc" id="L137">            mUsersFetchRequestInProgress = false;</span>
+<span class="nc" id="L138">            mFollowersFetchRequestInProgress = false;</span>
+<span class="nc" id="L139">            mEmailFollowersFetchRequestInProgress = false;</span>
+<span class="nc" id="L140">            mViewersFetchRequestInProgress = false;</span>
+<span class="nc" id="L141">            mFollowersLastFetchedPage = 0;</span>
+<span class="nc" id="L142">            mEmailFollowersLastFetchedPage = 0;</span>
+
+
+<span class="nc" id="L145">            fragmentManager.beginTransaction()</span>
+<span class="nc" id="L146">                           .add(R.id.fragment_container, peopleListFragment, KEY_PEOPLE_LIST_FRAGMENT)</span>
+<span class="nc" id="L147">                           .commit();</span>
+<span class="nc" id="L148">        } else {</span>
+<span class="nc" id="L149">            mUsersEndOfListReached = savedInstanceState.getBoolean(KEY_USERS_END_OF_LIST_REACHED);</span>
+<span class="nc" id="L150">            mFollowersEndOfListReached = savedInstanceState.getBoolean(KEY_FOLLOWERS_END_OF_LIST_REACHED);</span>
+<span class="nc" id="L151">            mEmailFollowersEndOfListReached = savedInstanceState.getBoolean(KEY_EMAIL_FOLLOWERS_END_OF_LIST_REACHED);</span>
+<span class="nc" id="L152">            mViewersEndOfListReached = savedInstanceState.getBoolean(KEY_VIEWERS_END_OF_LIST_REACHED);</span>
+
+<span class="nc" id="L154">            mHasRefreshedUsers = savedInstanceState.getBoolean(KEY_HAS_REFRESHED_USERS);</span>
+<span class="nc" id="L155">            mHasRefreshedFollowers = savedInstanceState.getBoolean(KEY_HAS_REFRESHED_FOLLOWERS);</span>
+<span class="nc" id="L156">            mHasRefreshedEmailFollowers = savedInstanceState.getBoolean(KEY_HAS_REFRESHED_EMAIL_FOLLOWERS);</span>
+<span class="nc" id="L157">            mHasRefreshedViewers = savedInstanceState.getBoolean(KEY_HAS_REFRESHED_VIEWERS);</span>
+
+<span class="nc" id="L159">            mUsersFetchRequestInProgress = savedInstanceState.getBoolean(KEY_USERS_FETCH_REQUEST_IN_PROGRESS);</span>
+<span class="nc" id="L160">            mFollowersFetchRequestInProgress = savedInstanceState.getBoolean(KEY_FOLLOWERS_FETCH_REQUEST_IN_PROGRESS);</span>
+<span class="nc" id="L161">            mEmailFollowersFetchRequestInProgress =</span>
+<span class="nc" id="L162">                    savedInstanceState.getBoolean(KEY_EMAIL_FOLLOWERS_FETCH_REQUEST_IN_PROGRESS);</span>
+<span class="nc" id="L163">            mViewersFetchRequestInProgress = savedInstanceState.getBoolean(KEY_VIEWERS_FETCH_REQUEST_IN_PROGRESS);</span>
+
+<span class="nc" id="L165">            mFollowersLastFetchedPage = savedInstanceState.getInt(KEY_FOLLOWERS_LAST_FETCHED_PAGE);</span>
+<span class="nc" id="L166">            mEmailFollowersLastFetchedPage = savedInstanceState.getInt(KEY_EMAIL_FOLLOWERS_LAST_FETCHED_PAGE);</span>
+
+<span class="nc" id="L168">            PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">            if (peopleListFragment != null) {</span>
+<span class="nc" id="L170">                peopleListFragment.setOnPersonSelectedListener(this);</span>
+<span class="nc" id="L171">                peopleListFragment.setOnFetchPeopleListener(this);</span>
+            }
+        }
+<span class="nc" id="L174">    }</span>
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+<span class="nc" id="L178">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L179">        outState.putSerializable(WordPress.SITE, mSite);</span>
+
+<span class="nc" id="L181">        outState.putBoolean(KEY_USERS_END_OF_LIST_REACHED, mUsersEndOfListReached);</span>
+<span class="nc" id="L182">        outState.putBoolean(KEY_FOLLOWERS_END_OF_LIST_REACHED, mFollowersEndOfListReached);</span>
+<span class="nc" id="L183">        outState.putBoolean(KEY_EMAIL_FOLLOWERS_END_OF_LIST_REACHED, mEmailFollowersEndOfListReached);</span>
+<span class="nc" id="L184">        outState.putBoolean(KEY_VIEWERS_END_OF_LIST_REACHED, mViewersEndOfListReached);</span>
+
+<span class="nc" id="L186">        outState.putBoolean(KEY_HAS_REFRESHED_USERS, mHasRefreshedUsers);</span>
+<span class="nc" id="L187">        outState.putBoolean(KEY_HAS_REFRESHED_FOLLOWERS, mHasRefreshedFollowers);</span>
+<span class="nc" id="L188">        outState.putBoolean(KEY_HAS_REFRESHED_EMAIL_FOLLOWERS, mHasRefreshedEmailFollowers);</span>
+<span class="nc" id="L189">        outState.putBoolean(KEY_HAS_REFRESHED_VIEWERS, mHasRefreshedViewers);</span>
+
+<span class="nc" id="L191">        outState.putBoolean(KEY_USERS_FETCH_REQUEST_IN_PROGRESS, mUsersFetchRequestInProgress);</span>
+<span class="nc" id="L192">        outState.putBoolean(KEY_FOLLOWERS_FETCH_REQUEST_IN_PROGRESS, mFollowersFetchRequestInProgress);</span>
+<span class="nc" id="L193">        outState.putBoolean(KEY_EMAIL_FOLLOWERS_FETCH_REQUEST_IN_PROGRESS, mEmailFollowersFetchRequestInProgress);</span>
+<span class="nc" id="L194">        outState.putBoolean(KEY_VIEWERS_FETCH_REQUEST_IN_PROGRESS, mViewersFetchRequestInProgress);</span>
+
+<span class="nc" id="L196">        outState.putInt(KEY_FOLLOWERS_LAST_FETCHED_PAGE, mFollowersLastFetchedPage);</span>
+<span class="nc" id="L197">        outState.putInt(KEY_EMAIL_FOLLOWERS_LAST_FETCHED_PAGE, mEmailFollowersLastFetchedPage);</span>
+
+<span class="nc" id="L199">        ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        if (actionBar != null) {</span>
+<span class="nc" id="L201">            outState.putCharSequence(KEY_TITLE, actionBar.getTitle());</span>
+        }
+<span class="nc" id="L203">    }</span>
+
+    @Override
+    public void onStart() {
+<span class="nc" id="L207">        super.onStart();</span>
+<span class="nc" id="L208">        EventBus.getDefault().register(this);</span>
+<span class="nc" id="L209">    }</span>
+
+    @Override
+    public void onStop() {
+<span class="nc" id="L213">        EventBus.getDefault().unregister(this);</span>
+<span class="nc" id="L214">        super.onStop();</span>
+<span class="nc" id="L215">    }</span>
+
+    @Override
+    public void onBackPressed() {
+<span class="nc bnc" id="L219" title="All 2 branches missed.">        if (!navigateBackToPeopleListFragment()) {</span>
+<span class="nc" id="L220">            super.onBackPressed();</span>
+        }
+<span class="nc" id="L222">    }</span>
+
+    @Override
+    public boolean onOptionsItemSelected(final MenuItem item) {
+<span class="nc bnc" id="L226" title="All 2 branches missed.">        if (item.getItemId() == android.R.id.home) {</span>
+<span class="nc" id="L227">            onBackPressed();</span>
+<span class="nc" id="L228">            return true;</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">        } else if (item.getItemId() == R.id.remove_person) {</span>
+<span class="nc" id="L230">            confirmRemovePerson();</span>
+<span class="nc" id="L231">            return true;</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">        } else if (item.getItemId() == R.id.invite) {</span>
+<span class="nc" id="L233">            FragmentManager fragmentManager = getSupportFragmentManager();</span>
+<span class="nc" id="L234">            Fragment peopleInviteFragment = fragmentManager.findFragmentByTag(KEY_PERSON_DETAIL_FRAGMENT);</span>
+
+<span class="nc bnc" id="L236" title="All 2 branches missed.">            if (peopleInviteFragment == null) {</span>
+<span class="nc" id="L237">                peopleInviteFragment = PeopleInviteFragment.newInstance(mSite);</span>
+            }
+<span class="nc bnc" id="L239" title="All 4 branches missed.">            if (peopleInviteFragment != null &amp;&amp; !peopleInviteFragment.isAdded()) {</span>
+<span class="nc" id="L240">                FragmentTransaction fragmentTransaction = getSupportFragmentManager().beginTransaction();</span>
+<span class="nc" id="L241">                fragmentTransaction.replace(R.id.fragment_container, peopleInviteFragment, KEY_PEOPLE_INVITE_FRAGMENT);</span>
+<span class="nc" id="L242">                fragmentTransaction.addToBackStack(null);</span>
+<span class="nc" id="L243">                fragmentTransaction.commit();</span>
+            }
+<span class="nc bnc" id="L245" title="All 2 branches missed.">        } else if (item.getItemId() == R.id.send_invitation) {</span>
+<span class="nc" id="L246">            FragmentManager fragmentManager = getSupportFragmentManager();</span>
+<span class="nc" id="L247">            Fragment peopleInviteFragment = fragmentManager.findFragmentByTag(KEY_PEOPLE_INVITE_FRAGMENT);</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">            if (peopleInviteFragment != null) {</span>
+<span class="nc" id="L249">                ((InvitationSender) peopleInviteFragment).send();</span>
+            }
+        }
+<span class="nc" id="L252">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    private boolean fetchUsersList(final SiteModel site, final int offset) {
+<span class="nc bnc" id="L256" title="All 6 branches missed.">        if (mUsersEndOfListReached || mUsersFetchRequestInProgress || !NetworkUtils.checkConnection(this)) {</span>
+<span class="nc" id="L257">            return false;</span>
+        }
+
+<span class="nc" id="L260">        mUsersFetchRequestInProgress = true;</span>
+
+<span class="nc" id="L262">        PeopleUtils.fetchUsers(site, offset, new PeopleUtils.FetchUsersCallback() {</span>
+            @Override
+            public void onSuccess(List&lt;Person&gt; peopleList, boolean isEndOfList) {
+<span class="nc bnc" id="L265" title="All 2 branches missed.">                boolean isFreshList = (offset == 0);</span>
+<span class="nc" id="L266">                mHasRefreshedUsers = true;</span>
+<span class="nc" id="L267">                mUsersEndOfListReached = isEndOfList;</span>
+<span class="nc" id="L268">                PeopleTable.saveUsers(peopleList, site.getId(), isFreshList);</span>
+
+<span class="nc" id="L270">                PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">                if (peopleListFragment != null) {</span>
+<span class="nc" id="L272">                    peopleListFragment.fetchingRequestFinished(PeopleListFilter.TEAM, isFreshList, true);</span>
+                }
+
+<span class="nc" id="L275">                refreshOnScreenFragmentDetails();</span>
+<span class="nc" id="L276">                mUsersFetchRequestInProgress = false;</span>
+<span class="nc" id="L277">            }</span>
+
+            @Override
+            public void onError() {
+<span class="nc" id="L281">                PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">                if (peopleListFragment != null) {</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">                    boolean isFirstPage = offset == 0;</span>
+<span class="nc" id="L284">                    peopleListFragment.fetchingRequestFinished(PeopleListFilter.TEAM, isFirstPage, false);</span>
+                }
+<span class="nc" id="L286">                mUsersFetchRequestInProgress = false;</span>
+<span class="nc" id="L287">                ToastUtils.showToast(PeopleManagementActivity.this,</span>
+                        R.string.error_fetch_users_list,
+                        ToastUtils.Duration.SHORT);
+<span class="nc" id="L290">            }</span>
+        });
+
+<span class="nc" id="L293">        return true;</span>
+    }
+
+    private boolean fetchFollowersList(final SiteModel site, final int page) {
+<span class="nc bnc" id="L297" title="All 6 branches missed.">        if (mFollowersEndOfListReached || mFollowersFetchRequestInProgress || !NetworkUtils.checkConnection(this)) {</span>
+<span class="nc" id="L298">            return false;</span>
+        }
+
+<span class="nc" id="L301">        mFollowersFetchRequestInProgress = true;</span>
+
+<span class="nc" id="L303">        PeopleUtils.fetchFollowers(site, page, new PeopleUtils.FetchFollowersCallback() {</span>
+            @Override
+            public void onSuccess(List&lt;Person&gt; peopleList, int pageFetched, boolean isEndOfList) {
+<span class="nc bnc" id="L306" title="All 2 branches missed.">                boolean isFreshList = (page == 1);</span>
+<span class="nc" id="L307">                mHasRefreshedFollowers = true;</span>
+<span class="nc" id="L308">                mFollowersLastFetchedPage = pageFetched;</span>
+<span class="nc" id="L309">                mFollowersEndOfListReached = isEndOfList;</span>
+<span class="nc" id="L310">                PeopleTable.saveFollowers(peopleList, site.getId(), isFreshList);</span>
+
+<span class="nc" id="L312">                PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L313" title="All 2 branches missed.">                if (peopleListFragment != null) {</span>
+<span class="nc" id="L314">                    peopleListFragment.fetchingRequestFinished(PeopleListFilter.FOLLOWERS, isFreshList, true);</span>
+                }
+
+<span class="nc" id="L317">                refreshOnScreenFragmentDetails();</span>
+<span class="nc" id="L318">                mFollowersFetchRequestInProgress = false;</span>
+<span class="nc" id="L319">            }</span>
+
+            @Override
+            public void onError() {
+<span class="nc" id="L323">                PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L324" title="All 2 branches missed.">                if (peopleListFragment != null) {</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">                    boolean isFirstPage = page == 1;</span>
+<span class="nc" id="L326">                    peopleListFragment.fetchingRequestFinished(PeopleListFilter.FOLLOWERS, isFirstPage, false);</span>
+                }
+<span class="nc" id="L328">                mFollowersFetchRequestInProgress = false;</span>
+<span class="nc" id="L329">                ToastUtils.showToast(PeopleManagementActivity.this,</span>
+                        R.string.error_fetch_followers_list,
+                        ToastUtils.Duration.SHORT);
+<span class="nc" id="L332">            }</span>
+        });
+
+<span class="nc" id="L335">        return true;</span>
+    }
+
+    private boolean fetchEmailFollowersList(final SiteModel site, final int page) {
+<span class="nc bnc" id="L339" title="All 4 branches missed.">        if (mEmailFollowersEndOfListReached || mEmailFollowersFetchRequestInProgress || !NetworkUtils</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">                .checkConnection(this)) {</span>
+<span class="nc" id="L341">            return false;</span>
+        }
+
+<span class="nc" id="L344">        mEmailFollowersFetchRequestInProgress = true;</span>
+
+<span class="nc" id="L346">        PeopleUtils.fetchEmailFollowers(site, page, new PeopleUtils.FetchFollowersCallback() {</span>
+            @Override
+            public void onSuccess(List&lt;Person&gt; peopleList, int pageFetched, boolean isEndOfList) {
+<span class="nc bnc" id="L349" title="All 2 branches missed.">                boolean isFreshList = (page == 1);</span>
+<span class="nc" id="L350">                mHasRefreshedEmailFollowers = true;</span>
+<span class="nc" id="L351">                mEmailFollowersLastFetchedPage = pageFetched;</span>
+<span class="nc" id="L352">                mEmailFollowersEndOfListReached = isEndOfList;</span>
+<span class="nc" id="L353">                PeopleTable.saveEmailFollowers(peopleList, site.getId(), isFreshList);</span>
+
+<span class="nc" id="L355">                PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">                if (peopleListFragment != null) {</span>
+<span class="nc" id="L357">                    peopleListFragment.fetchingRequestFinished(PeopleListFilter.EMAIL_FOLLOWERS, isFreshList, true);</span>
+                }
+
+<span class="nc" id="L360">                refreshOnScreenFragmentDetails();</span>
+<span class="nc" id="L361">                mEmailFollowersFetchRequestInProgress = false;</span>
+<span class="nc" id="L362">            }</span>
+
+            @Override
+            public void onError() {
+<span class="nc" id="L366">                PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L367" title="All 2 branches missed.">                if (peopleListFragment != null) {</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">                    boolean isFirstPage = page == 1;</span>
+<span class="nc" id="L369">                    peopleListFragment.fetchingRequestFinished(PeopleListFilter.EMAIL_FOLLOWERS, isFirstPage, false);</span>
+                }
+<span class="nc" id="L371">                mEmailFollowersFetchRequestInProgress = false;</span>
+<span class="nc" id="L372">                ToastUtils.showToast(PeopleManagementActivity.this,</span>
+                        R.string.error_fetch_email_followers_list,
+                        ToastUtils.Duration.SHORT);
+<span class="nc" id="L375">            }</span>
+        });
+
+<span class="nc" id="L378">        return true;</span>
+    }
+
+    private boolean fetchViewersList(final SiteModel site, final int offset) {
+<span class="nc bnc" id="L382" title="All 6 branches missed.">        if (mViewersEndOfListReached || mViewersFetchRequestInProgress || !NetworkUtils.checkConnection(this)) {</span>
+<span class="nc" id="L383">            return false;</span>
+        }
+
+<span class="nc" id="L386">        mViewersFetchRequestInProgress = true;</span>
+
+<span class="nc" id="L388">        PeopleUtils.fetchViewers(site, offset, new PeopleUtils.FetchViewersCallback() {</span>
+            @Override
+            public void onSuccess(List&lt;Person&gt; peopleList, boolean isEndOfList) {
+<span class="nc bnc" id="L391" title="All 2 branches missed.">                boolean isFreshList = (offset == 0);</span>
+<span class="nc" id="L392">                mHasRefreshedViewers = true;</span>
+<span class="nc" id="L393">                mViewersEndOfListReached = isEndOfList;</span>
+<span class="nc" id="L394">                PeopleTable.saveViewers(peopleList, site.getId(), isFreshList);</span>
+
+<span class="nc" id="L396">                PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">                if (peopleListFragment != null) {</span>
+<span class="nc" id="L398">                    peopleListFragment.fetchingRequestFinished(PeopleListFilter.VIEWERS, isFreshList, true);</span>
+                }
+
+<span class="nc" id="L401">                refreshOnScreenFragmentDetails();</span>
+<span class="nc" id="L402">                mViewersFetchRequestInProgress = false;</span>
+<span class="nc" id="L403">            }</span>
+
+            @Override
+            public void onError() {
+<span class="nc" id="L407">                PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">                if (peopleListFragment != null) {</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">                    boolean isFirstPage = offset == 0;</span>
+<span class="nc" id="L410">                    peopleListFragment.fetchingRequestFinished(PeopleListFilter.VIEWERS, isFirstPage, false);</span>
+                }
+<span class="nc" id="L412">                mViewersFetchRequestInProgress = false;</span>
+<span class="nc" id="L413">                ToastUtils.showToast(PeopleManagementActivity.this,</span>
+                        R.string.error_fetch_viewers_list,
+                        ToastUtils.Duration.SHORT);
+<span class="nc" id="L416">            }</span>
+        });
+
+<span class="nc" id="L419">        return true;</span>
+    }
+
+    @Override
+    public void onPersonSelected(Person person) {
+<span class="nc" id="L424">        PersonDetailFragment personDetailFragment = getDetailFragment();</span>
+
+<span class="nc" id="L426">        long personID = person.getPersonID();</span>
+<span class="nc" id="L427">        int localTableBlogID = person.getLocalTableBlogId();</span>
+
+<span class="nc bnc" id="L429" title="All 2 branches missed.">        if (personDetailFragment == null) {</span>
+<span class="nc" id="L430">            personDetailFragment = PersonDetailFragment.newInstance(mAccountStore.getAccount().getUserId(), personID,</span>
+<span class="nc" id="L431">                    localTableBlogID, person.getPersonType());</span>
+        } else {
+<span class="nc" id="L433">            personDetailFragment.setPersonDetails(personID, localTableBlogID);</span>
+        }
+<span class="nc bnc" id="L435" title="All 2 branches missed.">        if (!personDetailFragment.isAdded()) {</span>
+<span class="nc" id="L436">            AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.OPENED_PERSON, mSite);</span>
+<span class="nc" id="L437">            FragmentTransaction fragmentTransaction = getSupportFragmentManager().beginTransaction();</span>
+<span class="nc" id="L438">            fragmentTransaction.replace(R.id.fragment_container, personDetailFragment, KEY_PERSON_DETAIL_FRAGMENT);</span>
+<span class="nc" id="L439">            fragmentTransaction.addToBackStack(null);</span>
+
+<span class="nc" id="L441">            ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L442" title="All 2 branches missed.">            if (actionBar != null) {</span>
+<span class="nc" id="L443">                actionBar.setTitle(&quot;&quot;);</span>
+                // important for accessibility - talkback
+<span class="nc" id="L445">                setTitle(R.string.person_detail_screen_title);</span>
+            }
+
+<span class="nc" id="L448">            fragmentTransaction.commit();</span>
+        }
+<span class="nc" id="L450">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(RoleChangeDialogFragment.RoleChangeEvent event) {
+<span class="nc bnc" id="L454" title="All 2 branches missed.">        if (!NetworkUtils.checkConnection(this)) {</span>
+<span class="nc" id="L455">            return;</span>
+        }
+
+<span class="nc" id="L458">        final Person person = PeopleTable.getUser(event.getPersonID(), event.getLocalTableBlogId());</span>
+<span class="nc bnc" id="L459" title="All 6 branches missed.">        if (person == null || event.getNewRole() == null || event.getNewRole().equals(person.getRole())) {</span>
+<span class="nc" id="L460">            return;</span>
+        }
+
+<span class="nc" id="L463">        final PersonDetailFragment personDetailFragment = getDetailFragment();</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">        if (personDetailFragment != null) {</span>
+            // optimistically update the role
+<span class="nc" id="L466">            personDetailFragment.changeRole(event.getNewRole());</span>
+        }
+
+<span class="nc" id="L469">        PeopleUtils.updateRole(mSite, person.getPersonID(), event.getNewRole(), event.getLocalTableBlogId(),</span>
+<span class="nc" id="L470">                new PeopleUtils.UpdateUserCallback() {</span>
+                    @Override
+                    public void onSuccess(Person person) {
+<span class="nc" id="L473">                        AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.PERSON_UPDATED, mSite);</span>
+<span class="nc" id="L474">                        PeopleTable.saveUser(person);</span>
+<span class="nc" id="L475">                        refreshOnScreenFragmentDetails();</span>
+<span class="nc" id="L476">                    }</span>
+
+                    @Override
+                    public void onError() {
+                        // change the role back to it's original value
+<span class="nc bnc" id="L481" title="All 2 branches missed.">                        if (personDetailFragment != null) {</span>
+<span class="nc" id="L482">                            personDetailFragment.refreshPersonDetails();</span>
+                        }
+<span class="nc" id="L484">                        ToastUtils.showToast(PeopleManagementActivity.this,</span>
+                                R.string.error_update_role,
+                                ToastUtils.Duration.LONG);
+<span class="nc" id="L487">                    }</span>
+                });
+<span class="nc" id="L489">    }</span>
+
+    private void confirmRemovePerson() {
+<span class="nc" id="L492">        Person person = getCurrentPerson();</span>
+<span class="nc bnc" id="L493" title="All 2 branches missed.">        if (person == null) {</span>
+<span class="nc" id="L494">            return;</span>
+        }
+
+<span class="nc" id="L497">        AlertDialog.Builder builder = new MaterialAlertDialogBuilder(this);</span>
+<span class="nc" id="L498">        builder.setTitle(getString(R.string.person_remove_confirmation_title, person.getDisplayName()));</span>
+<span class="nc bnc" id="L499" title="All 2 branches missed.">        if (person.getPersonType() == Person.PersonType.USER) {</span>
+<span class="nc" id="L500">            builder.setMessage(getString(R.string.user_remove_confirmation_message, person.getDisplayName()));</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">        } else if (person.getPersonType() == Person.PersonType.VIEWER) {</span>
+<span class="nc" id="L502">            builder.setMessage(R.string.viewer_remove_confirmation_message);</span>
+        } else {
+<span class="nc" id="L504">            builder.setMessage(R.string.follower_remove_confirmation_message);</span>
+        }
+<span class="nc" id="L506">        builder.setNegativeButton(R.string.cancel, null);</span>
+<span class="nc" id="L507">        builder.setPositiveButton(R.string.remove, new DialogInterface.OnClickListener() {</span>
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+<span class="nc" id="L510">                removeSelectedPerson();</span>
+<span class="nc" id="L511">            }</span>
+        });
+<span class="nc" id="L513">        builder.show();</span>
+<span class="nc" id="L514">    }</span>
+
+    private void removeSelectedPerson() {
+<span class="nc bnc" id="L517" title="All 2 branches missed.">        if (!NetworkUtils.checkConnection(this)) {</span>
+<span class="nc" id="L518">            return;</span>
+        }
+
+<span class="nc" id="L521">        Person person = getCurrentPerson();</span>
+<span class="nc bnc" id="L522" title="All 2 branches missed.">        if (person == null) {</span>
+<span class="nc" id="L523">            return;</span>
+        }
+
+<span class="nc" id="L526">        final Person.PersonType personType = person.getPersonType();</span>
+<span class="nc" id="L527">        final String displayName = person.getDisplayName();</span>
+
+<span class="nc" id="L529">        PeopleUtils.RemovePersonCallback callback = new PeopleUtils.RemovePersonCallback() {</span>
+            @Override
+            public void onSuccess(long personID, int localTableBlogId) {
+<span class="nc bnc" id="L532" title="All 2 branches missed.">                if (personType == Person.PersonType.USER) {</span>
+<span class="nc" id="L533">                    AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.PERSON_REMOVED, mSite);</span>
+                }
+
+                // remove the person from db, navigate back to list fragment and refresh it
+<span class="nc" id="L537">                PeopleTable.deletePerson(personID, localTableBlogId, personType);</span>
+
+<span class="nc" id="L539">                String message = getString(R.string.person_removed, displayName);</span>
+<span class="nc" id="L540">                ToastUtils.showToast(PeopleManagementActivity.this, message, ToastUtils.Duration.LONG);</span>
+
+<span class="nc" id="L542">                navigateBackToPeopleListFragment();</span>
+<span class="nc" id="L543">                refreshPeopleListFragment();</span>
+<span class="nc" id="L544">            }</span>
+
+            @Override
+            public void onError() {
+                int errorMessageRes;
+<span class="nc bnc" id="L549" title="All 3 branches missed.">                switch (personType) {</span>
+                    case USER:
+<span class="nc" id="L551">                        errorMessageRes = R.string.error_remove_user;</span>
+<span class="nc" id="L552">                        break;</span>
+                    case VIEWER:
+<span class="nc" id="L554">                        errorMessageRes = R.string.error_remove_viewer;</span>
+<span class="nc" id="L555">                        break;</span>
+                    default:
+<span class="nc" id="L557">                        errorMessageRes = R.string.error_remove_follower;</span>
+                        break;
+                }
+<span class="nc" id="L560">                ToastUtils.showToast(PeopleManagementActivity.this,</span>
+                        errorMessageRes,
+                        ToastUtils.Duration.LONG);
+<span class="nc" id="L563">            }</span>
+        };
+
+<span class="nc bnc" id="L566" title="All 4 branches missed.">        if (personType == Person.PersonType.FOLLOWER || personType == Person.PersonType.EMAIL_FOLLOWER) {</span>
+<span class="nc" id="L567">            PeopleUtils.removeFollower(mSite, person.getPersonID(), personType, callback);</span>
+<span class="nc bnc" id="L568" title="All 2 branches missed.">        } else if (personType == Person.PersonType.VIEWER) {</span>
+<span class="nc" id="L569">            PeopleUtils.removeViewer(mSite, person.getPersonID(), callback);</span>
+        } else {
+<span class="nc" id="L571">            PeopleUtils.removeUser(mSite, person.getPersonID(), callback);</span>
+        }
+<span class="nc" id="L573">    }</span>
+
+    // This helper method is used after a successful network request
+    private void refreshOnScreenFragmentDetails() {
+<span class="nc" id="L577">        refreshPeopleListFragment();</span>
+<span class="nc" id="L578">        refreshDetailFragment();</span>
+<span class="nc" id="L579">    }</span>
+
+    private void refreshPeopleListFragment() {
+<span class="nc" id="L582">        PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L583" title="All 2 branches missed.">        if (peopleListFragment != null) {</span>
+<span class="nc" id="L584">            peopleListFragment.refreshPeopleList(false);</span>
+        }
+<span class="nc" id="L586">    }</span>
+
+    private void refreshDetailFragment() {
+<span class="nc" id="L589">        PersonDetailFragment personDetailFragment = getDetailFragment();</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">        if (personDetailFragment != null) {</span>
+<span class="nc" id="L591">            personDetailFragment.refreshPersonDetails();</span>
+        }
+<span class="nc" id="L593">    }</span>
+
+    private boolean navigateBackToPeopleListFragment() {
+<span class="nc" id="L596">        FragmentManager fragmentManager = getSupportFragmentManager();</span>
+<span class="nc bnc" id="L597" title="All 2 branches missed.">        if (fragmentManager.getBackStackEntryCount() &gt; 0) {</span>
+<span class="nc" id="L598">            fragmentManager.popBackStack();</span>
+
+<span class="nc" id="L600">            ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L601" title="All 2 branches missed.">            if (actionBar != null) {</span>
+<span class="nc" id="L602">                actionBar.setTitle(R.string.people);</span>
+            }
+<span class="nc" id="L604">            return true;</span>
+        }
+<span class="nc" id="L606">        return false;</span>
+    }
+
+    private Person getCurrentPerson() {
+<span class="nc" id="L610">        PersonDetailFragment personDetailFragment = getDetailFragment();</span>
+
+<span class="nc bnc" id="L612" title="All 2 branches missed.">        if (personDetailFragment == null) {</span>
+<span class="nc" id="L613">            return null;</span>
+        }
+
+<span class="nc" id="L616">        return personDetailFragment.loadPerson();</span>
+    }
+
+    @Override
+    public boolean onFetchFirstPage(PeopleListFilter filter) {
+<span class="nc bnc" id="L621" title="All 4 branches missed.">        if (filter == PeopleListFilter.TEAM &amp;&amp; !mHasRefreshedUsers) {</span>
+<span class="nc" id="L622">            return fetchUsersList(mSite, 0);</span>
+<span class="nc bnc" id="L623" title="All 4 branches missed.">        } else if (filter == PeopleListFilter.FOLLOWERS &amp;&amp; !mHasRefreshedFollowers) {</span>
+<span class="nc" id="L624">            return fetchFollowersList(mSite, 1);</span>
+<span class="nc bnc" id="L625" title="All 4 branches missed.">        } else if (filter == PeopleListFilter.EMAIL_FOLLOWERS &amp;&amp; !mHasRefreshedEmailFollowers) {</span>
+<span class="nc" id="L626">            return fetchEmailFollowersList(mSite, 1);</span>
+<span class="nc bnc" id="L627" title="All 4 branches missed.">        } else if (filter == PeopleListFilter.VIEWERS &amp;&amp; !mHasRefreshedViewers) {</span>
+<span class="nc" id="L628">            return fetchViewersList(mSite, 0);</span>
+        }
+<span class="nc" id="L630">        return false;</span>
+    }
+
+    @Override
+    public boolean onFetchMorePeople(PeopleListFilter filter) {
+<span class="nc bnc" id="L635" title="All 4 branches missed.">        if (filter == PeopleListFilter.TEAM &amp;&amp; !mUsersEndOfListReached) {</span>
+<span class="nc" id="L636">            int count = PeopleTable.getUsersCountForLocalBlogId(mSite.getId());</span>
+<span class="nc" id="L637">            return fetchUsersList(mSite, count);</span>
+<span class="nc bnc" id="L638" title="All 4 branches missed.">        } else if (filter == PeopleListFilter.FOLLOWERS &amp;&amp; !mFollowersEndOfListReached) {</span>
+<span class="nc" id="L639">            int pageToFetch = mFollowersLastFetchedPage + 1;</span>
+<span class="nc" id="L640">            return fetchFollowersList(mSite, pageToFetch);</span>
+<span class="nc bnc" id="L641" title="All 4 branches missed.">        } else if (filter == PeopleListFilter.EMAIL_FOLLOWERS &amp;&amp; !mEmailFollowersEndOfListReached) {</span>
+<span class="nc" id="L642">            int pageToFetch = mEmailFollowersLastFetchedPage + 1;</span>
+<span class="nc" id="L643">            return fetchEmailFollowersList(mSite, pageToFetch);</span>
+<span class="nc bnc" id="L644" title="All 4 branches missed.">        } else if (filter == PeopleListFilter.VIEWERS &amp;&amp; !mViewersEndOfListReached) {</span>
+<span class="nc" id="L645">            int count = PeopleTable.getViewersCountForLocalBlogId(mSite.getId());</span>
+<span class="nc" id="L646">            return fetchViewersList(mSite, count);</span>
+        }
+<span class="nc" id="L648">        return false;</span>
+    }
+
+    private PeopleListFragment getListFragment() {
+<span class="nc" id="L652">        return (PeopleListFragment) getSupportFragmentManager().findFragmentByTag(KEY_PEOPLE_LIST_FRAGMENT);</span>
+    }
+
+    private PersonDetailFragment getDetailFragment() {
+<span class="nc" id="L656">        return (PersonDetailFragment) getSupportFragmentManager().findFragmentByTag(KEY_PERSON_DETAIL_FRAGMENT);</span>
+    }
+
+    public interface InvitationSender {
+        void send();
+    }
+
+    // Fluxc events
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onUserRolesChanged(OnUserRolesChanged event) {
+<span class="nc bnc" id="L668" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L669">            AppLog.e(AppLog.T.PEOPLE, &quot;An error occurred while fetching the user roles with type: &quot;</span>
+                                      + event.error.type);
+        }
+<span class="nc" id="L672">        PeopleListFragment peopleListFragment = getListFragment();</span>
+<span class="nc bnc" id="L673" title="All 2 branches missed.">        if (peopleListFragment != null) {</span>
+<span class="nc" id="L674">            peopleListFragment.refreshUserRoles();</span>
+        }
+<span class="nc" id="L676">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,958 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ExploreMapFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.explore.map</a> &gt; <span class="el_source">ExploreMapFragment.java</span></div><h1>ExploreMapFragment.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.explore.map;
+
+import static fr.free.nrw.commons.location.LocationServiceManager.LocationChangeType.LOCATION_SIGNIFICANTLY_CHANGED;
+import static fr.free.nrw.commons.location.LocationServiceManager.LocationChangeType.LOCATION_SLIGHTLY_CHANGED;
+import static fr.free.nrw.commons.utils.MapUtils.ZOOM_LEVEL;
+
+import android.Manifest;
+import android.Manifest.permission;
+import android.annotation.SuppressLint;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.location.Location;
+import android.location.LocationManager;
+import android.os.Bundle;
+import android.preference.PreferenceManager;
+import android.provider.Settings;
+import android.text.Html;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import android.widget.Toast;
+import androidx.activity.result.ActivityResultCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.widget.AppCompatTextView;
+import androidx.core.content.ContextCompat;
+import butterknife.BindView;
+import butterknife.ButterKnife;
+import com.google.android.material.bottomsheet.BottomSheetBehavior;
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import com.google.android.material.snackbar.Snackbar;
+import com.mapbox.mapboxsdk.annotations.Marker;
+import fr.free.nrw.commons.MapController;
+import fr.free.nrw.commons.Media;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.Utils;
+import fr.free.nrw.commons.bookmarks.locations.BookmarkLocationsDao;
+import fr.free.nrw.commons.di.CommonsDaggerSupportFragment;
+import fr.free.nrw.commons.explore.ExploreMapRootFragment;
+import fr.free.nrw.commons.explore.paging.LiveDataConverter;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.location.LocationServiceManager;
+import fr.free.nrw.commons.location.LocationUpdateListener;
+import fr.free.nrw.commons.media.MediaClient;
+import fr.free.nrw.commons.nearby.NearbyBaseMarker;
+import fr.free.nrw.commons.nearby.NearbyMarker;
+import fr.free.nrw.commons.nearby.Place;
+import fr.free.nrw.commons.utils.DialogUtil;
+import fr.free.nrw.commons.utils.MapUtils;
+import fr.free.nrw.commons.utils.NetworkUtils;
+import fr.free.nrw.commons.utils.PermissionUtils;
+import fr.free.nrw.commons.utils.SystemThemeUtils;
+import fr.free.nrw.commons.utils.ViewUtil;
+import io.reactivex.Observable;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.schedulers.Schedulers;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import javax.inject.Inject;
+import javax.inject.Named;
+import org.osmdroid.events.MapEventsReceiver;
+import org.osmdroid.events.MapListener;
+import org.osmdroid.events.ScrollEvent;
+import org.osmdroid.events.ZoomEvent;
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
+import org.osmdroid.util.GeoPoint;
+import org.osmdroid.util.constants.GeoConstants;
+import org.osmdroid.views.CustomZoomButtonsController;
+import org.osmdroid.views.overlay.ItemizedIconOverlay.OnItemGestureListener;
+import org.osmdroid.views.overlay.ItemizedOverlayWithFocus;
+import org.osmdroid.views.overlay.MapEventsOverlay;
+import org.osmdroid.views.overlay.Overlay;
+import org.osmdroid.views.overlay.OverlayItem;
+import org.osmdroid.views.overlay.ScaleBarOverlay;
+import org.osmdroid.views.overlay.ScaleDiskOverlay;
+import org.osmdroid.views.overlay.TilesOverlay;
+import timber.log.Timber;
+
+<span class="nc" id="L96">public class ExploreMapFragment extends CommonsDaggerSupportFragment</span>
+    implements ExploreMapContract.View, LocationUpdateListener {
+
+    private BottomSheetBehavior bottomSheetDetailsBehavior;
+    private BroadcastReceiver broadcastReceiver;
+    private boolean isNetworkErrorOccurred;
+    private Snackbar snackbar;
+    private boolean isDarkTheme;
+    private boolean isPermissionDenied;
+    private fr.free.nrw.commons.location.LatLng lastKnownLocation; // last location of user
+    private fr.free.nrw.commons.location.LatLng lastFocusLocation; // last location that map is focused
+    public List&lt;Media&gt; mediaList;
+    private boolean recenterToUserLocation; // true is recenter is needed (ie. when current location is in visible map boundaries)
+    private NearbyBaseMarker clickedMarker;
+    private Marker selectedMarker; // the marker that user selected
+    private GeoPoint mapCenter;
+    private GeoPoint lastMapFocus;
+<span class="nc" id="L113">    IntentFilter intentFilter = new IntentFilter(MapUtils.NETWORK_INTENT_ACTION);</span>
+
+    @Inject
+    LiveDataConverter liveDataConverter;
+    @Inject
+    MediaClient mediaClient;
+    @Inject
+    LocationServiceManager locationManager;
+    @Inject
+    ExploreMapController exploreMapController;
+    @Inject
+    @Named(&quot;default_preferences&quot;)
+    JsonKvStore applicationKvStore;
+    @Inject
+    BookmarkLocationsDao bookmarkLocationDao; // May be needed in future if we want to integrate bookmarking explore places
+    @Inject
+    SystemThemeUtils systemThemeUtils;
+
+    private ExploreMapPresenter presenter;
+
+    @BindView(R.id.map_view)
+    org.osmdroid.views.MapView mapView;
+    @BindView(R.id.bottom_sheet_details)
+    View bottomSheetDetails;
+    @BindView(R.id.map_progress_bar)
+    ProgressBar progressBar;
+    @BindView(R.id.fab_recenter)
+    FloatingActionButton fabRecenter;
+    @BindView(R.id.search_this_area_button)
+    Button searchThisAreaButton;
+    @BindView(R.id.tv_attribution)
+    AppCompatTextView tvAttribution;
+
+    @BindView(R.id.directionsButton)
+    LinearLayout directionsButton;
+    @BindView(R.id.commonsButton)
+    LinearLayout commonsButton;
+    @BindView(R.id.mediaDetailsButton)
+    LinearLayout mediaDetailsButton;
+    @BindView(R.id.description)
+    TextView description;
+    @BindView(R.id.title)
+    TextView title;
+    @BindView(R.id.category)
+    TextView distance;
+
+<span class="nc" id="L159">    private ActivityResultLauncher&lt;String[]&gt; activityResultLauncher = registerForActivityResult(</span>
+        new ActivityResultContracts.RequestMultiplePermissions(),
+<span class="nc" id="L161">        new ActivityResultCallback&lt;Map&lt;String, Boolean&gt;&gt;() {</span>
+            @Override
+            public void onActivityResult(Map&lt;String, Boolean&gt; result) {
+<span class="nc" id="L164">                boolean areAllGranted = true;</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">                for (final boolean b : result.values()) {</span>
+<span class="nc bnc" id="L166" title="All 4 branches missed.">                    areAllGranted = areAllGranted &amp;&amp; b;</span>
+<span class="nc" id="L167">                }</span>
+
+<span class="nc bnc" id="L169" title="All 2 branches missed.">                if (areAllGranted) {</span>
+<span class="nc" id="L170">                    locationPermissionGranted();</span>
+                } else {
+<span class="nc bnc" id="L172" title="All 2 branches missed.">                    if (shouldShowRequestPermissionRationale(permission.ACCESS_FINE_LOCATION)) {</span>
+<span class="nc" id="L173">                        DialogUtil.showAlertDialog(getActivity(),</span>
+<span class="nc" id="L174">                            getActivity().getString(R.string.location_permission_title),</span>
+<span class="nc" id="L175">                            getActivity().getString(R.string.location_permission_rationale_nearby),</span>
+<span class="nc" id="L176">                            getActivity().getString(android.R.string.ok),</span>
+<span class="nc" id="L177">                            getActivity().getString(android.R.string.cancel),</span>
+                            () -&gt; {
+<span class="nc bnc" id="L179" title="All 2 branches missed.">                                if (!(locationManager.isNetworkProviderEnabled()</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">                                    || locationManager.isGPSProviderEnabled())) {</span>
+<span class="nc" id="L181">                                    showLocationOffDialog();</span>
+                                }
+<span class="nc" id="L183">                            },</span>
+<span class="nc" id="L184">                            () -&gt; isPermissionDenied = true,</span>
+                            null,
+                            false);
+                    } else {
+<span class="nc" id="L188">                        isPermissionDenied = true;</span>
+                    }
+
+                }
+<span class="nc" id="L192">            }</span>
+        });
+
+
+    @NonNull
+    public static ExploreMapFragment newInstance() {
+<span class="nc" id="L198">        ExploreMapFragment fragment = new ExploreMapFragment();</span>
+<span class="nc" id="L199">        fragment.setRetainInstance(true);</span>
+<span class="nc" id="L200">        return fragment;</span>
+    }
+
+    @Override
+    public void onCreate(@Nullable final Bundle savedInstanceState) {
+<span class="nc" id="L205">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L206">    }</span>
+
+    @Override
+    public View onCreateView(
+        @NonNull LayoutInflater inflater,
+        ViewGroup container,
+        Bundle savedInstanceState
+    ) {
+<span class="nc" id="L214">        View v = inflater.inflate(R.layout.fragment_explore_map, container, false);</span>
+<span class="nc" id="L215">        ButterKnife.bind(this, v);</span>
+<span class="nc" id="L216">        return v;</span>
+    }
+
+    @Override
+    public void onViewCreated(@NonNull final View view, @Nullable final Bundle savedInstanceState) {
+<span class="nc" id="L221">        super.onViewCreated(view, savedInstanceState);</span>
+<span class="nc" id="L222">        setSearchThisAreaButtonVisibility(false);</span>
+<span class="nc" id="L223">        tvAttribution.setText(Html.fromHtml(getString(R.string.map_attribution)));</span>
+<span class="nc" id="L224">        initNetworkBroadCastReceiver();</span>
+
+<span class="nc bnc" id="L226" title="All 2 branches missed.">        if (presenter == null) {</span>
+<span class="nc" id="L227">            presenter = new ExploreMapPresenter(bookmarkLocationDao);</span>
+        }
+<span class="nc" id="L229">        setHasOptionsMenu(true);</span>
+
+<span class="nc" id="L231">        isDarkTheme = systemThemeUtils.isDeviceInNightMode();</span>
+<span class="nc" id="L232">        isPermissionDenied = false;</span>
+<span class="nc" id="L233">        presenter.attachView(this);</span>
+
+<span class="nc" id="L235">        initViews();</span>
+<span class="nc" id="L236">        presenter.setActionListeners(applicationKvStore);</span>
+
+<span class="nc" id="L238">        org.osmdroid.config.Configuration.getInstance().load(this.getContext(),</span>
+<span class="nc" id="L239">            PreferenceManager.getDefaultSharedPreferences(this.getContext()));</span>
+
+<span class="nc" id="L241">        mapView.setTileSource(TileSourceFactory.WIKIMEDIA);</span>
+<span class="nc" id="L242">        mapView.setTilesScaledToDpi(true);</span>
+
+<span class="nc" id="L244">        org.osmdroid.config.Configuration.getInstance().getAdditionalHttpRequestProperties().put(</span>
+            &quot;Referer&quot;, &quot;http://maps.wikimedia.org/&quot;
+        );
+
+<span class="nc" id="L248">        ScaleBarOverlay scaleBarOverlay = new ScaleBarOverlay(mapView);</span>
+<span class="nc" id="L249">        scaleBarOverlay.setScaleBarOffset(15, 25);</span>
+<span class="nc" id="L250">        Paint barPaint = new Paint();</span>
+<span class="nc" id="L251">        barPaint.setARGB(200, 255, 250, 250);</span>
+<span class="nc" id="L252">        scaleBarOverlay.setBackgroundPaint(barPaint);</span>
+<span class="nc" id="L253">        scaleBarOverlay.enableScaleBar();</span>
+<span class="nc" id="L254">        mapView.getOverlays().add(scaleBarOverlay);</span>
+<span class="nc" id="L255">        mapView.getZoomController().setVisibility(CustomZoomButtonsController.Visibility.NEVER);</span>
+<span class="nc" id="L256">        mapView.setMultiTouchControls(true);</span>
+<span class="nc" id="L257">        mapView.getController().setZoom(ZOOM_LEVEL);</span>
+<span class="nc" id="L258">        performMapReadyActions();</span>
+
+<span class="nc" id="L260">        mapView.getOverlays().add(new MapEventsOverlay(new MapEventsReceiver() {</span>
+            @Override
+            public boolean singleTapConfirmedHelper(GeoPoint p) {
+<span class="nc bnc" id="L263" title="All 2 branches missed.">                if (clickedMarker != null) {</span>
+<span class="nc" id="L264">                    removeMarker(clickedMarker);</span>
+<span class="nc" id="L265">                    addMarkerToMap(clickedMarker);</span>
+<span class="nc" id="L266">                    mapView.invalidate();</span>
+                } else {
+<span class="nc" id="L268">                    Timber.e(&quot;CLICKED MARKER IS NULL&quot;);</span>
+                }
+<span class="nc bnc" id="L270" title="All 2 branches missed.">                if (bottomSheetDetailsBehavior.getState() == BottomSheetBehavior.STATE_EXPANDED) {</span>
+                    // Back should first hide the bottom sheet if it is expanded
+<span class="nc" id="L272">                    bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">                } else if (isDetailsBottomSheetVisible()) {</span>
+<span class="nc" id="L274">                    hideBottomDetailsSheet();</span>
+                }
+<span class="nc" id="L276">                return true;</span>
+            }
+
+            @Override
+            public boolean longPressHelper(GeoPoint p) {
+<span class="nc" id="L281">                return false;</span>
+            }
+        }));
+
+<span class="nc" id="L285">        mapView.addMapListener(new MapListener() {</span>
+            @Override
+            public boolean onScroll(ScrollEvent event) {
+<span class="nc bnc" id="L288" title="All 2 branches missed.">                if (getLastMapFocus() != null) {</span>
+<span class="nc" id="L289">                    Location mylocation = new Location(&quot;&quot;);</span>
+<span class="nc" id="L290">                    Location dest_location = new Location(&quot;&quot;);</span>
+<span class="nc" id="L291">                    dest_location.setLatitude(mapView.getMapCenter().getLatitude());</span>
+<span class="nc" id="L292">                    dest_location.setLongitude(mapView.getMapCenter().getLongitude());</span>
+<span class="nc" id="L293">                    mylocation.setLatitude(getLastMapFocus().getLatitude());</span>
+<span class="nc" id="L294">                    mylocation.setLongitude(getLastMapFocus().getLongitude());</span>
+<span class="nc" id="L295">                    Float distance = mylocation.distanceTo(dest_location);//in meters</span>
+<span class="nc bnc" id="L296" title="All 2 branches missed.">                    if (getLastMapFocus() != null) {</span>
+<span class="nc bnc" id="L297" title="All 4 branches missed.">                        if (isNetworkConnectionEstablished() &amp;&amp; (event.getX() &gt; 0</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">                            || event.getY() &gt; 0)) {</span>
+<span class="nc bnc" id="L299" title="All 2 branches missed.">                            if (distance &gt; 2000.0) {</span>
+<span class="nc" id="L300">                                setSearchThisAreaButtonVisibility(true);</span>
+                            } else {
+<span class="nc" id="L302">                                setSearchThisAreaButtonVisibility(false);</span>
+                            }
+                        }
+                    } else {
+<span class="nc" id="L306">                        setSearchThisAreaButtonVisibility(false);</span>
+                    }
+                }
+
+<span class="nc" id="L310">                return true;</span>
+            }
+
+            @Override
+            public boolean onZoom(ZoomEvent event) {
+<span class="nc" id="L315">                return false;</span>
+            }
+
+        });
+
+<span class="nc" id="L320">    }</span>
+
+    @Override
+    public void onResume() {
+<span class="nc" id="L324">        super.onResume();</span>
+<span class="nc" id="L325">        mapView.onResume();</span>
+<span class="nc" id="L326">        presenter.attachView(this);</span>
+<span class="nc" id="L327">        registerNetworkReceiver();</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">        if (isResumed()) {</span>
+<span class="nc bnc" id="L329" title="All 2 branches missed.">            if (!isPermissionDenied &amp;&amp; !applicationKvStore</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">                .getBoolean(&quot;doNotAskForLocationPermission&quot;, false)) {</span>
+<span class="nc" id="L331">                performMapReadyActions();</span>
+            } else {
+<span class="nc" id="L333">                startMapWithoutPermission();</span>
+            }
+        }
+<span class="nc" id="L336">    }</span>
+
+    private void startMapWithoutPermission() {
+<span class="nc" id="L339">        applicationKvStore.putBoolean(&quot;doNotAskForLocationPermission&quot;, true);</span>
+<span class="nc" id="L340">        lastKnownLocation = MapUtils.defaultLatLng;</span>
+<span class="nc" id="L341">        moveCameraToPosition(</span>
+<span class="nc" id="L342">            new GeoPoint(lastKnownLocation.getLatitude(), lastKnownLocation.getLongitude()));</span>
+<span class="nc" id="L343">        presenter.onMapReady(exploreMapController);</span>
+<span class="nc" id="L344">    }</span>
+
+    private void registerNetworkReceiver() {
+<span class="nc bnc" id="L347" title="All 2 branches missed.">        if (getActivity() != null) {</span>
+<span class="nc" id="L348">            getActivity().registerReceiver(broadcastReceiver, intentFilter);</span>
+        }
+<span class="nc" id="L350">    }</span>
+
+    private void performMapReadyActions() {
+<span class="nc bnc" id="L353" title="All 2 branches missed.">        if (isDarkTheme) {</span>
+<span class="nc" id="L354">            mapView.getOverlayManager().getTilesOverlay()</span>
+<span class="nc" id="L355">                .setColorFilter(TilesOverlay.INVERT_COLORS);</span>
+        }
+<span class="nc bnc" id="L357" title="All 2 branches missed.">        if (!applicationKvStore.getBoolean(&quot;doNotAskForLocationPermission&quot;, false) ||</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">            PermissionUtils.hasPermission(getActivity(),</span>
+                new String[]{Manifest.permission.ACCESS_FINE_LOCATION})) {
+<span class="nc" id="L360">            checkPermissionsAndPerformAction();</span>
+        } else {
+<span class="nc" id="L362">            isPermissionDenied = true;</span>
+        }
+<span class="nc" id="L364">    }</span>
+
+    private void initViews() {
+<span class="nc" id="L367">        Timber.d(&quot;init views called&quot;);</span>
+<span class="nc" id="L368">        initBottomSheets();</span>
+<span class="nc" id="L369">        setBottomSheetCallbacks();</span>
+<span class="nc" id="L370">    }</span>
+
+    /**
+     * a) Creates bottom sheet behaviours from bottom sheet, sets initial states and visibility
+     * b) Gets the touch event on the map to perform following actions:
+     *      if bottom sheet details are expanded or collapsed hide the bottom sheet details.
+     */
+    @SuppressLint(&quot;ClickableViewAccessibility&quot;)
+    private void initBottomSheets() {
+<span class="nc" id="L379">        bottomSheetDetailsBehavior = BottomSheetBehavior.from(bottomSheetDetails);</span>
+<span class="nc" id="L380">        bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+<span class="nc" id="L381">        bottomSheetDetails.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L382">    }</span>
+
+    /**
+     * Defines how bottom sheets will act on click
+     */
+    private void setBottomSheetCallbacks() {
+<span class="nc" id="L388">        bottomSheetDetails.setOnClickListener(v -&gt; {</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">            if (bottomSheetDetailsBehavior.getState() == BottomSheetBehavior.STATE_COLLAPSED) {</span>
+<span class="nc" id="L390">                bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_EXPANDED);</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">            } else if (bottomSheetDetailsBehavior.getState()</span>
+                == BottomSheetBehavior.STATE_EXPANDED) {
+<span class="nc" id="L393">                bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);</span>
+            }
+<span class="nc" id="L395">        });</span>
+<span class="nc" id="L396">    }</span>
+
+    @Override
+    public void onLocationChangedSignificantly(LatLng latLng) {
+<span class="nc" id="L400">        Timber.d(&quot;Location significantly changed&quot;);</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">        if (latLng != null) {</span>
+<span class="nc" id="L402">            handleLocationUpdate(latLng, LOCATION_SIGNIFICANTLY_CHANGED);</span>
+        }
+<span class="nc" id="L404">    }</span>
+
+    @Override
+    public void onLocationChangedSlightly(LatLng latLng) {
+<span class="nc" id="L408">        Timber.d(&quot;Location slightly changed&quot;);</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">        if (latLng != null) {//If the map has never ever shown the current location, lets do it know</span>
+<span class="nc" id="L410">            handleLocationUpdate(latLng, LOCATION_SLIGHTLY_CHANGED);</span>
+        }
+<span class="nc" id="L412">    }</span>
+
+    private void handleLocationUpdate(final fr.free.nrw.commons.location.LatLng latLng,
+        final LocationServiceManager.LocationChangeType locationChangeType) {
+<span class="nc" id="L416">        lastKnownLocation = latLng;</span>
+<span class="nc" id="L417">        exploreMapController.currentLocation = lastKnownLocation;</span>
+<span class="nc" id="L418">        presenter.updateMap(locationChangeType);</span>
+<span class="nc" id="L419">    }</span>
+
+    @Override
+    public void onLocationChangedMedium(LatLng latLng) {
+
+<span class="nc" id="L424">    }</span>
+
+    @Override
+    public boolean isNetworkConnectionEstablished() {
+<span class="nc" id="L428">        return NetworkUtils.isInternetConnectionEstablished(getActivity());</span>
+    }
+
+    @Override
+    public void populatePlaces(LatLng curLatLng) {
+        final Observable&lt;MapController.ExplorePlacesInfo&gt; nearbyPlacesInfoObservable;
+<span class="nc bnc" id="L434" title="All 2 branches missed.">        if (curLatLng == null) {</span>
+<span class="nc" id="L435">            checkPermissionsAndPerformAction();</span>
+<span class="nc" id="L436">            return;</span>
+        }
+<span class="nc bnc" id="L438" title="All 2 branches missed.">        if (curLatLng.equals(getLastMapFocus())) { // Means we are checking around current location</span>
+<span class="nc" id="L439">            nearbyPlacesInfoObservable = presenter.loadAttractionsFromLocation(curLatLng,</span>
+<span class="nc" id="L440">                getLastMapFocus(), true);</span>
+        } else {
+<span class="nc" id="L442">            nearbyPlacesInfoObservable = presenter.loadAttractionsFromLocation(getLastMapFocus(),</span>
+                curLatLng, false);
+        }
+<span class="nc" id="L445">        compositeDisposable.add(nearbyPlacesInfoObservable</span>
+<span class="nc" id="L446">            .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L447">            .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L448">            .subscribe(explorePlacesInfo -&gt; {</span>
+<span class="nc" id="L449">                    mediaList = explorePlacesInfo.mediaList;</span>
+<span class="nc" id="L450">                    updateMapMarkers(explorePlacesInfo);</span>
+<span class="nc" id="L451">                    lastMapFocus = new GeoPoint(curLatLng.getLatitude(), curLatLng.getLongitude());</span>
+<span class="nc" id="L452">                },</span>
+                throwable -&gt; {
+<span class="nc" id="L454">                    Timber.d(throwable);</span>
+<span class="nc" id="L455">                    showErrorMessage(getString(R.string.error_fetching_nearby_places)</span>
+<span class="nc" id="L456">                        + throwable.getLocalizedMessage());</span>
+<span class="nc" id="L457">                    setProgressBarVisibility(false);</span>
+<span class="nc" id="L458">                    presenter.lockUnlockNearby(false);</span>
+<span class="nc" id="L459">                }));</span>
+<span class="nc bnc" id="L460" title="All 2 branches missed.">        if (recenterToUserLocation) {</span>
+<span class="nc" id="L461">            recenterToUserLocation = false;</span>
+        }
+<span class="nc" id="L463">    }</span>
+
+    /**
+     * Updates map markers according to latest situation
+     *
+     * @param explorePlacesInfo holds several information as current location, marker list etc.
+     */
+    private void updateMapMarkers(final MapController.ExplorePlacesInfo explorePlacesInfo) {
+<span class="nc" id="L471">        presenter.updateMapMarkers(explorePlacesInfo, selectedMarker);</span>
+<span class="nc" id="L472">    }</span>
+
+    private void showErrorMessage(final String message) {
+<span class="nc" id="L475">        ViewUtil.showLongToast(getActivity(), message);</span>
+<span class="nc" id="L476">    }</span>
+
+    @Override
+    public void checkPermissionsAndPerformAction() {
+<span class="nc" id="L480">        Timber.d(&quot;Checking permission and perfoming action&quot;);</span>
+<span class="nc" id="L481">        activityResultLauncher.launch(new String[]{permission.ACCESS_FINE_LOCATION});</span>
+<span class="nc" id="L482">    }</span>
+
+    private void locationPermissionGranted() {
+<span class="nc" id="L485">        isPermissionDenied = false;</span>
+<span class="nc" id="L486">        applicationKvStore.putBoolean(&quot;doNotAskForLocationPermission&quot;, false);</span>
+<span class="nc" id="L487">        lastKnownLocation = locationManager.getLastLocation();</span>
+<span class="nc" id="L488">        fr.free.nrw.commons.location.LatLng target = lastKnownLocation;</span>
+<span class="nc bnc" id="L489" title="All 2 branches missed.">        if (lastKnownLocation != null) {</span>
+<span class="nc" id="L490">            GeoPoint targetP = new GeoPoint(target.getLatitude(), target.getLongitude());</span>
+<span class="nc" id="L491">            mapCenter = targetP;</span>
+<span class="nc" id="L492">            mapView.getController().setCenter(targetP);</span>
+<span class="nc" id="L493">            recenterMarkerToPosition(targetP);</span>
+<span class="nc" id="L494">            moveCameraToPosition(targetP);</span>
+<span class="nc bnc" id="L495" title="All 2 branches missed.">        } else if (locationManager.isGPSProviderEnabled()</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">            || locationManager.isNetworkProviderEnabled()) {</span>
+<span class="nc" id="L497">            locationManager.requestLocationUpdatesFromProvider(LocationManager.NETWORK_PROVIDER);</span>
+<span class="nc" id="L498">            locationManager.requestLocationUpdatesFromProvider(LocationManager.GPS_PROVIDER);</span>
+<span class="nc" id="L499">            setProgressBarVisibility(true);</span>
+        } else {
+<span class="nc" id="L501">            Toast.makeText(getContext(), getString(R.string.nearby_location_not_available),</span>
+<span class="nc" id="L502">                Toast.LENGTH_LONG).show();</span>
+        }
+<span class="nc" id="L504">        presenter.onMapReady(exploreMapController);</span>
+<span class="nc" id="L505">        registerUnregisterLocationListener(false);</span>
+<span class="nc" id="L506">    }</span>
+
+    public void registerUnregisterLocationListener(final boolean removeLocationListener) {
+<span class="nc" id="L509">        MapUtils.registerUnregisterLocationListener(removeLocationListener, locationManager, this);</span>
+<span class="nc" id="L510">    }</span>
+
+    @Override
+    public void recenterMap(LatLng curLatLng) {
+<span class="nc bnc" id="L514" title="All 4 branches missed.">        if (isPermissionDenied || curLatLng == null) {</span>
+<span class="nc" id="L515">            recenterToUserLocation = true;</span>
+<span class="nc" id="L516">            checkPermissionsAndPerformAction();</span>
+<span class="nc bnc" id="L517" title="All 4 branches missed.">            if (!isPermissionDenied &amp;&amp; !(locationManager.isNetworkProviderEnabled()</span>
+<span class="nc bnc" id="L518" title="All 2 branches missed.">                || locationManager.isGPSProviderEnabled())) {</span>
+<span class="nc" id="L519">                showLocationOffDialog();</span>
+            }
+<span class="nc" id="L521">            return;</span>
+        }
+<span class="nc" id="L523">        recenterMarkerToPosition(new GeoPoint(curLatLng.getLatitude(), curLatLng.getLongitude()));</span>
+<span class="nc" id="L524">        mapView.getController()</span>
+<span class="nc" id="L525">            .animateTo(new GeoPoint(curLatLng.getLatitude(), curLatLng.getLongitude()));</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">        if (lastMapFocus != null) {</span>
+<span class="nc" id="L527">            Location mylocation = new Location(&quot;&quot;);</span>
+<span class="nc" id="L528">            Location dest_location = new Location(&quot;&quot;);</span>
+<span class="nc" id="L529">            dest_location.setLatitude(mapView.getMapCenter().getLatitude());</span>
+<span class="nc" id="L530">            dest_location.setLongitude(mapView.getMapCenter().getLongitude());</span>
+<span class="nc" id="L531">            mylocation.setLatitude(lastMapFocus.getLatitude());</span>
+<span class="nc" id="L532">            mylocation.setLongitude(lastMapFocus.getLongitude());</span>
+<span class="nc" id="L533">            Float distance = mylocation.distanceTo(dest_location);//in meters</span>
+<span class="nc bnc" id="L534" title="All 2 branches missed.">            if (lastMapFocus != null) {</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">                if (isNetworkConnectionEstablished()) {</span>
+<span class="nc bnc" id="L536" title="All 2 branches missed.">                    if (distance &gt; 2000.0) {</span>
+<span class="nc" id="L537">                        setSearchThisAreaButtonVisibility(true);</span>
+                    } else {
+<span class="nc" id="L539">                        setSearchThisAreaButtonVisibility(false);</span>
+                    }
+                }
+            } else {
+<span class="nc" id="L543">                setSearchThisAreaButtonVisibility(false);</span>
+            }
+        }
+<span class="nc" id="L546">    }</span>
+
+    @Override
+    public void showLocationOffDialog() {
+        // This creates a dialog box that prompts the user to enable location
+<span class="nc" id="L551">        DialogUtil</span>
+<span class="nc" id="L552">            .showAlertDialog(getActivity(), getString(R.string.ask_to_turn_location_on),</span>
+<span class="nc" id="L553">                getString(R.string.nearby_needs_location),</span>
+<span class="nc" id="L554">                getString(R.string.yes), getString(R.string.no), this::openLocationSettings, null);</span>
+<span class="nc" id="L555">    }</span>
+
+    @Override
+    public void openLocationSettings() {
+        // This method opens the location settings of the device along with a followup toast.
+<span class="nc" id="L560">        final Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);</span>
+<span class="nc" id="L561">        final PackageManager packageManager = getActivity().getPackageManager();</span>
+
+<span class="nc bnc" id="L563" title="All 2 branches missed.">        if (intent.resolveActivity(packageManager) != null) {</span>
+<span class="nc" id="L564">            startActivity(intent);</span>
+<span class="nc" id="L565">            Toast.makeText(getContext(), R.string.recommend_high_accuracy_mode, Toast.LENGTH_LONG)</span>
+<span class="nc" id="L566">                .show();</span>
+        } else {
+<span class="nc" id="L568">            Toast.makeText(getContext(), R.string.cannot_open_location_settings, Toast.LENGTH_LONG)</span>
+<span class="nc" id="L569">                .show();</span>
+        }
+<span class="nc" id="L571">    }</span>
+
+    @Override
+    public void hideBottomDetailsSheet() {
+<span class="nc" id="L575">        bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+<span class="nc" id="L576">    }</span>
+
+    @Override
+    public void displayBottomSheetWithInfo(final Marker marker) {
+<span class="nc" id="L580">        selectedMarker = marker;</span>
+<span class="nc" id="L581">        final NearbyMarker nearbyMarker = (NearbyMarker) marker;</span>
+<span class="nc" id="L582">        final Place place = nearbyMarker.getNearbyBaseMarker().getPlace();</span>
+<span class="nc" id="L583">        passInfoToSheet(place);</span>
+<span class="nc" id="L584">        bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);</span>
+<span class="nc" id="L585">    }</span>
+
+    /**
+     * Same bottom sheet carries information for all nearby places, so we need to pass information
+     * (title, description, distance and links) to view on nearby marker click
+     *
+     * @param place Place of clicked nearby marker
+     */
+    private void passInfoToSheet(final Place place) {
+<span class="nc" id="L594">        directionsButton.setOnClickListener(view -&gt; Utils.handleGeoCoordinates(getActivity(),</span>
+<span class="nc" id="L595">            place.getLocation()));</span>
+
+<span class="nc bnc" id="L597" title="All 2 branches missed.">        commonsButton.setVisibility(place.hasCommonsLink() ? View.VISIBLE : View.GONE);</span>
+<span class="nc" id="L598">        commonsButton.setOnClickListener(</span>
+<span class="nc" id="L599">            view -&gt; Utils.handleWebUrl(getContext(), place.siteLinks.getCommonsLink()));</span>
+
+<span class="nc" id="L601">        int index = 0;</span>
+<span class="nc bnc" id="L602" title="All 2 branches missed.">        for (Media media : mediaList) {</span>
+<span class="nc bnc" id="L603" title="All 2 branches missed.">            if (media.getFilename().equals(place.name)) {</span>
+<span class="nc" id="L604">                int finalIndex = index;</span>
+<span class="nc" id="L605">                mediaDetailsButton.setOnClickListener(view -&gt; {</span>
+<span class="nc" id="L606">                    ((ExploreMapRootFragment) getParentFragment()).onMediaClicked(finalIndex);</span>
+<span class="nc" id="L607">                });</span>
+            }
+<span class="nc" id="L609">            index++;</span>
+<span class="nc" id="L610">        }</span>
+<span class="nc" id="L611">        title.setText(place.name.substring(5, place.name.lastIndexOf(&quot;.&quot;)));</span>
+<span class="nc" id="L612">        distance.setText(place.distance);</span>
+        // Remove label since it is double information
+<span class="nc" id="L614">        String descriptionText = place.getLongDescription()</span>
+<span class="nc" id="L615">            .replace(place.getName() + &quot; (&quot;, &quot;&quot;);</span>
+<span class="nc bnc" id="L616" title="All 2 branches missed.">        descriptionText = (descriptionText.equals(place.getLongDescription()) ? descriptionText</span>
+<span class="nc" id="L617">            : descriptionText.replaceFirst(&quot;.$&quot;, &quot;&quot;));</span>
+        // Set the short description after we remove place name from long description
+<span class="nc" id="L619">        description.setText(descriptionText);</span>
+<span class="nc" id="L620">    }</span>
+
+    @Override
+    public void addSearchThisAreaButtonAction() {
+<span class="nc" id="L624">        searchThisAreaButton.setOnClickListener(presenter.onSearchThisAreaClicked());</span>
+<span class="nc" id="L625">    }</span>
+
+    @Override
+    public void setSearchThisAreaButtonVisibility(boolean isVisible) {
+<span class="nc bnc" id="L629" title="All 2 branches missed.">        if (isVisible) {</span>
+<span class="nc" id="L630">            searchThisAreaButton.setVisibility(View.VISIBLE);</span>
+        } else {
+<span class="nc" id="L632">            searchThisAreaButton.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L634">    }</span>
+
+    @Override
+    public void setProgressBarVisibility(boolean isVisible) {
+<span class="nc bnc" id="L638" title="All 2 branches missed.">        if (isVisible) {</span>
+<span class="nc" id="L639">            progressBar.setVisibility(View.VISIBLE);</span>
+        } else {
+<span class="nc" id="L641">            progressBar.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L643">    }</span>
+
+    @Override
+    public boolean isDetailsBottomSheetVisible() {
+<span class="nc bnc" id="L647" title="All 2 branches missed.">        if (bottomSheetDetails.getVisibility() == View.VISIBLE) {</span>
+<span class="nc" id="L648">            return true;</span>
+        } else {
+<span class="nc" id="L650">            return false;</span>
+        }
+    }
+
+    @Override
+    public boolean isSearchThisAreaButtonVisible() {
+<span class="nc bnc" id="L656" title="All 2 branches missed.">        if (searchThisAreaButton.getVisibility() == View.VISIBLE) {</span>
+<span class="nc" id="L657">            return true;</span>
+        } else {
+<span class="nc" id="L659">            return false;</span>
+        }
+    }
+
+    @Override
+    public LatLng getLastLocation() {
+<span class="nc bnc" id="L665" title="All 2 branches missed.">        if (lastKnownLocation == null) {</span>
+<span class="nc" id="L666">            lastKnownLocation = locationManager.getLastLocation();</span>
+        }
+<span class="nc" id="L668">        return lastKnownLocation;</span>
+    }
+
+    @Override
+    public void disableFABRecenter() {
+<span class="nc" id="L673">        fabRecenter.setEnabled(false);</span>
+<span class="nc" id="L674">    }</span>
+
+    @Override
+    public void enableFABRecenter() {
+<span class="nc" id="L678">        fabRecenter.setEnabled(true);</span>
+<span class="nc" id="L679">    }</span>
+
+    /**
+     * Adds a markers to the map based on the list of NearbyBaseMarker.
+     *
+     * @param nearbyBaseMarkers The NearbyBaseMarker object representing the markers to be added.
+     */
+    @Override
+    public void addMarkersToMap(List&lt;NearbyBaseMarker&gt; nearbyBaseMarkers) {
+<span class="nc" id="L688">        clearAllMarkers();</span>
+<span class="nc bnc" id="L689" title="All 2 branches missed.">        for (int i = 0; i &lt; nearbyBaseMarkers.size(); i++) {</span>
+<span class="nc" id="L690">            addMarkerToMap(nearbyBaseMarkers.get(i));</span>
+        }
+<span class="nc" id="L692">        mapView.invalidate();</span>
+<span class="nc" id="L693">    }</span>
+
+    /**
+     * Adds a marker to the map based on the specified NearbyBaseMarker.
+     *
+     * @param nearbyBaseMarker The NearbyBaseMarker object representing the marker to be added.
+     */
+    private void addMarkerToMap(NearbyBaseMarker nearbyBaseMarker) {
+<span class="nc" id="L701">        ArrayList&lt;OverlayItem&gt; items = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L702">        Bitmap icon = nearbyBaseMarker.getMarker().getIcon().getBitmap();</span>
+<span class="nc" id="L703">        Drawable d = new BitmapDrawable(getResources(), icon);</span>
+<span class="nc" id="L704">        GeoPoint point = new GeoPoint(</span>
+<span class="nc" id="L705">            nearbyBaseMarker.getPlace().location.getLatitude(),</span>
+<span class="nc" id="L706">            nearbyBaseMarker.getPlace().location.getLongitude());</span>
+<span class="nc" id="L707">        OverlayItem item = new OverlayItem(nearbyBaseMarker.getPlace().name, null,</span>
+            point);
+<span class="nc" id="L709">        item.setMarker(d);</span>
+<span class="nc" id="L710">        items.add(item);</span>
+<span class="nc" id="L711">        ItemizedOverlayWithFocus overlay = new ItemizedOverlayWithFocus(items,</span>
+<span class="nc" id="L712">            new OnItemGestureListener&lt;OverlayItem&gt;() {</span>
+                @Override
+                public boolean onItemSingleTapUp(int index, OverlayItem item) {
+<span class="nc" id="L715">                    final Place place = nearbyBaseMarker.getPlace();</span>
+<span class="nc bnc" id="L716" title="All 2 branches missed.">                    if (clickedMarker != null) {</span>
+<span class="nc" id="L717">                        removeMarker(clickedMarker);</span>
+<span class="nc" id="L718">                        addMarkerToMap(clickedMarker);</span>
+<span class="nc" id="L719">                        bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+<span class="nc" id="L720">                        bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);</span>
+                    }
+<span class="nc" id="L722">                    clickedMarker = nearbyBaseMarker;</span>
+<span class="nc" id="L723">                    passInfoToSheet(place);</span>
+<span class="nc" id="L724">                    return true;</span>
+                }
+
+                @Override
+                public boolean onItemLongPress(int index, OverlayItem item) {
+<span class="nc" id="L729">                    return false;</span>
+                }
+<span class="nc" id="L731">            }, getContext());</span>
+
+<span class="nc" id="L733">        overlay.setFocusItemsOnTap(true);</span>
+<span class="nc" id="L734">        mapView.getOverlays().add(overlay); // Add the overlay to the map</span>
+<span class="nc" id="L735">    }</span>
+
+    /**
+     * Removes a marker from the map based on the specified NearbyBaseMarker.
+     *
+     * @param nearbyBaseMarker The NearbyBaseMarker object representing the marker to be removed.
+     */
+    private void removeMarker(NearbyBaseMarker nearbyBaseMarker) {
+<span class="nc" id="L743">        Place place = nearbyBaseMarker.getPlace();</span>
+<span class="nc" id="L744">        List&lt;Overlay&gt; overlays = mapView.getOverlays();</span>
+        ItemizedOverlayWithFocus item;
+
+<span class="nc bnc" id="L747" title="All 2 branches missed.">        for (int i = 0; i &lt; overlays.size(); i++) {</span>
+<span class="nc bnc" id="L748" title="All 2 branches missed.">            if (overlays.get(i) instanceof ItemizedOverlayWithFocus) {</span>
+<span class="nc" id="L749">                item = (ItemizedOverlayWithFocus) overlays.get(i);</span>
+<span class="nc" id="L750">                OverlayItem overlayItem = item.getItem(0);</span>
+
+<span class="nc bnc" id="L752" title="All 2 branches missed.">                if (place.location.getLatitude() == overlayItem.getPoint().getLatitude()</span>
+<span class="nc bnc" id="L753" title="All 2 branches missed.">                    &amp;&amp; place.location.getLongitude() == overlayItem.getPoint().getLongitude()) {</span>
+<span class="nc" id="L754">                    mapView.getOverlays().remove(i);</span>
+<span class="nc" id="L755">                    mapView.invalidate();</span>
+<span class="nc" id="L756">                    break;</span>
+                }
+            }
+        }
+<span class="nc" id="L760">    }</span>
+
+    /**
+     * Clears all markers from the map and resets certain map overlays and gestures. After clearing
+     * markers, it re-adds a scale bar overlay and rotation gesture overlay to the map.
+     */
+    @Override
+    public void clearAllMarkers() {
+<span class="nc" id="L768">        mapView.getOverlayManager().clear();</span>
+<span class="nc" id="L769">        GeoPoint geoPoint = mapCenter;</span>
+<span class="nc bnc" id="L770" title="All 2 branches missed.">        if (geoPoint != null) {</span>
+<span class="nc" id="L771">            List&lt;Overlay&gt; overlays = mapView.getOverlays();</span>
+<span class="nc" id="L772">            ScaleDiskOverlay diskOverlay =</span>
+<span class="nc" id="L773">                new ScaleDiskOverlay(this.getContext(),</span>
+                    geoPoint, 2000, GeoConstants.UnitOfMeasure.foot);
+<span class="nc" id="L775">            Paint circlePaint = new Paint();</span>
+<span class="nc" id="L776">            circlePaint.setColor(Color.rgb(128, 128, 128));</span>
+<span class="nc" id="L777">            circlePaint.setStyle(Paint.Style.STROKE);</span>
+<span class="nc" id="L778">            circlePaint.setStrokeWidth(2f);</span>
+<span class="nc" id="L779">            diskOverlay.setCirclePaint2(circlePaint);</span>
+<span class="nc" id="L780">            Paint diskPaint = new Paint();</span>
+<span class="nc" id="L781">            diskPaint.setColor(Color.argb(40, 128, 128, 128));</span>
+<span class="nc" id="L782">            diskPaint.setStyle(Paint.Style.FILL_AND_STROKE);</span>
+<span class="nc" id="L783">            diskOverlay.setCirclePaint1(diskPaint);</span>
+<span class="nc" id="L784">            diskOverlay.setDisplaySizeMin(900);</span>
+<span class="nc" id="L785">            diskOverlay.setDisplaySizeMax(1700);</span>
+<span class="nc" id="L786">            mapView.getOverlays().add(diskOverlay);</span>
+<span class="nc" id="L787">            org.osmdroid.views.overlay.Marker startMarker = new org.osmdroid.views.overlay.Marker(</span>
+                mapView);
+<span class="nc" id="L789">            startMarker.setPosition(geoPoint);</span>
+<span class="nc" id="L790">            startMarker.setAnchor(org.osmdroid.views.overlay.Marker.ANCHOR_CENTER,</span>
+                org.osmdroid.views.overlay.Marker.ANCHOR_BOTTOM);
+<span class="nc" id="L792">            startMarker.setIcon(</span>
+<span class="nc" id="L793">                ContextCompat.getDrawable(this.getContext(), R.drawable.current_location_marker));</span>
+<span class="nc" id="L794">            startMarker.setTitle(&quot;Your Location&quot;);</span>
+<span class="nc" id="L795">            startMarker.setTextLabelFontSize(24);</span>
+<span class="nc" id="L796">            mapView.getOverlays().add(startMarker);</span>
+        }
+<span class="nc" id="L798">        ScaleBarOverlay scaleBarOverlay = new ScaleBarOverlay(mapView);</span>
+<span class="nc" id="L799">        scaleBarOverlay.setScaleBarOffset(15, 25);</span>
+<span class="nc" id="L800">        Paint barPaint = new Paint();</span>
+<span class="nc" id="L801">        barPaint.setARGB(200, 255, 250, 250);</span>
+<span class="nc" id="L802">        scaleBarOverlay.setBackgroundPaint(barPaint);</span>
+<span class="nc" id="L803">        scaleBarOverlay.enableScaleBar();</span>
+<span class="nc" id="L804">        mapView.getOverlays().add(scaleBarOverlay);</span>
+<span class="nc" id="L805">        mapView.getOverlays().add(new MapEventsOverlay(new MapEventsReceiver() {</span>
+            @Override
+            public boolean singleTapConfirmedHelper(GeoPoint p) {
+<span class="nc bnc" id="L808" title="All 2 branches missed.">                if (clickedMarker != null) {</span>
+<span class="nc" id="L809">                    removeMarker(clickedMarker);</span>
+<span class="nc" id="L810">                    addMarkerToMap(clickedMarker);</span>
+<span class="nc" id="L811">                    mapView.invalidate();</span>
+                } else {
+<span class="nc" id="L813">                    Timber.e(&quot;CLICKED MARKER IS NULL&quot;);</span>
+                }
+<span class="nc bnc" id="L815" title="All 2 branches missed.">                if (bottomSheetDetailsBehavior.getState() == BottomSheetBehavior.STATE_EXPANDED) {</span>
+                    // Back should first hide the bottom sheet if it is expanded
+<span class="nc" id="L817">                    bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+<span class="nc bnc" id="L818" title="All 2 branches missed.">                } else if (isDetailsBottomSheetVisible()) {</span>
+<span class="nc" id="L819">                    hideBottomDetailsSheet();</span>
+                }
+<span class="nc" id="L821">                return true;</span>
+            }
+
+            @Override
+            public boolean longPressHelper(GeoPoint p) {
+<span class="nc" id="L826">                return false;</span>
+            }
+        }));
+<span class="nc" id="L829">        mapView.setMultiTouchControls(true);</span>
+<span class="nc" id="L830">    }</span>
+
+    /**
+     * Recenters the map view to the specified GeoPoint and updates the marker to indicate the new
+     * position.
+     *
+     * @param geoPoint The GeoPoint representing the new center position for the map.
+     */
+    private void recenterMarkerToPosition(GeoPoint geoPoint) {
+<span class="nc bnc" id="L839" title="All 2 branches missed.">        if (geoPoint != null) {</span>
+<span class="nc" id="L840">            mapView.getController().setCenter(geoPoint);</span>
+<span class="nc" id="L841">            List&lt;Overlay&gt; overlays = mapView.getOverlays();</span>
+<span class="nc bnc" id="L842" title="All 2 branches missed.">            for (int i = 0; i &lt; overlays.size(); i++) {</span>
+<span class="nc bnc" id="L843" title="All 2 branches missed.">                if (overlays.get(i) instanceof org.osmdroid.views.overlay.Marker) {</span>
+<span class="nc" id="L844">                    mapView.getOverlays().remove(i);</span>
+<span class="nc bnc" id="L845" title="All 2 branches missed.">                } else if (overlays.get(i) instanceof ScaleDiskOverlay) {</span>
+<span class="nc" id="L846">                    mapView.getOverlays().remove(i);</span>
+                }
+            }
+<span class="nc" id="L849">            ScaleDiskOverlay diskOverlay =</span>
+<span class="nc" id="L850">                new ScaleDiskOverlay(this.getContext(),</span>
+                    geoPoint, 2000, GeoConstants.UnitOfMeasure.foot);
+<span class="nc" id="L852">            Paint circlePaint = new Paint();</span>
+<span class="nc" id="L853">            circlePaint.setColor(Color.rgb(128, 128, 128));</span>
+<span class="nc" id="L854">            circlePaint.setStyle(Paint.Style.STROKE);</span>
+<span class="nc" id="L855">            circlePaint.setStrokeWidth(2f);</span>
+<span class="nc" id="L856">            diskOverlay.setCirclePaint2(circlePaint);</span>
+<span class="nc" id="L857">            Paint diskPaint = new Paint();</span>
+<span class="nc" id="L858">            diskPaint.setColor(Color.argb(40, 128, 128, 128));</span>
+<span class="nc" id="L859">            diskPaint.setStyle(Paint.Style.FILL_AND_STROKE);</span>
+<span class="nc" id="L860">            diskOverlay.setCirclePaint1(diskPaint);</span>
+<span class="nc" id="L861">            diskOverlay.setDisplaySizeMin(900);</span>
+<span class="nc" id="L862">            diskOverlay.setDisplaySizeMax(1700);</span>
+<span class="nc" id="L863">            mapView.getOverlays().add(diskOverlay);</span>
+<span class="nc" id="L864">            org.osmdroid.views.overlay.Marker startMarker = new org.osmdroid.views.overlay.Marker(</span>
+                mapView);
+<span class="nc" id="L866">            startMarker.setPosition(geoPoint);</span>
+<span class="nc" id="L867">            startMarker.setAnchor(org.osmdroid.views.overlay.Marker.ANCHOR_CENTER,</span>
+                org.osmdroid.views.overlay.Marker.ANCHOR_BOTTOM);
+<span class="nc" id="L869">            startMarker.setIcon(</span>
+<span class="nc" id="L870">                ContextCompat.getDrawable(this.getContext(), R.drawable.current_location_marker));</span>
+<span class="nc" id="L871">            startMarker.setTitle(&quot;Your Location&quot;);</span>
+<span class="nc" id="L872">            startMarker.setTextLabelFontSize(24);</span>
+<span class="nc" id="L873">            mapView.getOverlays().add(startMarker);</span>
+        }
+<span class="nc" id="L875">    }</span>
+
+    /**
+     * Moves the camera of the map view to the specified GeoPoint using an animation.
+     *
+     * @param geoPoint The GeoPoint representing the new camera position for the map.
+     */
+    private void moveCameraToPosition(GeoPoint geoPoint) {
+<span class="nc" id="L883">        mapView.getController().animateTo(geoPoint);</span>
+<span class="nc" id="L884">    }</span>
+
+    @Override
+    public fr.free.nrw.commons.location.LatLng getLastMapFocus() {
+<span class="nc bnc" id="L888" title="All 2 branches missed.">        return lastMapFocus == null ? getMapCenter() : new fr.free.nrw.commons.location.LatLng(</span>
+<span class="nc" id="L889">            lastMapFocus.getLatitude(), lastMapFocus.getLongitude(), 100);</span>
+    }
+
+    @Override
+    public fr.free.nrw.commons.location.LatLng getMapCenter() {
+<span class="nc" id="L894">        fr.free.nrw.commons.location.LatLng latLnge = null;</span>
+<span class="nc bnc" id="L895" title="All 2 branches missed.">        if (mapCenter != null) {</span>
+<span class="nc" id="L896">            latLnge = new fr.free.nrw.commons.location.LatLng(</span>
+<span class="nc" id="L897">                mapCenter.getLatitude(), mapCenter.getLongitude(), 100);</span>
+        }
+<span class="nc" id="L899">        return latLnge;</span>
+    }
+
+    @Override
+    public fr.free.nrw.commons.location.LatLng getMapFocus() {
+<span class="nc" id="L904">        fr.free.nrw.commons.location.LatLng mapFocusedLatLng = new fr.free.nrw.commons.location.LatLng(</span>
+<span class="nc" id="L905">            mapView.getMapCenter().getLatitude(), mapView.getMapCenter().getLongitude(), 100);</span>
+<span class="nc" id="L906">        return mapFocusedLatLng;</span>
+    }
+
+    @Override
+    public void setFABRecenterAction(OnClickListener onClickListener) {
+<span class="nc" id="L911">        fabRecenter.setOnClickListener(onClickListener);</span>
+<span class="nc" id="L912">    }</span>
+
+    @Override
+    public boolean backButtonClicked() {
+<span class="nc bnc" id="L916" title="All 2 branches missed.">        if (!(bottomSheetDetailsBehavior.getState() == BottomSheetBehavior.STATE_HIDDEN)) {</span>
+<span class="nc" id="L917">            bottomSheetDetailsBehavior.setState(BottomSheetBehavior.STATE_HIDDEN);</span>
+<span class="nc" id="L918">            return true;</span>
+        } else {
+<span class="nc" id="L920">            return false;</span>
+        }
+    }
+
+    /**
+     * Adds network broadcast receiver to recognize connection established
+     */
+    private void initNetworkBroadCastReceiver() {
+<span class="nc" id="L928">        broadcastReceiver = new BroadcastReceiver() {</span>
+            @Override
+            public void onReceive(final Context context, final Intent intent) {
+<span class="nc bnc" id="L931" title="All 2 branches missed.">                if (getActivity() != null) {</span>
+<span class="nc bnc" id="L932" title="All 2 branches missed.">                    if (NetworkUtils.isInternetConnectionEstablished(getActivity())) {</span>
+<span class="nc bnc" id="L933" title="All 2 branches missed.">                        if (isNetworkErrorOccurred) {</span>
+<span class="nc" id="L934">                            presenter.updateMap(LOCATION_SIGNIFICANTLY_CHANGED);</span>
+<span class="nc" id="L935">                            isNetworkErrorOccurred = false;</span>
+                        }
+
+<span class="nc bnc" id="L938" title="All 2 branches missed.">                        if (snackbar != null) {</span>
+<span class="nc" id="L939">                            snackbar.dismiss();</span>
+<span class="nc" id="L940">                            snackbar = null;</span>
+                        }
+                    } else {
+<span class="nc bnc" id="L943" title="All 2 branches missed.">                        if (snackbar == null) {</span>
+<span class="nc" id="L944">                            snackbar = Snackbar.make(getView(), R.string.no_internet,</span>
+                                Snackbar.LENGTH_INDEFINITE);
+<span class="nc" id="L946">                            setSearchThisAreaButtonVisibility(false);</span>
+<span class="nc" id="L947">                            setProgressBarVisibility(false);</span>
+                        }
+
+<span class="nc" id="L950">                        isNetworkErrorOccurred = true;</span>
+<span class="nc" id="L951">                        snackbar.show();</span>
+                    }
+                }
+<span class="nc" id="L954">            }</span>
+        };
+<span class="nc" id="L956">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

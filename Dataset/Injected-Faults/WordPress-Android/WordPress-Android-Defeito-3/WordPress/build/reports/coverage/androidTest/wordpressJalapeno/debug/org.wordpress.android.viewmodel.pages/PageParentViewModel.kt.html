@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PageParentViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.pages</a> &gt; <span class="el_source">PageParentViewModel.kt</span></div><h1>PageParentViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.viewmodel.pages
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.R.string
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.PAGES_SET_PARENT_CHANGES_SAVED
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.page.PageModel
+import org.wordpress.android.fluxc.model.page.PageStatus.PUBLISHED
+import org.wordpress.android.fluxc.store.PageStore
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.pages.PageItem
+import org.wordpress.android.ui.pages.PageItem.Divider
+import org.wordpress.android.ui.pages.PageItem.Empty
+import org.wordpress.android.ui.pages.PageItem.ParentPage
+import org.wordpress.android.ui.pages.PageItem.Type.PARENT
+import org.wordpress.android.ui.pages.PageItem.Type.TOP_LEVEL_PARENT
+import org.wordpress.android.util.analytics.AnalyticsUtils
+import org.wordpress.android.viewmodel.ResourceProvider
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import javax.inject.Inject
+import javax.inject.Named
+
+private const val SEARCH_DELAY = 200L
+private const val SEARCH_COLLAPSE_DELAY = 500L
+
+class PageParentViewModel
+<span class="nc" id="L36">@Inject constructor(</span>
+<span class="nc" id="L37">    private val pageStore: PageStore,</span>
+<span class="nc" id="L38">    private val resourceProvider: ResourceProvider,</span>
+<span class="nc" id="L39">    @Named(UI_THREAD) private val uiDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L40">    @Named(BG_THREAD) private val defaultDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L41">) : ScopedViewModel(uiDispatcher) {</span>
+<span class="nc" id="L42">    private val _pages: MutableLiveData&lt;List&lt;PageItem&gt;&gt; = MutableLiveData()</span>
+<span class="nc" id="L43">    val pages: LiveData&lt;List&lt;PageItem&gt;&gt; = _pages</span>
+
+    private lateinit var _currentParent: ParentPage
+    val currentParent: ParentPage
+<span class="nc bnc" id="L47" title="All 2 branches missed.">        get() = _currentParent</span>
+
+    private lateinit var _initialParent: ParentPage
+    val initialParent: ParentPage
+<span class="nc bnc" id="L51" title="All 2 branches missed.">        get() = _initialParent</span>
+
+<span class="nc" id="L53">    private val _isSaveButtonVisible = MutableLiveData&lt;Boolean&gt;()</span>
+<span class="nc" id="L54">    val isSaveButtonVisible: LiveData&lt;Boolean&gt; = _isSaveButtonVisible</span>
+
+<span class="nc" id="L56">    private val _saveParent = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L57">    val saveParent: LiveData&lt;Unit&gt; = _saveParent</span>
+
+<span class="nc" id="L59">    private val _searchPages: MutableLiveData&lt;List&lt;PageItem&gt;?&gt; = MutableLiveData()</span>
+<span class="nc" id="L60">    val searchPages: LiveData&lt;List&lt;PageItem&gt;?&gt; = _searchPages</span>
+
+<span class="nc" id="L62">    private var _lastSearchQuery = &quot;&quot;</span>
+    val lastSearchQuery: String
+<span class="nc" id="L64">        get() = _lastSearchQuery</span>
+
+    private var searchJob: Job? = null
+
+<span class="nc" id="L68">    private val _isSearchExpanded = MutableLiveData&lt;Boolean&gt;()</span>
+<span class="nc" id="L69">    val isSearchExpanded: LiveData&lt;Boolean&gt; = _isSearchExpanded</span>
+
+    private lateinit var site: SiteModel
+    private var isStarted: Boolean = false
+
+    private var page: PageModel? = null
+
+    fun start(site: SiteModel, pageId: Long) {
+<span class="nc" id="L77">        this.site = site</span>
+
+<span class="nc bnc" id="L79" title="All 2 branches missed.">        if (!isStarted) {</span>
+<span class="nc" id="L80">            _pages.postValue(listOf(Empty(string.empty_list_default)))</span>
+<span class="nc" id="L81">            isStarted = true</span>
+
+<span class="nc" id="L83">            loadPages(pageId)</span>
+
+<span class="nc" id="L85">            _isSaveButtonVisible.postValue(false)</span>
+        }
+<span class="nc" id="L87">    }</span>
+
+<span class="nc" id="L89">    private fun loadPages(pageId: Long) = launch(defaultDispatcher) {</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        page = if (pageId &lt; 0) {</span>
+            // negative local page ID used as a temp remote post ID for local-only pages (assigned by the PageStore)
+<span class="nc bnc" id="L92" title="All 2 branches missed.">            pageStore.getPageByLocalId(-pageId.toInt(), site)</span>
+        } else {
+<span class="nc bnc" id="L94" title="All 2 branches missed.">            pageStore.getPageByRemoteId(pageId, site)</span>
+        }
+
+<span class="nc" id="L97">        val parents = mutableListOf&lt;PageItem&gt;(</span>
+<span class="nc" id="L98">                ParentPage(</span>
+<span class="nc" id="L99">                        0, resourceProvider.getString(R.string.top_level),</span>
+<span class="nc bnc" id="L100" title="All 4 branches missed.">                        page?.parent == null,</span>
+<span class="nc" id="L101">                        TOP_LEVEL_PARENT</span>
+                )
+        )
+
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (page != null) {</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">            val choices = pageStore.getPagesFromDb(site)</span>
+<span class="nc bnc" id="L107" title="All 6 branches missed.">                    .filter { it.remoteId != pageId &amp;&amp; it.status == PUBLISHED }</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">            val parentChoices = choices.filter { isNotChild(it, choices) }</span>
+<span class="nc bnc" id="L109" title="All 4 branches missed.">            if (parentChoices.isNotEmpty()) {</span>
+<span class="nc" id="L110">                parents.add(Divider(resourceProvider.getString(R.string.pages)))</span>
+<span class="nc" id="L111">                parents.addAll(parentChoices.map {</span>
+<span class="nc bnc" id="L112" title="All 6 branches missed.">                    ParentPage(it.remoteId, it.title, page?.parent?.remoteId == it.remoteId, PARENT)</span>
+                })
+            }
+        }
+
+<span class="nc bnc" id="L117" title="All 10 branches missed.">        _currentParent = parents.firstOrNull { it is ParentPage &amp;&amp; it.isSelected } as? ParentPage</span>
+<span class="nc" id="L118">                ?: parents.first() as ParentPage</span>
+
+<span class="nc bnc" id="L120" title="All 2 branches missed.">        _initialParent = _currentParent</span>
+
+<span class="nc" id="L122">        _pages.postValue(parents)</span>
+<span class="nc" id="L123">    }</span>
+
+    fun onParentSelected(page: ParentPage) {
+<span class="nc bnc" id="L126" title="All 2 branches missed.">        _currentParent.isSelected = false</span>
+<span class="nc" id="L127">        _currentParent = page</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">        _currentParent.isSelected = true</span>
+<span class="nc" id="L129">        setSaveButton()</span>
+<span class="nc" id="L130">    }</span>
+
+    fun onSaveButtonTapped() {
+<span class="nc" id="L133">        trackSaveEvent()</span>
+
+<span class="nc" id="L135">        _saveParent.asyncCall()</span>
+<span class="nc" id="L136">    }</span>
+
+    private fun trackSaveEvent() {
+<span class="nc" id="L139">        val properties = mutableMapOf(</span>
+<span class="nc bnc" id="L140" title="All 4 branches missed.">                &quot;page_id&quot; to page?.remoteId as Any,</span>
+<span class="nc" id="L141">                &quot;new_parent_id&quot; to currentParent.id</span>
+        )
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        AnalyticsUtils.trackWithSiteDetails(PAGES_SET_PARENT_CHANGES_SAVED, site, properties)</span>
+<span class="nc" id="L144">    }</span>
+
+    private fun isNotChild(choice: PageModel, choices: List&lt;PageModel&gt;): Boolean {
+<span class="nc bnc" id="L147" title="All 2 branches missed.">        return !getChildren(page!!, choices).contains(choice)</span>
+    }
+
+    private fun getChildren(page: PageModel, pages: List&lt;PageModel&gt;): List&lt;PageModel&gt; {
+<span class="nc bnc" id="L151" title="All 6 branches missed.">        val children = pages.filter { it.parent?.remoteId == page.remoteId }</span>
+<span class="nc" id="L152">        val grandchildren = mutableListOf&lt;PageModel&gt;()</span>
+<span class="nc" id="L153">        children.forEach {</span>
+<span class="nc" id="L154">            grandchildren += getChildren(it, pages)</span>
+<span class="nc" id="L155">        }</span>
+<span class="nc" id="L156">        return children + grandchildren</span>
+    }
+
+    fun onSearchExpanded(restorePreviousSearch: Boolean) {
+<span class="nc bnc" id="L160" title="All 2 branches missed.">        if (isSearchExpanded.value != true) {</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">            if (!restorePreviousSearch) {</span>
+<span class="nc" id="L162">                clearSearch()</span>
+            }
+<span class="nc" id="L164">            _isSearchExpanded.value = true</span>
+<span class="nc" id="L165">            _isSaveButtonVisible.postValue(false)</span>
+        }
+<span class="nc" id="L167">    }</span>
+
+    fun onSearchCollapsed() {
+<span class="nc" id="L170">        _isSearchExpanded.value = false</span>
+<span class="nc" id="L171">        clearSearch()</span>
+<span class="nc" id="L172">        setSaveButton()</span>
+
+<span class="nc" id="L174">        launch {</span>
+<span class="nc" id="L175">            delay(SEARCH_COLLAPSE_DELAY)</span>
+<span class="nc" id="L176">        }</span>
+<span class="nc" id="L177">    }</span>
+
+    private fun clearSearch() {
+<span class="nc" id="L180">        _lastSearchQuery = &quot;&quot;</span>
+<span class="nc" id="L181">        _searchPages.postValue(null)</span>
+<span class="nc" id="L182">    }</span>
+
+<span class="nc" id="L184">    fun onSearch(searchQuery: String, delay: Long = SEARCH_DELAY) {</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">        searchJob?.cancel()</span>
+<span class="nc bnc" id="L186" title="All 4 branches missed.">        if (searchQuery.isNotEmpty()) {</span>
+<span class="nc" id="L187">            searchJob = launch {</span>
+<span class="nc" id="L188">                delay(delay)</span>
+<span class="nc" id="L189">                searchJob = null</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">                if (isActive) {</span>
+<span class="nc" id="L191">                    _lastSearchQuery = searchQuery</span>
+<span class="nc" id="L192">                    val result = search(searchQuery)</span>
+<span class="nc" id="L193">                    _searchPages.postValue(result)</span>
+                }
+<span class="nc" id="L195">            }</span>
+        } else {
+<span class="nc" id="L197">            _isSaveButtonVisible.postValue(false)</span>
+<span class="nc" id="L198">            clearSearch()</span>
+        }
+<span class="nc" id="L200">    }</span>
+
+    private suspend fun search(
+        searchQuery: String
+<span class="nc bnc" id="L204" title="All 2 branches missed.">    ): List&lt;PageItem&gt; = withContext(defaultDispatcher) {</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">        _pages.value?.let {</span>
+<span class="nc bnc" id="L206" title="All 4 branches missed.">            if (it.isNotEmpty()) return@withContext it</span>
+<span class="nc" id="L207">                    .filterIsInstance(ParentPage::class.java)</span>
+<span class="nc bnc" id="L208" title="All 4 branches missed.">                    .filter { parentPage -&gt; parentPage.id != 0L }</span>
+<span class="nc" id="L209">                    .filter { parentPage -&gt;</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">                        parentPage.title.contains(searchQuery, true)</span>
+                    }
+<span class="nc" id="L212">        }</span>
+<span class="nc" id="L213">        return@withContext mutableListOf&lt;PageItem&gt;()</span>
+<span class="nc" id="L214">    }</span>
+
+    private fun setSaveButton() {
+<span class="nc bnc" id="L217" title="All 6 branches missed.">        if (_currentParent == _initialParent) {</span>
+<span class="nc" id="L218">            _isSaveButtonVisible.postValue(false)</span>
+        } else {
+<span class="nc" id="L220">            _isSaveButtonVisible.postValue(true)</span>
+        }
+<span class="nc" id="L222">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

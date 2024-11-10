@@ -1,0 +1,693 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StoryComposerActivity.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.stories</a> &gt; <span class="el_source">StoryComposerActivity.kt</span></div><h1>StoryComposerActivity.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.stories
+
+import android.app.Activity
+import android.app.PendingIntent
+import android.app.ProgressDialog
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.view.View
+import androidx.fragment.app.DialogFragment
+import androidx.lifecycle.Observer
+import androidx.lifecycle.ViewModelProvider
+import com.google.android.material.snackbar.Snackbar
+import com.wordpress.stories.compose.AuthenticationHeadersProvider
+import com.wordpress.stories.compose.ComposeLoopFrameActivity
+import com.wordpress.stories.compose.FrameSaveErrorDialog
+import com.wordpress.stories.compose.FrameSaveErrorDialogOk
+import com.wordpress.stories.compose.GenericAnnouncementDialogProvider
+import com.wordpress.stories.compose.MediaPickerProvider
+import com.wordpress.stories.compose.MetadataProvider
+import com.wordpress.stories.compose.NotificationIntentLoader
+import com.wordpress.stories.compose.PermanentPermissionDenialDialogProvider
+import com.wordpress.stories.compose.PrepublishingEventProvider
+import com.wordpress.stories.compose.SnackbarProvider
+import com.wordpress.stories.compose.StoryDiscardListener
+import com.wordpress.stories.compose.frame.StoryLoadEvents.StoryLoadEnd
+import com.wordpress.stories.compose.frame.StorySaveEvents.StorySaveResult
+import com.wordpress.stories.compose.story.StoryFrameItem
+import com.wordpress.stories.compose.story.StoryFrameItem.BackgroundSource.FileBackgroundSource
+import com.wordpress.stories.compose.story.StoryFrameItem.BackgroundSource.UriBackgroundSource
+import com.wordpress.stories.compose.story.StoryFrameItemType.VIDEO
+import com.wordpress.stories.compose.story.StoryIndex
+import com.wordpress.stories.compose.story.StoryRepository.DEFAULT_NONE_SELECTED
+import com.wordpress.stories.util.KEY_STORY_EDIT_MODE
+import com.wordpress.stories.util.KEY_STORY_INDEX
+import com.wordpress.stories.util.KEY_STORY_SAVE_RESULT
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.R
+import org.wordpress.android.R.string
+import org.wordpress.android.WordPress
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.PREPUBLISHING_BOTTOM_SHEET_OPENED
+import org.wordpress.android.editor.gutenberg.GutenbergEditorFragment.ARG_STORY_BLOCK_ID
+import org.wordpress.android.editor.gutenberg.GutenbergEditorFragment.ARG_STORY_BLOCK_UPDATED_CONTENT
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.RemoteId
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.PostImmutableModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.MediaStore
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.push.NotificationType
+import org.wordpress.android.push.NotificationsProcessingService
+import org.wordpress.android.push.NotificationsProcessingService.ARG_NOTIFICATION_TYPE
+import org.wordpress.android.ui.RequestCodes
+import org.wordpress.android.ui.media.MediaBrowserActivity
+import org.wordpress.android.ui.photopicker.MediaPickerConstants
+import org.wordpress.android.ui.photopicker.MediaPickerLauncher
+import org.wordpress.android.ui.posts.EditPostActivity.OnPostUpdatedFromUIListener
+import org.wordpress.android.ui.posts.EditPostRepository
+import org.wordpress.android.ui.posts.EditPostSettingsFragment.EditPostActivityHook
+import org.wordpress.android.ui.posts.PostEditorAnalyticsSession
+import org.wordpress.android.ui.posts.PrepublishingBottomSheetFragment
+import org.wordpress.android.ui.posts.ProgressDialogHelper
+import org.wordpress.android.ui.posts.ProgressDialogUiState
+import org.wordpress.android.ui.posts.PublishPost
+import org.wordpress.android.ui.posts.editor.media.AddExistingMediaSource.WP_MEDIA_LIBRARY
+import org.wordpress.android.ui.posts.editor.media.EditorMediaListener
+import org.wordpress.android.ui.posts.prepublishing.PrepublishingBottomSheetListener
+import org.wordpress.android.ui.stories.SaveStoryGutenbergBlockUseCase.Companion.TEMPORARY_ID_PREFIX
+import org.wordpress.android.ui.stories.SaveStoryGutenbergBlockUseCase.StoryMediaFileData
+import org.wordpress.android.ui.stories.media.StoryEditorMedia
+import org.wordpress.android.ui.stories.media.StoryEditorMedia.AddMediaToStoryPostUiState
+import org.wordpress.android.ui.stories.prefs.StoriesPrefs
+import org.wordpress.android.ui.utils.AuthenticationUtils
+import org.wordpress.android.ui.utils.UiHelpers
+import org.wordpress.android.util.FluxCUtilsWrapper
+import org.wordpress.android.util.ListUtils
+import org.wordpress.android.util.MediaUtils
+import org.wordpress.android.util.ToastUtils
+import org.wordpress.android.util.ToastUtils.Duration.LONG
+import org.wordpress.android.util.WPMediaUtils
+import org.wordpress.android.util.WPPermissionUtils
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.util.analytics.AnalyticsUtilsWrapper
+import org.wordpress.android.util.helpers.MediaFile
+import org.wordpress.android.viewmodel.observeEvent
+import org.wordpress.android.widgets.WPSnackbar
+import java.util.Objects
+import javax.inject.Inject
+
+<span class="nc" id="L93">class StoryComposerActivity : ComposeLoopFrameActivity(),</span>
+        SnackbarProvider,
+        MediaPickerProvider,
+        EditorMediaListener,
+        AuthenticationHeadersProvider,
+        NotificationIntentLoader,
+        MetadataProvider,
+        StoryDiscardListener,
+        EditPostActivityHook,
+        PrepublishingEventProvider,
+        PrepublishingBottomSheetListener,
+        PermanentPermissionDenialDialogProvider,
+        GenericAnnouncementDialogProvider {
+    private var site: SiteModel? = null
+
+<span class="nc bnc" id="L108" title="All 2 branches missed.">    @Inject lateinit var storyEditorMedia: StoryEditorMedia</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">    @Inject lateinit var progressDialogHelper: ProgressDialogHelper</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">    @Inject lateinit var uiHelpers: UiHelpers</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">    @Inject lateinit var postStore: PostStore</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">    @Inject lateinit var authenticationUtils: AuthenticationUtils</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">    @Inject internal lateinit var editPostRepository: EditPostRepository</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">    @Inject lateinit var analyticsTrackerWrapper: AnalyticsTrackerWrapper</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">    @Inject lateinit var analyticsUtilsWrapper: AnalyticsUtilsWrapper</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">    @Inject internal lateinit var viewModelFactory: ViewModelProvider.Factory</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">    @Inject internal lateinit var mediaPickerLauncher: MediaPickerLauncher</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">    @Inject lateinit var saveStoryGutenbergBlockUseCase: SaveStoryGutenbergBlockUseCase</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">    @Inject lateinit var mediaStore: MediaStore</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">    @Inject lateinit var fluxCUtilsWrapper: FluxCUtilsWrapper</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">    @Inject lateinit var storyRepositoryWrapper: StoryRepositoryWrapper</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">    @Inject lateinit var storiesPrefs: StoriesPrefs</span>
+
+    private lateinit var viewModel: StoryComposerViewModel
+
+    private var addingMediaToEditorProgressDialog: ProgressDialog? = null
+<span class="nc" id="L127">    private val frameIdsToRemove = ArrayList&lt;String&gt;()</span>
+
+<span class="nc" id="L129">    override fun getSite() = site</span>
+<span class="nc" id="L130">    override fun getEditPostRepository() = editPostRepository</span>
+
+    companion object {
+        protected const val FRAGMENT_ANNOUNCEMENT_DIALOG = &quot;story_announcement_dialog&quot;
+        const val STATE_KEY_POST_LOCAL_ID = &quot;state_key_post_model_local_id&quot;
+        const val STATE_KEY_EDITOR_SESSION_DATA = &quot;stateKeyEditorSessionData&quot;
+        const val STATE_KEY_ORIGINAL_STORY_SAVE_RESULT = &quot;stateKeyOriginalSaveResult&quot;
+        const val KEY_POST_LOCAL_ID = &quot;key_post_model_local_id&quot;
+        const val KEY_LAUNCHED_FROM_GUTENBERG = &quot;key_launched_from_gutenberg&quot;
+        const val KEY_ALL_UNFLATTENED_LOADED_SLIDES = &quot;key_all_unflattened_laoded_slides&quot;
+        const val UNUSED_KEY = &quot;unused_key&quot;
+        const val BASE_FRAME_MEDIA_ERROR_NOTIFICATION_ID: Int = 72300
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // convert our WPAndroid KEY_LAUNCHED_FROM_GUTENBERG flag into Stories general purpose EDIT_MODE flag
+<span class="nc" id="L146">        intent.putExtra(KEY_STORY_EDIT_MODE, intent.getBooleanExtra(KEY_LAUNCHED_FROM_GUTENBERG, false))</span>
+<span class="nc" id="L147">        setMediaPickerProvider(this)</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        (application as WordPress).component().inject(this)</span>
+<span class="nc" id="L149">        initSite(savedInstanceState)</span>
+<span class="nc" id="L150">        setSnackbarProvider(this)</span>
+<span class="nc" id="L151">        setAuthenticationProvider(this)</span>
+<span class="nc" id="L152">        setNotificationExtrasLoader(this)</span>
+<span class="nc" id="L153">        setMetadataProvider(this)</span>
+<span class="nc" id="L154">        setStoryDiscardListener(this)</span>
+<span class="nc" id="L155">        setStoriesAnalyticsListener(StoriesAnalyticsReceiver())</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">        setNotificationTrackerProvider((application as WordPress).storyNotificationTrackerProvider)</span>
+<span class="nc" id="L157">        setPrepublishingEventProvider(this)</span>
+<span class="nc" id="L158">        setPermissionDialogProvider(this)</span>
+<span class="nc" id="L159">        setGenericAnnouncementDialogProvider(this)</span>
+
+<span class="nc" id="L161">        initViewModel(savedInstanceState)</span>
+<span class="nc" id="L162">        super.onCreate(savedInstanceState)</span>
+
+<span class="nc" id="L164">        setUseTempCaptureFile(false) // we need to keep the captured files for later Story editing</span>
+<span class="nc" id="L165">    }</span>
+
+    private fun initSite(savedInstanceState: Bundle?) {
+<span class="nc bnc" id="L168" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">            site = intent.getSerializableExtra(WordPress.SITE) as SiteModel</span>
+        } else {
+<span class="nc bnc" id="L171" title="All 2 branches missed.">            site = savedInstanceState.getSerializable(WordPress.SITE) as SiteModel</span>
+        }
+<span class="nc" id="L173">    }</span>
+
+    private fun initViewModel(savedInstanceState: Bundle?) {
+<span class="nc" id="L176">        var localPostId = 0</span>
+<span class="nc" id="L177">        var notificationType: NotificationType? = null</span>
+<span class="nc" id="L178">        var originalStorySaveResult: StorySaveResult? = null</span>
+
+<span class="nc bnc" id="L180" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L181">            localPostId = getBackingPostIdFromIntent()</span>
+<span class="nc" id="L182">            originalStorySaveResult = intent.getParcelableExtra(KEY_STORY_SAVE_RESULT) as StorySaveResult?</span>
+
+<span class="nc bnc" id="L184" title="All 2 branches missed.">            if (intent.hasExtra(ARG_NOTIFICATION_TYPE)) {</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">                notificationType = intent.getSerializableExtra(ARG_NOTIFICATION_TYPE) as NotificationType</span>
+            }
+        } else {
+<span class="nc bnc" id="L188" title="All 2 branches missed.">            if (savedInstanceState.containsKey(STATE_KEY_POST_LOCAL_ID)) {</span>
+<span class="nc" id="L189">                localPostId = savedInstanceState.getInt(STATE_KEY_POST_LOCAL_ID)</span>
+            }
+<span class="nc bnc" id="L191" title="All 2 branches missed.">            if (savedInstanceState.containsKey(STATE_KEY_ORIGINAL_STORY_SAVE_RESULT)) {</span>
+<span class="nc" id="L192">                originalStorySaveResult =</span>
+<span class="nc" id="L193">                        savedInstanceState.getParcelable(STATE_KEY_ORIGINAL_STORY_SAVE_RESULT) as StorySaveResult?</span>
+            }
+        }
+
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        val postEditorAnalyticsSession = savedInstanceState?.let { bundle -&gt;</span>
+<span class="nc" id="L198">            PostEditorAnalyticsSession.fromBundle(bundle, STATE_KEY_EDITOR_SESSION_DATA, analyticsTrackerWrapper)</span>
+        }
+
+<span class="nc" id="L201">        viewModel = ViewModelProvider(this, viewModelFactory)</span>
+<span class="nc" id="L202">                .get(StoryComposerViewModel::class.java)</span>
+
+<span class="nc bnc" id="L204" title="All 2 branches missed.">        site?.let {</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">            val postInitialized = viewModel.start(</span>
+<span class="nc" id="L206">                    it,</span>
+<span class="nc" id="L207">                    editPostRepository,</span>
+<span class="nc" id="L208">                    LocalId(localPostId),</span>
+<span class="nc" id="L209">                    postEditorAnalyticsSession,</span>
+<span class="nc" id="L210">                    notificationType,</span>
+<span class="nc" id="L211">                    originalStorySaveResult</span>
+            )
+
+            // Ensure we have a valid post
+<span class="nc bnc" id="L215" title="All 2 branches missed.">            if (!postInitialized) {</span>
+<span class="nc" id="L216">                showErrorAndFinish(R.string.post_not_found)</span>
+<span class="nc" id="L217">                return@let</span>
+            }
+<span class="nc" id="L219">        }</span>
+
+<span class="nc bnc" id="L221" title="All 2 branches missed.">        storyEditorMedia.start(requireNotNull(site), this)</span>
+<span class="nc" id="L222">        setupStoryEditorMediaObserver()</span>
+<span class="nc" id="L223">        setupViewModelObservers()</span>
+<span class="nc" id="L224">    }</span>
+
+    private fun setupViewModelObservers() {
+<span class="nc bnc" id="L227" title="All 2 branches missed.">        viewModel.mediaFilesUris.observe(this, { uriList -&gt;</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">            val filteredList = uriList.filterNot { MediaUtils.isGif(it.toString()) }</span>
+<span class="nc bnc" id="L229" title="All 4 branches missed.">            if (filteredList.isNotEmpty()) {</span>
+<span class="nc" id="L230">                addFramesToStoryFromMediaUriList(filteredList)</span>
+<span class="nc" id="L231">                setDefaultSelectionAndUpdateBackgroundSurfaceUI(filteredList)</span>
+                // generally speaking, adding media will happen at the beginning of loading the StoryComposer, so once
+                // it's done adding media the StoryComposer will be ready to render the newly loaded / created Story.
+                // Hence, it makes sense to start the editor session tracking at this point - note subsequent calls
+                // will have no effect, given PostEditorAnalyticsSession has a flag so it can only be started once.
+<span class="nc bnc" id="L236" title="All 2 branches missed.">                viewModel.onStoryComposerStartAnalyticsSession()</span>
+            }
+
+            // finally if any of the files was a gif, warn the user
+<span class="nc bnc" id="L240" title="All 2 branches missed.">            if (filteredList.size != uriList.size) {</span>
+<span class="nc" id="L241">                FrameSaveErrorDialog.newInstance(</span>
+<span class="nc" id="L242">                        title = getString(R.string.dialog_edit_story_unsupported_format_title),</span>
+<span class="nc" id="L243">                        message = getString(R.string.dialog_edit_story_unsupported_format_message),</span>
+<span class="nc" id="L244">                        hideCancelButton = true,</span>
+<span class="nc" id="L245">                        listener = object : FrameSaveErrorDialogOk {</span>
+                            override fun OnOkClicked(dialog: DialogFragment) {
+<span class="nc bnc" id="L247" title="All 2 branches missed.">                                if (filteredList.isEmpty()) {</span>
+<span class="nc" id="L248">                                    onStoryDiscarded()</span>
+<span class="nc" id="L249">                                    setResult(Activity.RESULT_CANCELED)</span>
+<span class="nc" id="L250">                                    finish()</span>
+                                }
+<span class="nc" id="L252">                            }</span>
+                        }
+<span class="nc" id="L254">                ).show(supportFragmentManager, FRAGMENT_ANNOUNCEMENT_DIALOG)</span>
+            }
+<span class="nc" id="L256">        })</span>
+
+<span class="nc bnc" id="L258" title="All 2 branches missed.">        viewModel.openPrepublishingBottomSheet.observeEvent(this, {</span>
+<span class="nc" id="L259">            analyticsTrackerWrapper.track(PREPUBLISHING_BOTTOM_SHEET_OPENED)</span>
+<span class="nc" id="L260">            openPrepublishingBottomSheet()</span>
+<span class="nc" id="L261">        })</span>
+
+<span class="nc bnc" id="L263" title="All 2 branches missed.">        viewModel.submitButtonClicked.observeEvent(this, {</span>
+<span class="nc" id="L264">            analyticsTrackerWrapper.track(Stat.STORY_POST_PUBLISH_TAPPED)</span>
+<span class="nc" id="L265">            processStorySaving()</span>
+<span class="nc" id="L266">        })</span>
+
+<span class="nc bnc" id="L268" title="All 2 branches missed.">        viewModel.trackEditorCreatedPost.observeEvent(this, {</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">            site?.let {</span>
+<span class="nc" id="L270">                analyticsUtilsWrapper.trackEditorCreatedPost(</span>
+<span class="nc" id="L271">                        intent.action,</span>
+<span class="nc" id="L272">                        intent,</span>
+<span class="nc" id="L273">                        it,</span>
+<span class="nc" id="L274">                        editPostRepository.getPost()</span>
+                )
+<span class="nc" id="L276">            }</span>
+<span class="nc" id="L277">        })</span>
+<span class="nc" id="L278">    }</span>
+
+    private fun showErrorAndFinish(errorMessageId: Int) {
+<span class="nc" id="L281">        ToastUtils.showToast(</span>
+<span class="nc" id="L282">                this,</span>
+<span class="nc" id="L283">                errorMessageId,</span>
+<span class="nc" id="L284">                ToastUtils.Duration.LONG</span>
+        )
+<span class="nc" id="L286">        finish()</span>
+<span class="nc" id="L287">    }</span>
+
+    override fun onLoadFromIntent(intent: Intent) {
+<span class="nc" id="L290">        super.onLoadFromIntent(intent)</span>
+        // now see if we need to handle information coming from the MediaPicker to populate
+<span class="nc" id="L292">        handleMediaPickerIntentData(intent)</span>
+<span class="nc" id="L293">    }</span>
+
+    override fun onSaveInstanceState(outState: Bundle) {
+<span class="nc" id="L296">        super.onSaveInstanceState(outState)</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        viewModel.writeToBundle(outState)</span>
+<span class="nc" id="L298">    }</span>
+
+    @Suppress(&quot;NestedBlockDepth&quot;)
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+<span class="nc bnc" id="L302" title="All 2 branches missed.">        viewModel.onStoryComposerAnalyticsSessionStartTimeReset()</span>
+<span class="nc" id="L303">        super.onActivityResult(requestCode, resultCode, data)</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">        data?.let {</span>
+<span class="nc bnc" id="L305" title="All 3 branches missed.">            when (requestCode) {</span>
+                RequestCodes.MULTI_SELECT_MEDIA_PICKER, RequestCodes.SINGLE_SELECT_MEDIA_PICKER -&gt; {
+<span class="nc" id="L307">                    handleMediaPickerIntentData(it)</span>
+                }
+                RequestCodes.PHOTO_PICKER, RequestCodes.STORIES_PHOTO_PICKER -&gt; {
+<span class="nc" id="L310">                    when {</span>
+<span class="nc bnc" id="L311" title="All 2 branches missed.">                        it.hasExtra(MediaPickerConstants.EXTRA_MEDIA_URIS) -&gt; {</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">                            data.getStringArrayExtra(MediaPickerConstants.EXTRA_MEDIA_URIS)?.let {</span>
+<span class="nc" id="L313">                                val uriList: List&lt;Uri&gt; = convertStringArrayIntoUrisList(it)</span>
+<span class="nc" id="L314">                                storyEditorMedia.onPhotoPickerMediaChosen(uriList)</span>
+<span class="nc" id="L315">                            }</span>
+                        }
+<span class="nc bnc" id="L317" title="All 2 branches missed.">                        it.hasExtra(MediaBrowserActivity.RESULT_IDS) -&gt; {</span>
+<span class="nc" id="L318">                            handleMediaPickerIntentData(it)</span>
+                        }
+                        else -&gt; {
+                            // handleMediaPickerIntentData(it)?
+                        }
+                    }
+                }
+                else -&gt; {
+                    // handleMediaPickerIntentData(it)?
+                }
+            }
+        }
+<span class="nc" id="L330">    }</span>
+
+    override fun onDestroy() {
+<span class="nc" id="L333">        storyEditorMedia.cancelAddMediaToEditorActions()</span>
+<span class="nc" id="L334">        super.onDestroy()</span>
+<span class="nc" id="L335">    }</span>
+
+    private fun getBackingPostIdFromIntent(): Int {
+<span class="nc" id="L338">        var localPostId = intent.getIntExtra(KEY_POST_LOCAL_ID, 0)</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">        if (localPostId == 0) {</span>
+<span class="nc bnc" id="L340" title="All 2 branches missed.">            if (intent.hasExtra(KEY_STORY_SAVE_RESULT)) {</span>
+<span class="nc" id="L341">                val storySaveResult =</span>
+<span class="nc" id="L342">                        intent.getParcelableExtra(KEY_STORY_SAVE_RESULT) as StorySaveResult?</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">                storySaveResult?.let {</span>
+<span class="nc bnc" id="L344" title="All 2 branches missed.">                    localPostId = it.metadata?.getInt(KEY_POST_LOCAL_ID, 0) ?: 0</span>
+<span class="nc" id="L345">                }</span>
+            }
+        }
+<span class="nc" id="L348">        return localPostId</span>
+    }
+
+    override fun showProvidedSnackbar(message: String, actionLabel: String?, callback: () -&gt; Unit) {
+        // no op
+        // no provided snackbar here given we're not using snackbars from within the Story Creation experience
+        // in WPAndroid
+<span class="nc" id="L355">    }</span>
+
+    override fun setupRequestCodes(requestCodes: ExternalMediaPickerRequestCodesAndExtraKeys) {
+<span class="nc" id="L358">        requestCodes.PHOTO_PICKER = RequestCodes.PHOTO_PICKER</span>
+<span class="nc" id="L359">        requestCodes.EXTRA_LAUNCH_WPSTORIES_CAMERA_REQUESTED =</span>
+<span class="nc" id="L360">                MediaPickerConstants.EXTRA_LAUNCH_WPSTORIES_CAMERA_REQUESTED</span>
+<span class="nc" id="L361">        requestCodes.EXTRA_LAUNCH_WPSTORIES_MEDIA_PICKER_REQUESTED =</span>
+<span class="nc" id="L362">                MediaPickerConstants.EXTRA_LAUNCH_WPSTORIES_MEDIA_PICKER_REQUESTED</span>
+        // we're handling EXTRA_MEDIA_URIS at the app level (not at the Stories library level)
+        // hence we set the requestCode to UNUSED
+<span class="nc" id="L365">        requestCodes.EXTRA_MEDIA_URIS = UNUSED_KEY</span>
+<span class="nc" id="L366">    }</span>
+
+    override fun showProvidedMediaPicker() {
+<span class="nc" id="L369">        mediaPickerLauncher.showStoriesPhotoPickerForResult(</span>
+<span class="nc" id="L370">                this,</span>
+<span class="nc" id="L371">                site</span>
+        )
+<span class="nc" id="L373">    }</span>
+
+    override fun providerHandlesOnActivityResult(): Boolean {
+        // lets the super class know we're handling media picking OnActivityResult
+<span class="nc" id="L377">        return true</span>
+    }
+
+    private fun handleMediaPickerIntentData(data: Intent) {
+<span class="nc bnc" id="L381" title="All 2 branches missed.">        if (permissionsRequestForCameraInProgress) {</span>
+<span class="nc" id="L382">            return</span>
+        }
+
+<span class="nc" id="L385">        when {</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">            data.hasExtra(MediaPickerConstants.EXTRA_MEDIA_URIS) -&gt; {</span>
+<span class="nc bnc" id="L387" title="All 2 branches missed.">                data.getStringArrayExtra(MediaPickerConstants.EXTRA_MEDIA_URIS)?.let {</span>
+<span class="nc" id="L388">                    val uriList: List&lt;Uri&gt; = convertStringArrayIntoUrisList(it)</span>
+
+<span class="nc bnc" id="L390" title="All 4 branches missed.">                    if (uriList.isNotEmpty()) {</span>
+<span class="nc" id="L391">                        storyEditorMedia.onPhotoPickerMediaChosen(uriList)</span>
+                    }
+<span class="nc" id="L393">                }</span>
+            }
+<span class="nc bnc" id="L395" title="All 2 branches missed.">            data.hasExtra(MediaBrowserActivity.RESULT_IDS) -&gt; {</span>
+<span class="nc" id="L396">                val ids = ListUtils.fromLongArray(</span>
+<span class="nc" id="L397">                        data.getLongArrayExtra(</span>
+<span class="nc" id="L398">                                MediaBrowserActivity.RESULT_IDS</span>
+                        )
+                )
+<span class="nc bnc" id="L401" title="All 4 branches missed.">                if (ids == null || ids.size == 0) {</span>
+<span class="nc" id="L402">                    return</span>
+                }
+<span class="nc" id="L404">                storyEditorMedia.addExistingMediaToEditorAsync(WP_MEDIA_LIBRARY, ids)</span>
+            }
+<span class="nc bnc" id="L406" title="All 2 branches missed.">            data.hasExtra(MediaPickerConstants.EXTRA_LAUNCH_WPSTORIES_CAMERA_REQUESTED) -&gt; {</span>
+                // when coming from this entry point, we can start the analytics session
+<span class="nc bnc" id="L408" title="All 2 branches missed.">                viewModel.onStoryComposerStartAnalyticsSession()</span>
+            }
+        }
+<span class="nc" id="L411">    }</span>
+
+    private fun setupStoryEditorMediaObserver() {
+<span class="nc" id="L414">        storyEditorMedia.uiState.observe(this,</span>
+                Observer { uiState: AddMediaToStoryPostUiState? -&gt;
+<span class="nc bnc" id="L416" title="All 2 branches missed.">                    if (uiState != null) {</span>
+<span class="nc" id="L417">                        updateAddingMediaToStoryComposerProgressDialogState(uiState.progressDialogUiState)</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">                        if (uiState.editorOverlayVisibility) {</span>
+<span class="nc" id="L419">                            showLoading()</span>
+                        } else {
+<span class="nc" id="L421">                            hideLoading()</span>
+                        }
+                    }
+<span class="nc" id="L424">                }</span>
+        )
+<span class="nc" id="L426">        storyEditorMedia.snackBarMessage.observeEvent(this,</span>
+                { messageHolder -&gt;
+<span class="nc bnc" id="L428" title="All 2 branches missed.">                    findViewById&lt;View&gt;(R.id.compose_loop_frame_layout)?.let {</span>
+<span class="nc" id="L429">                        WPSnackbar</span>
+<span class="nc" id="L430">                                .make(</span>
+<span class="nc" id="L431">                                        it,</span>
+<span class="nc" id="L432">                                        uiHelpers.getTextOfUiString(this, messageHolder.message),</span>
+<span class="nc" id="L433">                                        Snackbar.LENGTH_SHORT</span>
+                                )
+<span class="nc" id="L435">                                .show()</span>
+<span class="nc" id="L436">                    }</span>
+<span class="nc" id="L437">                }</span>
+        )
+<span class="nc" id="L439">    }</span>
+
+    // EditorMediaListener
+    override fun appendMediaFiles(mediaFiles: Map&lt;String, MediaFile&gt;) {
+<span class="nc bnc" id="L443" title="All 2 branches missed.">        viewModel.appendMediaFiles(mediaFiles)</span>
+<span class="nc" id="L444">    }</span>
+
+    override fun getImmutablePost(): PostImmutableModel {
+<span class="nc" id="L447">        return Objects.requireNonNull(editPostRepository.getPost()!!)</span>
+    }
+
+    override fun syncPostObjectWithUiAndSaveIt(listener: OnPostUpdatedFromUIListener?) {
+        // TODO will implement when we support StoryPost editing
+        // updateAndSavePostAsync(listener)
+        // Ignore the result as we want to invoke the listener even when the PostModel was up-to-date
+<span class="nc bnc" id="L454" title="All 2 branches missed.">        listener?.onPostUpdatedFromUI(null)</span>
+<span class="nc" id="L455">    }</span>
+
+    override fun advertiseImageOptimization(listener: () -&gt; Unit) {
+<span class="nc" id="L458">        WPMediaUtils.advertiseImageOptimization(this) { listener.invoke() }</span>
+<span class="nc" id="L459">    }</span>
+
+    override fun onMediaModelsCreatedFromOptimizedUris(oldUriToMediaFiles: Map&lt;Uri, MediaModel&gt;) {
+        // no op - we're not doing any special handling while composing, only when saving in the UploadBridge
+<span class="nc" id="L463">    }</span>
+
+    override fun showVideoDurationLimitWarning(fileName: String) {
+<span class="nc" id="L466">        ToastUtils.showToast(this, string.error_media_video_duration_exceeds_limit, LONG)</span>
+<span class="nc" id="L467">    }</span>
+
+    private fun updateAddingMediaToStoryComposerProgressDialogState(uiState: ProgressDialogUiState) {
+<span class="nc" id="L470">        addingMediaToEditorProgressDialog = progressDialogHelper</span>
+<span class="nc" id="L471">                .updateProgressDialogState(this, addingMediaToEditorProgressDialog, uiState, uiHelpers)</span>
+<span class="nc" id="L472">    }</span>
+
+    override fun getAuthHeaders(url: String): Map&lt;String, String&gt; {
+<span class="nc" id="L475">        return authenticationUtils.getAuthHeaders(url)</span>
+    }
+
+    // region NotificationIntentLoader
+    override fun loadIntentForErrorNotification(): Intent {
+<span class="nc" id="L480">        val notificationIntent = Intent(applicationContext, StoryComposerActivity::class.java)</span>
+<span class="nc" id="L481">        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)</span>
+<span class="nc" id="L482">        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)</span>
+<span class="nc" id="L483">        notificationIntent.putExtra(WordPress.SITE, site)</span>
+        // setup tracks NotificationType for Notification tracking. Note this doesn't use our interface.
+<span class="nc" id="L485">        val notificationType = NotificationType.STORY_SAVE_ERROR</span>
+<span class="nc" id="L486">        notificationIntent.putExtra(ARG_NOTIFICATION_TYPE, notificationType)</span>
+<span class="nc" id="L487">        return notificationIntent</span>
+    }
+
+    override fun loadPendingIntentForErrorNotificationDeletion(notificationId: Int): PendingIntent? {
+<span class="nc" id="L491">        return NotificationsProcessingService</span>
+<span class="nc" id="L492">                .getPendingIntentForNotificationDismiss(</span>
+<span class="nc" id="L493">                        applicationContext,</span>
+<span class="nc" id="L494">                        notificationId,</span>
+<span class="nc" id="L495">                        NotificationType.STORY_SAVE_ERROR</span>
+                )
+    }
+
+    override fun setupErrorNotificationBaseId(): Int {
+<span class="nc" id="L500">        return BASE_FRAME_MEDIA_ERROR_NOTIFICATION_ID</span>
+    }
+    // endregion
+
+    override fun loadMetadataForStory(index: StoryIndex): Bundle? {
+<span class="nc" id="L505">        val bundle = Bundle()</span>
+<span class="nc" id="L506">        bundle.putSerializable(WordPress.SITE, site)</span>
+<span class="nc" id="L507">        bundle.putInt(KEY_STORY_INDEX, index)</span>
+<span class="nc" id="L508">        bundle.putInt(KEY_POST_LOCAL_ID, editPostRepository.id)</span>
+<span class="nc" id="L509">        return bundle</span>
+    }
+
+    override fun onStoryDiscarded() {
+<span class="nc" id="L513">        val launchedFromGutenberg = intent.getBooleanExtra(KEY_LAUNCHED_FROM_GUTENBERG, false)</span>
+<span class="nc bnc" id="L514" title="All 4 branches missed.">        val storyDiscardedFromRetry = viewModel.onStoryDiscarded(!launchedFromGutenberg)</span>
+
+<span class="nc bnc" id="L516" title="All 4 branches missed.">        if (launchedFromGutenberg || storyDiscardedFromRetry) {</span>
+<span class="nc" id="L517">            setResult(Activity.RESULT_CANCELED)</span>
+        }
+<span class="nc" id="L519">        finish()</span>
+<span class="nc" id="L520">    }</span>
+
+    override fun onFrameRemove(storyIndex: StoryIndex, storyFrameIndex: Int) {
+        // keep record of the frames users deleted.
+        // But we'll only actually do cleanup once they tap on the DONE/SAVE button, because they could
+        // still bail out of the StoryComposer by tapping back or the cross and then admitting they want to lose
+        // the changes they made (this means, they'd want to keep the stories).
+<span class="nc" id="L527">        val story = storyRepositoryWrapper.getStoryAtIndex(storyIndex)</span>
+<span class="nc bnc" id="L528" title="All 2 branches missed.">        if (storyFrameIndex &lt; story.frames.size) {</span>
+<span class="nc bnc" id="L529" title="All 2 branches missed.">            story.frames[storyFrameIndex].id?.let {</span>
+<span class="nc" id="L530">                frameIdsToRemove.add(it)</span>
+            }
+        }
+<span class="nc" id="L533">    }</span>
+
+    private fun openPrepublishingBottomSheet() {
+<span class="nc" id="L536">        val fragment = supportFragmentManager.findFragmentByTag(PrepublishingBottomSheetFragment.TAG)</span>
+<span class="nc bnc" id="L537" title="All 2 branches missed.">        if (fragment == null) {</span>
+<span class="nc" id="L538">            val prepublishingFragment = PrepublishingBottomSheetFragment.newInstance(</span>
+<span class="nc bnc" id="L539" title="All 2 branches missed.">                    site = requireNotNull(site),</span>
+<span class="nc" id="L540">                    isPage = editPostRepository.isPage,</span>
+<span class="nc" id="L541">                    isStoryPost = true</span>
+            )
+<span class="nc" id="L543">            prepublishingFragment.show(supportFragmentManager, PrepublishingBottomSheetFragment.TAG)</span>
+        }
+<span class="nc" id="L545">    }</span>
+
+    override fun onStorySaveButtonPressed() {
+<span class="nc bnc" id="L548" title="All 2 branches missed.">        if (intent.getBooleanExtra(KEY_LAUNCHED_FROM_GUTENBERG, false)) {</span>
+            // first of all, remove any StoriesPref for removed slides
+<span class="nc bnc" id="L550" title="All 2 branches missed.">            site?.let {</span>
+<span class="nc" id="L551">                val siteLocalId = it.id.toLong()</span>
+<span class="nc bnc" id="L552" title="All 2 branches missed.">                for (frameId in frameIdsToRemove) {</span>
+<span class="nc bnc" id="L553" title="All 2 branches missed.">                    if (storiesPrefs.checkSlideIdExists(siteLocalId, RemoteId(frameId.toLong()))) {</span>
+<span class="nc" id="L554">                        storiesPrefs.deleteSlideWithRemoteId(siteLocalId, RemoteId(frameId.toLong()))</span>
+                    } else {
+                        // shouldn't happen but just in case the story frame has just been created but not yet uploaded
+                        // let's delete the local slide pref.
+<span class="nc" id="L558">                        storiesPrefs.deleteSlideWithLocalId(siteLocalId, LocalId(frameId.toInt()))</span>
+                    }
+                }
+<span class="nc" id="L561">            }</span>
+
+<span class="nc bnc" id="L563" title="All 2 branches missed.">            viewModel.onStorySaved()</span>
+            // TODO add tracks
+<span class="nc" id="L565">            processStorySaving()</span>
+
+<span class="nc" id="L567">            val savedContentIntent = Intent()</span>
+<span class="nc bnc" id="L568" title="All 2 branches missed.">            val blockId = intent.extras?.getString(ARG_STORY_BLOCK_ID)</span>
+<span class="nc" id="L569">            savedContentIntent.putExtra(ARG_STORY_BLOCK_ID, blockId)</span>
+
+            // check if story index has been passed through intent
+<span class="nc" id="L572">            var storyIndex = intent.getIntExtra(KEY_STORY_INDEX, DEFAULT_NONE_SELECTED)</span>
+<span class="nc bnc" id="L573" title="All 2 branches missed.">            if (storyIndex == DEFAULT_NONE_SELECTED) {</span>
+                // if not, let's use the current Story
+<span class="nc" id="L575">                storyIndex = storyRepositoryWrapper.getCurrentStoryIndex()</span>
+            }
+
+            // if we are editing this Story Block, then the id is assured to be a remote media file id, but
+            // the frame no longer points to such media Id on the site given we are just about to save a
+            // new flattened media. Hence, we need to set a new temporary Id we can use to identify
+            // this frame within the Gutenberg Story block inside a Post, and match it to an existing Story frame in
+            // our StoryRepository.
+            // All of this while still keeping a valid &quot;old&quot; remote URl and mediaId so the block is still
+            // rendered as non-empty on mobile gutenberg while the actual flattening happens on the service.
+<span class="nc" id="L585">            val updatedStoryBlock =</span>
+<span class="nc" id="L586">                    saveStoryGutenbergBlockUseCase.buildJetpackStoryBlockStringFromStoryMediaFileData(</span>
+<span class="nc" id="L587">                            buildStoryMediaFileDataListFromStoryFrameIndexes(storyIndex)</span>
+                    )
+
+<span class="nc" id="L590">            savedContentIntent.putExtra(ARG_STORY_BLOCK_UPDATED_CONTENT, updatedStoryBlock)</span>
+<span class="nc" id="L591">            setResult(Activity.RESULT_OK, savedContentIntent)</span>
+<span class="nc" id="L592">            finish()</span>
+        } else {
+            // assume this is a new Post, and proceed to PrePublish bottom sheet
+<span class="nc bnc" id="L595" title="All 2 branches missed.">            viewModel.onStorySaveButtonPressed()</span>
+        }
+<span class="nc" id="L597">    }</span>
+
+    private fun buildStoryMediaFileDataListFromStoryFrameIndexes(
+        storyIndex: StoryIndex
+    ): ArrayList&lt;StoryMediaFileData&gt; {
+<span class="nc" id="L602">        val storyMediaFileDataList = ArrayList&lt;StoryMediaFileData&gt;() // holds media files</span>
+<span class="nc" id="L603">        val story = storyRepositoryWrapper.getStoryAtIndex(storyIndex)</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">        for ((frameIndex, frame) in story.frames.withIndex()) {</span>
+<span class="nc" id="L605">            val newTempId = storiesPrefs.getNewIncrementalTempId()</span>
+<span class="nc" id="L606">            val assignedTempId = saveStoryGutenbergBlockUseCase.getTempIdForStoryFrame(</span>
+<span class="nc" id="L607">                    newTempId, storyIndex, frameIndex</span>
+            )
+<span class="nc" id="L609">            when (frame.id) {</span>
+                // if the frame.id is null, this is a new frame that has been added to an edited Story
+                // so, we don't have much information yet. We do have the background source (not the flattened
+                // image yet) so, let's use that for now, and assign the temporaryID we'll use to send
+                // save progress events to Gutenberg.
+<span class="nc bnc" id="L614" title="All 2 branches missed.">                null -&gt; {</span>
+<span class="nc" id="L615">                    val storyMediaFileData = buildStoryMediaFileDataForTemporarySlide(</span>
+<span class="nc" id="L616">                            frame,</span>
+<span class="nc" id="L617">                            assignedTempId</span>
+                    )
+<span class="nc" id="L619">                    frame.id = storyMediaFileData.id</span>
+<span class="nc" id="L620">                    storyMediaFileDataList.add(storyMediaFileData)</span>
+                }
+                // if the frame.id is populated and is not a temporary id, this should be an actual MediaModel mediaId so,
+                // let's use that to obtain the mediaFile and then replace it with the temporary frame.id
+                else -&gt; {
+<span class="nc bnc" id="L625" title="All 2 branches missed.">                    frame.id?.let {</span>
+<span class="nc bnc" id="L626" title="All 2 branches missed.">                        if (it.startsWith(TEMPORARY_ID_PREFIX)) {</span>
+<span class="nc" id="L627">                            val storyMediaFileData = buildStoryMediaFileDataForTemporarySlide(</span>
+<span class="nc" id="L628">                                    frame,</span>
+<span class="nc" id="L629">                                    it</span>
+                            )
+<span class="nc" id="L631">                            storyMediaFileDataList.add(storyMediaFileData)</span>
+                        } else {
+<span class="nc" id="L633">                            val mediaModel = mediaStore.getSiteMediaWithId(site, it.toLong())</span>
+<span class="nc" id="L634">                            val mediaFile = fluxCUtilsWrapper.mediaFileFromMediaModel(mediaModel)</span>
+<span class="nc bnc" id="L635" title="All 2 branches missed.">                            mediaFile?.let { mediafile -&gt;</span>
+<span class="nc" id="L636">                                mediaFile.alt = StoryFrameItem.getAltTextFromFrameAddedViews(frame)</span>
+<span class="nc" id="L637">                                mediaModel.alt = mediaFile.alt</span>
+<span class="nc" id="L638">                                val storyMediaFileData =</span>
+<span class="nc" id="L639">                                        saveStoryGutenbergBlockUseCase.buildMediaFileDataWithTemporaryId(</span>
+<span class="nc" id="L640">                                                mediaFile = mediafile,</span>
+<span class="nc" id="L641">                                                temporaryId = assignedTempId</span>
+                                        )
+<span class="nc" id="L643">                                frame.id = storyMediaFileData.id</span>
+<span class="nc" id="L644">                                storyMediaFileDataList.add(storyMediaFileData)</span>
+                            }
+                        }
+                    }
+                }
+            }
+        }
+<span class="nc" id="L651">        return storyMediaFileDataList</span>
+    }
+
+    private fun buildStoryMediaFileDataForTemporarySlide(frame: StoryFrameItem, tempId: String): StoryMediaFileData {
+<span class="nc" id="L655">        return saveStoryGutenbergBlockUseCase.buildMediaFileDataWithTemporaryIdNoMediaFile(</span>
+<span class="nc" id="L656">                temporaryId = tempId,</span>
+<span class="nc bnc" id="L657" title="All 2 branches missed.">                url = if (frame.source is FileBackgroundSource) {</span>
+<span class="nc" id="L658">                    (frame.source as FileBackgroundSource).file.toString()</span>
+                } else {
+<span class="nc" id="L660">                    (frame.source as UriBackgroundSource).contentUri.toString()</span>
+                },
+<span class="nc" id="L662">                isVideo = (frame.frameItemType is VIDEO)</span>
+        )
+    }
+
+    override fun onSubmitButtonClicked(publishPost: PublishPost) {
+<span class="nc bnc" id="L667" title="All 2 branches missed.">        viewModel.onSubmitButtonClicked()</span>
+<span class="nc" id="L668">    }</span>
+
+    override fun showPermissionPermanentlyDeniedDialog(permission: String) {
+<span class="nc" id="L671">        WPPermissionUtils.showPermissionAlwaysDeniedDialog(this, permission)</span>
+<span class="nc" id="L672">    }</span>
+
+    override fun showGenericAnnouncementDialog() {
+<span class="nc bnc" id="L675" title="All 2 branches missed.">        if (intent.getBooleanExtra(KEY_LAUNCHED_FROM_GUTENBERG, false)) {</span>
+<span class="nc bnc" id="L676" title="All 2 branches missed.">            if (!intent.getBooleanExtra(KEY_ALL_UNFLATTENED_LOADED_SLIDES, false)) {</span>
+                // not all slides in this Story could be unflattened so, show the warning informative dialog
+<span class="nc" id="L678">                FrameSaveErrorDialog.newInstance(</span>
+<span class="nc" id="L679">                        title = getString(R.string.dialog_edit_story_limited_title),</span>
+<span class="nc" id="L680">                        message = getString(R.string.dialog_edit_story_limited_message)</span>
+<span class="nc" id="L681">                ).show(supportFragmentManager, FRAGMENT_ANNOUNCEMENT_DIALOG)</span>
+            }
+        }
+<span class="nc" id="L684">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onStoryLoadEnd(event: StoryLoadEnd) {
+        // once the Story has been loaded by the Composer, we should mark the composing session start as the
+        // UI is ready to receive user's input
+<span class="nc bnc" id="L690" title="All 2 branches missed.">        viewModel.onStoryComposerStartAnalyticsSession()</span>
+<span class="nc" id="L691">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

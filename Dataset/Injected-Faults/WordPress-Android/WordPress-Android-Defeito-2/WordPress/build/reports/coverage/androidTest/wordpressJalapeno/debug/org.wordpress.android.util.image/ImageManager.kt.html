@@ -1,0 +1,605 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ImageManager.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.util.image</a> &gt; <span class="el_source">ImageManager.kt</span></div><h1>ImageManager.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.util.image
+
+import android.app.Activity
+import android.app.Application
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
+import android.net.Uri
+import android.text.TextUtils
+import android.util.Base64
+import android.widget.ImageView
+import android.widget.ImageView.ScaleType
+import android.widget.ImageView.ScaleType.CENTER
+import android.widget.ImageView.ScaleType.FIT_CENTER
+import android.widget.ImageView.ScaleType.FIT_END
+import android.widget.ImageView.ScaleType.FIT_START
+import android.widget.ImageView.ScaleType.FIT_XY
+import android.widget.ImageView.ScaleType.MATRIX
+import android.widget.TextView
+import androidx.annotation.DrawableRes
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import com.bumptech.glide.load.DataSource
+import com.bumptech.glide.load.engine.GlideException
+import com.bumptech.glide.load.resource.bitmap.CenterCrop
+import com.bumptech.glide.load.resource.bitmap.DownsampleStrategy
+import com.bumptech.glide.load.resource.bitmap.RoundedCorners
+import com.bumptech.glide.request.RequestOptions
+import com.bumptech.glide.request.target.AppWidgetTarget
+import com.bumptech.glide.request.target.BaseTarget
+import com.bumptech.glide.request.target.CustomTarget
+import com.bumptech.glide.request.target.Target
+import com.bumptech.glide.request.target.ViewTarget
+import com.bumptech.glide.request.transition.Transition
+import com.bumptech.glide.signature.ObjectKey
+import kotlinx.coroutines.CoroutineScope
+import org.wordpress.android.WordPress
+import org.wordpress.android.modules.GlideApp
+import org.wordpress.android.modules.GlideRequest
+import org.wordpress.android.networking.MShot
+import org.wordpress.android.ui.media.VideoLoader
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.image.ImageType.VIDEO
+import java.io.File
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Singleton for asynchronous image fetching/loading with support for placeholders, transformations and more.
+ */
+
+<span class="fc" id="L53">@Singleton</span>
+<span class="fc" id="L54">class ImageManager @Inject constructor(</span>
+<span class="fc" id="L55">    private val placeholderManager: ImagePlaceholderManager,</span>
+<span class="fc" id="L56">    private val videoLoader: VideoLoader?</span>
+) {
+    interface RequestListener&lt;T&gt; {
+        /**
+         * Called when an exception occurs during a load
+         *
+         * @param e The maybe {@code null} exception containing information about why the request failed.
+         * @param model The model we were trying to load when the exception occurred.
+         */
+        fun onLoadFailed(e: Exception?, model: Any?)
+
+        /**
+         * Called when a load completes successfully
+         *
+         * @param resource The resource that was loaded for the target.
+         * @param model The specific model that was used to load the image.
+         */
+        fun onResourceReady(resource: T, model: Any?)
+    }
+
+    /**
+     * Return true if this [Context] is available.
+     * Availability is defined as the following:
+     * + [Context] is not null
+     * + [Context] is not destroyed (tested with [FragmentActivity.isDestroyed] or [Activity.isDestroyed])
+     */
+    private fun Context?.isAvailable(): Boolean {
+<span class="nc bnc" id="L83" title="All 2 branches missed.">        if (this == null) {</span>
+<span class="nc" id="L84">            return false</span>
+<span class="nc bnc" id="L85" title="All 2 branches missed.">        } else if (this !is Application) {</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">            if (this is FragmentActivity) {</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">                return !this.isDestroyed</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">            } else if (this is Activity) {</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">                return !this.isDestroyed</span>
+            }
+        }
+<span class="nc" id="L92">        return true</span>
+    }
+
+    /**
+     * Loads an image from the &quot;imgUrl&quot; into the ImageView. Adds a placeholder and an error placeholder depending
+     * on the ImageType.
+     *
+     * If no URL is provided, it only loads the placeholder
+     */
+    @JvmOverloads
+<span class="nc" id="L102">    fun load(imageView: ImageView, imageType: ImageType, imgUrl: String = &quot;&quot;, scaleType: ScaleType = CENTER) {</span>
+<span class="nc" id="L103">        val context = imageView.context</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L105">        GlideApp.with(context)</span>
+<span class="nc" id="L106">                .load(imgUrl)</span>
+<span class="nc" id="L107">                .addFallback(imageType)</span>
+<span class="nc" id="L108">                .addPlaceholder(imageType)</span>
+<span class="nc" id="L109">                .applyScaleType(scaleType)</span>
+<span class="nc" id="L110">                .into(imageView)</span>
+<span class="nc" id="L111">                .clearOnDetach()</span>
+<span class="nc" id="L112">    }</span>
+
+    /**
+     * Loads the first frame from the &quot;videoUrl&quot; as an image into the ImageView.
+     * Adds a placeholder and an error placeholder depending on the ImageType.
+     *
+     * If no URL is provided, it only loads the placeholder
+     */
+    @JvmOverloads
+<span class="nc" id="L121">    fun loadThumbnailFromVideoUrl(</span>
+        scope: CoroutineScope,
+        imageView: ImageView,
+<span class="nc" id="L124">        videoUrl: String = &quot;&quot;,</span>
+<span class="nc" id="L125">        scaleType: ScaleType = CENTER,</span>
+<span class="nc" id="L126">        requestListener: RequestListener&lt;Drawable&gt;? = null</span>
+    ) {
+<span class="nc" id="L128">        val context = imageView.context</span>
+<span class="nc" id="L129">        val imageType = VIDEO</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc bnc" id="L131" title="All 4 branches missed.">        videoLoader?.runIfMediaNotTooBig(scope,</span>
+<span class="nc" id="L132">                videoUrl,</span>
+                loadAction = {
+<span class="nc bnc" id="L134" title="All 2 branches missed.">                    if (!context.isAvailable()) return@runIfMediaNotTooBig</span>
+<span class="nc" id="L135">                    GlideApp.with(context)</span>
+<span class="nc" id="L136">                            .load(videoUrl)</span>
+<span class="nc" id="L137">                            .addFallback(imageType)</span>
+<span class="nc" id="L138">                            .addPlaceholder(imageType)</span>
+<span class="nc" id="L139">                            .applyScaleType(scaleType)</span>
+<span class="nc" id="L140">                            .attachRequestListener(requestListener)</span>
+<span class="nc" id="L141">                            .apply(RequestOptions().frame(0))</span>
+<span class="nc" id="L142">                            .into(imageView)</span>
+<span class="nc" id="L143">                            .clearOnDetach()</span>
+<span class="nc" id="L144">                },</span>
+                fallbackAction = {
+<span class="nc bnc" id="L146" title="All 2 branches missed.">                    if (!context.isAvailable()) return@runIfMediaNotTooBig</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">                    val fallbackDrawable = placeholderManager.getErrorResource(imageType)?.let {</span>
+<span class="nc" id="L148">                        ColorDrawable(ContextCompat.getColor(context, it))</span>
+                    }
+<span class="nc" id="L150">                    GlideApp.with(context)</span>
+<span class="nc" id="L151">                            .load(fallbackDrawable)</span>
+<span class="nc" id="L152">                            .addPlaceholder(imageType)</span>
+<span class="nc" id="L153">                            .addFallback(imageType)</span>
+<span class="nc" id="L154">                            .into(imageView)</span>
+<span class="nc" id="L155">                            .clearOnDetach()</span>
+<span class="nc" id="L156">                }) ?: throw java.lang.IllegalArgumentException(&quot;Video loader has to be set&quot;)</span>
+<span class="nc" id="L157">    }</span>
+
+    /**
+     * Loads an image from the &quot;imgUrl&quot; into the AppWidgetTarget. Adds a placeholder and an error placeholder depending
+     * on the ImageType.
+     *
+     * If no URL is provided, it only loads the placeholder
+     */
+    @JvmOverloads
+<span class="nc" id="L166">    fun load(</span>
+        awt: AppWidgetTarget,
+        context: Context,
+        imageType: ImageType,
+<span class="nc" id="L170">        imgUrl: String = &quot;&quot;,</span>
+<span class="nc" id="L171">        scaleType: ScaleType = CENTER,</span>
+<span class="nc" id="L172">        width: Int? = null,</span>
+<span class="nc" id="L173">        height: Int? = null</span>
+    ) {
+<span class="nc bnc" id="L175" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L176">        GlideApp.with(context)</span>
+<span class="nc" id="L177">                .asBitmap()</span>
+<span class="nc" id="L178">                .load(imgUrl)</span>
+<span class="nc" id="L179">                .addFallback(imageType)</span>
+<span class="nc" id="L180">                .addPlaceholder(imageType)</span>
+<span class="nc" id="L181">                .applyScaleType(scaleType)</span>
+<span class="nc" id="L182">                .applySize(width, height)</span>
+<span class="nc" id="L183">                .into(awt)</span>
+<span class="nc" id="L184">    }</span>
+
+    /**
+     * Loads an image from the &quot;imgUrl&quot; into the ImageView and applies circle transformation. Adds placeholder and
+     * error placeholder depending on the ImageType.
+     */
+    @JvmOverloads
+<span class="nc" id="L191">    fun loadIntoCircle(</span>
+        imageView: ImageView,
+        imageType: ImageType,
+        imgUrl: String,
+<span class="nc" id="L195">        requestListener: RequestListener&lt;Drawable&gt;? = null,</span>
+<span class="nc" id="L196">        version: Int? = null</span>
+    ) {
+<span class="nc" id="L198">        val context = imageView.context</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L200">        GlideApp.with(context)</span>
+<span class="nc" id="L201">                .load(imgUrl)</span>
+<span class="nc" id="L202">                .addFallback(imageType)</span>
+<span class="nc" id="L203">                .addPlaceholder(imageType)</span>
+<span class="nc" id="L204">                .circleCrop()</span>
+<span class="nc" id="L205">                .attachRequestListener(requestListener)</span>
+<span class="nc" id="L206">                .addSignature(version)</span>
+<span class="nc" id="L207">                .into(imageView)</span>
+<span class="nc" id="L208">                .clearOnDetach()</span>
+<span class="nc" id="L209">    }</span>
+
+    /**
+     * Loads a base64 string without prefix (data:image/png;base64,) into the ImageView and applies circle
+     * transformation. Adds placeholder and error placeholder depending on the ImageType.
+     */
+    @JvmOverloads
+<span class="nc" id="L216">    fun loadBase64IntoCircle(</span>
+        imageView: ImageView,
+        imageType: ImageType,
+        base64ImageData: String,
+<span class="nc" id="L220">        requestListener: RequestListener&lt;Drawable&gt;? = null,</span>
+<span class="nc" id="L221">        version: Int? = null</span>
+    ) {
+<span class="nc" id="L223">        val context = imageView.context</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+
+        val imageData: ByteArray
+<span class="nc" id="L227">        try {</span>
+<span class="nc" id="L228">            imageData = Base64.decode(base64ImageData, Base64.DEFAULT)</span>
+<span class="nc" id="L229">        } catch (ex: IllegalArgumentException) {</span>
+<span class="nc" id="L230">            AppLog.e(AppLog.T.UTILS, String.format(&quot;Cant parse base64 image data:&quot; + ex.message))</span>
+<span class="nc" id="L231">            return</span>
+        }
+
+<span class="nc" id="L234">        GlideApp.with(context)</span>
+<span class="nc" id="L235">                .load(imageData)</span>
+<span class="nc" id="L236">                .addFallback(imageType)</span>
+<span class="nc" id="L237">                .addPlaceholder(imageType)</span>
+<span class="nc" id="L238">                .circleCrop()</span>
+<span class="nc" id="L239">                .attachRequestListener(requestListener)</span>
+<span class="nc" id="L240">                .addSignature(version)</span>
+<span class="nc" id="L241">                .into(imageView)</span>
+<span class="nc" id="L242">                .clearOnDetach()</span>
+<span class="nc" id="L243">    }</span>
+
+    /**
+     * Loads an image from the &quot;imgUrl&quot; into the ImageView with a corner radius. Adds placeholder and
+     * error placeholder depending on the ImageType.
+     */
+    @JvmOverloads
+<span class="nc" id="L250">    fun loadImageWithCorners(</span>
+        imageView: ImageView,
+        imageType: ImageType,
+        imgUrl: String,
+        cornerRadius: Int,
+<span class="nc" id="L255">        requestListener: RequestListener&lt;Drawable&gt;? = null</span>
+    ) {
+<span class="nc" id="L257">        val context = imageView.context</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+
+<span class="nc" id="L260">        GlideApp.with(context)</span>
+<span class="nc" id="L261">                .load(imgUrl)</span>
+<span class="nc" id="L262">                .transform(CenterCrop(), RoundedCorners(cornerRadius))</span>
+<span class="nc" id="L263">                .addFallback(imageType)</span>
+<span class="nc" id="L264">                .addPlaceholder(imageType)</span>
+<span class="nc" id="L265">                .attachRequestListener(requestListener)</span>
+<span class="nc" id="L266">                .into(imageView)</span>
+<span class="nc" id="L267">                .clearOnDetach()</span>
+<span class="nc" id="L268">    }</span>
+
+    /**
+     * Loads an image from the &quot;imgUrl&quot; into the ImageView. Adds a placeholder and an error placeholder depending
+     * on the ImageType. Attaches the ResultListener so the client can manually show/hide progress and error
+     * views or add a PhotoViewAttacher(adds support for pinch-to-zoom gesture). Optionally adds
+     * thumbnailUrl - mostly used for loading low resolution images.
+     *
+     * Unless you necessarily need to react on the request result, preferred way is to use one of the load(...) methods.
+     */
+<span class="nc" id="L278">    fun loadWithResultListener(</span>
+        imageView: ImageView,
+        imageType: ImageType,
+        imgUrl: String,
+<span class="nc" id="L282">        scaleType: ScaleType = CENTER,</span>
+<span class="nc" id="L283">        thumbnailUrl: String? = null,</span>
+        requestListener: RequestListener&lt;Drawable&gt;
+    ) {
+<span class="nc" id="L286">        val context = imageView.context</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L288">        GlideApp.with(context)</span>
+<span class="nc" id="L289">                .load(Uri.parse(imgUrl))</span>
+<span class="nc" id="L290">                .addFallback(imageType)</span>
+<span class="nc" id="L291">                .addPlaceholder(imageType)</span>
+<span class="nc" id="L292">                .addThumbnail(context, thumbnailUrl, requestListener)</span>
+<span class="nc" id="L293">                .applyScaleType(scaleType)</span>
+<span class="nc" id="L294">                .attachRequestListener(requestListener)</span>
+<span class="nc" id="L295">                .into(imageView)</span>
+<span class="nc" id="L296">                .clearOnDetach()</span>
+<span class="nc" id="L297">    }</span>
+
+    /**
+     * Preloads an [MShot].
+     *
+     * This is needed because the mshot service redirects to a loading gif image when the thumbnail is not ready.
+     * The loading is handled by [org.wordpress.android.networking.GlideMShotsLoader]
+     */
+    fun preload(context: Context, design: MShot) {
+<span class="nc bnc" id="L306" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L307">        GlideApp.with(context)</span>
+<span class="nc" id="L308">                .downloadOnly()</span>
+<span class="nc" id="L309">                .load(design)</span>
+<span class="nc" id="L310">                .submit()</span>
+<span class="nc" id="L311">                .get() // This makes each call blocking, so subsequent calls can be cancelled if needed.</span>
+<span class="nc" id="L312">    }</span>
+
+    /**
+     * Loads an [MShot] into an [ImageView] and attaches a [RequestListener].
+     *
+     * This is needed because the mshot service redirects to a loading gif image when the thumbnail is not ready.
+     * The loading is handled by [org.wordpress.android.networking.GlideMShotsLoader]
+     */
+    fun loadWithResultListener(view: ImageView, design: MShot, requestListener: RequestListener&lt;Drawable&gt;) {
+<span class="nc" id="L321">        val context = view.context</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L323">        GlideApp.with(context)</span>
+<span class="nc" id="L324">                .load(design)</span>
+<span class="nc" id="L325">                .addFallback(ImageType.THEME)</span>
+<span class="nc" id="L326">                .addPlaceholder(ImageType.THEME)</span>
+<span class="nc" id="L327">                .applyScaleType(FIT_CENTER)</span>
+<span class="nc" id="L328">                .attachRequestListener(requestListener)</span>
+<span class="nc" id="L329">                .into(view)</span>
+<span class="nc" id="L330">                .clearOnDetach()</span>
+<span class="nc" id="L331">    }</span>
+
+    /**
+     * Loads an image from the &quot;imgUri&quot; into the ImageView. Doing this allows content and remote URIs to interchangeable.
+     * Adds a placeholder and an error placeholder depending
+     * on the ImageType. Attaches the ResultListener so the client can manually show/hide progress and error
+     * views or add a PhotoViewAttacher(adds support for pinch-to-zoom gesture). Optionally adds
+     * thumbnailUrl - mostly used for loading low resolution images.
+     *
+     * Unless you necessarily need to react on the request result, preferred way is to use one of the load(...) methods.
+     */
+<span class="nc" id="L342">    fun loadWithResultListener(</span>
+        imageView: ImageView,
+        imageType: ImageType,
+        imgUri: Uri,
+<span class="nc" id="L346">        scaleType: ScaleType = CENTER,</span>
+<span class="nc" id="L347">        thumbnailUrl: String? = null,</span>
+        requestListener: RequestListener&lt;Drawable&gt;
+    ) {
+<span class="nc" id="L350">        val context = imageView.context</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L352">        GlideApp.with(context)</span>
+<span class="nc" id="L353">                .load(imgUri)</span>
+<span class="nc" id="L354">                .addFallback(imageType)</span>
+<span class="nc" id="L355">                .addPlaceholder(imageType)</span>
+<span class="nc" id="L356">                .addThumbnail(context, thumbnailUrl, requestListener)</span>
+<span class="nc" id="L357">                .applyScaleType(scaleType)</span>
+<span class="nc" id="L358">                .attachRequestListener(requestListener)</span>
+<span class="nc" id="L359">                .into(imageView)</span>
+<span class="nc" id="L360">                .clearOnDetach()</span>
+<span class="nc" id="L361">    }</span>
+
+    /**
+     * Loads a File either using a file path obtained from the media store (for local images),
+     * or using Glide's disk cache (for remote images). Using Uri allows content and remote URIs to be interchangeable.
+     *
+     * We can use asFile() asynchronously on the ui thread or synchronously on a background thread.
+     * This function uses the asynchronous api which takes a Target argument to invoke asFile().
+     */
+    fun loadIntoFileWithResultListener(
+        imgUri: Uri,
+        requestListener: RequestListener&lt;File&gt;
+    ) {
+<span class="nc" id="L374">        val context = WordPress.getContext()</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L376">        GlideApp.with(context)</span>
+<span class="nc" id="L377">                .asFile()</span>
+<span class="nc" id="L378">                .load(imgUri)</span>
+<span class="nc" id="L379">                .attachRequestListener(requestListener)</span>
+<span class="nc" id="L380">                .into(</span>
+                        // Used just to invoke asFile() and ignored thereafter.
+<span class="nc" id="L382">                        object : CustomTarget&lt;File&gt;() {</span>
+<span class="nc" id="L383">                            override fun onLoadCleared(placeholder: Drawable?) {}</span>
+<span class="nc" id="L384">                            override fun onResourceReady(resource: File, transition: Transition&lt;in File&gt;?) {}</span>
+                        }
+                )
+<span class="nc" id="L387">    }</span>
+
+    /**
+     * Loads the Bitmap into the ImageView.
+     */
+    @JvmOverloads
+<span class="nc" id="L393">    fun load(imageView: ImageView, bitmap: Bitmap, scaleType: ScaleType = CENTER) {</span>
+<span class="nc" id="L394">        val context = imageView.context</span>
+<span class="nc bnc" id="L395" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L396">        GlideApp.with(context)</span>
+<span class="nc" id="L397">                .load(bitmap)</span>
+<span class="nc" id="L398">                .applyScaleType(scaleType)</span>
+<span class="nc" id="L399">                .into(imageView)</span>
+<span class="nc" id="L400">                .clearOnDetach()</span>
+<span class="nc" id="L401">    }</span>
+
+    /**
+     * Loads the Drawable into the ImageView.
+     */
+    @JvmOverloads
+<span class="nc" id="L407">    fun load(imageView: ImageView, drawable: Drawable, scaleType: ScaleType = CENTER) {</span>
+<span class="nc" id="L408">        val context = imageView.context</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L410">        GlideApp.with(context)</span>
+<span class="nc" id="L411">                .load(drawable)</span>
+<span class="nc" id="L412">                .applyScaleType(scaleType)</span>
+<span class="nc" id="L413">                .into(imageView)</span>
+<span class="nc" id="L414">                .clearOnDetach()</span>
+<span class="nc" id="L415">    }</span>
+
+    /**
+     * Loads the DrawableResource into the ImageView.
+     */
+    @JvmOverloads
+<span class="nc" id="L421">    fun load(imageView: ImageView, @DrawableRes resourceId: Int, scaleType: ScaleType = CENTER) {</span>
+<span class="nc" id="L422">        val context = imageView.context</span>
+<span class="nc bnc" id="L423" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L424">        GlideApp.with(context)</span>
+<span class="nc" id="L425">                .load(ContextCompat.getDrawable(context, resourceId))</span>
+<span class="nc" id="L426">                .applyScaleType(scaleType)</span>
+<span class="nc" id="L427">                .into(imageView)</span>
+<span class="nc" id="L428">                .clearOnDetach()</span>
+<span class="nc" id="L429">    }</span>
+
+    /**
+     * Loads an image from the &quot;imgUrl&quot; into the ViewTarget. Adds a placeholder and an error placeholder depending
+     * on the ImageType.
+     *
+     * Use this method with caution and only when you necessarily need it(in other words, don't use it
+     * when you need to load an image into an ImageView).
+     */
+    fun loadIntoCustomTarget(viewTarget: ViewTarget&lt;TextView, Drawable&gt;, imageType: ImageType, imgUrl: String) {
+<span class="nc" id="L439">        val context = WordPress.getContext()</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L441">        GlideApp.with(context)</span>
+<span class="nc" id="L442">                .load(imgUrl)</span>
+<span class="nc" id="L443">                .addFallback(imageType)</span>
+<span class="nc" id="L444">                .addPlaceholder(imageType)</span>
+<span class="nc" id="L445">                .into(viewTarget)</span>
+<span class="nc" id="L446">                .clearOnDetach()</span>
+<span class="nc" id="L447">    }</span>
+
+    /**
+     * Loads an image from the &quot;imgUrl&quot; into the ViewTarget.
+     *
+     * Use this method with caution and only when you necessarily need it(in other words, don't use it
+     * when you need to load an image into an ImageView).
+     */
+<span class="nc" id="L455">    fun loadAsBitmapIntoCustomTarget(</span>
+        context: Context,
+        target: BaseTarget&lt;Bitmap&gt;,
+        imgUrl: String,
+<span class="nc" id="L459">        scaleType: ScaleType = CENTER</span>
+    ) {
+<span class="nc bnc" id="L461" title="All 2 branches missed.">        if (!context.isAvailable()) return</span>
+<span class="nc" id="L462">        GlideApp.with(context)</span>
+<span class="nc" id="L463">                .asBitmap()</span>
+<span class="nc" id="L464">                .load(imgUrl)</span>
+<span class="nc" id="L465">                .applyScaleType(scaleType)</span>
+<span class="nc" id="L466">                .into(target)</span>
+<span class="nc" id="L467">    }</span>
+
+    /**
+     * Cancel any pending requests and free any resources that may have been
+     * loaded for the view.
+     */
+    fun cancelRequestAndClearImageView(imageView: ImageView) {
+<span class="nc" id="L474">        val context = imageView.context</span>
+<span class="nc bnc" id="L475" title="All 6 branches missed.">        if (context is Activity &amp;&amp; (context.isFinishing || context.isDestroyed)) {</span>
+<span class="nc" id="L476">            return</span>
+        }
+<span class="nc" id="L478">        GlideApp.with(imageView.context).clear(imageView)</span>
+<span class="nc" id="L479">    }</span>
+
+    /**
+     * Cancel any pending requests and free any resources that may have been
+     * loaded for the view.
+     */
+    fun &lt;T : Any&gt; cancelRequest(context: Context, target: BaseTarget&lt;T&gt;?) {
+<span class="nc" id="L486">        GlideApp.with(context).clear(target)</span>
+<span class="nc" id="L487">    }</span>
+
+    private fun &lt;T : Any&gt; GlideRequest&lt;T&gt;.applyScaleType(
+        scaleType: ScaleType
+    ): GlideRequest&lt;T&gt; {
+<span class="nc bnc" id="L492" title="All 5 branches missed.">        return when (scaleType) {</span>
+<span class="nc" id="L493">            ScaleType.CENTER_CROP -&gt; this.centerCrop()</span>
+<span class="nc" id="L494">            ScaleType.CENTER_INSIDE -&gt; this.centerInside()</span>
+<span class="nc" id="L495">            FIT_CENTER -&gt; this.fitCenter()</span>
+<span class="nc" id="L496">            CENTER -&gt; this</span>
+            FIT_END,
+            FIT_START,
+            FIT_XY,
+            MATRIX -&gt; {
+<span class="nc" id="L501">                AppLog.e(AppLog.T.UTILS, String.format(&quot;ScaleType %s is not supported.&quot;, scaleType.toString()))</span>
+<span class="nc" id="L502">                this</span>
+            }
+        }
+    }
+
+    private fun &lt;T : Any&gt; GlideRequest&lt;T&gt;.applySize(width: Int?, height: Int?): GlideRequest&lt;T&gt; {
+<span class="nc bnc" id="L508" title="All 4 branches missed.">        return if (width != null &amp;&amp; height != null) {</span>
+<span class="nc" id="L509">            this.override(width, height)</span>
+        } else {
+<span class="nc" id="L511">            this</span>
+        }
+    }
+
+    private fun &lt;T : Any&gt; GlideRequest&lt;T&gt;.addPlaceholder(imageType: ImageType): GlideRequest&lt;T&gt; {
+<span class="nc" id="L516">        val placeholderImageRes = placeholderManager.getPlaceholderResource(imageType)</span>
+<span class="nc bnc" id="L517" title="All 2 branches missed.">        return if (placeholderImageRes == null) {</span>
+<span class="nc" id="L518">            this</span>
+<span class="nc" id="L519">        } else {</span>
+<span class="nc" id="L520">            this.placeholder(placeholderImageRes)</span>
+        }
+    }
+
+    private fun &lt;T : Any&gt; GlideRequest&lt;T&gt;.addFallback(imageType: ImageType): GlideRequest&lt;T&gt; {
+<span class="nc" id="L525">        val errorImageRes = placeholderManager.getErrorResource(imageType)</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">        return if (errorImageRes == null) {</span>
+<span class="nc" id="L527">            this</span>
+<span class="nc" id="L528">        } else {</span>
+<span class="nc" id="L529">            this.error(errorImageRes)</span>
+        }
+    }
+
+    /**
+     * Changing the signature invalidates cache.
+     */
+    private fun &lt;T : Any&gt; GlideRequest&lt;T&gt;.addSignature(signature: Int?): GlideRequest&lt;T&gt; {
+<span class="nc bnc" id="L537" title="All 2 branches missed.">        return if (signature == null) {</span>
+<span class="nc" id="L538">            this</span>
+<span class="nc" id="L539">        } else {</span>
+<span class="nc" id="L540">            this.signature(ObjectKey(signature))</span>
+        }
+    }
+
+    private fun GlideRequest&lt;Drawable&gt;.addThumbnail(
+        context: Context,
+        thumbnailUrl: String?,
+        listener: RequestListener&lt;Drawable&gt;
+    ): GlideRequest&lt;Drawable&gt; {
+<span class="nc bnc" id="L549" title="All 2 branches missed.">        return if (TextUtils.isEmpty(thumbnailUrl)) {</span>
+<span class="nc" id="L550">            this</span>
+        } else {
+<span class="nc" id="L552">            val thumbnailRequest = GlideApp</span>
+<span class="nc" id="L553">                    .with(context)</span>
+<span class="nc" id="L554">                    .load(thumbnailUrl)</span>
+<span class="nc" id="L555">                    .downsample(DownsampleStrategy.AT_MOST)</span>
+<span class="nc" id="L556">                    .attachRequestListener(listener)</span>
+<span class="nc" id="L557">            return this.thumbnail(thumbnailRequest)</span>
+        }
+    }
+
+    private fun &lt;T : Any&gt; GlideRequest&lt;T&gt;.attachRequestListener(
+        requestListener: RequestListener&lt;T&gt;?
+    ): GlideRequest&lt;T&gt; {
+<span class="nc bnc" id="L564" title="All 2 branches missed.">        return if (requestListener == null) {</span>
+<span class="nc" id="L565">            this</span>
+<span class="nc" id="L566">        } else {</span>
+<span class="nc" id="L567">            this.listener(object : com.bumptech.glide.request.RequestListener&lt;T&gt; {</span>
+                override fun onLoadFailed(
+                    e: GlideException?,
+                    model: Any?,
+                    target: Target&lt;T&gt;?,
+                    isFirstResource: Boolean
+                ): Boolean {
+<span class="nc" id="L574">                    requestListener.onLoadFailed(e, model)</span>
+<span class="nc" id="L575">                    return false</span>
+                }
+
+                override fun onResourceReady(
+                    resource: T?,
+                    model: Any?,
+                    target: Target&lt;T&gt;?,
+                    dataSource: DataSource?,
+                    isFirstResource: Boolean
+                ): Boolean {
+<span class="nc bnc" id="L585" title="All 2 branches missed.">                    if (resource != null) {</span>
+<span class="nc" id="L586">                        requestListener.onResourceReady(resource, model)</span>
+                    } else {
+                        // according to the Glide's JavaDoc, this shouldn't happen
+<span class="nc" id="L589">                        AppLog.e(AppLog.T.UTILS, &quot;Resource in ImageManager.onResourceReady is null.&quot;)</span>
+<span class="nc" id="L590">                        requestListener.onLoadFailed(null, model)</span>
+                    }
+<span class="nc" id="L592">                    return false</span>
+                }
+            })
+        }
+    }
+
+    @Deprecated(&quot;Object for backward compatibility with code which doesn't support DI&quot;)
+    companion object {
+        @JvmStatic
+        @Deprecated(&quot;Use injected ImageManager&quot;)
+<span class="pc" id="L602">        val instance: ImageManager by lazy { ImageManager(ImagePlaceholderManager(), null) }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DomainsDashboardViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.domains</a> &gt; <span class="el_source">DomainsDashboardViewModel.kt</span></div><h1>DomainsDashboardViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.domains
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.async
+import org.wordpress.android.Constants
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.DOMAINS_DASHBOARD_ADD_DOMAIN_TAPPED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.DOMAINS_DASHBOARD_GET_DOMAIN_TAPPED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.DOMAINS_DASHBOARD_VIEWED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.DOMAIN_CREDIT_REDEMPTION_TAPPED
+import org.wordpress.android.fluxc.model.PlanModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.network.rest.wpcom.site.Domain
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.domains.DomainsDashboardItem.Action
+import org.wordpress.android.ui.domains.DomainsDashboardItem.Action.CHANGE_SITE_ADDRESS
+import org.wordpress.android.ui.domains.DomainsDashboardItem.AddDomain
+import org.wordpress.android.ui.domains.DomainsDashboardItem.DomainBlurb
+import org.wordpress.android.ui.domains.DomainsDashboardItem.FreeDomain
+import org.wordpress.android.ui.domains.DomainsDashboardItem.PurchaseDomain
+import org.wordpress.android.ui.domains.DomainsDashboardItem.SiteDomains
+import org.wordpress.android.ui.domains.DomainsDashboardItem.SiteDomainsHeader
+import org.wordpress.android.ui.domains.DomainsDashboardNavigationAction.ClaimDomain
+import org.wordpress.android.ui.domains.DomainsDashboardNavigationAction.GetDomain
+import org.wordpress.android.ui.domains.DomainsDashboardNavigationAction.OpenManageDomains
+import org.wordpress.android.ui.domains.usecases.FetchPlansUseCase
+import org.wordpress.android.ui.plans.isDomainCreditAvailable
+import org.wordpress.android.ui.utils.HtmlMessageUtils
+import org.wordpress.android.ui.utils.ListItemInteraction
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringResWithParams
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T.DOMAIN_REGISTRATION
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.StringUtils
+import org.wordpress.android.util.UrlUtils
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+@Suppress(&quot;TooManyFunctions&quot;)
+<span class="nc" id="L48">class DomainsDashboardViewModel @Inject constructor(</span>
+<span class="nc" id="L49">    private val siteStore: SiteStore,</span>
+<span class="nc" id="L50">    private val analyticsTrackerWrapper: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L51">    private val htmlMessageUtils: HtmlMessageUtils,</span>
+<span class="nc" id="L52">    private val fetchPlansUseCase: FetchPlansUseCase,</span>
+<span class="nc" id="L53">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L54">) : ScopedViewModel(bgDispatcher) {</span>
+<span class="nc bnc" id="L55" title="All 2 branches missed.">    lateinit var site: SiteModel</span>
+    private var isStarted: Boolean = false
+
+<span class="nc" id="L58">    private val _showProgressSpinner = MutableLiveData&lt;Boolean&gt;()</span>
+<span class="nc" id="L59">    val progressBar: LiveData&lt;Boolean&gt; = _showProgressSpinner</span>
+
+<span class="nc" id="L61">    private val _onNavigation = MutableLiveData&lt;Event&lt;DomainsDashboardNavigationAction&gt;&gt;()</span>
+<span class="nc" id="L62">    val onNavigation: LiveData&lt;Event&lt;DomainsDashboardNavigationAction&gt;&gt; = _onNavigation</span>
+
+<span class="nc" id="L64">    private val _uiModel = MutableLiveData&lt;List&lt;DomainsDashboardItem&gt;&gt;()</span>
+<span class="nc" id="L65">    val uiModel: LiveData&lt;List&lt;DomainsDashboardItem&gt;&gt; = _uiModel</span>
+
+    fun start(site: SiteModel) {
+<span class="nc bnc" id="L68" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L69">            return</span>
+        }
+<span class="nc" id="L71">        this.site = site</span>
+<span class="nc" id="L72">        analyticsTrackerWrapper.track(DOMAINS_DASHBOARD_VIEWED, site)</span>
+<span class="nc" id="L73">        refresh(site)</span>
+<span class="nc" id="L74">        isStarted = true</span>
+<span class="nc" id="L75">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L78">        fetchPlansUseCase.clear()</span>
+<span class="nc" id="L79">        super.onCleared()</span>
+<span class="nc" id="L80">    }</span>
+
+<span class="nc" id="L82">    private fun refresh(site: SiteModel) = launch {</span>
+<span class="nc" id="L83">        _showProgressSpinner.postValue(true)</span>
+
+<span class="nc" id="L85">        val deferredPlansResult = async { fetchPlansUseCase.execute(site) }</span>
+<span class="nc" id="L86">        val deferredDomainsResult = async { siteStore.fetchSiteDomains(site) }</span>
+
+<span class="nc" id="L88">        val plansResult = deferredPlansResult.await()</span>
+<span class="nc" id="L89">        val domainsResult = deferredDomainsResult.await()</span>
+
+<span class="nc bnc" id="L91" title="All 2 branches missed.">        if (plansResult.isError) {</span>
+<span class="nc" id="L92">            AppLog.e(DOMAIN_REGISTRATION, &quot;An error occurred while fetching plans: ${plansResult.error.message}&quot;)</span>
+        }
+
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (domainsResult.isError) {</span>
+<span class="nc" id="L96">            AppLog.e(DOMAIN_REGISTRATION, &quot;An error occurred while fetching domains: ${domainsResult.error.message}&quot;)</span>
+        }
+
+<span class="nc bnc" id="L99" title="All 4 branches missed.">        buildDashboardItems(site, plansResult.plans.orEmpty(), domainsResult.domains.orEmpty())</span>
+<span class="nc" id="L100">    }</span>
+
+    private fun buildDashboardItems(site: SiteModel, plans: List&lt;PlanModel&gt;, domains: List&lt;Domain&gt;) {
+<span class="nc" id="L103">        val listItems = mutableListOf&lt;DomainsDashboardItem&gt;()</span>
+
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        val freeDomain = domains.firstOrNull { it.wpcomDomain }</span>
+<span class="nc bnc" id="L106" title="All 4 branches missed.">        val freeDomainUrl = freeDomain?.domain ?: getCleanUrl(site.unmappedUrl)</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">        val freeDomainIsPrimary = freeDomain?.primaryDomain ?: false</span>
+
+<span class="nc" id="L109">        listItems += FreeDomain(UiStringText(freeDomainUrl), freeDomainIsPrimary, this::onChangeSiteClick)</span>
+
+<span class="nc bnc" id="L111" title="All 4 branches missed.">        val customDomains = domains.filter { !it.wpcomDomain }</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">        val hasCustomDomains = customDomains.isNotEmpty()</span>
+<span class="nc" id="L113">        val hasDomainCredit = isDomainCreditAvailable(plans)</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">        val hasPaidPlan = !SiteUtils.onFreePlan(site)</span>
+
+<span class="nc" id="L116">        listItems += buildCustomDomainItems(customDomains, hasCustomDomains)</span>
+
+<span class="nc" id="L118">        listItems += buildCtaItems(freeDomainUrl, hasCustomDomains, hasDomainCredit, hasPaidPlan)</span>
+
+//        NOTE: Manage domains option is de-scoped for v1 release
+//        if (hasCustomDomains) {
+//            listItems += ManageDomains(ListItemInteraction.create(this::onManageDomainClick))
+//        }
+
+<span class="nc" id="L125">        _showProgressSpinner.postValue(false)</span>
+<span class="nc" id="L126">        _uiModel.postValue(listItems)</span>
+<span class="nc" id="L127">    }</span>
+
+    private fun buildCtaItems(
+        freeDomainUrl: String,
+        hasCustomDomains: Boolean,
+        hasDomainCredit: Boolean,
+        hasPaidPlan: Boolean
+    ): List&lt;DomainsDashboardItem&gt; {
+<span class="nc" id="L135">        val listItems = mutableListOf&lt;DomainsDashboardItem&gt;()</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (hasDomainCredit) {</span>
+<span class="nc" id="L137">            listItems += PurchaseDomain(</span>
+<span class="nc" id="L138">                    null,</span>
+<span class="nc" id="L139">                    UiStringRes(R.string.domains_paid_plan_claim_your_domain_title),</span>
+<span class="nc" id="L140">                    UiStringRes(R.string.domains_paid_plan_claim_your_domain_caption),</span>
+<span class="nc" id="L141">                    ListItemInteraction.create(this::onClaimDomainClick)</span>
+            )
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        } else if (hasCustomDomains) {</span>
+<span class="nc" id="L144">            listItems += AddDomain(ListItemInteraction.create(hasDomainCredit, this::onAddDomainClick))</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">            if (!hasPaidPlan) {</span>
+<span class="nc" id="L146">                listItems += DomainBlurb(</span>
+<span class="nc" id="L147">                        UiStringResWithParams(</span>
+<span class="nc" id="L148">                                R.string.domains_redirected_domains_blurb,</span>
+<span class="nc" id="L149">                                listOf(UiStringText(freeDomainUrl))</span>
+                        )
+                )
+            }
+        } else {
+<span class="nc bnc" id="L154" title="All 2 branches missed.">            listItems += if (hasPaidPlan) {</span>
+<span class="nc" id="L155">                PurchaseDomain(</span>
+<span class="nc" id="L156">                        R.drawable.img_illustration_domains_card_header,</span>
+<span class="nc" id="L157">                        UiStringRes(R.string.domains_paid_plan_add_your_domain_title),</span>
+<span class="nc" id="L158">                        UiStringRes(R.string.domains_paid_plan_add_your_domain_caption),</span>
+<span class="nc" id="L159">                        ListItemInteraction.create(this::onGetDomainClick)</span>
+                )
+            } else {
+<span class="nc" id="L162">                PurchaseDomain(</span>
+<span class="nc" id="L163">                        R.drawable.img_illustration_domains_card_header,</span>
+<span class="nc" id="L164">                        UiStringRes(R.string.domains_free_plan_get_your_domain_title),</span>
+<span class="nc" id="L165">                        UiStringText(</span>
+<span class="nc" id="L166">                                htmlMessageUtils.getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L167">                                        R.string.domains_free_plan_get_your_domain_caption,</span>
+<span class="nc" id="L168">                                        freeDomainUrl</span>
+                                )
+                        ),
+<span class="nc" id="L171">                        ListItemInteraction.create(this::onGetDomainClick)</span>
+                )
+            }
+        }
+<span class="nc" id="L175">        return listItems</span>
+    }
+
+    private fun buildCustomDomainItems(
+        customDomains: List&lt;Domain&gt;,
+        hasCustomDomains: Boolean
+    ): List&lt;DomainsDashboardItem&gt; {
+<span class="nc" id="L182">        val listItems = mutableListOf&lt;DomainsDashboardItem&gt;()</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        if (hasCustomDomains) listItems += SiteDomainsHeader(UiStringRes(R.string.domains_site_domains))</span>
+<span class="nc" id="L184">        listItems += customDomains.map {</span>
+<span class="nc" id="L185">            SiteDomains(</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">                    UiStringText(it.domain.orEmpty()),</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">                    if (it.expirySoon) {</span>
+<span class="nc" id="L188">                        UiStringText(</span>
+<span class="nc" id="L189">                                htmlMessageUtils.getHtmlMessageFromStringFormatResId(</span>
+<span class="nc" id="L190">                                        R.string.domains_site_domain_expires_soon,</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">                                        it.expiry.orEmpty()</span>
+                                )
+                        )
+                    } else {
+<span class="nc" id="L195">                        UiStringResWithParams(</span>
+<span class="nc" id="L196">                                R.string.domains_site_domain_expires,</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                                listOf(UiStringText(it.expiry.orEmpty()))</span>
+                        )
+                    },
+<span class="nc" id="L200">                    it.primaryDomain</span>
+            )
+        }
+<span class="nc" id="L203">        return listItems</span>
+    }
+
+<span class="nc" id="L206">    private fun getCleanUrl(url: String?) = StringUtils.removeTrailingSlash(UrlUtils.removeScheme(url))</span>
+
+    private fun onGetDomainClick() {
+<span class="nc" id="L209">        analyticsTrackerWrapper.track(DOMAINS_DASHBOARD_GET_DOMAIN_TAPPED, site)</span>
+<span class="nc" id="L210">        _onNavigation.value = Event(GetDomain(site))</span>
+<span class="nc" id="L211">    }</span>
+
+    private fun onClaimDomainClick() {
+<span class="nc" id="L214">        analyticsTrackerWrapper.track(DOMAIN_CREDIT_REDEMPTION_TAPPED, site)</span>
+<span class="nc" id="L215">        _onNavigation.value = Event(ClaimDomain(site))</span>
+<span class="nc" id="L216">    }</span>
+
+    private fun onAddDomainClick(hasDomainCredit: Boolean) {
+<span class="nc" id="L219">        analyticsTrackerWrapper.track(DOMAINS_DASHBOARD_ADD_DOMAIN_TAPPED, site)</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">        if (hasDomainCredit) onClaimDomainClick() else onGetDomainClick()</span>
+<span class="nc" id="L221">    }</span>
+
+    private fun onManageDomainClick() {
+<span class="nc" id="L224">        _onNavigation.postValue(Event(OpenManageDomains(&quot;${Constants.URL_MANAGE_DOMAINS}/${site.siteId}&quot;)))</span>
+<span class="nc" id="L225">    }</span>
+
+    //  NOTE: Change site option is de-scoped for v1 release
+    private fun onChangeSiteClick(action: Action): Boolean {
+<span class="nc" id="L229">        when (action) {</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">            CHANGE_SITE_ADDRESS -&gt; {</span>
+<span class="nc" id="L231">                TODO(&quot;Not yet implemented&quot;)</span>
+            }
+        }
+        return true
+    }
+
+    fun onSuccessfulDomainRegistration() {
+<span class="nc" id="L238">        refresh(site)</span>
+<span class="nc" id="L239">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MediaDeleteService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.media.services</a> &gt; <span class="el_source">MediaDeleteService.java</span></div><h1>MediaDeleteService.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.media.services;
+
+import android.app.Service;
+import android.content.Intent;
+import android.os.Binder;
+import android.os.IBinder;
+
+import androidx.annotation.NonNull;
+
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.MediaActionBuilder;
+import org.wordpress.android.fluxc.model.MediaModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.MediaStore;
+import org.wordpress.android.fluxc.store.MediaStore.MediaPayload;
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaChanged;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import javax.inject.Inject;
+
+/**
+ * A service for deleting media. Only one media item is deleted at a time.
+ */
+
+<span class="nc" id="L32">public class MediaDeleteService extends Service {</span>
+    public static final String SITE_KEY = &quot;mediaSite&quot;;
+    public static final String MEDIA_LIST_KEY = &quot;mediaList&quot;;
+
+<span class="nc" id="L36">    public class MediaDeleteBinder extends Binder {</span>
+        public MediaDeleteService getService() {
+<span class="nc" id="L38">            return MediaDeleteService.this;</span>
+        }
+
+        public void addMediaToDeleteQueue(@NonNull MediaModel media) {
+<span class="nc" id="L42">            getDeleteQueue().add(media);</span>
+<span class="nc" id="L43">            deleteNextInQueue();</span>
+<span class="nc" id="L44">        }</span>
+
+        public void removeMediaFromDeleteQueue(@NonNull MediaModel media) {
+<span class="nc" id="L47">            getDeleteQueue().remove(media);</span>
+<span class="nc" id="L48">            deleteNextInQueue();</span>
+<span class="nc" id="L49">        }</span>
+    }
+
+<span class="nc" id="L52">    private final IBinder mBinder = new MediaDeleteBinder();</span>
+
+    private SiteModel mSite; // required for payloads
+    @Inject Dispatcher mDispatcher;
+    @Inject MediaStore mMediaStore;
+
+    private MediaModel mCurrentDelete;
+    private List&lt;MediaModel&gt; mDeleteQueue;
+    private List&lt;MediaModel&gt; mCompletedItems;
+
+    @Override
+    public void onCreate() {
+<span class="nc" id="L64">        super.onCreate();</span>
+<span class="nc" id="L65">        ((WordPress) getApplication()).component().inject(this);</span>
+<span class="nc" id="L66">        mDispatcher.register(this);</span>
+<span class="nc" id="L67">        mCurrentDelete = null;</span>
+<span class="nc" id="L68">    }</span>
+
+    @Override
+    public void onDestroy() {
+<span class="nc" id="L72">        mDispatcher.unregister(this);</span>
+        // TODO: if event not dispatched for ongoing delete cancel it and dispatch cancel event
+<span class="nc" id="L74">        super.onDestroy();</span>
+<span class="nc" id="L75">    }</span>
+
+    @Override
+    public IBinder onBind(Intent intent) {
+<span class="nc" id="L79">        return mBinder;</span>
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        // stop service if no site is given
+<span class="nc bnc" id="L85" title="All 4 branches missed.">        if (intent == null || !intent.hasExtra(SITE_KEY)) {</span>
+<span class="nc" id="L86">            stopSelf();</span>
+<span class="nc" id="L87">            return START_NOT_STICKY;</span>
+        }
+
+<span class="nc" id="L90">        mSite = (SiteModel) intent.getSerializableExtra(SITE_KEY);</span>
+<span class="nc" id="L91">        mDeleteQueue = (List&lt;MediaModel&gt;) intent.getSerializableExtra(MEDIA_LIST_KEY);</span>
+
+        // start deleting queued media
+<span class="nc" id="L94">        deleteNextInQueue();</span>
+
+        // only run while app process is running, allows service to be stopped by user force closing the app
+<span class="nc" id="L97">        return START_NOT_STICKY;</span>
+    }
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onMediaChanged(OnMediaChanged event) {
+        // event for unknown media, ignoring
+<span class="nc bnc" id="L104" title="All 6 branches missed.">        if (event.mediaList == null || event.mediaList.isEmpty() || !matchesInProgressMedia(event.mediaList.get(0))) {</span>
+<span class="nc" id="L105">            AppLog.w(T.MEDIA, &quot;Media event not recognized: &quot; + event.mediaList);</span>
+<span class="nc" id="L106">            return;</span>
+        }
+
+<span class="nc bnc" id="L109" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L110">            handleOnMediaChangedError(event);</span>
+        } else {
+<span class="nc" id="L112">            handleMediaChangedSuccess(event);</span>
+        }
+
+<span class="nc" id="L115">        deleteNextInQueue();</span>
+<span class="nc" id="L116">    }</span>
+
+    public @NonNull List&lt;MediaModel&gt; getDeleteQueue() {
+<span class="nc bnc" id="L119" title="All 2 branches missed.">        if (mDeleteQueue == null) {</span>
+<span class="nc" id="L120">            mDeleteQueue = new ArrayList&lt;&gt;();</span>
+        }
+<span class="nc" id="L122">        return mDeleteQueue;</span>
+    }
+
+    public @NonNull List&lt;MediaModel&gt; getCompletedItems() {
+<span class="nc bnc" id="L126" title="All 2 branches missed.">        if (mCompletedItems == null) {</span>
+<span class="nc" id="L127">            mCompletedItems = new ArrayList&lt;&gt;();</span>
+        }
+<span class="nc" id="L129">        return mCompletedItems;</span>
+    }
+
+    public boolean isMediaBeingDeleted(@NonNull MediaModel media) {
+<span class="nc bnc" id="L133" title="All 2 branches missed.">        if (mDeleteQueue != null) {</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">            for (MediaModel deletingMedia : mDeleteQueue) {</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">                if (deletingMedia.getId() == media.getId()) {</span>
+<span class="nc" id="L136">                    return true;</span>
+                }
+<span class="nc" id="L138">            }</span>
+        }
+<span class="nc" id="L140">        return false;</span>
+    }
+
+    public boolean isAnyMediaBeingDeleted() {
+<span class="nc bnc" id="L144" title="All 4 branches missed.">        return mDeleteQueue != null &amp;&amp; mDeleteQueue.size() &gt; 0;</span>
+    }
+
+    private void handleMediaChangedSuccess(@NonNull OnMediaChanged event) {
+<span class="nc bnc" id="L148" title="All 3 branches missed.">        switch (event.cause) {</span>
+            case DELETE_MEDIA:
+<span class="nc bnc" id="L150" title="All 2 branches missed.">                if (mCurrentDelete != null) {</span>
+<span class="nc" id="L151">                    AppLog.d(T.MEDIA, mCurrentDelete.getTitle() + &quot; successfully deleted!&quot;);</span>
+<span class="nc" id="L152">                    completeCurrentDelete();</span>
+                }
+                break;
+            case REMOVE_MEDIA:
+<span class="nc bnc" id="L156" title="All 2 branches missed.">                if (mCurrentDelete != null) {</span>
+<span class="nc" id="L157">                    AppLog.d(T.MEDIA, &quot;Successfully deleted &quot; + mCurrentDelete.getTitle());</span>
+<span class="nc" id="L158">                    completeCurrentDelete();</span>
+                }
+                break;
+        }
+<span class="nc" id="L162">    }</span>
+
+    private void handleOnMediaChangedError(@NonNull OnMediaChanged event) {
+<span class="nc" id="L165">        MediaModel media = event.mediaList.get(0);</span>
+
+<span class="nc bnc" id="L167" title="All 5 branches missed.">        switch (event.error.type) {</span>
+            case AUTHORIZATION_REQUIRED:
+<span class="nc" id="L169">                AppLog.v(T.MEDIA, &quot;Authorization required. Stopping MediaDeleteService.&quot;);</span>
+                // stop delete service until authorized to perform actions on site
+<span class="nc" id="L171">                stopSelf();</span>
+<span class="nc" id="L172">                break;</span>
+            case NULL_MEDIA_ARG:
+                // shouldn't happen, get back to deleting the queue
+<span class="nc" id="L175">                AppLog.d(T.MEDIA, &quot;Null media argument supplied, skipping current delete.&quot;);</span>
+<span class="nc" id="L176">                completeCurrentDelete();</span>
+<span class="nc" id="L177">                break;</span>
+            case NOT_FOUND:
+<span class="nc bnc" id="L179" title="All 2 branches missed.">                if (media == null) {</span>
+<span class="nc" id="L180">                    break;</span>
+                }
+<span class="nc" id="L182">                AppLog.d(T.MEDIA, &quot;Could not find media (id=&quot; + media.getMediaId() + &quot;). on remote&quot;);</span>
+                // remove media from local database
+<span class="nc" id="L184">                mDispatcher.dispatch(MediaActionBuilder.newRemoveMediaAction(mCurrentDelete));</span>
+<span class="nc" id="L185">                break;</span>
+            case PARSE_ERROR:
+<span class="nc" id="L187">                AppLog.d(T.MEDIA, &quot;Error parsing reponse to &quot; + event.cause.toString() + &quot;.&quot;);</span>
+<span class="nc" id="L188">                completeCurrentDelete();</span>
+<span class="nc" id="L189">                break;</span>
+            default:
+<span class="nc" id="L191">                completeCurrentDelete();</span>
+                break;
+        }
+<span class="nc" id="L194">    }</span>
+
+    /**
+     * Delete next media item in queue. Only one media item is deleted at a time.
+     */
+    private void deleteNextInQueue() {
+        // waiting for response to current delete request
+<span class="nc bnc" id="L201" title="All 2 branches missed.">        if (mCurrentDelete != null) {</span>
+<span class="nc" id="L202">            AppLog.i(T.MEDIA, &quot;Ignoring request to deleteNextInQueue, only one media item can be deleted at a time.&quot;);</span>
+<span class="nc" id="L203">            return;</span>
+        }
+
+        // somehow lost our reference to the site, stop service
+<span class="nc bnc" id="L207" title="All 2 branches missed.">        if (mSite == null) {</span>
+<span class="nc" id="L208">            AppLog.i(T.MEDIA, &quot;Unexpected state, site is null. Stopping MediaDeleteService.&quot;);</span>
+<span class="nc" id="L209">            stopSelf();</span>
+<span class="nc" id="L210">            return;</span>
+        }
+
+<span class="nc" id="L213">        mCurrentDelete = nextMediaToDelete();</span>
+
+        // no more items to delete, stop service
+<span class="nc bnc" id="L216" title="All 2 branches missed.">        if (mCurrentDelete == null) {</span>
+<span class="nc" id="L217">            AppLog.v(T.MEDIA, &quot;No more media items to delete. Stopping MediaDeleteService.&quot;);</span>
+<span class="nc" id="L218">            stopSelf();</span>
+<span class="nc" id="L219">            return;</span>
+        }
+
+<span class="nc" id="L222">        dispatchDeleteAction(mCurrentDelete);</span>
+<span class="nc" id="L223">    }</span>
+
+    private void dispatchDeleteAction(@NonNull MediaModel media) {
+<span class="nc" id="L226">        AppLog.v(T.MEDIA, &quot;Deleting &quot; + media.getTitle() + &quot; (id=&quot; + media.getMediaId() + &quot;)&quot;);</span>
+<span class="nc" id="L227">        MediaPayload payload = new MediaPayload(mSite, media);</span>
+<span class="nc" id="L228">        mDispatcher.dispatch(MediaActionBuilder.newDeleteMediaAction(payload));</span>
+<span class="nc" id="L229">    }</span>
+
+    /**
+     * Compares site ID and media ID to determine if a given media item matches the current media item being deleted.
+     */
+    private boolean matchesInProgressMedia(final @NonNull MediaModel media) {
+<span class="nc bnc" id="L235" title="All 2 branches missed.">        return mCurrentDelete != null</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">               &amp;&amp; media.getLocalSiteId() == mCurrentDelete.getLocalSiteId()</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">               &amp;&amp; media.getMediaId() == mCurrentDelete.getMediaId();</span>
+    }
+
+    /**
+     * @return the next item in the queue to delete, null if queue is empty
+     */
+    private MediaModel nextMediaToDelete() {
+<span class="nc bnc" id="L244" title="All 2 branches missed.">        if (!getDeleteQueue().isEmpty()) {</span>
+<span class="nc" id="L245">            return getDeleteQueue().get(0);</span>
+        }
+<span class="nc" id="L247">        return null;</span>
+    }
+
+    /**
+     * Moves current delete from the queue into the completed list.
+     */
+    private void completeCurrentDelete() {
+<span class="nc bnc" id="L254" title="All 2 branches missed.">        if (mCurrentDelete != null) {</span>
+<span class="nc" id="L255">            getCompletedItems().add(mCurrentDelete);</span>
+<span class="nc" id="L256">            getDeleteQueue().remove(mCurrentDelete);</span>
+<span class="nc" id="L257">            mCurrentDelete = null;</span>
+        }
+<span class="nc" id="L259">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

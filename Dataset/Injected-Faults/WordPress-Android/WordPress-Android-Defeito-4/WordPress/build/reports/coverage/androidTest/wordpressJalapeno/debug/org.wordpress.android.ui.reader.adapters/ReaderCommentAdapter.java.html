@@ -1,0 +1,719 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderCommentAdapter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.adapters</a> &gt; <span class="el_source">ReaderCommentAdapter.java</span></div><h1>ReaderCommentAdapter.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.adapters;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.content.res.ColorStateList;
+import android.os.AsyncTask;
+import android.view.Gravity;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.ProgressBar;
+import android.widget.RelativeLayout;
+import android.widget.TextView;
+
+import androidx.appcompat.widget.ListPopupWindow;
+import androidx.core.graphics.ColorUtils;
+import androidx.recyclerview.widget.RecyclerView;
+
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.datasets.ReaderCommentTable;
+import org.wordpress.android.datasets.ReaderPostTable;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.models.ReaderComment;
+import org.wordpress.android.models.ReaderCommentList;
+import org.wordpress.android.models.ReaderPost;
+import org.wordpress.android.ui.comments.CommentUtils;
+import org.wordpress.android.ui.mysite.SelectedSiteRepository;
+import org.wordpress.android.ui.reader.ReaderActivityLauncher;
+import org.wordpress.android.ui.reader.ReaderAnim;
+import org.wordpress.android.ui.reader.ReaderInterfaces;
+import org.wordpress.android.ui.reader.actions.ReaderActions;
+import org.wordpress.android.ui.reader.actions.ReaderCommentActions;
+import org.wordpress.android.ui.reader.adapters.ReaderCommentMenuActionAdapter.ReaderCommentMenuActionType;
+import org.wordpress.android.ui.reader.adapters.ReaderCommentMenuActionAdapter.ReaderCommentMenuItem;
+import org.wordpress.android.ui.reader.adapters.ReaderCommentMenuActionAdapter.ReaderCommentMenuItem.Divider;
+import org.wordpress.android.ui.reader.adapters.ReaderCommentMenuActionAdapter.ReaderCommentMenuItem.PrimaryItemMenu;
+import org.wordpress.android.ui.reader.tracker.ReaderTracker;
+import org.wordpress.android.ui.reader.utils.ReaderCommentLeveler;
+import org.wordpress.android.ui.reader.utils.ReaderUtils;
+import org.wordpress.android.ui.reader.utils.ThreadedCommentsUtils;
+import org.wordpress.android.ui.reader.views.ReaderCommentsPostHeaderView;
+import org.wordpress.android.ui.reader.views.ReaderIconCountView;
+import org.wordpress.android.ui.utils.UiHelpers;
+import org.wordpress.android.ui.utils.UiString.UiStringRes;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.extensions.ContextExtensionsKt;
+import org.wordpress.android.util.DateTimeUtils;
+import org.wordpress.android.util.DisplayUtils;
+import org.wordpress.android.util.GravatarUtils;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils.AnalyticsCommentActionSource;
+import org.wordpress.android.util.config.ReaderCommentsModerationFeatureConfig;
+import org.wordpress.android.util.image.ImageManager;
+import org.wordpress.android.util.image.ImageType;
+
+import java.util.ArrayList;
+import java.util.Date;
+
+import javax.inject.Inject;
+
+public class ReaderCommentAdapter extends RecyclerView.Adapter&lt;RecyclerView.ViewHolder&gt; {
+    private ReaderPost mPost;
+    private boolean mMoreCommentsExist;
+
+    private static final int MAX_INDENT_LEVEL = 2;
+    private final int mIndentPerLevel;
+    private final int mAvatarSz;
+    private final int mContentWidth;
+
+<span class="nc" id="L77">    private long mHighlightCommentId = 0;</span>
+<span class="nc" id="L78">    private long mReplyTargetComment = 0;</span>
+<span class="nc" id="L79">    private long mAnimateLikeCommentId = 0;</span>
+<span class="nc" id="L80">    private boolean mShowProgressForHighlightedComment = false;</span>
+    private final boolean mIsPrivatePost;
+    private boolean mIsHeaderClickEnabled;
+
+    private final int mColorHighlight;
+    private final ColorStateList mReplyButtonHighlightedColor;
+    private final ColorStateList mReplyButtonNormalColorColor;
+
+    private static final int VIEW_TYPE_HEADER = 1;
+    private static final int VIEW_TYPE_COMMENT = 2;
+
+    private static final long ID_HEADER = -1L;
+
+    private static final int NUM_HEADERS = 1;
+
+    private SiteModel mPostsSite;
+
+    @Inject AccountStore mAccountStore;
+    @Inject SiteStore mSiteStore;
+    @Inject ImageManager mImageManager;
+    @Inject ReaderTracker mReaderTracker;
+    @Inject ThreadedCommentsUtils mThreadedCommentsUtils;
+    @Inject SelectedSiteRepository mSelectedSiteRepository;
+    @Inject UiHelpers mUiHelpers;
+    @Inject ReaderCommentsModerationFeatureConfig mReaderCommentsModerationFeatureConfig;
+
+
+    public interface RequestReplyListener {
+        void onRequestReply(long commentId);
+    }
+
+    public interface CommentMenuActionListener {
+        void onCommentMenuItemTapped(ReaderComment comment, ReaderCommentMenuActionType actionType);
+    }
+
+<span class="nc" id="L115">    private ReaderCommentList mComments = new ReaderCommentList();</span>
+    private RequestReplyListener mReplyListener;
+    private CommentMenuActionListener mCommentMenuActionListener;
+    private ReaderInterfaces.DataLoadedListener mDataLoadedListener;
+    private ReaderActions.DataRequestedListener mDataRequestedListener;
+    private PostHeaderHolder mHeaderHolder;
+
+    class CommentHolder extends RecyclerView.ViewHolder {
+        private final ViewGroup mCommentContainer;
+        private final TextView mTxtAuthor;
+        private final TextView mTxtText;
+        private final TextView mTxtDate;
+
+        private final ImageView mImgAvatar;
+        private final View mSpacerIndent;
+        private final View mSelectedCommentIndicator;
+        private final View mTopCommentDivider;
+        private final View mAuthorContainer;
+        private final View mAuthorBadge;
+        private final View mActionButtonContainer;
+        private final ImageView mActionButton;
+        private final ProgressBar mProgress;
+
+        private final ViewGroup mReplyView;
+        private final ImageView mReplyButtonIcon;
+        private final TextView mReplyButtonLabel;
+        private final ReaderIconCountView mCountLikes;
+
+<span class="nc" id="L143">        CommentHolder(View view) {</span>
+<span class="nc" id="L144">            super(view);</span>
+
+<span class="nc" id="L146">            mCommentContainer = view.findViewById(R.id.comment_container);</span>
+<span class="nc" id="L147">            mSelectedCommentIndicator = view.findViewById(R.id.selected_comment_indicator);</span>
+
+<span class="nc" id="L149">            mTxtAuthor = view.findViewById(R.id.text_comment_author);</span>
+<span class="nc" id="L150">            mTxtText = view.findViewById(R.id.text_comment_text);</span>
+<span class="nc" id="L151">            mTxtDate = view.findViewById(R.id.text_comment_date);</span>
+
+<span class="nc" id="L153">            mImgAvatar = view.findViewById(R.id.image_comment_avatar);</span>
+<span class="nc" id="L154">            mSpacerIndent = view.findViewById(R.id.spacer_comment_indent);</span>
+<span class="nc" id="L155">            mProgress = view.findViewById(R.id.progress_comment);</span>
+
+<span class="nc" id="L157">            mTopCommentDivider = view.findViewById(R.id.divider);</span>
+<span class="nc" id="L158">            mAuthorContainer = view.findViewById(R.id.layout_author);</span>
+<span class="nc" id="L159">            mAuthorBadge = view.findViewById(R.id.author_badge);</span>
+
+<span class="nc" id="L161">            mActionButtonContainer = view.findViewById(R.id.comment_action_button_container);</span>
+<span class="nc" id="L162">            mActionButton = view.findViewById(R.id.comment_action_button);</span>
+
+<span class="nc" id="L164">            mReplyView = view.findViewById(R.id.reply_container);</span>
+<span class="nc" id="L165">            mReplyButtonLabel = view.findViewById(R.id.reply_button_label);</span>
+<span class="nc" id="L166">            mReplyButtonIcon = view.findViewById(R.id.reply_button_icon);</span>
+<span class="nc" id="L167">            mCountLikes = view.findViewById(R.id.count_likes);</span>
+
+<span class="nc" id="L169">            mThreadedCommentsUtils.setLinksClickable(mTxtText, mIsPrivatePost);</span>
+<span class="nc" id="L170">        }</span>
+    }
+
+    class PostHeaderHolder extends RecyclerView.ViewHolder {
+        private final ReaderCommentsPostHeaderView mHeaderView;
+
+<span class="nc" id="L176">        PostHeaderHolder(View view) {</span>
+<span class="nc" id="L177">            super(view);</span>
+<span class="nc" id="L178">            mHeaderView = (ReaderCommentsPostHeaderView) view;</span>
+<span class="nc" id="L179">        }</span>
+    }
+
+<span class="nc" id="L182">    public ReaderCommentAdapter(Context context, ReaderPost post) {</span>
+<span class="nc" id="L183">        ((WordPress) context.getApplicationContext()).component().inject(this);</span>
+<span class="nc" id="L184">        mPost = post;</span>
+<span class="nc" id="L185">        mIsPrivatePost = mThreadedCommentsUtils.isPrivatePost(post);</span>
+
+<span class="nc" id="L187">        mIndentPerLevel = context.getResources().getDimensionPixelSize(R.dimen.reader_comment_indent_per_level);</span>
+<span class="nc" id="L188">        mAvatarSz = context.getResources().getDimensionPixelSize(R.dimen.avatar_sz_extra_small);</span>
+
+<span class="nc" id="L190">        mPostsSite = mSiteStore.getSiteBySiteId(post.blogId);</span>
+
+        // calculate the max width of comment content
+<span class="nc" id="L193">        int displayWidth = DisplayUtils.getWindowPixelWidth(context);</span>
+<span class="nc" id="L194">        int cardMargin = context.getResources().getDimensionPixelSize(R.dimen.reader_card_margin);</span>
+<span class="nc" id="L195">        int contentPadding = context.getResources().getDimensionPixelSize(R.dimen.reader_card_content_padding);</span>
+<span class="nc" id="L196">        int mediumMargin = context.getResources().getDimensionPixelSize(R.dimen.margin_medium);</span>
+<span class="nc" id="L197">        mContentWidth = displayWidth - (cardMargin * 2) - (contentPadding * 2) - (mediumMargin * 2);</span>
+
+<span class="nc" id="L199">        mColorHighlight = ColorUtils</span>
+<span class="nc" id="L200">                .setAlphaComponent(ContextExtensionsKt.getColorFromAttribute(context, R.attr.colorPrimary),</span>
+<span class="nc" id="L201">                        context.getResources().getInteger(R.integer.selected_list_item_opacity));</span>
+
+<span class="nc" id="L203">        mReplyButtonHighlightedColor = ContextExtensionsKt.getColorStateListFromAttribute(context, R.attr.colorPrimary);</span>
+<span class="nc" id="L204">        mReplyButtonNormalColorColor =</span>
+<span class="nc" id="L205">                ContextExtensionsKt.getColorStateListFromAttribute(context, R.attr.wpColorOnSurfaceMedium);</span>
+
+<span class="nc" id="L207">        setHasStableIds(true);</span>
+<span class="nc" id="L208">    }</span>
+
+    public void setReplyListener(RequestReplyListener replyListener) {
+<span class="nc" id="L211">        mReplyListener = replyListener;</span>
+<span class="nc" id="L212">    }</span>
+
+    public void setCommentMenuActionListener(CommentMenuActionListener commentMenuActionListener) {
+<span class="nc" id="L215">        mCommentMenuActionListener = commentMenuActionListener;</span>
+<span class="nc" id="L216">    }</span>
+
+    public void setDataLoadedListener(ReaderInterfaces.DataLoadedListener dataLoadedListener) {
+<span class="nc" id="L219">        mDataLoadedListener = dataLoadedListener;</span>
+<span class="nc" id="L220">    }</span>
+
+    public void setDataRequestedListener(ReaderActions.DataRequestedListener dataRequestedListener) {
+<span class="nc" id="L223">        mDataRequestedListener = dataRequestedListener;</span>
+<span class="nc" id="L224">    }</span>
+
+    public void enableHeaderClicks() {
+<span class="nc" id="L227">        mIsHeaderClickEnabled = true;</span>
+<span class="nc" id="L228">    }</span>
+
+    @Override
+    public int getItemViewType(int position) {
+<span class="nc bnc" id="L232" title="All 2 branches missed.">        return position == 0 ? VIEW_TYPE_HEADER : VIEW_TYPE_COMMENT;</span>
+    }
+
+    public void refreshComments() {
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        if (mIsTaskRunning) {</span>
+<span class="nc" id="L237">            AppLog.w(T.READER, &quot;reader comment adapter &gt; Load comments task already running&quot;);</span>
+        }
+<span class="nc" id="L239">        new LoadCommentsTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);</span>
+<span class="nc" id="L240">    }</span>
+
+    @Override
+    public int getItemCount() {
+<span class="nc" id="L244">        return mComments.size() + NUM_HEADERS;</span>
+    }
+
+    public boolean isEmpty() {
+<span class="nc bnc" id="L248" title="All 2 branches missed.">        return mComments.size() == 0;</span>
+    }
+
+    @Override
+    public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+<span class="nc bnc" id="L253" title="All 2 branches missed.">        switch (viewType) {</span>
+            case VIEW_TYPE_HEADER:
+<span class="nc" id="L255">                View headerView = new ReaderCommentsPostHeaderView(parent.getContext());</span>
+<span class="nc" id="L256">                headerView.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,</span>
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+<span class="nc" id="L258">                return new PostHeaderHolder(headerView);</span>
+            default:
+<span class="nc" id="L260">                View commentView = LayoutInflater.from(parent.getContext())</span>
+<span class="nc" id="L261">                                                 .inflate(R.layout.reader_listitem_comment, parent, false);</span>
+<span class="nc" id="L262">                return new CommentHolder(commentView);</span>
+        }
+    }
+
+    @Override
+    public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
+<span class="nc bnc" id="L268" title="All 2 branches missed.">        if (holder instanceof PostHeaderHolder) {</span>
+<span class="nc" id="L269">            mHeaderHolder = (PostHeaderHolder) holder;</span>
+<span class="nc" id="L270">            mHeaderHolder.mHeaderView.setPost(mPost);</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">            if (mIsHeaderClickEnabled) {</span>
+<span class="nc" id="L272">                mHeaderHolder.mHeaderView.setOnClickListener(new View.OnClickListener() {</span>
+                    @Override
+                    public void onClick(View view) {
+<span class="nc" id="L275">                        ReaderActivityLauncher.showReaderPostDetail(view.getContext(), mPost.blogId, mPost.postId);</span>
+<span class="nc" id="L276">                    }</span>
+                });
+            }
+<span class="nc" id="L279">            return;</span>
+        }
+
+<span class="nc" id="L282">        final ReaderComment comment = getItem(position);</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">        if (comment == null) {</span>
+<span class="nc" id="L284">            return;</span>
+        }
+
+<span class="nc" id="L287">        final CommentHolder commentHolder = (CommentHolder) holder;</span>
+<span class="nc" id="L288">        commentHolder.mTxtAuthor.setText(comment.getAuthorName());</span>
+
+        java.util.Date dtPublished;
+<span class="nc bnc" id="L291" title="All 4 branches missed.">        if (mShowProgressForHighlightedComment &amp;&amp; mHighlightCommentId == comment.commentId) {</span>
+<span class="nc" id="L292">            dtPublished = new Date();</span>
+        } else {
+<span class="nc" id="L294">            dtPublished = DateTimeUtils.dateFromIso8601(comment.getPublished());</span>
+        }
+<span class="nc" id="L296">        commentHolder.mTxtDate.setText(DateTimeUtils.javaDateToTimeSpan(dtPublished, WordPress.getContext()));</span>
+
+<span class="nc" id="L298">        String avatarUrl = GravatarUtils.fixGravatarUrl(comment.getAuthorAvatar(), mAvatarSz);</span>
+<span class="nc" id="L299">        mImageManager.loadIntoCircle(commentHolder.mImgAvatar, ImageType.AVATAR, avatarUrl);</span>
+
+        // tapping avatar or author name opens blog preview
+<span class="nc bnc" id="L302" title="All 2 branches missed.">        if (comment.hasAuthorBlogId()) {</span>
+<span class="nc" id="L303">            View.OnClickListener authorListener = new View.OnClickListener() {</span>
+                @Override
+                public void onClick(View view) {
+<span class="nc" id="L306">                    ReaderActivityLauncher.showReaderBlogPreview(</span>
+<span class="nc" id="L307">                            view.getContext(),</span>
+                            comment.authorBlogId,
+<span class="nc" id="L309">                            mPost.isFollowedByCurrentUser,</span>
+                            ReaderTracker.SOURCE_COMMENT,
+                            mReaderTracker
+                    );
+<span class="nc" id="L313">                }</span>
+            };
+<span class="nc" id="L315">            commentHolder.mAuthorContainer.setOnClickListener(authorListener);</span>
+<span class="nc" id="L316">            commentHolder.mAuthorContainer.setOnClickListener(authorListener);</span>
+<span class="nc" id="L317">        } else {</span>
+<span class="nc" id="L318">            commentHolder.mAuthorContainer.setOnClickListener(null);</span>
+<span class="nc" id="L319">            commentHolder.mAuthorContainer.setOnClickListener(null);</span>
+        }
+
+        // author name uses different color for comments from the post's author
+<span class="nc bnc" id="L323" title="All 2 branches missed.">        if (comment.authorId == mPost.authorId) {</span>
+<span class="nc" id="L324">            commentHolder.mAuthorBadge.setVisibility(View.VISIBLE);</span>
+        } else {
+<span class="nc" id="L326">            commentHolder.mAuthorBadge.setVisibility(View.GONE);</span>
+        }
+
+<span class="nc bnc" id="L329" title="All 4 branches missed.">        if (mReaderCommentsModerationFeatureConfig.isEnabled()</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">            &amp;&amp; (mPostsSite != null &amp;&amp; mPostsSite.getHasCapabilityEditOthersPosts())) {</span>
+<span class="nc" id="L331">            commentHolder.mActionButton.setImageResource(R.drawable.ic_more_vert_white_24dp);</span>
+
+<span class="nc" id="L333">            commentHolder.mActionButtonContainer.setOnClickListener(v -&gt; {</span>
+<span class="nc" id="L334">                Context context = commentHolder.mActionButton.getContext();</span>
+
+<span class="nc" id="L336">                ListPopupWindow menuPopup = new ListPopupWindow(context);</span>
+
+<span class="nc" id="L338">                ArrayList&lt;ReaderCommentMenuItem&gt; actions = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L339">                actions.add(new PrimaryItemMenu(ReaderCommentMenuActionType.UNAPPROVE,</span>
+                        new UiStringRes(R.string.reader_comment_menu_unapprove),
+                        new UiStringRes(R.string.reader_comment_menu_unapprove),
+                        R.drawable.ic_cross_in_circle_white_24dp));
+
+<span class="nc" id="L344">                actions.add(new PrimaryItemMenu(ReaderCommentMenuActionType.SPAM,</span>
+                        new UiStringRes(R.string.reader_comment_menu_spam),
+                        new UiStringRes(R.string.reader_comment_menu_spam),
+                        R.drawable.ic_spam_white_24dp));
+
+<span class="nc" id="L349">                actions.add(new PrimaryItemMenu(ReaderCommentMenuActionType.TRASH,</span>
+                        new UiStringRes(R.string.reader_comment_menu_trash),
+                        new UiStringRes(R.string.reader_comment_menu_trash),
+                        R.drawable.ic_trash_white_24dp));
+
+<span class="nc" id="L354">                actions.add(new Divider());</span>
+
+<span class="nc" id="L356">                actions.add(new PrimaryItemMenu(ReaderCommentMenuActionType.EDIT,</span>
+                        new UiStringRes(R.string.reader_comment_menu_edit),
+                        new UiStringRes(R.string.reader_comment_menu_edit),
+                        R.drawable.ic_pencil_white_24dp));
+
+<span class="nc" id="L361">                actions.add(new PrimaryItemMenu(ReaderCommentMenuActionType.SHARE,</span>
+                        new UiStringRes(R.string.reader_comment_menu_share),
+                        new UiStringRes(R.string.reader_comment_menu_share),
+                        R.drawable.ic_share_white_24dp));
+
+<span class="nc" id="L366">                menuPopup.setWidth(context.getResources().getDimensionPixelSize(R.dimen.menu_item_width));</span>
+<span class="nc" id="L367">                menuPopup.setAdapter(new ReaderCommentMenuActionAdapter(context, mUiHelpers, actions));</span>
+<span class="nc" id="L368">                menuPopup.setDropDownGravity(Gravity.END);</span>
+<span class="nc" id="L369">                menuPopup.setAnchorView(commentHolder.mActionButton);</span>
+<span class="nc" id="L370">                menuPopup.setModal(true);</span>
+<span class="nc" id="L371">                menuPopup.setOnItemClickListener((parent, view, position1, id) -&gt; {</span>
+<span class="nc" id="L372">                    mCommentMenuActionListener</span>
+<span class="nc" id="L373">                            .onCommentMenuItemTapped(comment, actions.get(position1).getType());</span>
+<span class="nc" id="L374">                    menuPopup.dismiss();</span>
+<span class="nc" id="L375">                });</span>
+<span class="nc" id="L376">                menuPopup.show();</span>
+<span class="nc" id="L377">            });</span>
+        } else {
+<span class="nc" id="L379">            commentHolder.mActionButton.setImageResource(R.drawable.ic_share_white_24dp);</span>
+<span class="nc" id="L380">            commentHolder.mActionButtonContainer.setOnClickListener(</span>
+<span class="nc" id="L381">                    v -&gt; mCommentMenuActionListener</span>
+<span class="nc" id="L382">                            .onCommentMenuItemTapped(comment, ReaderCommentMenuActionType.SHARE));</span>
+        }
+
+        // show indentation spacer for comments with parents and indent it based on comment level
+        int indentWidth;
+<span class="nc bnc" id="L387" title="All 4 branches missed.">        if (comment.parentId != 0 &amp;&amp; comment.level &gt; 0) {</span>
+<span class="nc" id="L388">            indentWidth = Math.min(MAX_INDENT_LEVEL, comment.level) * mIndentPerLevel;</span>
+<span class="nc" id="L389">            RelativeLayout.LayoutParams params =</span>
+<span class="nc" id="L390">                    (RelativeLayout.LayoutParams) commentHolder.mSpacerIndent.getLayoutParams();</span>
+<span class="nc" id="L391">            params.width = indentWidth;</span>
+<span class="nc" id="L392">            commentHolder.mSpacerIndent.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L393">            commentHolder.mTopCommentDivider.setVisibility(View.GONE);</span>
+<span class="nc" id="L394">        } else {</span>
+<span class="nc" id="L395">            indentWidth = 0;</span>
+<span class="nc" id="L396">            commentHolder.mSpacerIndent.setVisibility(View.GONE);</span>
+<span class="nc" id="L397">            commentHolder.mTopCommentDivider.setVisibility(View.VISIBLE);</span>
+        }
+
+<span class="nc" id="L400">        int maxImageWidth = mContentWidth - indentWidth;</span>
+<span class="nc" id="L401">        String renderingError = commentHolder.mTxtText.getResources().getString(R.string.comment_unable_to_show_error);</span>
+<span class="nc" id="L402">        CommentUtils.displayHtmlComment(commentHolder.mTxtText, comment.getText(), maxImageWidth,</span>
+<span class="nc" id="L403">                commentHolder.mTxtText.getLineHeight(), renderingError);</span>
+
+        // different background for highlighted comment, with optional progress bar
+<span class="nc bnc" id="L406" title="All 4 branches missed.">        if (mHighlightCommentId != 0 &amp;&amp; mHighlightCommentId == comment.commentId) {</span>
+<span class="nc" id="L407">            commentHolder.mCommentContainer.setBackgroundColor(mColorHighlight);</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">            commentHolder.mProgress.setVisibility(mShowProgressForHighlightedComment ? View.VISIBLE : View.GONE);</span>
+<span class="nc" id="L409">            commentHolder.mSelectedCommentIndicator.setVisibility(View.VISIBLE);</span>
+        } else {
+<span class="nc" id="L411">            commentHolder.mCommentContainer.setBackgroundColor(0);</span>
+<span class="nc" id="L412">            commentHolder.mProgress.setVisibility(View.GONE);</span>
+<span class="nc" id="L413">            commentHolder.mSelectedCommentIndicator.setVisibility(View.GONE);</span>
+        }
+
+<span class="nc bnc" id="L416" title="All 4 branches missed.">        if (mReplyTargetComment != 0 &amp;&amp; mReplyTargetComment == comment.commentId) {</span>
+<span class="nc" id="L417">            commentHolder.mReplyButtonLabel.setTextColor(mReplyButtonHighlightedColor);</span>
+<span class="nc" id="L418">            commentHolder.mReplyButtonIcon.setImageTintList(mReplyButtonHighlightedColor);</span>
+        } else {
+<span class="nc" id="L420">            commentHolder.mReplyButtonLabel.setTextColor(mReplyButtonNormalColorColor);</span>
+<span class="nc" id="L421">            commentHolder.mReplyButtonIcon.setImageTintList(mReplyButtonNormalColorColor);</span>
+        }
+
+<span class="nc bnc" id="L424" title="All 2 branches missed.">        if (!mAccountStore.hasAccessToken()) {</span>
+<span class="nc" id="L425">            commentHolder.mReplyView.setVisibility(View.GONE);</span>
+        } else {
+            // tapping reply tells activity to show reply box
+<span class="nc" id="L428">            commentHolder.mReplyView.setOnClickListener(new View.OnClickListener() {</span>
+                @Override
+                public void onClick(View v) {
+<span class="nc bnc" id="L431" title="All 2 branches missed.">                    if (mReplyListener != null) {</span>
+<span class="nc" id="L432">                        mReplyListener.onRequestReply(comment.commentId);</span>
+                    }
+<span class="nc" id="L434">                }</span>
+            });
+
+<span class="nc bnc" id="L437" title="All 4 branches missed.">            if (mAnimateLikeCommentId != 0 &amp;&amp; mAnimateLikeCommentId == comment.commentId) {</span>
+                // simulate tapping on the &quot;Like&quot; button. Add a delay to help the user notice it.
+<span class="nc" id="L439">                commentHolder.mCountLikes.postDelayed(new Runnable() {</span>
+                    @Override
+                    public void run() {
+<span class="nc" id="L442">                        ReaderAnim.animateLikeButton(commentHolder.mCountLikes.getImageView(), true);</span>
+<span class="nc" id="L443">                    }</span>
+                }, 400);
+
+                // clear the &quot;command&quot; to like a comment
+<span class="nc" id="L447">                mAnimateLikeCommentId = 0;</span>
+            }
+        }
+
+<span class="nc" id="L451">        showLikeStatus(commentHolder, position);</span>
+
+        // if we're nearing the end of the comments and we know more exist on the server,
+        // fire request to load more
+<span class="nc bnc" id="L455" title="All 6 branches missed.">        if (mMoreCommentsExist &amp;&amp; mDataRequestedListener != null &amp;&amp; (position &gt;= getItemCount() - NUM_HEADERS)) {</span>
+<span class="nc" id="L456">            mDataRequestedListener.onRequestData();</span>
+        }
+<span class="nc" id="L458">    }</span>
+
+    @Override
+    public long getItemId(int position) {
+<span class="nc bnc" id="L462" title="All 2 branches missed.">        switch (getItemViewType(position)) {</span>
+            case VIEW_TYPE_HEADER:
+<span class="nc" id="L464">                return ID_HEADER;</span>
+            default:
+<span class="nc" id="L466">                ReaderComment comment = getItem(position);</span>
+<span class="nc bnc" id="L467" title="All 2 branches missed.">                return comment != null ? comment.commentId : 0;</span>
+        }
+    }
+
+    private ReaderComment getItem(int position) {
+<span class="nc bnc" id="L472" title="All 2 branches missed.">        return position == 0 ? null : mComments.get(position - NUM_HEADERS);</span>
+    }
+
+    /*
+     * refresh the post from the database - used to reflect changes to comment counts, etc.
+     */
+    public void refreshPost() {
+<span class="nc bnc" id="L479" title="All 2 branches missed.">        if (mPost != null) {</span>
+<span class="nc" id="L480">            ReaderPost post = ReaderPostTable.getBlogPost(mPost.blogId, mPost.postId, true);</span>
+<span class="nc" id="L481">            setPost(post);</span>
+        }
+<span class="nc" id="L483">    }</span>
+
+    private void showLikeStatus(final CommentHolder holder, int position) {
+<span class="nc" id="L486">        ReaderComment comment = getItem(position);</span>
+<span class="nc bnc" id="L487" title="All 2 branches missed.">        if (comment == null) {</span>
+<span class="nc" id="L488">            return;</span>
+        }
+
+<span class="nc bnc" id="L491" title="All 2 branches missed.">        if (mPost.canLikePost()) {</span>
+<span class="nc" id="L492">            holder.mCountLikes.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L493">            holder.mCountLikes.setSelected(comment.isLikedByCurrentUser);</span>
+<span class="nc" id="L494">            holder.mCountLikes.setTextCount(comment.numLikes);</span>
+<span class="nc" id="L495">            holder.mCountLikes.setContentDescription(ReaderUtils.getLongLikeLabelText(</span>
+<span class="nc" id="L496">                    holder.mCountLikes.getContext(), comment.numLikes, comment.isLikedByCurrentUser));</span>
+
+<span class="nc bnc" id="L498" title="All 2 branches missed.">            if (!mAccountStore.hasAccessToken()) {</span>
+<span class="nc" id="L499">                holder.mCountLikes.setEnabled(false);</span>
+            } else {
+<span class="nc" id="L501">                holder.mCountLikes.setEnabled(true);</span>
+<span class="nc" id="L502">                holder.mCountLikes.setOnClickListener(new View.OnClickListener() {</span>
+                    @Override
+                    public void onClick(View v) {
+<span class="nc" id="L505">                        int clickedPosition = holder.getAdapterPosition();</span>
+<span class="nc" id="L506">                        toggleLike(v.getContext(), holder, clickedPosition);</span>
+<span class="nc" id="L507">                    }</span>
+                });
+            }
+        } else {
+<span class="nc" id="L511">            holder.mCountLikes.setVisibility(View.GONE);</span>
+<span class="nc" id="L512">            holder.mCountLikes.setOnClickListener(null);</span>
+        }
+<span class="nc" id="L514">    }</span>
+
+    private void toggleLike(Context context, CommentHolder holder, int position) {
+<span class="nc bnc" id="L517" title="All 2 branches missed.">        if (!NetworkUtils.checkConnection(context)) {</span>
+<span class="nc" id="L518">            return;</span>
+        }
+
+<span class="nc" id="L521">        ReaderComment comment = getItem(position);</span>
+<span class="nc bnc" id="L522" title="All 2 branches missed.">        if (comment == null) {</span>
+<span class="nc" id="L523">            ToastUtils.showToast(context, R.string.reader_toast_err_generic);</span>
+<span class="nc" id="L524">            return;</span>
+        }
+
+<span class="nc bnc" id="L527" title="All 2 branches missed.">        boolean isAskingToLike = !comment.isLikedByCurrentUser;</span>
+<span class="nc" id="L528">        ReaderAnim.animateLikeButton(holder.mCountLikes.getImageView(), isAskingToLike);</span>
+
+<span class="nc bnc" id="L530" title="All 2 branches missed.">        if (!ReaderCommentActions.performLikeAction(comment, isAskingToLike, mAccountStore.getAccount().getUserId())) {</span>
+<span class="nc" id="L531">            ToastUtils.showToast(context, R.string.reader_toast_err_generic);</span>
+<span class="nc" id="L532">            return;</span>
+        }
+
+<span class="nc" id="L535">        ReaderComment updatedComment = ReaderCommentTable.getComment(comment.blogId, comment.postId, comment.commentId);</span>
+<span class="nc bnc" id="L536" title="All 2 branches missed.">        if (updatedComment != null) {</span>
+<span class="nc" id="L537">            mComments.set(position - NUM_HEADERS, updatedComment);</span>
+<span class="nc" id="L538">            showLikeStatus(holder, position);</span>
+        }
+
+<span class="nc bnc" id="L541" title="All 2 branches missed.">        mReaderTracker.trackPost(isAskingToLike</span>
+<span class="nc" id="L542">                        ? AnalyticsTracker.Stat.READER_ARTICLE_COMMENT_LIKED</span>
+<span class="nc" id="L543">                        : AnalyticsTracker.Stat.READER_ARTICLE_COMMENT_UNLIKED,</span>
+                mPost
+        );
+<span class="nc" id="L546">        mReaderTracker.trackPost(</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">                isAskingToLike ? AnalyticsTracker.Stat.COMMENT_LIKED : AnalyticsTracker.Stat.COMMENT_UNLIKED,</span>
+                mPost,
+<span class="nc" id="L549">                AnalyticsCommentActionSource.READER.toString()</span>
+        );
+<span class="nc" id="L551">    }</span>
+
+    public boolean refreshComment(long commentId) {
+<span class="nc" id="L554">        int position = positionOfCommentId(commentId);</span>
+<span class="nc bnc" id="L555" title="All 2 branches missed.">        if (position == -1) {</span>
+<span class="nc" id="L556">            return false;</span>
+        }
+
+<span class="nc" id="L559">        ReaderComment comment = getItem(position);</span>
+<span class="nc bnc" id="L560" title="All 2 branches missed.">        if (comment == null) {</span>
+<span class="nc" id="L561">            return false;</span>
+        }
+
+<span class="nc" id="L564">        ReaderComment updatedComment = ReaderCommentTable.getComment(comment.blogId, comment.postId, comment.commentId);</span>
+<span class="nc bnc" id="L565" title="All 2 branches missed.">        if (updatedComment != null) {</span>
+            // copy the comment level over since loading from the DB always has it as 0
+<span class="nc" id="L567">            updatedComment.level = comment.level;</span>
+<span class="nc" id="L568">            mComments.set(position - NUM_HEADERS, updatedComment);</span>
+<span class="nc" id="L569">            notifyItemChanged(position);</span>
+        }
+
+<span class="nc" id="L572">        return true;</span>
+    }
+
+    /*
+     * called from post detail activity when user submits a comment
+     */
+    public void addComment(ReaderComment comment) {
+<span class="nc bnc" id="L579" title="All 2 branches missed.">        if (comment == null) {</span>
+<span class="nc" id="L580">            return;</span>
+        }
+
+        // if the comment doesn't have a parent we can just add it to the list of existing
+        // comments - but if it does have a parent, we need to reload the list so that it
+        // appears under its parent and is correctly indented
+<span class="nc bnc" id="L586" title="All 2 branches missed.">        if (comment.parentId == 0) {</span>
+<span class="nc" id="L587">            mComments.add(comment);</span>
+<span class="nc" id="L588">            notifyDataSetChanged();</span>
+        } else {
+<span class="nc" id="L590">            refreshComments();</span>
+        }
+<span class="nc" id="L592">    }</span>
+
+    /*
+     * called from post detail when submitted a comment fails - this removes the &quot;fake&quot; comment
+     * that was inserted while the API call was still being processed
+     */
+    public void removeComment(long commentId) {
+<span class="nc bnc" id="L599" title="All 2 branches missed.">        if (commentId == mHighlightCommentId) {</span>
+<span class="nc" id="L600">            setHighlightCommentId(0, false);</span>
+        }
+
+<span class="nc" id="L603">        int index = mComments.indexOfCommentId(commentId);</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">        if (index &gt; -1) {</span>
+<span class="nc" id="L605">            mComments.remove(index);</span>
+            // re-level comments
+<span class="nc" id="L607">            mComments = new ReaderCommentLeveler(mComments).createLevelList();</span>
+<span class="nc" id="L608">            notifyDataSetChanged();</span>
+        }
+<span class="nc" id="L610">    }</span>
+
+    /*
+     * replace the comment that has the passed commentId with another comment
+     */
+    public void replaceComment(long commentId, ReaderComment comment) {
+<span class="nc" id="L616">        int positionOfTargetComment = positionOfCommentId(comment.commentId);</span>
+<span class="nc bnc" id="L617" title="All 2 branches missed.">        if (positionOfTargetComment == -1) {</span>
+<span class="nc" id="L618">            int position = positionOfCommentId(commentId);</span>
+<span class="nc bnc" id="L619" title="All 4 branches missed.">            if (position &gt; -1 &amp;&amp; mComments.replaceComment(commentId, comment)) {</span>
+<span class="nc" id="L620">                notifyItemChanged(position);</span>
+            }
+<span class="nc" id="L622">        } else {</span>
+<span class="nc" id="L623">            removeComment(commentId);</span>
+        }
+<span class="nc" id="L625">    }</span>
+
+    /*
+     * sets the passed comment as highlighted with a different background color and an optional
+     * progress bar (used when posting new comments) - note that we don't call notifyDataSetChanged()
+     * here since in most cases it's unnecessary, so we leave it up to the caller to do that
+     */
+    public void setHighlightCommentId(long commentId, boolean showProgress) {
+<span class="nc" id="L633">        mHighlightCommentId = commentId;</span>
+<span class="nc" id="L634">        mShowProgressForHighlightedComment = showProgress;</span>
+<span class="nc" id="L635">    }</span>
+
+    public void setReplyTargetComment(long commentId) {
+<span class="nc" id="L638">        mReplyTargetComment = commentId;</span>
+<span class="nc" id="L639">    }</span>
+
+    /*
+     * returns the position of the passed comment in the adapter, taking the header into account
+     */
+    public int positionOfCommentId(long commentId) {
+<span class="nc" id="L645">        int index = mComments.indexOfCommentId(commentId);</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">        return index == -1 ? -1 : index + NUM_HEADERS;</span>
+    }
+
+    /*
+     * sets the passed comment as the one to perform a &quot;Like&quot; on when the list comment list has completed loading
+     */
+    public void setAnimateLikeCommentId(long commentId) {
+<span class="nc" id="L653">        mAnimateLikeCommentId = commentId;</span>
+<span class="nc" id="L654">    }</span>
+
+    /*
+     * AsyncTask to load comments for this post
+     */
+<span class="nc" id="L659">    private boolean mIsTaskRunning = false;</span>
+
+    @SuppressLint(&quot;StaticFieldLeak&quot;)
+<span class="nc" id="L662">    private class LoadCommentsTask extends AsyncTask&lt;Void, Void, Boolean&gt; {</span>
+        private ReaderCommentList mTmpComments;
+        private boolean mTmpMoreCommentsExist;
+
+        @Override
+        protected void onPreExecute() {
+<span class="nc" id="L668">            mIsTaskRunning = true;</span>
+<span class="nc" id="L669">        }</span>
+
+        @Override
+        protected void onCancelled() {
+<span class="nc" id="L673">            mIsTaskRunning = false;</span>
+<span class="nc" id="L674">        }</span>
+
+        @Override
+        protected Boolean doInBackground(Void... params) {
+<span class="nc bnc" id="L678" title="All 2 branches missed.">            if (mPost == null) {</span>
+<span class="nc" id="L679">                return false;</span>
+            }
+
+            // determine whether more comments can be downloaded by comparing the number of
+            // comments the post says it has with the number of comments actually stored
+            // locally for this post
+<span class="nc" id="L685">            int numServerComments = ReaderPostTable.getNumCommentsForPost(mPost);</span>
+<span class="nc" id="L686">            int numLocalComments = ReaderCommentTable.getNumCommentsForPost(mPost);</span>
+<span class="nc bnc" id="L687" title="All 2 branches missed.">            mTmpMoreCommentsExist = (numServerComments &gt; numLocalComments);</span>
+
+<span class="nc" id="L689">            mTmpComments = ReaderCommentTable.getCommentsForPost(mPost);</span>
+<span class="nc bnc" id="L690" title="All 2 branches missed.">            return !mComments.isSameList(mTmpComments);</span>
+        }
+
+        @Override
+        protected void onPostExecute(Boolean result) {
+<span class="nc" id="L695">            mMoreCommentsExist = mTmpMoreCommentsExist;</span>
+
+<span class="nc bnc" id="L697" title="All 2 branches missed.">            if (result) {</span>
+                // assign the comments with children sorted under their parents and indent levels applied
+<span class="nc" id="L699">                mComments = new ReaderCommentLeveler(mTmpComments).createLevelList();</span>
+<span class="nc" id="L700">                notifyDataSetChanged();</span>
+            }
+<span class="nc bnc" id="L702" title="All 2 branches missed.">            if (mDataLoadedListener != null) {</span>
+<span class="nc" id="L703">                mDataLoadedListener.onDataLoaded(isEmpty());</span>
+            }
+<span class="nc" id="L705">            mIsTaskRunning = false;</span>
+<span class="nc" id="L706">        }</span>
+    }
+
+    /*
+     * Set a post to adapter and update relevant information in the post header
+     */
+    public void setPost(ReaderPost post) {
+<span class="nc bnc" id="L713" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L714">            mPost = post;</span>
+<span class="nc" id="L715">            notifyItemChanged(0); // notify header to update itself</span>
+        }
+<span class="nc" id="L717">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

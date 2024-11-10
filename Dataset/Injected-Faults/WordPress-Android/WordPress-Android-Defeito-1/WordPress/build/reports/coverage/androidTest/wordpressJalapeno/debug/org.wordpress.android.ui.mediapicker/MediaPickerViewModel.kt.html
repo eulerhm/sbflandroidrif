@@ -1,0 +1,748 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MediaPickerViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.mediapicker</a> &gt; <span class="el_source">MediaPickerViewModel.kt</span></div><h1>MediaPickerViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.mediapicker
+
+import android.Manifest.permission
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.MediaStore
+import org.wordpress.android.fluxc.utils.MimeTypes
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.mediapicker.MediaItem.Identifier
+import org.wordpress.android.ui.mediapicker.MediaItem.Identifier.GifMediaIdentifier
+import org.wordpress.android.ui.mediapicker.MediaItem.Identifier.LocalUri
+import org.wordpress.android.ui.mediapicker.MediaItem.Identifier.RemoteId
+import org.wordpress.android.ui.mediapicker.MediaItem.Identifier.StockMediaIdentifier
+import org.wordpress.android.ui.mediapicker.MediaNavigationEvent.EditMedia
+import org.wordpress.android.ui.mediapicker.MediaNavigationEvent.Exit
+import org.wordpress.android.ui.mediapicker.MediaNavigationEvent.IconClickEvent
+import org.wordpress.android.ui.mediapicker.MediaNavigationEvent.PreviewMedia
+import org.wordpress.android.ui.mediapicker.MediaNavigationEvent.PreviewUrl
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.ChooserContext
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerAction
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerAction.OpenCameraForPhotos
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerAction.OpenCameraForWPStories
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerAction.OpenSystemPicker
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerAction.SwitchMediaPicker
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerIcon
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerIcon.CapturePhoto
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerIcon.ChooseFromAndroidDevice
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerIcon.SwitchSource
+import org.wordpress.android.ui.mediapicker.MediaPickerFragment.MediaPickerIcon.WpStoriesCapture
+import org.wordpress.android.ui.mediapicker.MediaPickerSetup.CameraSetup.ENABLED
+import org.wordpress.android.ui.mediapicker.MediaPickerSetup.CameraSetup.HIDDEN
+import org.wordpress.android.ui.mediapicker.MediaPickerSetup.CameraSetup.STORIES
+import org.wordpress.android.ui.mediapicker.MediaPickerSetup.DataSource.DEVICE
+import org.wordpress.android.ui.mediapicker.MediaPickerSetup.DataSource.GIF_LIBRARY
+import org.wordpress.android.ui.mediapicker.MediaPickerSetup.DataSource.STOCK_LIBRARY
+import org.wordpress.android.ui.mediapicker.MediaPickerSetup.DataSource.WP_LIBRARY
+import org.wordpress.android.ui.mediapicker.MediaPickerUiItem.ClickAction
+import org.wordpress.android.ui.mediapicker.MediaPickerUiItem.FileItem
+import org.wordpress.android.ui.mediapicker.MediaPickerUiItem.PhotoItem
+import org.wordpress.android.ui.mediapicker.MediaPickerUiItem.ToggleAction
+import org.wordpress.android.ui.mediapicker.MediaPickerUiItem.VideoItem
+import org.wordpress.android.ui.mediapicker.MediaPickerViewModel.BrowseMenuUiModel.BrowseAction
+import org.wordpress.android.ui.mediapicker.MediaPickerViewModel.BrowseMenuUiModel.BrowseAction.SYSTEM_PICKER
+import org.wordpress.android.ui.mediapicker.MediaPickerViewModel.ProgressDialogUiModel.Hidden
+import org.wordpress.android.ui.mediapicker.MediaPickerViewModel.ProgressDialogUiModel.Visible
+import org.wordpress.android.ui.mediapicker.MediaType.AUDIO
+import org.wordpress.android.ui.mediapicker.MediaType.DOCUMENT
+import org.wordpress.android.ui.mediapicker.MediaType.IMAGE
+import org.wordpress.android.ui.mediapicker.MediaType.VIDEO
+import org.wordpress.android.ui.mediapicker.insert.MediaInsertHandler
+import org.wordpress.android.ui.mediapicker.insert.MediaInsertHandler.InsertModel
+import org.wordpress.android.ui.mediapicker.insert.MediaInsertHandlerFactory
+import org.wordpress.android.ui.mediapicker.loader.MediaLoader
+import org.wordpress.android.ui.mediapicker.loader.MediaLoader.DomainModel
+import org.wordpress.android.ui.mediapicker.loader.MediaLoader.LoadAction
+import org.wordpress.android.ui.mediapicker.loader.MediaLoader.LoadAction.NextPage
+import org.wordpress.android.ui.mediapicker.loader.MediaLoaderFactory
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.photopicker.PermissionsHandler
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringResWithParams
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.LocaleManagerWrapper
+import org.wordpress.android.util.MediaUtilsWrapper
+import org.wordpress.android.util.UriWrapper
+import org.wordpress.android.util.WPPermissionUtils
+import org.wordpress.android.util.distinct
+import org.wordpress.android.util.merge
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ResourceProvider
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+<span class="nc" id="L87">class MediaPickerViewModel @Inject constructor(</span>
+<span class="nc" id="L88">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L89">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L90">    private val mediaLoaderFactory: MediaLoaderFactory,</span>
+<span class="nc" id="L91">    private val mediaInsertHandlerFactory: MediaInsertHandlerFactory,</span>
+<span class="nc" id="L92">    private val mediaPickerTracker: MediaPickerTracker,</span>
+<span class="nc" id="L93">    private val permissionsHandler: PermissionsHandler,</span>
+<span class="nc" id="L94">    private val localeManagerWrapper: LocaleManagerWrapper,</span>
+<span class="nc" id="L95">    private val mediaUtilsWrapper: MediaUtilsWrapper,</span>
+<span class="nc" id="L96">    private val mediaStore: MediaStore,</span>
+<span class="nc" id="L97">    private val resourceProvider: ResourceProvider</span>
+<span class="nc" id="L98">) : ScopedViewModel(mainDispatcher) {</span>
+    private lateinit var mediaLoader: MediaLoader
+    private lateinit var mediaInsertHandler: MediaInsertHandler
+<span class="nc" id="L101">    private val loadActions = Channel&lt;LoadAction&gt;()</span>
+    private var searchJob: Job? = null
+<span class="nc" id="L103">    private val _domainModel = MutableLiveData&lt;DomainModel&gt;()</span>
+<span class="nc" id="L104">    private val _selectedIds = MutableLiveData&lt;List&lt;Identifier&gt;?&gt;()</span>
+<span class="nc" id="L105">    private val _onPermissionsRequested = MutableLiveData&lt;Event&lt;PermissionsRequested&gt;&gt;()</span>
+<span class="nc" id="L106">    private val _softAskRequest = MutableLiveData&lt;SoftAskRequest&gt;()</span>
+<span class="nc" id="L107">    private val _searchExpanded = MutableLiveData&lt;Boolean&gt;()</span>
+<span class="nc" id="L108">    private val _showProgressDialog = MutableLiveData&lt;ProgressDialogUiModel&gt;()</span>
+<span class="nc" id="L109">    private val _onSnackbarMessage = MutableLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L110">    private val _onNavigate = MutableLiveData&lt;Event&lt;MediaNavigationEvent&gt;&gt;()</span>
+
+<span class="nc" id="L112">    val onSnackbarMessage: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _onSnackbarMessage</span>
+<span class="nc" id="L113">    val onNavigate = _onNavigate as LiveData&lt;Event&lt;MediaNavigationEvent&gt;&gt;</span>
+
+<span class="nc" id="L115">    val onPermissionsRequested: LiveData&lt;Event&lt;PermissionsRequested&gt;&gt; = _onPermissionsRequested</span>
+
+<span class="nc" id="L117">    val uiState: LiveData&lt;MediaPickerUiState&gt; = merge(</span>
+<span class="nc" id="L118">            _domainModel.distinct(),</span>
+<span class="nc" id="L119">            _selectedIds.distinct(),</span>
+<span class="nc" id="L120">            _softAskRequest,</span>
+<span class="nc" id="L121">            _searchExpanded,</span>
+<span class="nc" id="L122">            _showProgressDialog.distinct()</span>
+    ) { domainModel, selectedIds, softAskRequest, searchExpanded, progressDialogUiModel -&gt;
+<span class="nc" id="L124">        MediaPickerUiState(</span>
+<span class="nc" id="L125">                buildUiModel(domainModel, selectedIds, softAskRequest, searchExpanded),</span>
+<span class="nc" id="L126">                buildSoftAskView(softAskRequest),</span>
+<span class="nc bnc" id="L127" title="All 10 branches missed.">                FabUiModel(mediaPickerSetup.cameraSetup != HIDDEN &amp;&amp; selectedIds.isNullOrEmpty(), this::clickOnCamera),</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">                buildActionModeUiModel(selectedIds, domainModel?.domainItems),</span>
+<span class="nc bnc" id="L129" title="All 6 branches missed.">                buildSearchUiModel(softAskRequest?.let { !it.show } ?: true, domainModel?.filter, searchExpanded),</span>
+<span class="nc bnc" id="L130" title="All 14 branches missed.">                !domainModel?.domainItems.isNullOrEmpty() &amp;&amp; domainModel?.isLoading == true,</span>
+<span class="nc" id="L131">                buildBrowseMenuUiModel(softAskRequest, searchExpanded),</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">                progressDialogUiModel ?: Hidden</span>
+        )
+    }
+
+    private fun buildSearchUiModel(isVisible: Boolean, filter: String?, searchExpanded: Boolean?): SearchUiModel {
+<span class="nc" id="L137">        return when {</span>
+<span class="nc bnc" id="L138" title="All 8 branches missed.">            searchExpanded == true -&gt; SearchUiModel.Expanded(filter ?: &quot;&quot;, !mediaPickerSetup.defaultSearchView)</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">            isVisible -&gt; SearchUiModel.Collapsed</span>
+<span class="nc" id="L140">            else -&gt; SearchUiModel.Hidden</span>
+        }
+    }
+
+    private fun buildBrowseMenuUiModel(softAskRequest: SoftAskRequest?, searchExpanded: Boolean?): BrowseMenuUiModel {
+<span class="nc bnc" id="L145" title="All 2 branches missed.">        val isSoftAskRequestVisible = softAskRequest?.show ?: false</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">        val isSearchExpanded = searchExpanded ?: false</span>
+<span class="nc bnc" id="L147" title="All 4 branches missed.">        val showActions = !isSoftAskRequestVisible &amp;&amp; !isSearchExpanded</span>
+<span class="nc bnc" id="L148" title="All 6 branches missed.">        val showSystemPicker = mediaPickerSetup.systemPickerEnabled &amp;&amp; showActions</span>
+
+<span class="nc bnc" id="L150" title="All 10 branches missed.">        return if (showActions &amp;&amp; (showSystemPicker || mediaPickerSetup.availableDataSources.isNotEmpty())) {</span>
+<span class="nc" id="L151">            val actions = mutableSetOf&lt;BrowseAction&gt;()</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">            if (showSystemPicker) {</span>
+<span class="nc" id="L153">                actions.add(SYSTEM_PICKER)</span>
+            }
+<span class="nc bnc" id="L155" title="All 2 branches missed.">            actions.addAll(mediaPickerSetup.availableDataSources.map {</span>
+<span class="nc bnc" id="L156" title="All 4 branches missed.">                when (it) {</span>
+<span class="nc" id="L157">                    DEVICE -&gt; BrowseAction.DEVICE</span>
+<span class="nc" id="L158">                    WP_LIBRARY -&gt; BrowseAction.WP_MEDIA_LIBRARY</span>
+<span class="nc" id="L159">                    STOCK_LIBRARY -&gt; BrowseAction.STOCK_LIBRARY</span>
+<span class="nc" id="L160">                    GIF_LIBRARY -&gt; BrowseAction.GIF_LIBRARY</span>
+                }
+            })
+<span class="nc" id="L163">            BrowseMenuUiModel(actions)</span>
+        } else {
+<span class="nc" id="L165">            BrowseMenuUiModel(setOf())</span>
+        }
+    }
+
+<span class="nc" id="L169">    var lastTappedIcon: MediaPickerIcon? = null</span>
+    private lateinit var mediaPickerSetup: MediaPickerSetup
+    private var site: SiteModel? = null
+
+    private fun buildUiModel(
+        domainModel: DomainModel?,
+        selectedIds: List&lt;Identifier&gt;?,
+        softAskRequest: SoftAskRequest?,
+        isSearching: Boolean?
+    ): PhotoListUiModel {
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        val data = domainModel?.domainItems</span>
+<span class="nc bnc" id="L180" title="All 4 branches missed.">        return if (null != softAskRequest &amp;&amp; softAskRequest.show) {</span>
+<span class="nc" id="L181">            PhotoListUiModel.Hidden</span>
+<span class="nc bnc" id="L182" title="All 6 branches missed.">        } else if (data != null &amp;&amp; data.isNotEmpty()) {</span>
+<span class="nc" id="L183">            val uiItems = data.map {</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">                val showOrderCounter = mediaPickerSetup.canMultiselect</span>
+<span class="nc" id="L185">                val toggleAction = ToggleAction(it.identifier, showOrderCounter, this::toggleItem)</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">                val clickAction = ClickAction(it.identifier, it.type == VIDEO, this::clickItem)</span>
+<span class="nc bnc" id="L187" title="All 4 branches missed.">                val (selectedOrder, isSelected) = if (selectedIds != null &amp;&amp; selectedIds.contains(it.identifier)) {</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">                    val selectedOrder = if (showOrderCounter) selectedIds.indexOf(it.identifier) + 1 else null</span>
+<span class="nc" id="L189">                    val isSelected = true</span>
+<span class="nc" id="L190">                    selectedOrder to isSelected</span>
+                } else {
+<span class="nc" id="L192">                    null to false</span>
+                }
+
+<span class="nc bnc" id="L195" title="All 2 branches missed.">                val fileExtension = it.mimeType?.let { mimeType -&gt;</span>
+<span class="nc" id="L196">                    mediaUtilsWrapper.getExtensionForMimeType(mimeType).uppercase(localeManagerWrapper.getLocale())</span>
+                }
+<span class="nc bnc" id="L198" title="All 3 branches missed.">                when (it.type) {</span>
+<span class="nc" id="L199">                    IMAGE -&gt; PhotoItem(</span>
+<span class="nc" id="L200">                            url = it.url,</span>
+<span class="nc" id="L201">                            identifier = it.identifier,</span>
+<span class="nc" id="L202">                            isSelected = isSelected,</span>
+<span class="nc" id="L203">                            selectedOrder = selectedOrder,</span>
+<span class="nc" id="L204">                            showOrderCounter = showOrderCounter,</span>
+<span class="nc" id="L205">                            toggleAction = toggleAction,</span>
+<span class="nc" id="L206">                            clickAction = clickAction</span>
+                    )
+<span class="nc" id="L208">                    VIDEO -&gt; VideoItem(</span>
+<span class="nc" id="L209">                            url = it.url,</span>
+<span class="nc" id="L210">                            identifier = it.identifier,</span>
+<span class="nc" id="L211">                            isSelected = isSelected,</span>
+<span class="nc" id="L212">                            selectedOrder = selectedOrder,</span>
+<span class="nc" id="L213">                            showOrderCounter = showOrderCounter,</span>
+<span class="nc" id="L214">                            toggleAction = toggleAction,</span>
+<span class="nc" id="L215">                            clickAction = clickAction</span>
+                    )
+<span class="nc" id="L217">                    AUDIO, DOCUMENT -&gt; FileItem(</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">                            fileName = it.name ?: &quot;&quot;,</span>
+<span class="nc" id="L219">                            fileExtension = fileExtension,</span>
+<span class="nc" id="L220">                            identifier = it.identifier,</span>
+<span class="nc" id="L221">                            isSelected = isSelected,</span>
+<span class="nc" id="L222">                            selectedOrder = selectedOrder,</span>
+<span class="nc" id="L223">                            showOrderCounter = showOrderCounter,</span>
+<span class="nc" id="L224">                            toggleAction = toggleAction,</span>
+<span class="nc" id="L225">                            clickAction = clickAction</span>
+                    )
+                }
+            }
+<span class="nc bnc" id="L229" title="All 2 branches missed.">            if (domainModel.hasMore) {</span>
+<span class="nc" id="L230">                val updatedItems = uiItems.toMutableList()</span>
+<span class="nc bnc" id="L231" title="All 6 branches missed.">                val loaderItem = if (domainModel.emptyState?.isError == true) {</span>
+<span class="nc" id="L232">                    MediaPickerUiItem.NextPageLoader(false) {</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">                        launch {</span>
+<span class="nc" id="L234">                            retry()</span>
+<span class="nc" id="L235">                        }</span>
+<span class="nc" id="L236">                    }</span>
+                } else {
+<span class="nc" id="L238">                    MediaPickerUiItem.NextPageLoader(true) {</span>
+<span class="nc" id="L239">                        launch {</span>
+<span class="nc" id="L240">                            loadActions.send(NextPage)</span>
+<span class="nc" id="L241">                        }</span>
+<span class="nc" id="L242">                    }</span>
+                }
+<span class="nc" id="L244">                updatedItems.add(loaderItem)</span>
+<span class="nc" id="L245">                PhotoListUiModel.Data(items = updatedItems)</span>
+            } else {
+<span class="nc" id="L247">                PhotoListUiModel.Data(items = uiItems)</span>
+            }
+<span class="nc bnc" id="L249" title="All 4 branches missed.">        } else if (domainModel?.emptyState != null) {</span>
+<span class="nc" id="L250">            PhotoListUiModel.Empty(</span>
+<span class="nc" id="L251">                    domainModel.emptyState.title,</span>
+<span class="nc" id="L252">                    domainModel.emptyState.htmlSubtitle,</span>
+<span class="nc" id="L253">                    domainModel.emptyState.image,</span>
+<span class="nc" id="L254">                    domainModel.emptyState.bottomImage,</span>
+<span class="nc" id="L255">                    domainModel.emptyState.bottomImageDescription,</span>
+<span class="nc" id="L256">                    isSearching == true,</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">                    retryAction = if (domainModel.emptyState.isError) {</span>
+<span class="nc" id="L258">                        this::retry</span>
+                    } else {
+<span class="nc" id="L260">                        null</span>
+                    }
+            )
+<span class="nc bnc" id="L263" title="All 6 branches missed.">        } else if (domainModel?.isLoading == true) {</span>
+<span class="nc" id="L264">            PhotoListUiModel.Loading</span>
+        } else {
+<span class="nc bnc" id="L266" title="All 8 branches missed.">            val onlyMediaType = if (domainModel?.mediaTypes?.size == 1) domainModel.mediaTypes.first() else null</span>
+<span class="nc bnc" id="L267" title="All 7 branches missed.">            val stringId = when (onlyMediaType) {</span>
+<span class="nc" id="L268">                IMAGE -&gt; R.string.media_empty_image_list</span>
+<span class="nc" id="L269">                AUDIO -&gt; R.string.media_empty_audio_list</span>
+<span class="nc" id="L270">                VIDEO -&gt; R.string.media_empty_videos_list</span>
+<span class="nc" id="L271">                DOCUMENT -&gt; R.string.media_empty_documents_list</span>
+<span class="nc" id="L272">                else -&gt; R.string.media_empty_list</span>
+            }
+<span class="nc" id="L274">            PhotoListUiModel.Empty(</span>
+<span class="nc" id="L275">                    UiStringRes(stringId),</span>
+<span class="nc" id="L276">                    image = R.drawable.img_illustration_media_105dp,</span>
+<span class="nc" id="L277">                    isSearching = isSearching == true</span>
+            )
+        }
+    }
+
+    private fun buildActionModeUiModel(
+        selectedIds: List&lt;Identifier&gt;?,
+        items: List&lt;MediaItem&gt;?
+    ): ActionModeUiModel {
+<span class="nc bnc" id="L286" title="All 2 branches missed.">        val numSelected = selectedIds?.size ?: 0</span>
+<span class="nc bnc" id="L287" title="All 6 branches missed.">        if (selectedIds.isNullOrEmpty()) {</span>
+<span class="nc" id="L288">            return ActionModeUiModel.Hidden</span>
+        }
+<span class="nc" id="L290">        val title: UiString? = when {</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">            numSelected == 0 -&gt; null</span>
+<span class="nc bnc" id="L292" title="All 4 branches missed.">            mediaPickerSetup.canMultiselect -&gt; {</span>
+<span class="nc" id="L293">                UiStringText(String.format(resourceProvider.getString(R.string.cab_selected), numSelected))</span>
+            }
+            else -&gt; {
+<span class="nc bnc" id="L296" title="All 2 branches missed.">                val isImagePicker = mediaPickerSetup.allowedTypes.contains(IMAGE)</span>
+<span class="nc bnc" id="L297" title="All 2 branches missed.">                val isVideoPicker = mediaPickerSetup.allowedTypes.contains(VIDEO)</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">                val isAudioPicker = mediaPickerSetup.allowedTypes.contains(AUDIO)</span>
+<span class="nc bnc" id="L299" title="All 4 branches missed.">                if (isImagePicker &amp;&amp; isVideoPicker) {</span>
+<span class="nc" id="L300">                    UiStringRes(R.string.photo_picker_use_media)</span>
+<span class="nc bnc" id="L301" title="All 2 branches missed.">                } else if (isVideoPicker) {</span>
+<span class="nc" id="L302">                    UiStringRes(R.string.photo_picker_use_video)</span>
+<span class="nc bnc" id="L303" title="All 2 branches missed.">                } else if (isAudioPicker) {</span>
+<span class="nc" id="L304">                    UiStringRes(R.string.photo_picker_use_audio)</span>
+                } else {
+<span class="nc" id="L306">                    UiStringRes(R.string.photo_picker_use_photo)</span>
+                }
+            }
+        }
+
+<span class="nc bnc" id="L311" title="All 8 branches missed.">        val onlyImagesSelected = items?.none { it.type != IMAGE &amp;&amp; selectedIds.contains(it.identifier) } ?: true</span>
+<span class="nc bnc" id="L312" title="All 6 branches missed.">        val showEditActionButton = mediaPickerSetup.editingEnabled &amp;&amp; onlyImagesSelected</span>
+<span class="nc" id="L313">        return ActionModeUiModel.Visible(</span>
+<span class="nc" id="L314">                title,</span>
+<span class="nc" id="L315">                EditActionUiModel(</span>
+<span class="nc" id="L316">                        isVisible = showEditActionButton,</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">                        isCounterBadgeVisible = if (!showEditActionButton) {</span>
+<span class="nc" id="L318">                            false</span>
+                        } else {
+<span class="nc bnc" id="L320" title="All 2 branches missed.">                            mediaPickerSetup.canMultiselect</span>
+                        },
+<span class="nc" id="L322">                        counterBadgeValue = numSelected</span>
+                )
+        )
+    }
+
+    fun refreshData(forceReload: Boolean) {
+<span class="nc bnc" id="L328" title="All 2 branches missed.">        if (!permissionsHandler.hasStoragePermission()) {</span>
+<span class="nc" id="L329">            return</span>
+        }
+<span class="nc" id="L331">        launch(bgDispatcher) {</span>
+<span class="nc" id="L332">            loadActions.send(LoadAction.Refresh(forceReload))</span>
+<span class="nc" id="L333">        }</span>
+<span class="nc" id="L334">    }</span>
+
+    private fun retry() {
+<span class="nc" id="L337">        launch(bgDispatcher) {</span>
+<span class="nc" id="L338">            loadActions.send(LoadAction.Retry)</span>
+<span class="nc" id="L339">        }</span>
+<span class="nc" id="L340">    }</span>
+
+    fun clearSelection() {
+<span class="nc bnc" id="L343" title="All 6 branches missed.">        if (!_selectedIds.value.isNullOrEmpty()) {</span>
+<span class="nc bnc" id="L344" title="All 2 branches missed.">            mediaPickerTracker.trackSelectionCleared(mediaPickerSetup)</span>
+<span class="nc" id="L345">            _selectedIds.postValue(listOf())</span>
+        }
+<span class="nc" id="L347">    }</span>
+
+    fun start(
+        selectedIds: List&lt;Identifier&gt;?,
+        mediaPickerSetup: MediaPickerSetup,
+        lastTappedIcon: MediaPickerIcon?,
+        site: SiteModel?
+    ) {
+<span class="nc" id="L355">        _selectedIds.value = selectedIds</span>
+<span class="nc" id="L356">        this.mediaPickerSetup = mediaPickerSetup</span>
+<span class="nc" id="L357">        this.lastTappedIcon = lastTappedIcon</span>
+<span class="nc" id="L358">        this.site = site</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">        if (_domainModel.value == null) {</span>
+<span class="nc" id="L360">            mediaPickerTracker.trackMediaPickerOpened(mediaPickerSetup)</span>
+<span class="nc" id="L361">            this.mediaLoader = mediaLoaderFactory.build(mediaPickerSetup, site)</span>
+<span class="nc" id="L362">            this.mediaInsertHandler = mediaInsertHandlerFactory.build(mediaPickerSetup, site)</span>
+<span class="nc" id="L363">            launch {</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">                mediaLoader.loadMedia(loadActions).flowOn(bgDispatcher).collect { domainModel -&gt;</span>
+                    _domainModel.value = domainModel
+                }
+<span class="nc" id="L367">            }</span>
+<span class="nc bnc" id="L368" title="All 4 branches missed.">            if (!mediaPickerSetup.requiresStoragePermissions || permissionsHandler.hasStoragePermission()) {</span>
+<span class="nc" id="L369">                launch(bgDispatcher) {</span>
+<span class="nc" id="L370">                    loadActions.send(LoadAction.Start())</span>
+<span class="nc" id="L371">                }</span>
+            }
+        }
+<span class="nc bnc" id="L374" title="All 2 branches missed.">        if (mediaPickerSetup.defaultSearchView) {</span>
+<span class="nc" id="L375">            _searchExpanded.postValue(true)</span>
+        }
+<span class="nc" id="L377">    }</span>
+
+    fun numSelected(): Int {
+<span class="nc bnc" id="L380" title="All 2 branches missed.">        return _selectedIds.value?.size ?: 0</span>
+    }
+
+    fun selectedIdentifiers(): List&lt;Identifier&gt; {
+<span class="nc bnc" id="L384" title="All 2 branches missed.">        return _selectedIds.value ?: listOf()</span>
+    }
+
+    private fun toggleItem(identifier: Identifier, canMultiselect: Boolean) {
+<span class="nc bnc" id="L388" title="All 4 branches missed.">        val updatedUris = _selectedIds.value?.toMutableList() ?: mutableListOf()</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">        if (updatedUris.contains(identifier)) {</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">            mediaPickerTracker.trackItemUnselected(mediaPickerSetup)</span>
+<span class="nc" id="L391">            updatedUris.remove(identifier)</span>
+        } else {
+<span class="nc bnc" id="L393" title="All 2 branches missed.">            mediaPickerTracker.trackItemSelected(mediaPickerSetup)</span>
+<span class="nc bnc" id="L394" title="All 6 branches missed.">            if (updatedUris.isNotEmpty() &amp;&amp; !canMultiselect) {</span>
+<span class="nc" id="L395">                updatedUris.clear()</span>
+            }
+<span class="nc" id="L397">            updatedUris.add(identifier)</span>
+        }
+<span class="nc" id="L399">        _selectedIds.postValue(updatedUris)</span>
+<span class="nc" id="L400">    }</span>
+
+    private fun clickItem(identifier: Identifier, isVideo: Boolean) {
+<span class="nc" id="L403">        launch {</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">            mediaPickerTracker.trackPreview(isVideo, identifier, mediaPickerSetup)</span>
+<span class="nc" id="L405">        }</span>
+<span class="nc" id="L406">        when (identifier) {</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">            is LocalUri -&gt; {</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">                mediaUtilsWrapper.getRealPathFromURI(identifier.value.uri)?.let { path -&gt;</span>
+<span class="nc" id="L409">                    _onNavigate.postValue(Event(PreviewUrl(path)))</span>
+<span class="nc" id="L410">                }</span>
+            }
+<span class="nc bnc" id="L412" title="All 2 branches missed.">            is StockMediaIdentifier -&gt; {</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">                if (identifier.url != null) {</span>
+<span class="nc" id="L414">                    _onNavigate.postValue(Event(PreviewUrl(identifier.url)))</span>
+                }
+            }
+<span class="nc bnc" id="L417" title="All 2 branches missed.">            is RemoteId -&gt; {</span>
+<span class="nc bnc" id="L418" title="All 2 branches missed.">                site?.let {</span>
+<span class="nc bnc" id="L419" title="All 2 branches missed.">                    launch {</span>
+<span class="nc" id="L420">                        val media: MediaModel = mediaStore.getSiteMediaWithId(it, identifier.value)</span>
+<span class="nc" id="L421">                        _onNavigate.postValue(Event(PreviewMedia(media)))</span>
+<span class="nc" id="L422">                    }</span>
+                }
+            }
+<span class="nc bnc" id="L425" title="All 2 branches missed.">            is GifMediaIdentifier -&gt; {</span>
+<span class="nc" id="L426">                _onNavigate.postValue(Event(PreviewUrl(identifier.largeImageUri.toString())))</span>
+            }
+        }
+<span class="nc" id="L429">    }</span>
+
+    fun performInsertAction() {
+<span class="nc" id="L432">        val ids = selectedIdentifiers()</span>
+<span class="nc" id="L433">        insertIdentifiers(ids)</span>
+<span class="nc" id="L434">    }</span>
+
+    private fun insertIdentifiers(ids: List&lt;Identifier&gt;) {
+<span class="nc" id="L437">        var job: Job? = null</span>
+<span class="nc" id="L438">        job = launch {</span>
+<span class="nc" id="L439">            var progressDialogJob: Job? = null</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">            mediaInsertHandler.insertMedia(ids).flowOn(bgDispatcher).collect {</span>
+                when (it) {
+                    is InsertModel.Progress -&gt; {
+                        progressDialogJob = launch {
+<span class="nc" id="L444">                            delay(100)</span>
+<span class="nc" id="L445">                            _showProgressDialog.value = Visible(it.title) {</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">                                job?.cancel()</span>
+<span class="nc" id="L447">                                _showProgressDialog.value = Hidden</span>
+<span class="nc" id="L448">                            }</span>
+<span class="nc" id="L449">                        }</span>
+                    }
+                    is InsertModel.Error -&gt; {
+                        val message = if (it.error.isNotEmpty()) {
+                            UiStringResWithParams(
+                                    R.string.media_insert_failed_with_reason,
+                                    listOf(UiStringText(it.error))
+                            )
+                        } else {
+                            UiStringRes(R.string.media_insert_failed)
+                        }
+                        _onSnackbarMessage.value = Event(
+                                SnackbarMessageHolder(
+                                        message
+                                )
+                        )
+                        progressDialogJob?.cancel()
+                        job = null
+                        _showProgressDialog.value = Hidden
+                    }
+                    is InsertModel.Success -&gt; {
+                        launch {
+<span class="nc bnc" id="L471" title="All 2 branches missed.">                            mediaPickerTracker.trackItemsPicked(it.identifiers, mediaPickerSetup)</span>
+<span class="nc" id="L472">                        }</span>
+                        progressDialogJob?.cancel()
+                        job = null
+                        _showProgressDialog.value = Hidden
+                        if (_searchExpanded.value == true) {
+                            _searchExpanded.value = false
+                        }
+                        _onNavigate.value = Event(MediaNavigationEvent.InsertMedia(it.identifiers))
+                    }
+                }
+            }
+<span class="nc" id="L483">        }</span>
+<span class="nc" id="L484">    }</span>
+
+    fun performEditAction() {
+<span class="nc bnc" id="L487" title="All 6 branches missed.">        val uriList = selectedIdentifiers().mapNotNull { (it as? Identifier.LocalUri)?.value }</span>
+<span class="nc" id="L488">        _onNavigate.value = Event(EditMedia(uriList))</span>
+<span class="nc" id="L489">    }</span>
+
+<span class="nc" id="L491">    fun clickOnLastTappedIcon() = clickIcon(lastTappedIcon!!)</span>
+
+    private fun clickIcon(icon: MediaPickerIcon) {
+<span class="nc bnc" id="L494" title="All 2 branches missed.">        mediaPickerTracker.trackIconClick(icon, mediaPickerSetup)</span>
+<span class="nc bnc" id="L495" title="All 4 branches missed.">        if (icon is WpStoriesCapture || icon is CapturePhoto) {</span>
+<span class="nc bnc" id="L496" title="All 2 branches missed.">            if (!permissionsHandler.hasPermissionsToAccessPhotos()) {</span>
+<span class="nc" id="L497">                _onPermissionsRequested.value = Event(PermissionsRequested.CAMERA)</span>
+<span class="nc" id="L498">                lastTappedIcon = icon</span>
+<span class="nc" id="L499">                return</span>
+            }
+        }
+        // Do we need tracking here?; review tracking need.
+
+<span class="nc bnc" id="L504" title="All 2 branches missed.">        _onNavigate.postValue(Event(populateIconClickEvent(icon, mediaPickerSetup.canMultiselect)))</span>
+<span class="nc" id="L505">    }</span>
+
+    private fun clickOnCamera() {
+<span class="nc bnc" id="L508" title="All 5 branches missed.">        when (mediaPickerSetup.cameraSetup) {</span>
+<span class="nc" id="L509">            STORIES -&gt; clickIcon(WpStoriesCapture)</span>
+<span class="nc" id="L510">            ENABLED -&gt; clickIcon(CapturePhoto)</span>
+            HIDDEN -&gt; {
+                // Do nothing
+            }
+        }
+<span class="nc" id="L515">    }</span>
+
+    private fun populateIconClickEvent(icon: MediaPickerIcon, canMultiselect: Boolean): IconClickEvent {
+<span class="nc" id="L518">        val action: MediaPickerAction = when (icon) {</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">            is ChooseFromAndroidDevice -&gt; {</span>
+<span class="nc" id="L520">                val allowedTypes = icon.allowedTypes</span>
+<span class="nc" id="L521">                val (context, types) = when {</span>
+<span class="nc bnc" id="L522" title="All 2 branches missed.">                    listOf(IMAGE).containsAll(allowedTypes) -&gt; {</span>
+<span class="nc" id="L523">                        Pair(ChooserContext.PHOTO, MimeTypes().getImageTypesOnly())</span>
+                    }
+<span class="nc bnc" id="L525" title="All 2 branches missed.">                    listOf(VIDEO).containsAll(allowedTypes) -&gt; {</span>
+<span class="nc" id="L526">                        Pair(ChooserContext.VIDEO, MimeTypes().getVideoTypesOnly())</span>
+                    }
+<span class="nc bnc" id="L528" title="All 2 branches missed.">                    listOf(IMAGE, VIDEO).containsAll(allowedTypes) -&gt; {</span>
+<span class="nc" id="L529">                        Pair(ChooserContext.PHOTO_OR_VIDEO, MimeTypes().getVideoAndImageTypesOnly())</span>
+                    }
+<span class="nc bnc" id="L531" title="All 2 branches missed.">                    listOf(AUDIO).containsAll(allowedTypes) -&gt; {</span>
+<span class="nc" id="L532">                        Pair(</span>
+<span class="nc" id="L533">                                ChooserContext.AUDIO,</span>
+<span class="nc" id="L534">                                MimeTypes().getAudioTypesOnly(mediaUtilsWrapper.getSitePlanForMimeTypes(site))</span>
+                        )
+                    }
+                    else -&gt; {
+<span class="nc" id="L538">                        Pair(</span>
+<span class="nc" id="L539">                                ChooserContext.MEDIA_FILE,</span>
+<span class="nc" id="L540">                                MimeTypes().getAllTypes(mediaUtilsWrapper.getSitePlanForMimeTypes(site))</span>
+                        )
+                    }
+                }
+<span class="nc" id="L544">                OpenSystemPicker(context, types.toList(), canMultiselect)</span>
+            }
+<span class="nc bnc" id="L546" title="All 2 branches missed.">            is WpStoriesCapture -&gt; OpenCameraForWPStories(canMultiselect)</span>
+<span class="nc bnc" id="L547" title="All 2 branches missed.">            is CapturePhoto -&gt; OpenCameraForPhotos</span>
+<span class="nc" id="L548">            is SwitchSource -&gt; {</span>
+<span class="nc" id="L549">                SwitchMediaPicker(</span>
+<span class="nc bnc" id="L550" title="All 2 branches missed.">                        mediaPickerSetup.copy(</span>
+<span class="nc" id="L551">                                primaryDataSource = icon.dataSource,</span>
+<span class="nc" id="L552">                                availableDataSources = setOf(),</span>
+<span class="nc bnc" id="L553" title="All 2 branches missed.">                                systemPickerEnabled = icon.dataSource == DEVICE,</span>
+<span class="nc bnc" id="L554" title="All 4 branches missed.">                                defaultSearchView = icon.dataSource == STOCK_LIBRARY || icon.dataSource == GIF_LIBRARY,</span>
+<span class="nc" id="L555">                                cameraSetup = HIDDEN</span>
+                        )
+                )
+            }
+        }
+
+<span class="nc" id="L561">        return IconClickEvent(action)</span>
+    }
+
+    fun checkStoragePermission(isAlwaysDenied: Boolean) {
+<span class="nc bnc" id="L565" title="All 4 branches missed.">        if (!mediaPickerSetup.requiresStoragePermissions) {</span>
+<span class="nc" id="L566">            return</span>
+        }
+<span class="nc bnc" id="L568" title="All 2 branches missed.">        if (permissionsHandler.hasStoragePermission()) {</span>
+<span class="nc" id="L569">            _softAskRequest.value = SoftAskRequest(show = false, isAlwaysDenied = isAlwaysDenied)</span>
+<span class="nc bnc" id="L570" title="All 8 branches missed.">            if (_domainModel.value?.domainItems.isNullOrEmpty()) {</span>
+<span class="nc" id="L571">                refreshData(false)</span>
+            }
+        } else {
+<span class="nc" id="L574">            _softAskRequest.value = SoftAskRequest(show = true, isAlwaysDenied = isAlwaysDenied)</span>
+        }
+<span class="nc" id="L576">    }</span>
+
+    fun onMenuItemClicked(action: BrowseAction) {
+<span class="nc bnc" id="L579" title="All 5 branches missed.">        val icon = when (action) {</span>
+<span class="nc" id="L580">            BrowseAction.DEVICE -&gt; SwitchSource(DEVICE)</span>
+<span class="nc" id="L581">            BrowseAction.WP_MEDIA_LIBRARY -&gt; SwitchSource(WP_LIBRARY)</span>
+<span class="nc" id="L582">            BrowseAction.STOCK_LIBRARY -&gt; SwitchSource(STOCK_LIBRARY)</span>
+<span class="nc" id="L583">            BrowseAction.GIF_LIBRARY -&gt; SwitchSource(GIF_LIBRARY)</span>
+<span class="nc bnc" id="L584" title="All 2 branches missed.">            BrowseAction.SYSTEM_PICKER -&gt; ChooseFromAndroidDevice(mediaPickerSetup.allowedTypes)</span>
+        }
+<span class="nc" id="L586">        clickIcon(icon)</span>
+<span class="nc" id="L587">    }</span>
+
+    private fun buildSoftAskView(softAskRequest: SoftAskRequest?): SoftAskViewUiModel {
+<span class="nc bnc" id="L590" title="All 4 branches missed.">        if (softAskRequest != null &amp;&amp; softAskRequest.show) {</span>
+<span class="nc bnc" id="L591" title="All 2 branches missed.">            mediaPickerTracker.trackShowPermissionsScreen(mediaPickerSetup, softAskRequest.isAlwaysDenied)</span>
+<span class="nc" id="L592">            val appName = &quot;&lt;strong&gt;${resourceProvider.getString(R.string.app_name)}&lt;/strong&gt;&quot;</span>
+<span class="nc bnc" id="L593" title="All 2 branches missed.">            val label = if (softAskRequest.isAlwaysDenied) {</span>
+<span class="nc" id="L594">                val writePermission = (&quot;&lt;strong&gt;${</span>
+<span class="nc" id="L595">                    WPPermissionUtils.getPermissionName(</span>
+<span class="nc" id="L596">                            resourceProvider,</span>
+<span class="nc" id="L597">                            permission.WRITE_EXTERNAL_STORAGE</span>
+                    )
+<span class="nc" id="L599">                }&lt;/strong&gt;&quot;)</span>
+<span class="nc" id="L600">                val readPermission = (&quot;&lt;strong&gt;${</span>
+<span class="nc" id="L601">                    WPPermissionUtils.getPermissionName(</span>
+<span class="nc" id="L602">                            resourceProvider,</span>
+<span class="nc" id="L603">                            permission.READ_EXTERNAL_STORAGE</span>
+                    )
+<span class="nc" id="L605">                }&lt;/strong&gt;&quot;)</span>
+<span class="nc" id="L606">                String.format(</span>
+<span class="nc" id="L607">                        resourceProvider.getString(R.string.media_picker_soft_ask_permissions_denied),</span>
+<span class="nc" id="L608">                        appName,</span>
+<span class="nc" id="L609">                        writePermission,</span>
+<span class="nc" id="L610">                        readPermission</span>
+                )
+            } else {
+<span class="nc" id="L613">                String.format(</span>
+<span class="nc" id="L614">                        resourceProvider.getString(R.string.photo_picker_soft_ask_label),</span>
+<span class="nc" id="L615">                        appName</span>
+                )
+            }
+<span class="nc bnc" id="L618" title="All 2 branches missed.">            val allowId = if (softAskRequest.isAlwaysDenied) {</span>
+<span class="nc" id="L619">                R.string.button_edit_permissions</span>
+            } else {
+<span class="nc" id="L621">                R.string.photo_picker_soft_ask_allow</span>
+            }
+<span class="nc" id="L623">            return SoftAskViewUiModel.Visible(label, UiStringRes(allowId), softAskRequest.isAlwaysDenied)</span>
+        } else {
+<span class="nc" id="L625">            return SoftAskViewUiModel.Hidden</span>
+        }
+    }
+
+    fun onSearch(query: String) {
+<span class="nc bnc" id="L630" title="All 2 branches missed.">        searchJob?.cancel()</span>
+<span class="nc" id="L631">        searchJob = launch(bgDispatcher) {</span>
+<span class="nc" id="L632">            delay(300)</span>
+<span class="nc bnc" id="L633" title="All 2 branches missed.">            mediaPickerTracker.trackSearch(mediaPickerSetup)</span>
+<span class="nc" id="L634">            loadActions.send(LoadAction.Filter(query))</span>
+<span class="nc" id="L635">        }</span>
+<span class="nc" id="L636">    }</span>
+
+    fun onSearchExpanded() {
+<span class="nc bnc" id="L639" title="All 2 branches missed.">        mediaPickerTracker.trackSearchExpanded(mediaPickerSetup)</span>
+<span class="nc" id="L640">        _searchExpanded.value = true</span>
+<span class="nc" id="L641">    }</span>
+
+    fun onSearchCollapsed() {
+<span class="nc bnc" id="L644" title="All 4 branches missed.">        if (!mediaPickerSetup.defaultSearchView) {</span>
+<span class="nc" id="L645">            _searchExpanded.value = false</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">            searchJob?.cancel()</span>
+<span class="nc" id="L647">            searchJob = launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L648" title="All 2 branches missed.">                mediaPickerTracker.trackSearchCollapsed(mediaPickerSetup)</span>
+<span class="nc" id="L649">                loadActions.send(LoadAction.ClearFilter)</span>
+<span class="nc" id="L650">            }</span>
+        } else {
+<span class="nc" id="L652">            _onNavigate.postValue(Event(Exit))</span>
+        }
+<span class="nc" id="L654">    }</span>
+
+    fun onPullToRefresh() {
+<span class="nc" id="L657">        refreshData(true)</span>
+<span class="nc" id="L658">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L661">        super.onCleared()</span>
+<span class="nc bnc" id="L662" title="All 2 branches missed.">        searchJob?.cancel()</span>
+<span class="nc" id="L663">    }</span>
+
+    fun urisSelectedFromSystemPicker(uris: List&lt;UriWrapper&gt;) {
+<span class="nc" id="L666">        launch {</span>
+<span class="nc" id="L667">            delay(100)</span>
+<span class="nc" id="L668">            insertIdentifiers(uris.map { LocalUri(it) })</span>
+<span class="nc" id="L669">        }</span>
+<span class="nc" id="L670">    }</span>
+
+<span class="nc" id="L672">    data class MediaPickerUiState(</span>
+<span class="nc" id="L673">        val photoListUiModel: PhotoListUiModel,</span>
+<span class="nc" id="L674">        val softAskViewUiModel: SoftAskViewUiModel,</span>
+<span class="nc" id="L675">        val fabUiModel: FabUiModel,</span>
+<span class="nc" id="L676">        val actionModeUiModel: ActionModeUiModel,</span>
+<span class="nc" id="L677">        val searchUiModel: SearchUiModel,</span>
+<span class="nc" id="L678">        val isRefreshing: Boolean,</span>
+<span class="nc" id="L679">        val browseMenuUiModel: BrowseMenuUiModel,</span>
+<span class="nc" id="L680">        val progressDialogUiModel: ProgressDialogUiModel</span>
+    )
+
+    sealed class PhotoListUiModel {
+<span class="nc" id="L684">        data class Data(val items: List&lt;MediaPickerUiItem&gt;) :</span>
+<span class="nc" id="L685">                PhotoListUiModel()</span>
+
+<span class="nc" id="L687">        data class Empty(</span>
+<span class="nc" id="L688">            val title: UiString,</span>
+<span class="nc" id="L689">            val htmlSubtitle: UiString? = null,</span>
+<span class="nc" id="L690">            val image: Int? = null,</span>
+<span class="nc" id="L691">            val bottomImage: Int? = null,</span>
+<span class="nc" id="L692">            val bottomImageDescription: UiString? = null,</span>
+<span class="nc" id="L693">            val isSearching: Boolean = false,</span>
+<span class="nc" id="L694">            val retryAction: (() -&gt; Unit)? = null</span>
+<span class="nc" id="L695">        ) : PhotoListUiModel()</span>
+
+<span class="nc" id="L697">        object Hidden : PhotoListUiModel()</span>
+<span class="nc" id="L698">        object Loading : PhotoListUiModel()</span>
+    }
+
+    sealed class SoftAskViewUiModel {
+<span class="nc" id="L702">        data class Visible(val label: String, val allowId: UiStringRes, val isAlwaysDenied: Boolean) :</span>
+<span class="nc" id="L703">                SoftAskViewUiModel()</span>
+
+<span class="nc" id="L705">        object Hidden : SoftAskViewUiModel()</span>
+    }
+
+<span class="nc" id="L708">    data class FabUiModel(val show: Boolean, val action: () -&gt; Unit)</span>
+
+    sealed class ActionModeUiModel {
+<span class="nc" id="L711">        data class Visible(</span>
+<span class="nc" id="L712">            val actionModeTitle: UiString? = null,</span>
+<span class="nc" id="L713">            val editActionUiModel: EditActionUiModel = EditActionUiModel()</span>
+<span class="nc" id="L714">        ) : ActionModeUiModel()</span>
+
+<span class="nc" id="L716">        object Hidden : ActionModeUiModel()</span>
+    }
+
+    sealed class SearchUiModel {
+<span class="nc" id="L720">        object Collapsed : SearchUiModel()</span>
+<span class="nc" id="L721">        data class Expanded(val filter: String, val closeable: Boolean = true) : SearchUiModel()</span>
+<span class="nc" id="L722">        object Hidden : SearchUiModel()</span>
+    }
+
+<span class="nc" id="L725">    data class BrowseMenuUiModel(val shownActions: Set&lt;BrowseAction&gt;) {</span>
+        enum class BrowseAction {
+<span class="nc" id="L727">            SYSTEM_PICKER, DEVICE, WP_MEDIA_LIBRARY, STOCK_LIBRARY, GIF_LIBRARY</span>
+        }
+    }
+
+    enum class PermissionsRequested {
+<span class="nc" id="L732">        CAMERA, STORAGE</span>
+    }
+
+<span class="nc" id="L735">    data class SoftAskRequest(val show: Boolean, val isAlwaysDenied: Boolean)</span>
+
+<span class="nc" id="L737">    data class EditActionUiModel(</span>
+<span class="nc" id="L738">        val isVisible: Boolean = false,</span>
+<span class="nc" id="L739">        val isCounterBadgeVisible: Boolean = false,</span>
+<span class="nc" id="L740">        val counterBadgeValue: Int = 1</span>
+<span class="nc" id="L741">    )</span>
+
+    sealed class ProgressDialogUiModel {
+<span class="nc" id="L744">        object Hidden : ProgressDialogUiModel()</span>
+<span class="nc" id="L745">        data class Visible(val title: Int, val cancelAction: () -&gt; Unit) : ProgressDialogUiModel()</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

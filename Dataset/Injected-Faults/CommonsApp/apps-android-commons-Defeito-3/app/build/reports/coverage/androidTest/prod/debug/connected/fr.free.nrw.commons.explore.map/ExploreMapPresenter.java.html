@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ExploreMapPresenter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.explore.map</a> &gt; <span class="el_source">ExploreMapPresenter.java</span></div><h1>ExploreMapPresenter.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.explore.map;
+
+import static fr.free.nrw.commons.location.LocationServiceManager.LocationChangeType.LOCATION_SIGNIFICANTLY_CHANGED;
+import static fr.free.nrw.commons.location.LocationServiceManager.LocationChangeType.MAP_UPDATED;
+import static fr.free.nrw.commons.location.LocationServiceManager.LocationChangeType.SEARCH_CUSTOM_AREA;
+
+
+import android.location.Location;
+import android.view.View;
+import com.mapbox.mapboxsdk.annotations.Marker;
+import com.mapbox.mapboxsdk.camera.CameraUpdateFactory;
+import com.mapbox.mapboxsdk.geometry.LatLngBounds;
+import fr.free.nrw.commons.MapController;
+import fr.free.nrw.commons.MapController.ExplorePlacesInfo;
+import fr.free.nrw.commons.bookmarks.locations.BookmarkLocationsDao;
+import fr.free.nrw.commons.explore.map.ExploreMapController.NearbyBaseMarkerThumbCallback;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.location.LocationServiceManager.LocationChangeType;
+import fr.free.nrw.commons.nearby.NearbyBaseMarker;
+import fr.free.nrw.commons.utils.LocationUtils;
+import io.reactivex.Observable;
+import java.lang.reflect.Proxy;
+import java.util.List;
+import timber.log.Timber;
+
+public class ExploreMapPresenter
+    implements ExploreMapContract.UserActions,
+    NearbyBaseMarkerThumbCallback {
+
+    BookmarkLocationsDao bookmarkLocationDao;
+    private boolean isNearbyLocked;
+    private LatLng curLatLng;
+    private ExploreMapController exploreMapController;
+
+<span class="nc" id="L36">    private static final ExploreMapContract.View DUMMY = (ExploreMapContract.View) Proxy</span>
+<span class="nc" id="L37">        .newProxyInstance(</span>
+<span class="nc" id="L38">            ExploreMapContract.View.class.getClassLoader(),</span>
+            new Class[]{ExploreMapContract.View.class}, (proxy, method, args) -&gt; {
+<span class="nc bnc" id="L40" title="All 2 branches missed.">                if (method.getName().equals(&quot;onMyEvent&quot;)) {</span>
+<span class="nc" id="L41">                    return null;</span>
+<span class="nc bnc" id="L42" title="All 2 branches missed.">                } else if (String.class == method.getReturnType()) {</span>
+<span class="nc" id="L43">                    return &quot;&quot;;</span>
+<span class="nc bnc" id="L44" title="All 2 branches missed.">                } else if (Integer.class == method.getReturnType()) {</span>
+<span class="nc" id="L45">                    return Integer.valueOf(0);</span>
+<span class="nc bnc" id="L46" title="All 2 branches missed.">                } else if (int.class == method.getReturnType()) {</span>
+<span class="nc" id="L47">                    return 0;</span>
+<span class="nc bnc" id="L48" title="All 2 branches missed.">                } else if (Boolean.class == method.getReturnType()) {</span>
+<span class="nc" id="L49">                    return Boolean.FALSE;</span>
+<span class="nc bnc" id="L50" title="All 2 branches missed.">                } else if (boolean.class == method.getReturnType()) {</span>
+<span class="nc" id="L51">                    return false;</span>
+                } else {
+<span class="nc" id="L53">                    return null;</span>
+                }
+            }
+        );
+<span class="nc" id="L57">    private ExploreMapContract.View exploreMapFragmentView = DUMMY;</span>
+
+<span class="nc" id="L59">    public ExploreMapPresenter(BookmarkLocationsDao bookmarkLocationDao) {</span>
+<span class="nc" id="L60">        this.bookmarkLocationDao = bookmarkLocationDao;</span>
+<span class="nc" id="L61">    }</span>
+
+    @Override
+    public void updateMap(LocationChangeType locationChangeType) {
+<span class="nc" id="L65">        Timber.d(&quot;Presenter updates map and list&quot; + locationChangeType.toString());</span>
+<span class="nc bnc" id="L66" title="All 2 branches missed.">        if (isNearbyLocked) {</span>
+<span class="nc" id="L67">            Timber.d(&quot;Nearby is locked, so updateMapAndList returns&quot;);</span>
+<span class="nc" id="L68">            return;</span>
+        }
+
+<span class="nc bnc" id="L71" title="All 2 branches missed.">        if (!exploreMapFragmentView.isNetworkConnectionEstablished()) {</span>
+<span class="nc" id="L72">            Timber.d(&quot;Network connection is not established&quot;);</span>
+<span class="nc" id="L73">            return;</span>
+        }
+
+        /**
+         * Significant changed - Markers and current location will be updated together
+         * Slightly changed - Only current position marker will be updated
+         */
+<span class="nc bnc" id="L80" title="All 2 branches missed.">        if (locationChangeType.equals(LOCATION_SIGNIFICANTLY_CHANGED)) {</span>
+<span class="nc" id="L81">            Timber.d(&quot;LOCATION_SIGNIFICANTLY_CHANGED&quot;);</span>
+<span class="nc" id="L82">            lockUnlockNearby(true);</span>
+<span class="nc" id="L83">            exploreMapFragmentView.setProgressBarVisibility(true);</span>
+<span class="nc" id="L84">            exploreMapFragmentView.populatePlaces(exploreMapFragmentView.getMapCenter());</span>
+<span class="nc bnc" id="L85" title="All 2 branches missed.">        } else if (locationChangeType.equals(SEARCH_CUSTOM_AREA)) {</span>
+<span class="nc" id="L86">            Timber.d(&quot;SEARCH_CUSTOM_AREA&quot;);</span>
+<span class="nc" id="L87">            lockUnlockNearby(true);</span>
+<span class="nc" id="L88">            exploreMapFragmentView.setProgressBarVisibility(true);</span>
+<span class="nc" id="L89">            exploreMapFragmentView.populatePlaces(exploreMapFragmentView.getMapFocus());</span>
+        } else { // Means location changed slightly, ie user is walking or driving.
+<span class="nc" id="L91">            Timber.d(&quot;Means location changed slightly&quot;);</span>
+        }
+<span class="nc" id="L93">    }</span>
+
+    /**
+     * Nearby updates takes time, since they are network operations. During update time, we don't
+     * want to get any other calls from user. So locking nearby.
+     *
+     * @param isNearbyLocked true means lock, false means unlock
+     */
+    @Override
+    public void lockUnlockNearby(boolean isNearbyLocked) {
+<span class="nc" id="L103">        this.isNearbyLocked = isNearbyLocked;</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">        if (isNearbyLocked) {</span>
+<span class="nc" id="L105">            exploreMapFragmentView.disableFABRecenter();</span>
+        } else {
+<span class="nc" id="L107">            exploreMapFragmentView.enableFABRecenter();</span>
+        }
+<span class="nc" id="L109">    }</span>
+
+    @Override
+    public void attachView(ExploreMapContract.View view) {
+<span class="nc" id="L113">        exploreMapFragmentView = view;</span>
+<span class="nc" id="L114">    }</span>
+
+    @Override
+    public void detachView() {
+<span class="nc" id="L118">        exploreMapFragmentView = DUMMY;</span>
+<span class="nc" id="L119">    }</span>
+
+    /**
+     * Sets click listener of FAB
+     */
+    @Override
+    public void setActionListeners(JsonKvStore applicationKvStore) {
+<span class="nc" id="L126">        exploreMapFragmentView.setFABRecenterAction(v -&gt; {</span>
+<span class="nc" id="L127">            exploreMapFragmentView.recenterMap(curLatLng);</span>
+<span class="nc" id="L128">        });</span>
+
+<span class="nc" id="L130">    }</span>
+
+    @Override
+    public boolean backButtonClicked() {
+<span class="nc" id="L134">        return exploreMapFragmentView.backButtonClicked();</span>
+    }
+
+    public void onMapReady(ExploreMapController exploreMapController) {
+<span class="nc" id="L138">        this.exploreMapController = exploreMapController;</span>
+<span class="nc" id="L139">        exploreMapFragmentView.addSearchThisAreaButtonAction();</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">        if (null != exploreMapFragmentView) {</span>
+<span class="nc" id="L141">            exploreMapFragmentView.addSearchThisAreaButtonAction();</span>
+<span class="nc" id="L142">            initializeMapOperations();</span>
+        }
+<span class="nc" id="L144">    }</span>
+
+    public void initializeMapOperations() {
+<span class="nc" id="L147">        lockUnlockNearby(false);</span>
+<span class="nc" id="L148">        updateMap(LOCATION_SIGNIFICANTLY_CHANGED);</span>
+<span class="nc" id="L149">        exploreMapFragmentView.addSearchThisAreaButtonAction();</span>
+<span class="nc" id="L150">    }</span>
+
+    public Observable&lt;ExplorePlacesInfo&gt; loadAttractionsFromLocation(LatLng curLatLng,
+        LatLng searchLatLng, boolean checkingAroundCurrent) {
+<span class="nc" id="L154">        return Observable</span>
+<span class="nc" id="L155">            .fromCallable(() -&gt; exploreMapController</span>
+<span class="nc" id="L156">                .loadAttractionsFromLocation(curLatLng, searchLatLng, checkingAroundCurrent));</span>
+    }
+
+    /**
+     * Populates places for custom location, should be used for finding nearby places around a
+     * location where you are not at.
+     *
+     * @param explorePlacesInfo This variable has placeToCenter list information and distances.
+     */
+    public void updateMapMarkers(
+        MapController.ExplorePlacesInfo explorePlacesInfo, Marker selectedMarker) {
+<span class="nc bnc" id="L167" title="All 2 branches missed.">        if (explorePlacesInfo.mediaList != null) {</span>
+<span class="nc" id="L168">            prepareNearbyBaseMarkers(explorePlacesInfo, selectedMarker);</span>
+        } else {
+            //TODO: SHOW SNACKBAR
+<span class="nc" id="L171">            lockUnlockNearby(false); // So that new location updates wont come</span>
+<span class="nc" id="L172">            exploreMapFragmentView.setProgressBarVisibility(false);</span>
+        }
+<span class="nc" id="L174">    }</span>
+
+    void prepareNearbyBaseMarkers(MapController.ExplorePlacesInfo explorePlacesInfo,
+        Marker selectedMarker) {
+<span class="nc" id="L178">        exploreMapController</span>
+<span class="nc" id="L179">            .loadAttractionsFromLocationToBaseMarkerOptions(explorePlacesInfo.curLatLng,</span>
+                // Curlatlang will be used to calculate distances
+                explorePlacesInfo.explorePlaceList,
+<span class="nc" id="L182">                exploreMapFragmentView.getContext(),</span>
+                this,
+                selectedMarker,
+                explorePlacesInfo);
+<span class="nc" id="L186">    }</span>
+
+    @Override
+    public void onNearbyBaseMarkerThumbsReady(List&lt;NearbyBaseMarker&gt; baseMarkers,
+        ExplorePlacesInfo explorePlacesInfo, Marker selectedMarker) {
+<span class="nc bnc" id="L191" title="All 2 branches missed.">        if (null != exploreMapFragmentView) {</span>
+<span class="nc" id="L192">            exploreMapFragmentView.addMarkersToMap(baseMarkers);</span>
+<span class="nc" id="L193">            lockUnlockNearby(false); // So that new location updates wont come</span>
+<span class="nc" id="L194">            exploreMapFragmentView.setProgressBarVisibility(false);</span>
+        }
+<span class="nc" id="L196">    }</span>
+
+    public View.OnClickListener onSearchThisAreaClicked() {
+<span class="nc" id="L199">        return v -&gt; {</span>
+            // Lock map operations during search this area operation
+<span class="nc" id="L201">            exploreMapFragmentView.setSearchThisAreaButtonVisibility(false);</span>
+
+<span class="nc bnc" id="L203" title="All 2 branches missed.">            if (searchCloseToCurrentLocation()) {</span>
+<span class="nc" id="L204">                updateMap(LOCATION_SIGNIFICANTLY_CHANGED);</span>
+            } else {
+<span class="nc" id="L206">                updateMap(SEARCH_CUSTOM_AREA);</span>
+            }
+<span class="nc" id="L208">        };</span>
+    }
+
+    /**
+     * Returns true if search this area button is used around our current location, so that we can
+     * continue following our current location again
+     *
+     * @return Returns true if search this area button is used around our current location
+     */
+    public boolean searchCloseToCurrentLocation() {
+<span class="nc bnc" id="L218" title="All 2 branches missed.">        if (null == exploreMapFragmentView.getLastMapFocus()) {</span>
+<span class="nc" id="L219">            return true;</span>
+        }
+
+<span class="nc" id="L222">        Location mylocation = new Location(&quot;&quot;);</span>
+<span class="nc" id="L223">        Location dest_location = new Location(&quot;&quot;);</span>
+<span class="nc" id="L224">        dest_location.setLatitude(exploreMapFragmentView.getMapFocus().getLatitude());</span>
+<span class="nc" id="L225">        dest_location.setLongitude(exploreMapFragmentView.getMapFocus().getLongitude());</span>
+<span class="nc" id="L226">        mylocation.setLatitude(exploreMapFragmentView.getLastMapFocus().getLatitude());</span>
+<span class="nc" id="L227">        mylocation.setLongitude(exploreMapFragmentView.getLastMapFocus().getLongitude());</span>
+<span class="nc" id="L228">        Float distance = mylocation.distanceTo(dest_location);</span>
+
+<span class="nc bnc" id="L230" title="All 2 branches missed.">        if (distance &gt; 2000.0 * 3 / 4) {</span>
+<span class="nc" id="L231">            return false;</span>
+        } else {
+<span class="nc" id="L233">            return true;</span>
+        }
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

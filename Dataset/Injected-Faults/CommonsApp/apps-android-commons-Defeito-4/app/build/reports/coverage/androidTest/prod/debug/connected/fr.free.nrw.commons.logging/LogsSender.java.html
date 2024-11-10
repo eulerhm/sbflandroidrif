@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>LogsSender.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.logging</a> &gt; <span class="el_source">LogsSender.java</span></div><h1>LogsSender.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.logging;
+
+import static org.acra.ACRA.getErrorReporter;
+
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.core.content.FileProvider;
+
+import org.acra.data.CrashReportData;
+import org.acra.sender.ReportSender;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.auth.SessionManager;
+import timber.log.Timber;
+
+/**
+ * Abstract class that implements Acra's log sender
+ */
+public abstract class LogsSender implements ReportSender {
+
+    String mailTo;
+    String logFileName;
+    String emailSubject;
+    String emailBody;
+
+    private final SessionManager sessionManager;
+
+<span class="nc" id="L42">    LogsSender(SessionManager sessionManager) {</span>
+<span class="nc" id="L43">        this.sessionManager = sessionManager;</span>
+<span class="nc" id="L44">    }</span>
+
+    /**
+     * Overrides send method of ACRA's ReportSender to send logs
+     *
+     * @param context
+     * @param report
+     */
+    @Override
+    public void send(@NonNull final Context context, @Nullable CrashReportData report) {
+<span class="nc" id="L54">        sendLogs(context, report);</span>
+<span class="nc" id="L55">    }</span>
+
+    /**
+     * Gets zipped log files and sends it via email. Can be modified to change the send log mechanism
+     *
+     * @param context
+     * @param report
+     */
+    private void sendLogs(Context context, CrashReportData report) {
+<span class="nc" id="L64">        final Uri logFileUri = getZippedLogFileUri(context, report);</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">        if (logFileUri != null) {</span>
+<span class="nc" id="L66">            sendEmail(context, logFileUri);</span>
+        } else {
+<span class="nc" id="L68">            getErrorReporter().handleSilentException(null);</span>
+        }
+<span class="nc" id="L70">    }</span>
+
+    /***
+     * Provides any extra information that you want to send. The return value will be
+     * delivered inside the report verbatim
+     *
+     * @return
+     */
+    protected abstract String getExtraInfo();
+
+    /**
+     * Fires an intent to send email with logs
+     *
+     * @param context
+     * @param logFileUri
+     */
+    private void sendEmail(Context context, Uri logFileUri) {
+<span class="nc" id="L87">        String subject = emailSubject;</span>
+<span class="nc" id="L88">        String body = emailBody;</span>
+
+<span class="nc" id="L90">        Intent emailIntent = new Intent(Intent.ACTION_SEND);</span>
+<span class="nc" id="L91">        emailIntent.setType(&quot;message/rfc822&quot;);</span>
+<span class="nc" id="L92">        emailIntent.putExtra(Intent.EXTRA_EMAIL, new String[]{mailTo});</span>
+<span class="nc" id="L93">        emailIntent.putExtra(Intent.EXTRA_SUBJECT, subject);</span>
+<span class="nc" id="L94">        emailIntent.putExtra(Intent.EXTRA_TEXT, body);</span>
+<span class="nc" id="L95">        emailIntent.putExtra(Intent.EXTRA_STREAM, logFileUri);</span>
+<span class="nc" id="L96">        emailIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);</span>
+<span class="nc" id="L97">        emailIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);</span>
+<span class="nc" id="L98">        context.startActivity(Intent.createChooser(emailIntent, context.getString(R.string.share_logs_using)));</span>
+<span class="nc" id="L99">    }</span>
+
+    /**
+     * Returns the URI for the zipped log file
+     *
+     * @param report
+     * @return
+     */
+    private Uri getZippedLogFileUri(Context context, CrashReportData report) {
+        try {
+<span class="nc" id="L109">            StringBuilder builder = new StringBuilder();</span>
+<span class="nc bnc" id="L110" title="All 2 branches missed.">            if (report != null) {</span>
+<span class="nc" id="L111">                attachCrashInfo(report, builder);</span>
+            }
+<span class="nc" id="L113">            attachUserInfo(builder);</span>
+<span class="nc" id="L114">            attachExtraInfo(builder);</span>
+<span class="nc" id="L115">            byte[] metaData = builder.toString().getBytes(Charset.forName(&quot;UTF-8&quot;));</span>
+<span class="nc" id="L116">            File zipFile = new File(LogUtils.getLogZipDirectory(), logFileName);</span>
+<span class="nc" id="L117">            writeLogToZipFile(metaData, zipFile);</span>
+<span class="nc" id="L118">            return FileProvider</span>
+<span class="nc" id="L119">                    .getUriForFile(context,</span>
+<span class="nc" id="L120">                            context.getApplicationContext().getPackageName() + &quot;.provider&quot;, zipFile);</span>
+<span class="nc" id="L121">        } catch (IOException e) {</span>
+<span class="nc" id="L122">            Timber.w(e, &quot;Error in generating log file&quot;);</span>
+        }
+<span class="nc" id="L124">        return null;</span>
+    }
+
+    /**
+     * Checks if there are any pending crash reports and attaches them to the logs
+     *
+     * @param report
+     * @param builder
+     */
+    private void attachCrashInfo(CrashReportData report, StringBuilder builder) {
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        if (report == null) {</span>
+<span class="nc" id="L135">            return;</span>
+        }
+<span class="nc" id="L137">        builder.append(report);</span>
+<span class="nc" id="L138">    }</span>
+
+    /**
+     * Attaches username to the the meta_data file
+     *
+     * @param builder
+     */
+    private void attachUserInfo(StringBuilder builder) {
+<span class="nc" id="L146">        builder.append(&quot;MediaWiki Username = &quot;).append(sessionManager.getUserName()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L147">    }</span>
+
+    /**
+     * Gets any extra meta information to be attached with the log files
+     *
+     * @param builder
+     */
+    private void attachExtraInfo(StringBuilder builder) {
+<span class="nc" id="L155">        String infoToBeAttached = getExtraInfo();</span>
+<span class="nc" id="L156">        builder.append(infoToBeAttached);</span>
+<span class="nc" id="L157">        builder.append(&quot;\n&quot;);</span>
+<span class="nc" id="L158">    }</span>
+
+    /**
+     * Zips the logs and meta information
+     *
+     * @param metaData
+     * @param zipFile
+     * @throws IOException
+     */
+    private void writeLogToZipFile(byte[] metaData, File zipFile) throws IOException {
+<span class="nc" id="L168">        FileOutputStream fos = new FileOutputStream(zipFile);</span>
+<span class="nc" id="L169">        BufferedOutputStream bos = new BufferedOutputStream(fos);</span>
+<span class="nc" id="L170">        ZipOutputStream zos = new ZipOutputStream(bos);</span>
+<span class="nc" id="L171">        File logDir = new File(LogUtils.getLogDirectory());</span>
+
+<span class="nc bnc" id="L173" title="All 4 branches missed.">        if (!logDir.exists() || logDir.listFiles().length == 0) {</span>
+<span class="nc" id="L174">            return;</span>
+        }
+
+<span class="nc" id="L177">        byte[] buffer = new byte[1024];</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">        for (File file : logDir.listFiles()) {</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">            if (file.isDirectory()) {</span>
+<span class="nc" id="L180">                continue;</span>
+            }
+<span class="nc" id="L182">            FileInputStream fis = new FileInputStream(file);</span>
+<span class="nc" id="L183">            BufferedInputStream bis = new BufferedInputStream(fis);</span>
+<span class="nc" id="L184">            zos.putNextEntry(new ZipEntry(file.getName()));</span>
+            int length;
+<span class="nc bnc" id="L186" title="All 2 branches missed.">            while ((length = bis.read(buffer)) &gt; 0) {</span>
+<span class="nc" id="L187">                zos.write(buffer, 0, length);</span>
+            }
+<span class="nc" id="L189">            zos.closeEntry();</span>
+<span class="nc" id="L190">            bis.close();</span>
+        }
+
+        //attach metadata as a separate file
+<span class="nc" id="L194">        zos.putNextEntry(new ZipEntry(&quot;meta_data.txt&quot;));</span>
+<span class="nc" id="L195">        zos.write(metaData);</span>
+<span class="nc" id="L196">        zos.closeEntry();</span>
+
+<span class="nc" id="L198">        zos.flush();</span>
+<span class="nc" id="L199">        zos.close();</span>
+<span class="nc" id="L200">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

@@ -1,0 +1,557 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>Note.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.models</a> &gt; <span class="el_source">Note.java</span></div><h1>Note.java</h1><pre class="source lang-java linenums">/**
+ * Note represents a single WordPress.com notification
+ */
+package org.wordpress.android.models;
+
+import android.text.Spannable;
+import android.text.TextUtils;
+import android.util.Base64;
+
+import org.apache.commons.lang3.time.DateUtils;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.wordpress.android.fluxc.model.CommentModel;
+import org.wordpress.android.fluxc.model.CommentStatus;
+import org.wordpress.android.ui.notifications.utils.NotificationsUtilsWrapper;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.DateTimeUtils;
+import org.wordpress.android.util.JSONUtils;
+import org.wordpress.android.util.StringUtils;
+
+import java.io.UnsupportedEncodingException;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.EnumSet;
+import java.util.zip.DataFormatException;
+import java.util.zip.Inflater;
+
+public class Note {
+    private static final String TAG = &quot;NoteModel&quot;;
+
+    // Maximum character length for a comment preview
+    private static final int MAX_COMMENT_PREVIEW_LENGTH = 200;
+
+    // Note types
+    public static final String NOTE_FOLLOW_TYPE = &quot;follow&quot;;
+    public static final String NOTE_LIKE_TYPE = &quot;like&quot;;
+    public static final String NOTE_COMMENT_TYPE = &quot;comment&quot;;
+    public static final String NOTE_MATCHER_TYPE = &quot;automattcher&quot;;
+    public static final String NOTE_COMMENT_LIKE_TYPE = &quot;comment_like&quot;;
+    public static final String NOTE_REBLOG_TYPE = &quot;reblog&quot;;
+    public static final String NOTE_NEW_POST_TYPE = &quot;new_post&quot;;
+    public static final String NOTE_VIEW_MILESTONE = &quot;view_milestone&quot;;
+    public static final String NOTE_UNKNOWN_TYPE = &quot;unknown&quot;;
+
+    // JSON action keys
+    private static final String ACTION_KEY_REPLY = &quot;replyto-comment&quot;;
+    private static final String ACTION_KEY_APPROVE = &quot;approve-comment&quot;;
+    private static final String ACTION_KEY_SPAM = &quot;spam-comment&quot;;
+    private static final String ACTION_KEY_LIKE = &quot;like-comment&quot;;
+
+    private JSONObject mActions;
+    private JSONObject mNoteJSON;
+    private final String mKey;
+
+<span class="nc" id="L56">    private final Object mSyncLock = new Object();</span>
+    private String mLocalStatus;
+
+<span class="nc" id="L59">    public enum EnabledActions {</span>
+<span class="nc" id="L60">        ACTION_REPLY,</span>
+<span class="nc" id="L61">        ACTION_APPROVE,</span>
+<span class="nc" id="L62">        ACTION_UNAPPROVE,</span>
+<span class="nc" id="L63">        ACTION_SPAM,</span>
+<span class="nc" id="L64">        ACTION_LIKE</span>
+    }
+
+<span class="nc" id="L67">    public enum NoteTimeGroup {</span>
+<span class="nc" id="L68">        GROUP_TODAY,</span>
+<span class="nc" id="L69">        GROUP_YESTERDAY,</span>
+<span class="nc" id="L70">        GROUP_OLDER_TWO_DAYS,</span>
+<span class="nc" id="L71">        GROUP_OLDER_WEEK,</span>
+<span class="nc" id="L72">        GROUP_OLDER_MONTH</span>
+    }
+
+<span class="nc" id="L75">    public Note(String key, JSONObject noteJSON) {</span>
+<span class="nc" id="L76">        mKey = key;</span>
+<span class="nc" id="L77">        mNoteJSON = noteJSON;</span>
+<span class="nc" id="L78">    }</span>
+
+<span class="nc" id="L80">    public Note(JSONObject noteJSON) {</span>
+<span class="nc" id="L81">        mNoteJSON = noteJSON;</span>
+<span class="nc" id="L82">        mKey = mNoteJSON.optString(&quot;id&quot;, &quot;&quot;);</span>
+<span class="nc" id="L83">    }</span>
+
+    public JSONObject getJSON() {
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        return mNoteJSON != null ? mNoteJSON : new JSONObject();</span>
+    }
+
+    public String getId() {
+<span class="nc" id="L90">        return mKey;</span>
+    }
+
+    public String getType() {
+<span class="nc" id="L94">        return queryJSON(&quot;type&quot;, NOTE_UNKNOWN_TYPE);</span>
+    }
+
+    private Boolean isType(String type) {
+<span class="nc" id="L98">        return getType().equals(type);</span>
+    }
+
+    public Boolean isCommentType() {
+<span class="nc" id="L102">        synchronized (mSyncLock) {</span>
+<span class="nc bnc" id="L103" title="All 4 branches missed.">            return (isAutomattcherType() &amp;&amp; JSONUtils.queryJSON(mNoteJSON, &quot;meta.ids.comment&quot;, -1) != -1)</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">                   || isType(NOTE_COMMENT_TYPE);</span>
+        }
+    }
+
+    public Boolean isAutomattcherType() {
+<span class="nc" id="L109">        return isType(NOTE_MATCHER_TYPE);</span>
+    }
+
+    public Boolean isNewPostType() {
+<span class="nc" id="L113">        return isType(NOTE_NEW_POST_TYPE);</span>
+    }
+
+    public Boolean isFollowType() {
+<span class="nc" id="L117">        return isType(NOTE_FOLLOW_TYPE);</span>
+    }
+
+    public Boolean isLikeType() {
+<span class="nc bnc" id="L121" title="All 4 branches missed.">        return isPostLikeType() || isCommentLikeType();</span>
+    }
+
+    public Boolean isPostLikeType() {
+<span class="nc" id="L125">        return isType(NOTE_LIKE_TYPE);</span>
+    }
+
+    public Boolean isCommentLikeType() {
+<span class="nc" id="L129">        return isType(NOTE_COMMENT_LIKE_TYPE);</span>
+    }
+
+    public Boolean isReblogType() {
+<span class="nc" id="L133">        return isType(NOTE_REBLOG_TYPE);</span>
+    }
+
+    public Boolean isViewMilestoneType() {
+<span class="nc" id="L137">        return isType(NOTE_VIEW_MILESTONE);</span>
+    }
+
+    public Boolean isCommentReplyType() {
+<span class="nc bnc" id="L141" title="All 4 branches missed.">        return isCommentType() &amp;&amp; getParentCommentId() &gt; 0;</span>
+    }
+
+    // Returns true if the user has replied to this comment note
+    public Boolean isCommentWithUserReply() {
+<span class="nc bnc" id="L146" title="All 4 branches missed.">        return isCommentType() &amp;&amp; !TextUtils.isEmpty(getCommentSubjectNoticon());</span>
+    }
+
+    public Boolean isUserList() {
+<span class="nc bnc" id="L150" title="All 6 branches missed.">        return isLikeType() || isFollowType() || isReblogType();</span>
+    }
+
+    /*
+     * does user have permission to moderate/reply/spam this comment?
+     */
+    public boolean canModerate() {
+<span class="nc" id="L157">        EnumSet&lt;EnabledActions&gt; enabledActions = getEnabledActions();</span>
+<span class="nc bnc" id="L158" title="All 4 branches missed.">        return enabledActions != null &amp;&amp; (enabledActions.contains(EnabledActions.ACTION_APPROVE) || enabledActions</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">                .contains(EnabledActions.ACTION_UNAPPROVE));</span>
+    }
+
+    public boolean canMarkAsSpam() {
+<span class="nc" id="L163">        EnumSet&lt;EnabledActions&gt; enabledActions = getEnabledActions();</span>
+<span class="nc bnc" id="L164" title="All 4 branches missed.">        return (enabledActions != null &amp;&amp; enabledActions.contains(EnabledActions.ACTION_SPAM));</span>
+    }
+
+    public boolean canReply() {
+<span class="nc" id="L168">        EnumSet&lt;EnabledActions&gt; enabledActions = getEnabledActions();</span>
+<span class="nc bnc" id="L169" title="All 4 branches missed.">        return (enabledActions != null &amp;&amp; enabledActions.contains(EnabledActions.ACTION_REPLY));</span>
+    }
+
+    public boolean canTrash() {
+<span class="nc" id="L173">        return canModerate();</span>
+    }
+
+    public boolean canLike() {
+<span class="nc" id="L177">        EnumSet&lt;EnabledActions&gt; enabledActions = getEnabledActions();</span>
+<span class="nc bnc" id="L178" title="All 4 branches missed.">        return (enabledActions != null &amp;&amp; enabledActions.contains(EnabledActions.ACTION_LIKE));</span>
+    }
+
+    public String getLocalStatus() {
+<span class="nc" id="L182">        return StringUtils.notNullStr(mLocalStatus);</span>
+    }
+
+    public void setLocalStatus(String localStatus) {
+<span class="nc" id="L186">        mLocalStatus = localStatus;</span>
+<span class="nc" id="L187">    }</span>
+
+    public JSONObject getSubject() {
+        try {
+<span class="nc" id="L191">            synchronized (mSyncLock) {</span>
+<span class="nc" id="L192">                JSONArray subjectArray = mNoteJSON.getJSONArray(&quot;subject&quot;);</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">                if (subjectArray.length() &gt; 0) {</span>
+<span class="nc" id="L194">                    return subjectArray.getJSONObject(0);</span>
+                }
+<span class="nc" id="L196">            }</span>
+<span class="nc" id="L197">        } catch (JSONException e) {</span>
+<span class="nc" id="L198">            return null;</span>
+<span class="nc" id="L199">        }</span>
+
+<span class="nc" id="L201">        return null;</span>
+    }
+
+    public Spannable getFormattedSubject(NotificationsUtilsWrapper notificationsUtilsWrapper) {
+<span class="nc" id="L205">        return notificationsUtilsWrapper.getSpannableContentForRanges(getSubject());</span>
+    }
+
+    public String getTitle() {
+<span class="nc" id="L209">        return queryJSON(&quot;title&quot;, &quot;&quot;);</span>
+    }
+
+    public String getIconURL() {
+<span class="nc" id="L213">        return queryJSON(&quot;icon&quot;, &quot;&quot;);</span>
+    }
+
+    public String getCommentSubject() {
+<span class="nc" id="L217">        synchronized (mSyncLock) {</span>
+<span class="nc" id="L218">            JSONArray subjectArray = mNoteJSON.optJSONArray(&quot;subject&quot;);</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">            if (subjectArray != null) {</span>
+<span class="nc" id="L220">                String commentSubject = JSONUtils.queryJSON(subjectArray, &quot;subject[1].text&quot;, &quot;&quot;);</span>
+
+                // Trim down the comment preview if the comment text is too large.
+<span class="nc bnc" id="L223" title="All 4 branches missed.">                if (commentSubject != null &amp;&amp; commentSubject.length() &gt; MAX_COMMENT_PREVIEW_LENGTH) {</span>
+<span class="nc" id="L224">                    commentSubject = commentSubject.substring(0, MAX_COMMENT_PREVIEW_LENGTH - 1);</span>
+                }
+
+<span class="nc" id="L227">                return commentSubject;</span>
+            }
+<span class="nc" id="L229">        }</span>
+
+<span class="nc" id="L231">        return &quot;&quot;;</span>
+    }
+
+    public String getCommentSubjectNoticon() {
+<span class="nc" id="L235">        JSONArray subjectRanges = queryJSON(&quot;subject[0].ranges&quot;, new JSONArray());</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        if (subjectRanges != null) {</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">            for (int i = 0; i &lt; subjectRanges.length(); i++) {</span>
+                try {
+<span class="nc" id="L239">                    JSONObject rangeItem = subjectRanges.getJSONObject(i);</span>
+<span class="nc bnc" id="L240" title="All 4 branches missed.">                    if (rangeItem.has(&quot;type&quot;) &amp;&amp; rangeItem.optString(&quot;type&quot;).equals(&quot;noticon&quot;)) {</span>
+<span class="nc" id="L241">                        return rangeItem.optString(&quot;value&quot;, &quot;&quot;);</span>
+                    }
+<span class="nc" id="L243">                } catch (JSONException e) {</span>
+<span class="nc" id="L244">                    return &quot;&quot;;</span>
+<span class="nc" id="L245">                }</span>
+            }
+        }
+
+<span class="nc" id="L249">        return &quot;&quot;;</span>
+    }
+
+    public long getCommentReplyId() {
+<span class="nc" id="L253">        return queryJSON(&quot;meta.ids.reply_comment&quot;, 0);</span>
+    }
+
+    /**
+     * Compare note timestamp to now and return a time grouping
+     */
+    public static NoteTimeGroup getTimeGroupForTimestamp(long timestamp) {
+<span class="nc" id="L260">        Date today = new Date();</span>
+<span class="nc" id="L261">        Date then = new Date(timestamp * 1000);</span>
+
+<span class="nc bnc" id="L263" title="All 2 branches missed.">        if (then.compareTo(DateUtils.addMonths(today, -1)) &lt; 0) {</span>
+<span class="nc" id="L264">            return NoteTimeGroup.GROUP_OLDER_MONTH;</span>
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        } else if (then.compareTo(DateUtils.addWeeks(today, -1)) &lt; 0) {</span>
+<span class="nc" id="L266">            return NoteTimeGroup.GROUP_OLDER_WEEK;</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">        } else if (then.compareTo(DateUtils.addDays(today, -2)) &lt; 0</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">                   || DateUtils.isSameDay(DateUtils.addDays(today, -2), then)) {</span>
+<span class="nc" id="L269">            return NoteTimeGroup.GROUP_OLDER_TWO_DAYS;</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        } else if (DateUtils.isSameDay(DateUtils.addDays(today, -1), then)) {</span>
+<span class="nc" id="L271">            return NoteTimeGroup.GROUP_YESTERDAY;</span>
+        } else {
+<span class="nc" id="L273">            return NoteTimeGroup.GROUP_TODAY;</span>
+        }
+    }
+
+<span class="nc" id="L277">    public static class TimeStampComparator implements Comparator&lt;Note&gt; {</span>
+        @Override
+        public int compare(Note a, Note b) {
+<span class="nc" id="L280">            return b.getTimestampString().compareTo(a.getTimestampString());</span>
+        }
+    }
+
+    /**
+     * The inverse of isRead
+     */
+    public Boolean isUnread() {
+<span class="nc bnc" id="L288" title="All 2 branches missed.">        return !isRead();</span>
+    }
+
+    private Boolean isRead() {
+<span class="nc bnc" id="L292" title="All 2 branches missed.">        return queryJSON(&quot;read&quot;, 0) == 1;</span>
+    }
+
+    public void setRead() {
+        try {
+<span class="nc" id="L297">            mNoteJSON.putOpt(&quot;read&quot;, 1);</span>
+<span class="nc" id="L298">        } catch (JSONException e) {</span>
+<span class="nc" id="L299">            AppLog.e(AppLog.T.NOTIFS, &quot;Failed to set 'read' property&quot;, e);</span>
+<span class="nc" id="L300">        }</span>
+<span class="nc" id="L301">    }</span>
+
+    /**
+     * Get the timestamp provided by the API for the note
+     */
+    public long getTimestamp() {
+<span class="nc" id="L307">        return DateTimeUtils.timestampFromIso8601(getTimestampString());</span>
+    }
+
+    public String getTimestampString() {
+<span class="nc" id="L311">        return queryJSON(&quot;timestamp&quot;, &quot;&quot;);</span>
+    }
+
+    public JSONArray getBody() {
+        try {
+<span class="nc" id="L316">            synchronized (mSyncLock) {</span>
+<span class="nc" id="L317">                return mNoteJSON.getJSONArray(&quot;body&quot;);</span>
+            }
+<span class="nc" id="L319">        } catch (JSONException e) {</span>
+<span class="nc" id="L320">            return new JSONArray();</span>
+        }
+    }
+
+    // returns character code for notification font
+    public String getNoticonCharacter() {
+<span class="nc" id="L326">        return queryJSON(&quot;noticon&quot;, &quot;&quot;);</span>
+    }
+
+    private JSONObject getCommentActions() {
+<span class="nc bnc" id="L330" title="All 2 branches missed.">        if (mActions == null) {</span>
+            // Find comment block that matches the root note comment id
+<span class="nc" id="L332">            long commentId = getCommentId();</span>
+<span class="nc" id="L333">            JSONArray bodyArray = getBody();</span>
+<span class="nc bnc" id="L334" title="All 2 branches missed.">            for (int i = 0; i &lt; bodyArray.length(); i++) {</span>
+                try {
+<span class="nc" id="L336">                    JSONObject bodyItem = bodyArray.getJSONObject(i);</span>
+<span class="nc bnc" id="L337" title="All 4 branches missed.">                    if (bodyItem.has(&quot;type&quot;) &amp;&amp; bodyItem.optString(&quot;type&quot;).equals(&quot;comment&quot;)</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">                        &amp;&amp; commentId == JSONUtils.queryJSON(bodyItem, &quot;meta.ids.comment&quot;, 0)) {</span>
+<span class="nc" id="L339">                        mActions = JSONUtils.queryJSON(bodyItem, &quot;actions&quot;, new JSONObject());</span>
+<span class="nc" id="L340">                        break;</span>
+                    }
+<span class="nc" id="L342">                } catch (JSONException e) {</span>
+<span class="nc" id="L343">                    break;</span>
+<span class="nc" id="L344">                }</span>
+            }
+
+<span class="nc bnc" id="L347" title="All 2 branches missed.">            if (mActions == null) {</span>
+<span class="nc" id="L348">                mActions = new JSONObject();</span>
+            }
+        }
+
+<span class="nc" id="L352">        return mActions;</span>
+    }
+
+    /*
+     * returns the actions allowed on this note, assumes it's a comment notification
+     */
+    public EnumSet&lt;EnabledActions&gt; getEnabledActions() {
+<span class="nc" id="L359">        EnumSet&lt;EnabledActions&gt; actions = EnumSet.noneOf(EnabledActions.class);</span>
+<span class="nc" id="L360">        JSONObject jsonActions = getCommentActions();</span>
+<span class="nc bnc" id="L361" title="All 4 branches missed.">        if (jsonActions == null || jsonActions.length() == 0) {</span>
+<span class="nc" id="L362">            return actions;</span>
+        }
+
+<span class="nc bnc" id="L365" title="All 2 branches missed.">        if (jsonActions.has(ACTION_KEY_REPLY)) {</span>
+<span class="nc" id="L366">            actions.add(EnabledActions.ACTION_REPLY);</span>
+        }
+<span class="nc bnc" id="L368" title="All 4 branches missed.">        if (jsonActions.has(ACTION_KEY_APPROVE) &amp;&amp; jsonActions.optBoolean(ACTION_KEY_APPROVE, false)) {</span>
+<span class="nc" id="L369">            actions.add(EnabledActions.ACTION_UNAPPROVE);</span>
+        }
+<span class="nc bnc" id="L371" title="All 4 branches missed.">        if (jsonActions.has(ACTION_KEY_APPROVE) &amp;&amp; !jsonActions.optBoolean(ACTION_KEY_APPROVE, false)) {</span>
+<span class="nc" id="L372">            actions.add(EnabledActions.ACTION_APPROVE);</span>
+        }
+<span class="nc bnc" id="L374" title="All 2 branches missed.">        if (jsonActions.has(ACTION_KEY_SPAM)) {</span>
+<span class="nc" id="L375">            actions.add(EnabledActions.ACTION_SPAM);</span>
+        }
+<span class="nc bnc" id="L377" title="All 2 branches missed.">        if (jsonActions.has(ACTION_KEY_LIKE)) {</span>
+<span class="nc" id="L378">            actions.add(EnabledActions.ACTION_LIKE);</span>
+        }
+
+<span class="nc" id="L381">        return actions;</span>
+    }
+
+    public int getSiteId() {
+<span class="nc" id="L385">        return queryJSON(&quot;meta.ids.site&quot;, 0);</span>
+    }
+
+    public int getPostId() {
+<span class="nc" id="L389">        return queryJSON(&quot;meta.ids.post&quot;, 0);</span>
+    }
+
+    public long getCommentId() {
+<span class="nc" id="L393">        return queryJSON(&quot;meta.ids.comment&quot;, 0);</span>
+    }
+
+    public long getParentCommentId() {
+<span class="nc" id="L397">        return queryJSON(&quot;meta.ids.parent_comment&quot;, 0);</span>
+    }
+
+    /**
+     * Rudimentary system for pulling an item out of a JSON object hierarchy
+     */
+    private &lt;U&gt; U queryJSON(String query, U defaultObject) {
+<span class="nc" id="L404">        synchronized (mSyncLock) {</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">            if (mNoteJSON == null) {</span>
+<span class="nc" id="L406">                return defaultObject;</span>
+            }
+<span class="nc" id="L408">            return JSONUtils.queryJSON(mNoteJSON, query, defaultObject);</span>
+        }
+    }
+
+    /**
+     * Constructs a new Comment object based off of data in a Note
+     */
+    public CommentModel buildComment() {
+<span class="nc" id="L416">        CommentModel comment = new CommentModel();</span>
+<span class="nc" id="L417">        comment.setRemotePostId(getPostId());</span>
+<span class="nc" id="L418">        comment.setRemoteCommentId(getCommentId());</span>
+<span class="nc" id="L419">        comment.setAuthorName(getCommentAuthorName());</span>
+<span class="nc" id="L420">        comment.setDatePublished(DateTimeUtils.iso8601FromTimestamp(getTimestamp()));</span>
+<span class="nc" id="L421">        comment.setContent(getCommentText());</span>
+<span class="nc" id="L422">        comment.setStatus(getCommentStatus().toString());</span>
+<span class="nc" id="L423">        comment.setAuthorUrl(getCommentAuthorUrl());</span>
+<span class="nc" id="L424">        comment.setPostTitle(getTitle()); // unavailable in note model</span>
+<span class="nc" id="L425">        comment.setAuthorEmail(&quot;&quot;); // unavailable in note model</span>
+<span class="nc" id="L426">        comment.setAuthorProfileImageUrl(getIconURL());</span>
+<span class="nc" id="L427">        comment.setILike(hasLikedComment());</span>
+<span class="nc" id="L428">        return comment;</span>
+    }
+
+    public String getCommentAuthorName() {
+<span class="nc" id="L432">        JSONArray bodyArray = getBody();</span>
+
+<span class="nc bnc" id="L434" title="All 2 branches missed.">        for (int i = 0; i &lt; bodyArray.length(); i++) {</span>
+            try {
+<span class="nc" id="L436">                JSONObject bodyItem = bodyArray.getJSONObject(i);</span>
+<span class="nc bnc" id="L437" title="All 4 branches missed.">                if (bodyItem.has(&quot;type&quot;) &amp;&amp; bodyItem.optString(&quot;type&quot;).equals(&quot;user&quot;)) {</span>
+<span class="nc" id="L438">                    return bodyItem.optString(&quot;text&quot;);</span>
+                }
+<span class="nc" id="L440">            } catch (JSONException e) {</span>
+<span class="nc" id="L441">                return &quot;&quot;;</span>
+<span class="nc" id="L442">            }</span>
+        }
+
+<span class="nc" id="L445">        return &quot;&quot;;</span>
+    }
+
+    private String getCommentText() {
+<span class="nc" id="L449">        return queryJSON(&quot;body[last].text&quot;, &quot;&quot;);</span>
+    }
+
+    private String getCommentAuthorUrl() {
+<span class="nc" id="L453">        JSONArray bodyArray = getBody();</span>
+
+<span class="nc bnc" id="L455" title="All 2 branches missed.">        for (int i = 0; i &lt; bodyArray.length(); i++) {</span>
+            try {
+<span class="nc" id="L457">                JSONObject bodyItem = bodyArray.getJSONObject(i);</span>
+<span class="nc bnc" id="L458" title="All 4 branches missed.">                if (bodyItem.has(&quot;type&quot;) &amp;&amp; bodyItem.optString(&quot;type&quot;).equals(&quot;user&quot;)) {</span>
+<span class="nc" id="L459">                    return JSONUtils.queryJSON(bodyItem, &quot;meta.links.home&quot;, &quot;&quot;);</span>
+                }
+<span class="nc" id="L461">            } catch (JSONException e) {</span>
+<span class="nc" id="L462">                return &quot;&quot;;</span>
+<span class="nc" id="L463">            }</span>
+        }
+
+<span class="nc" id="L466">        return &quot;&quot;;</span>
+    }
+
+    public CommentStatus getCommentStatus() {
+<span class="nc" id="L470">        EnumSet&lt;EnabledActions&gt; enabledActions = getEnabledActions();</span>
+
+<span class="nc bnc" id="L472" title="All 2 branches missed.">        if (enabledActions.contains(EnabledActions.ACTION_UNAPPROVE)) {</span>
+<span class="nc" id="L473">            return CommentStatus.APPROVED;</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">        } else if (enabledActions.contains(EnabledActions.ACTION_APPROVE)) {</span>
+<span class="nc" id="L475">            return CommentStatus.UNAPPROVED;</span>
+        }
+
+<span class="nc" id="L478">        return CommentStatus.ALL;</span>
+    }
+
+    public boolean hasLikedComment() {
+<span class="nc" id="L482">        JSONObject jsonActions = getCommentActions();</span>
+<span class="nc bnc" id="L483" title="All 6 branches missed.">        return !(jsonActions == null || jsonActions.length() == 0) &amp;&amp; jsonActions.optBoolean(ACTION_KEY_LIKE);</span>
+    }
+
+    public String getUrl() {
+<span class="nc" id="L487">        return queryJSON(&quot;url&quot;, &quot;&quot;);</span>
+    }
+
+    public JSONArray getHeader() {
+<span class="nc" id="L491">        synchronized (mSyncLock) {</span>
+<span class="nc" id="L492">            return mNoteJSON.optJSONArray(&quot;header&quot;);</span>
+        }
+    }
+
+    // this method is used to compare two Notes: as it's potentially a very processing intensive operation,
+    // we're only comparing the note id, timestamp, and raw JSON length, which is accurate enough for
+    // the purpose of checking if the local Note is any different from a remote note.
+    public boolean equalsTimeAndLength(Note note) {
+<span class="nc bnc" id="L500" title="All 2 branches missed.">        if (note == null) {</span>
+<span class="nc" id="L501">            return false;</span>
+        }
+
+<span class="nc bnc" id="L504" title="All 2 branches missed.">        if (this.getTimestampString().equalsIgnoreCase(note.getTimestampString())</span>
+<span class="nc bnc" id="L505" title="All 2 branches missed.">            &amp;&amp; this.getJSON().length() == note.getJSON().length()) {</span>
+<span class="nc" id="L506">            return true;</span>
+        }
+<span class="nc" id="L508">        return false;</span>
+    }
+
+    public static synchronized Note buildFromBase64EncodedData(String noteId, String base64FullNoteData) {
+<span class="nc" id="L512">        Note note = null;</span>
+
+<span class="nc bnc" id="L514" title="All 2 branches missed.">        if (base64FullNoteData == null) {</span>
+<span class="nc" id="L515">            return null;</span>
+        }
+
+<span class="nc" id="L518">        byte[] b64DecodedPayload = Base64.decode(base64FullNoteData, Base64.DEFAULT);</span>
+
+        // Decompress the payload
+<span class="nc" id="L521">        Inflater decompresser = new Inflater();</span>
+<span class="nc" id="L522">        decompresser.setInput(b64DecodedPayload, 0, b64DecodedPayload.length);</span>
+<span class="nc" id="L523">        byte[] result = new byte[4096]; // max length an Android PN payload can have</span>
+<span class="nc" id="L524">        int resultLength = 0;</span>
+        try {
+<span class="nc" id="L526">            resultLength = decompresser.inflate(result);</span>
+<span class="nc" id="L527">            decompresser.end();</span>
+<span class="nc" id="L528">        } catch (DataFormatException e) {</span>
+<span class="nc" id="L529">            AppLog.e(AppLog.T.NOTIFS, &quot;Can't decompress the PN BlockListPayload. It could be &gt; 4K&quot;, e);</span>
+<span class="nc" id="L530">        }</span>
+
+<span class="nc" id="L532">        String out = null;</span>
+        try {
+<span class="nc" id="L534">            out = new String(result, 0, resultLength, &quot;UTF8&quot;);</span>
+<span class="nc" id="L535">        } catch (UnsupportedEncodingException e) {</span>
+<span class="nc" id="L536">            AppLog.e(AppLog.T.NOTIFS, &quot;Notification data contains non UTF8 characters.&quot;, e);</span>
+<span class="nc" id="L537">        }</span>
+
+<span class="nc bnc" id="L539" title="All 2 branches missed.">        if (out != null) {</span>
+            try {
+<span class="nc" id="L541">                JSONObject jsonObject = new JSONObject(out);</span>
+<span class="nc bnc" id="L542" title="All 2 branches missed.">                if (jsonObject.has(&quot;notes&quot;)) {</span>
+<span class="nc" id="L543">                    JSONArray jsonArray = jsonObject.getJSONArray(&quot;notes&quot;);</span>
+<span class="nc bnc" id="L544" title="All 4 branches missed.">                    if (jsonArray != null &amp;&amp; jsonArray.length() == 1) {</span>
+<span class="nc" id="L545">                        jsonObject = jsonArray.getJSONObject(0);</span>
+                    }
+                }
+<span class="nc" id="L548">                note = new Note(noteId, jsonObject);</span>
+<span class="nc" id="L549">            } catch (JSONException e) {</span>
+<span class="nc" id="L550">                AppLog.e(AppLog.T.NOTIFS, &quot;Can't parse the Note JSON received in the PN&quot;, e);</span>
+<span class="nc" id="L551">            }</span>
+        }
+
+<span class="nc" id="L554">        return note;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

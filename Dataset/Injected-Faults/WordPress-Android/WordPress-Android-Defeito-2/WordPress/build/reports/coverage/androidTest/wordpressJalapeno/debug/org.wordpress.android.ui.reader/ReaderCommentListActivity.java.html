@@ -1,0 +1,1071 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderCommentListActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader</a> &gt; <span class="el_source">ReaderCommentListActivity.java</span></div><h1>ReaderCommentListActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextUtils;
+import android.text.TextWatcher;
+import android.view.HapticFeedbackConstants;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.widget.ImageView;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.widget.Toolbar;
+import androidx.coordinatorlayout.widget.CoordinatorLayout;
+import androidx.fragment.app.FragmentManager;
+import androidx.lifecycle.ViewModelProvider;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.LinearSmoothScroller;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.RecyclerView.LayoutManager;
+
+import com.facebook.shimmer.ShimmerFrameLayout;
+import com.google.android.material.appbar.AppBarLayout;
+import com.google.android.material.snackbar.BaseTransientBottomBar.BaseCallback;
+import com.google.android.material.snackbar.Snackbar;
+
+import org.greenrobot.eventbus.EventBus;
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.datasets.ReaderCommentTable;
+import org.wordpress.android.datasets.ReaderPostTable;
+import org.wordpress.android.datasets.UserSuggestionTable;
+import org.wordpress.android.fluxc.model.CommentStatus;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.models.ReaderComment;
+import org.wordpress.android.models.ReaderPost;
+import org.wordpress.android.models.UserSuggestion;
+import org.wordpress.android.ui.ActivityLauncher;
+import org.wordpress.android.ui.CollapseFullScreenDialogFragment;
+import org.wordpress.android.ui.CollapseFullScreenDialogFragment.Builder;
+import org.wordpress.android.ui.CollapseFullScreenDialogFragment.OnCollapseListener;
+import org.wordpress.android.ui.CollapseFullScreenDialogFragment.OnConfirmListener;
+import org.wordpress.android.ui.CommentFullScreenDialogFragment;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.ui.RequestCodes;
+import org.wordpress.android.ui.comments.unified.CommentIdentifier.ReaderCommentIdentifier;
+import org.wordpress.android.ui.comments.unified.UnifiedCommentsEditActivity;
+import org.wordpress.android.ui.reader.ReaderCommentListViewModel.ScrollPosition;
+import org.wordpress.android.ui.reader.ReaderPostPagerActivity.DirectOperation;
+import org.wordpress.android.ui.reader.actions.ReaderActions;
+import org.wordpress.android.ui.reader.actions.ReaderCommentActions;
+import org.wordpress.android.ui.reader.actions.ReaderPostActions;
+import org.wordpress.android.ui.reader.adapters.ReaderCommentAdapter;
+import org.wordpress.android.ui.reader.adapters.ReaderCommentMenuActionAdapter.ReaderCommentMenuActionType;
+import org.wordpress.android.ui.reader.comments.ThreadedCommentsActionSource;
+import org.wordpress.android.ui.reader.services.comment.ReaderCommentService;
+import org.wordpress.android.ui.reader.tracker.ReaderTracker;
+import org.wordpress.android.ui.reader.viewmodels.ConversationNotificationsViewModel;
+import org.wordpress.android.ui.reader.views.ReaderRecyclerView;
+import org.wordpress.android.ui.suggestion.Suggestion;
+import org.wordpress.android.ui.suggestion.adapters.SuggestionAdapter;
+import org.wordpress.android.ui.suggestion.service.SuggestionEvents;
+import org.wordpress.android.ui.suggestion.util.SuggestionServiceConnectionManager;
+import org.wordpress.android.ui.suggestion.util.SuggestionUtils;
+import org.wordpress.android.ui.utils.UiHelpers;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.DisplayUtils;
+import org.wordpress.android.util.EditTextUtils;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.extensions.ViewExtensionsKt;
+import org.wordpress.android.util.WPActivityUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils.AnalyticsCommentActionSource;
+import org.wordpress.android.util.helpers.SwipeToRefreshHelper;
+import org.wordpress.android.widgets.RecyclerItemDecoration;
+import org.wordpress.android.widgets.SuggestionAutoCompleteText;
+import org.wordpress.android.widgets.WPSnackbar;
+
+import java.util.List;
+import java.util.Locale;
+
+import javax.inject.Inject;
+
+import static org.wordpress.android.ui.CommentFullScreenDialogFragment.RESULT_REPLY;
+import static org.wordpress.android.ui.CommentFullScreenDialogFragment.RESULT_SELECTION_END;
+import static org.wordpress.android.ui.CommentFullScreenDialogFragment.RESULT_SELECTION_START;
+import static org.wordpress.android.ui.reader.FollowConversationUiStateKt.FOLLOW_CONVERSATION_UI_STATE_FLAGS_KEY;
+import static org.wordpress.android.util.WPSwipeToRefreshHelper.buildSwipeToRefreshHelper;
+
+import kotlin.Unit;
+
+<span class="nc" id="L111">public class ReaderCommentListActivity extends LocaleAwareActivity implements OnConfirmListener,</span>
+        OnCollapseListener {
+    private static final String KEY_REPLY_TO_COMMENT_ID = &quot;reply_to_comment_id&quot;;
+    private static final String KEY_HAS_UPDATED_COMMENTS = &quot;has_updated_comments&quot;;
+
+    private static final String NOTIFICATIONS_BOTTOM_SHEET_TAG = &quot;NOTIFICATIONS_BOTTOM_SHEET_TAG&quot;;
+
+    private long mPostId;
+    private long mBlogId;
+    private ReaderPost mPost;
+    private ReaderCommentAdapter mCommentAdapter;
+    private SuggestionAdapter mSuggestionAdapter;
+    private SuggestionServiceConnectionManager mSuggestionServiceConnectionManager;
+
+    private SwipeToRefreshHelper mSwipeToRefreshHelper;
+    private ReaderRecyclerView mRecyclerView;
+    private CoordinatorLayout mCoordinator;
+    private SuggestionAutoCompleteText mEditComment;
+    private View mSubmitReplyBtn;
+    private ViewGroup mCommentBox;
+
+    private boolean mIsUpdatingComments;
+    private boolean mHasUpdatedComments;
+    private boolean mIsSubmittingComment;
+    private boolean mUpdateOnResume;
+
+    private DirectOperation mDirectOperation;
+    private long mReplyToCommentId;
+    private long mCommentId;
+    private int mRestorePosition;
+    private String mInterceptedUri;
+    private String mSource;
+
+    @Inject AccountStore mAccountStore;
+    @Inject UiHelpers mUiHelpers;
+    @Inject ViewModelProvider.Factory mViewModelFactory;
+    @Inject ReaderTracker mReaderTracker;
+    @Inject SiteStore mSiteStore;
+
+    private ReaderCommentListViewModel mViewModel;
+    private ConversationNotificationsViewModel mConversationViewModel;
+
+    @Override
+    public void onBackPressed() {
+<span class="nc" id="L155">        CollapseFullScreenDialogFragment fragment = (CollapseFullScreenDialogFragment)</span>
+<span class="nc" id="L156">                getSupportFragmentManager().findFragmentByTag(CollapseFullScreenDialogFragment.TAG);</span>
+
+<span class="nc bnc" id="L158" title="All 2 branches missed.">        if (fragment != null) {</span>
+<span class="nc" id="L159">            fragment.onBackPressed();</span>
+        } else {
+<span class="nc" id="L161">            super.onBackPressed();</span>
+        }
+<span class="nc" id="L163">    }</span>
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L167">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L168">        ((WordPress) getApplication()).component().inject(this);</span>
+<span class="nc" id="L169">        setContentView(R.layout.reader_activity_comment_list);</span>
+
+<span class="nc" id="L171">        Toolbar toolbar = findViewById(R.id.toolbar_main);</span>
+<span class="nc" id="L172">        setSupportActionBar(toolbar);</span>
+
+<span class="nc" id="L174">        ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">        if (actionBar != null) {</span>
+<span class="nc" id="L176">            actionBar.setDisplayShowTitleEnabled(true);</span>
+<span class="nc" id="L177">            actionBar.setDisplayHomeAsUpEnabled(true);</span>
+        }
+
+<span class="nc" id="L180">        initViewModel();</span>
+<span class="nc" id="L181">        initObservers(savedInstanceState);</span>
+
+<span class="nc" id="L183">        mSwipeToRefreshHelper = buildSwipeToRefreshHelper(</span>
+<span class="nc" id="L184">                findViewById(R.id.swipe_to_refresh),</span>
+                () -&gt; {
+<span class="nc" id="L186">                    mConversationViewModel.onRefresh();</span>
+<span class="nc" id="L187">                    updatePostAndComments();</span>
+<span class="nc" id="L188">                }</span>
+        );
+
+<span class="nc" id="L191">        mCoordinator = findViewById(R.id.coordinator_layout);</span>
+
+<span class="nc" id="L193">        mRecyclerView = findViewById(R.id.recycler_view);</span>
+<span class="nc" id="L194">        int spacingHorizontal = 0;</span>
+<span class="nc" id="L195">        int spacingVertical = DisplayUtils.dpToPx(this, 1);</span>
+<span class="nc" id="L196">        mRecyclerView.addItemDecoration(new RecyclerItemDecoration(spacingHorizontal, spacingVertical));</span>
+
+<span class="nc" id="L198">        mCommentBox = findViewById(R.id.layout_comment_box);</span>
+<span class="nc" id="L199">        mEditComment = mCommentBox.findViewById(R.id.edit_comment);</span>
+<span class="nc" id="L200">        mEditComment.initializeWithPrefix('@');</span>
+<span class="nc" id="L201">        mEditComment.getAutoSaveTextHelper().setUniqueId(String.format(Locale.US, &quot;%d%d&quot;, mPostId, mBlogId));</span>
+
+<span class="nc" id="L203">        mEditComment.addTextChangedListener(new TextWatcher() {</span>
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+<span class="nc" id="L206">            }</span>
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+<span class="nc" id="L210">            }</span>
+
+            @Override
+            public void afterTextChanged(Editable s) {
+<span class="nc bnc" id="L214" title="All 2 branches missed.">                mSubmitReplyBtn.setEnabled(!TextUtils.isEmpty(s.toString().trim()));</span>
+<span class="nc" id="L215">            }</span>
+        });
+<span class="nc" id="L217">        mSubmitReplyBtn = mCommentBox.findViewById(R.id.btn_submit_reply);</span>
+<span class="nc" id="L218">        mSubmitReplyBtn.setEnabled(false);</span>
+<span class="nc" id="L219">        mSubmitReplyBtn.setOnLongClickListener(view -&gt; {</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">            if (view.isHapticFeedbackEnabled()) {</span>
+<span class="nc" id="L221">                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);</span>
+            }
+
+<span class="nc" id="L224">            Toast.makeText(view.getContext(), R.string.send, Toast.LENGTH_SHORT).show();</span>
+<span class="nc" id="L225">            return true;</span>
+        });
+<span class="nc" id="L227">        ViewExtensionsKt.redirectContextClickToLongPressListener(mSubmitReplyBtn);</span>
+
+<span class="nc bnc" id="L229" title="All 2 branches missed.">        if (!loadPost()) {</span>
+<span class="nc" id="L230">            ToastUtils.showToast(this, R.string.reader_toast_err_get_post);</span>
+<span class="nc" id="L231">            finish();</span>
+<span class="nc" id="L232">            return;</span>
+        }
+
+<span class="nc" id="L235">        mRecyclerView.setAdapter(getCommentAdapter());</span>
+
+<span class="nc bnc" id="L237" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L238">            setReplyToCommentId(savedInstanceState.getLong(KEY_REPLY_TO_COMMENT_ID), false);</span>
+        }
+
+        // update the post and its comments upon creation
+<span class="nc bnc" id="L242" title="All 2 branches missed.">        mUpdateOnResume = (savedInstanceState == null);</span>
+
+<span class="nc" id="L244">        mSuggestionServiceConnectionManager = new SuggestionServiceConnectionManager(this, mBlogId);</span>
+<span class="nc" id="L245">        mSuggestionAdapter = SuggestionUtils.setupUserSuggestions(</span>
+                mBlogId,
+                this,
+                mSuggestionServiceConnectionManager,
+<span class="nc" id="L249">                mPost.isWP()</span>
+        );
+<span class="nc bnc" id="L251" title="All 2 branches missed.">        if (mSuggestionAdapter != null) {</span>
+<span class="nc" id="L252">            mEditComment.setAdapter(mSuggestionAdapter);</span>
+        }
+
+<span class="nc" id="L255">        mReaderTracker.trackPost(AnalyticsTracker.Stat.READER_ARTICLE_COMMENTS_OPENED, mPost, mSource);</span>
+
+<span class="nc" id="L257">        ImageView buttonExpand = findViewById(R.id.button_expand);</span>
+<span class="nc" id="L258">        buttonExpand.setOnClickListener(</span>
+                v -&gt; {
+<span class="nc" id="L260">                    Bundle bundle = CommentFullScreenDialogFragment.Companion</span>
+<span class="nc" id="L261">                            .newBundle(</span>
+<span class="nc" id="L262">                                    mEditComment.getText().toString(),</span>
+<span class="nc" id="L263">                                    mEditComment.getSelectionStart(),</span>
+<span class="nc" id="L264">                                    mEditComment.getSelectionEnd(),</span>
+                                    mBlogId
+                            );
+
+<span class="nc" id="L268">                    new Builder(ReaderCommentListActivity.this)</span>
+<span class="nc" id="L269">                            .setTitle(R.string.comment)</span>
+<span class="nc" id="L270">                            .setOnCollapseListener(this)</span>
+<span class="nc" id="L271">                            .setOnConfirmListener(this)</span>
+<span class="nc" id="L272">                            .setContent(CommentFullScreenDialogFragment.class, bundle)</span>
+<span class="nc" id="L273">                            .setAction(R.string.send)</span>
+<span class="nc" id="L274">                            .setHideActivityBar(true)</span>
+<span class="nc" id="L275">                            .build()</span>
+<span class="nc" id="L276">                            .show(getSupportFragmentManager(), CollapseFullScreenDialogFragment.TAG);</span>
+<span class="nc" id="L277">                }</span>
+        );
+
+<span class="nc" id="L280">        buttonExpand.setOnLongClickListener(view -&gt; {</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">            if (view.isHapticFeedbackEnabled()) {</span>
+<span class="nc" id="L282">                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);</span>
+            }
+
+<span class="nc" id="L285">            Toast.makeText(view.getContext(), R.string.description_expand, Toast.LENGTH_SHORT).show();</span>
+<span class="nc" id="L286">            return true;</span>
+        });
+<span class="nc" id="L288">        ViewExtensionsKt.redirectContextClickToLongPressListener(buttonExpand);</span>
+
+        // reattach listeners to collapsible reply dialog
+<span class="nc" id="L291">        CollapseFullScreenDialogFragment fragment =</span>
+<span class="nc" id="L292">                (CollapseFullScreenDialogFragment) getSupportFragmentManager().findFragmentByTag(</span>
+                        CollapseFullScreenDialogFragment.TAG);
+
+<span class="nc bnc" id="L295" title="All 4 branches missed.">        if (fragment != null &amp;&amp; fragment.isAdded()) {</span>
+<span class="nc" id="L296">            fragment.setOnCollapseListener(this);</span>
+<span class="nc" id="L297">            fragment.setOnConfirmListener(this);</span>
+        }
+<span class="nc" id="L299">    }</span>
+
+    private void initViewModel() {
+<span class="nc" id="L302">        mViewModel = new ViewModelProvider(this, mViewModelFactory).get(ReaderCommentListViewModel.class);</span>
+<span class="nc" id="L303">        mConversationViewModel = new ViewModelProvider(this, mViewModelFactory).get(</span>
+                ConversationNotificationsViewModel.class
+        );
+<span class="nc" id="L306">    }</span>
+
+    private void initObservers(Bundle savedInstanceState) {
+<span class="nc" id="L309">        AppBarLayout appBarLayout = findViewById(R.id.appbar_main);</span>
+
+<span class="nc" id="L311">        mViewModel.getScrollTo().observe(this, scrollPositionEvent -&gt; {</span>
+<span class="nc" id="L312">            ScrollPosition content = scrollPositionEvent.getContentIfNotHandled();</span>
+<span class="nc" id="L313">            LayoutManager layoutManager = mRecyclerView.getLayoutManager();</span>
+<span class="nc bnc" id="L314" title="All 4 branches missed.">            if (content != null &amp;&amp; layoutManager != null) {</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">                if (content.isSmooth()) {</span>
+<span class="nc" id="L316">                    RecyclerView.SmoothScroller smoothScrollerToTop = new LinearSmoothScroller(this) {</span>
+                        @Override protected int getVerticalSnapPreference() {
+<span class="nc" id="L318">                            return LinearSmoothScroller.SNAP_TO_START;</span>
+                        }
+                    };
+<span class="nc" id="L321">                    smoothScrollerToTop.setTargetPosition(content.getPosition());</span>
+<span class="nc" id="L322">                    layoutManager.startSmoothScroll(smoothScrollerToTop);</span>
+<span class="nc" id="L323">                } else {</span>
+<span class="nc" id="L324">                    ((LinearLayoutManager) layoutManager).scrollToPositionWithOffset(content.getPosition(), 0);</span>
+                }
+<span class="nc" id="L326">                appBarLayout.post(appBarLayout::requestLayout);</span>
+            }
+<span class="nc" id="L328">        });</span>
+
+<span class="nc" id="L330">        mConversationViewModel.getSnackbarEvents().observe(this, snackbarMessageHolderEvent -&gt; {</span>
+<span class="nc" id="L331">            FragmentManager fm = getSupportFragmentManager();</span>
+<span class="nc" id="L332">            CommentNotificationsBottomSheetFragment bottomSheet =</span>
+<span class="nc" id="L333">                    (CommentNotificationsBottomSheetFragment) fm.findFragmentByTag(NOTIFICATIONS_BOTTOM_SHEET_TAG);</span>
+
+<span class="nc bnc" id="L335" title="All 2 branches missed.">            if (bottomSheet != null) return;</span>
+
+<span class="nc" id="L337">            snackbarMessageHolderEvent.applyIfNotHandled(holder -&gt; {</span>
+<span class="nc" id="L338">                WPSnackbar.make(mCoordinator,</span>
+<span class="nc" id="L339">                        mUiHelpers.getTextOfUiString(ReaderCommentListActivity.this, holder.getMessage()),</span>
+                        Snackbar.LENGTH_LONG)
+<span class="nc" id="L341">                          .setAction(</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">                                  holder.getButtonTitle() != null</span>
+<span class="nc" id="L343">                                          ? mUiHelpers.getTextOfUiString(</span>
+                                          ReaderCommentListActivity.this,
+<span class="nc" id="L345">                                          holder.getButtonTitle())</span>
+<span class="nc" id="L346">                                          : null,</span>
+<span class="nc" id="L347">                                  v -&gt; holder.getButtonAction().invoke())</span>
+<span class="nc" id="L348">                          .show();</span>
+<span class="nc" id="L349">                return Unit.INSTANCE;</span>
+            });
+<span class="nc" id="L351">        });</span>
+
+<span class="nc" id="L353">        mConversationViewModel.getShowBottomSheetEvent().observe(this, event -&gt;</span>
+<span class="nc" id="L354">                event.applyIfNotHandled(isShowingData -&gt; {</span>
+<span class="nc" id="L355">                    FragmentManager fm = getSupportFragmentManager();</span>
+<span class="nc" id="L356">                    CommentNotificationsBottomSheetFragment bottomSheet =</span>
+<span class="nc" id="L357">                            (CommentNotificationsBottomSheetFragment) fm.findFragmentByTag(</span>
+                                    NOTIFICATIONS_BOTTOM_SHEET_TAG
+                            );
+<span class="nc bnc" id="L360" title="All 4 branches missed.">                    if (isShowingData.getShow() &amp;&amp; bottomSheet == null) {</span>
+<span class="nc" id="L361">                        bottomSheet = CommentNotificationsBottomSheetFragment.newInstance(</span>
+<span class="nc" id="L362">                                isShowingData.isReceivingNotifications(),</span>
+                                false
+                        );
+<span class="nc" id="L365">                        bottomSheet.show(fm, NOTIFICATIONS_BOTTOM_SHEET_TAG);</span>
+<span class="nc bnc" id="L366" title="All 4 branches missed.">                    } else if (!isShowingData.getShow() &amp;&amp; bottomSheet != null) {</span>
+<span class="nc" id="L367">                        bottomSheet.dismiss();</span>
+                    }
+<span class="nc" id="L369">                    return Unit.INSTANCE;</span>
+                })
+        );
+
+
+<span class="nc bnc" id="L374" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L375">            mBlogId = savedInstanceState.getLong(ReaderConstants.ARG_BLOG_ID);</span>
+<span class="nc" id="L376">            mPostId = savedInstanceState.getLong(ReaderConstants.ARG_POST_ID);</span>
+<span class="nc" id="L377">            mRestorePosition = savedInstanceState.getInt(ReaderConstants.KEY_RESTORE_POSITION);</span>
+<span class="nc" id="L378">            mHasUpdatedComments = savedInstanceState.getBoolean(KEY_HAS_UPDATED_COMMENTS);</span>
+<span class="nc" id="L379">            mInterceptedUri = savedInstanceState.getString(ReaderConstants.ARG_INTERCEPTED_URI);</span>
+<span class="nc" id="L380">            mSource = savedInstanceState.getString(ReaderConstants.ARG_SOURCE);</span>
+        } else {
+<span class="nc" id="L382">            mBlogId = getIntent().getLongExtra(ReaderConstants.ARG_BLOG_ID, 0);</span>
+<span class="nc" id="L383">            mPostId = getIntent().getLongExtra(ReaderConstants.ARG_POST_ID, 0);</span>
+<span class="nc" id="L384">            mDirectOperation = (DirectOperation) getIntent()</span>
+<span class="nc" id="L385">                    .getSerializableExtra(ReaderConstants.ARG_DIRECT_OPERATION);</span>
+<span class="nc" id="L386">            mCommentId = getIntent().getLongExtra(ReaderConstants.ARG_COMMENT_ID, 0);</span>
+<span class="nc" id="L387">            mInterceptedUri = getIntent().getStringExtra(ReaderConstants.ARG_INTERCEPTED_URI);</span>
+<span class="nc" id="L388">            mSource = getIntent().getStringExtra(ReaderConstants.ARG_SOURCE);</span>
+        }
+
+<span class="nc" id="L391">        mConversationViewModel.start(mBlogId, mPostId, ThreadedCommentsActionSource.READER_THREADED_COMMENTS);</span>
+<span class="nc" id="L392">    }</span>
+
+    @Override
+    public void onCollapse(@Nullable Bundle result) {
+<span class="nc bnc" id="L396" title="All 2 branches missed.">        if (result != null) {</span>
+<span class="nc" id="L397">            mEditComment.setText(result.getString(RESULT_REPLY));</span>
+<span class="nc" id="L398">            mEditComment.setSelection(</span>
+<span class="nc" id="L399">                    result.getInt(RESULT_SELECTION_START),</span>
+<span class="nc" id="L400">                    result.getInt(RESULT_SELECTION_END)</span>
+            );
+<span class="nc" id="L402">            mEditComment.requestFocus();</span>
+        }
+<span class="nc" id="L404">    }</span>
+
+    @Override
+    public void onConfirm(@Nullable Bundle result) {
+<span class="nc bnc" id="L408" title="All 2 branches missed.">        if (result != null) {</span>
+<span class="nc" id="L409">            mEditComment.setText(result.getString(RESULT_REPLY));</span>
+<span class="nc" id="L410">            submitComment();</span>
+        }
+<span class="nc" id="L412">    }</span>
+
+<span class="nc" id="L414">    private final View.OnClickListener mSignInClickListener = new View.OnClickListener() {</span>
+        @Override
+        public void onClick(View v) {
+<span class="nc bnc" id="L417" title="All 2 branches missed.">            if (isFinishing()) {</span>
+<span class="nc" id="L418">                return;</span>
+            }
+
+<span class="nc" id="L421">            mReaderTracker.trackUri(AnalyticsTracker.Stat.READER_SIGN_IN_INITIATED, mInterceptedUri);</span>
+<span class="nc" id="L422">            ActivityLauncher.loginWithoutMagicLink(ReaderCommentListActivity.this);</span>
+<span class="nc" id="L423">        }</span>
+    };
+
+    // to do a complete refresh we need to get updated post and new comments
+    private void updatePostAndComments() {
+<span class="nc" id="L428">        ReaderPostActions.updatePost(mPost, result -&gt; {</span>
+<span class="nc bnc" id="L429" title="All 4 branches missed.">            if (!isFinishing() &amp;&amp; result.isNewOrChanged()) {</span>
+                // get the updated post and pass it to the adapter
+<span class="nc" id="L431">                ReaderPost post = ReaderPostTable.getBlogPost(mBlogId, mPostId, false);</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">                if (post != null) {</span>
+<span class="nc" id="L433">                    getCommentAdapter().setPost(post);</span>
+<span class="nc" id="L434">                    mPost = post;</span>
+                }
+            }
+<span class="nc" id="L437">        });</span>
+
+        // load the first page of comments
+<span class="nc" id="L440">        updateComments(true, false);</span>
+<span class="nc" id="L441">    }</span>
+
+    @Override
+    public void onResume() {
+<span class="nc" id="L445">        super.onResume();</span>
+<span class="nc" id="L446">        EventBus.getDefault().register(this);</span>
+
+<span class="nc" id="L448">        refreshComments();</span>
+
+<span class="nc bnc" id="L450" title="All 4 branches missed.">        if (mUpdateOnResume &amp;&amp; NetworkUtils.isNetworkAvailable(this)) {</span>
+<span class="nc" id="L451">            updatePostAndComments();</span>
+<span class="nc" id="L452">            mUpdateOnResume = false;</span>
+        }
+<span class="nc" id="L454">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(SuggestionEvents.SuggestionNameListUpdated event) {
+        // check if the updated suggestions are for the current blog and update the suggestions
+<span class="nc bnc" id="L460" title="All 6 branches missed.">        if (event.mRemoteBlogId != 0 &amp;&amp; event.mRemoteBlogId == mBlogId &amp;&amp; mSuggestionAdapter != null) {</span>
+<span class="nc" id="L461">            List&lt;UserSuggestion&gt; userSuggestions = UserSuggestionTable.getSuggestionsForSite(event.mRemoteBlogId);</span>
+<span class="nc" id="L462">            List&lt;Suggestion&gt; suggestions = Suggestion.Companion.fromUserSuggestions(userSuggestions);</span>
+<span class="nc" id="L463">            mSuggestionAdapter.setSuggestionList(suggestions);</span>
+        }
+<span class="nc" id="L465">    }</span>
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+<span class="nc" id="L469">        super.onCreateOptionsMenu(menu);</span>
+<span class="nc" id="L470">        MenuInflater inflater = getMenuInflater();</span>
+<span class="nc" id="L471">        inflater.inflate(R.menu.threaded_comments_menu, menu);</span>
+
+<span class="nc" id="L473">        mConversationViewModel.getUpdateFollowUiState().observe(this, uiState -&gt; {</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">                    if (menu != null) {</span>
+<span class="nc" id="L475">                        MenuItem bellItem = menu.findItem(R.id.manage_notifications_item);</span>
+<span class="nc" id="L476">                        MenuItem followItem = menu.findItem(R.id.follow_item);</span>
+
+<span class="nc bnc" id="L478" title="All 4 branches missed.">                        if (bellItem != null &amp;&amp; followItem != null) {</span>
+<span class="nc" id="L479">                            ShimmerFrameLayout shimmerView =</span>
+<span class="nc" id="L480">                                    followItem.getActionView().findViewById(R.id.shimmer_view_container);</span>
+<span class="nc" id="L481">                            TextView followText = followItem.getActionView().findViewById(R.id.follow_button);</span>
+
+<span class="nc" id="L483">                            followItem.getActionView().setOnClickListener(</span>
+<span class="nc bnc" id="L484" title="All 2 branches missed.">                                    uiState.getOnFollowTapped() != null</span>
+<span class="nc" id="L485">                                            ? v -&gt; uiState.getOnFollowTapped().invoke()</span>
+<span class="nc" id="L486">                                            : null</span>
+                            );
+
+<span class="nc" id="L489">                            bellItem.setOnMenuItemClickListener(item -&gt; {</span>
+<span class="nc" id="L490">                                uiState.getOnManageNotificationsTapped().invoke();</span>
+<span class="nc" id="L491">                                return true;</span>
+                            });
+
+<span class="nc" id="L494">                            followItem.getActionView().setEnabled(uiState.getFlags().isMenuEnabled());</span>
+<span class="nc" id="L495">                            followText.setEnabled(uiState.getFlags().isMenuEnabled());</span>
+<span class="nc" id="L496">                            bellItem.setEnabled(uiState.getFlags().isMenuEnabled());</span>
+
+<span class="nc bnc" id="L498" title="All 2 branches missed.">                            if (uiState.getFlags().getShowMenuShimmer()) {</span>
+<span class="nc bnc" id="L499" title="All 2 branches missed.">                                if (!shimmerView.isShimmerVisible()) {</span>
+<span class="nc" id="L500">                                    shimmerView.showShimmer(true);</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">                                } else if (!shimmerView.isShimmerStarted()) {</span>
+<span class="nc" id="L502">                                    shimmerView.startShimmer();</span>
+                                }
+                            } else {
+<span class="nc" id="L505">                                shimmerView.hideShimmer();</span>
+                            }
+
+<span class="nc" id="L508">                            followItem.setVisible(uiState.getFlags().isFollowMenuVisible());</span>
+<span class="nc" id="L509">                            bellItem.setVisible(uiState.getFlags().isBellMenuVisible());</span>
+
+<span class="nc" id="L511">                            setResult(RESULT_OK, new Intent().putExtra(</span>
+                                    FOLLOW_CONVERSATION_UI_STATE_FLAGS_KEY,
+<span class="nc" id="L513">                                    uiState.getFlags()</span>
+                            ));
+                        }
+                    }
+<span class="nc" id="L517">                }</span>
+        );
+<span class="nc" id="L519">        return true;</span>
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc bnc" id="L524" title="All 2 branches missed.">        switch (item.getItemId()) {</span>
+            case android.R.id.home:
+<span class="nc" id="L526">                finish();</span>
+<span class="nc" id="L527">                return true;</span>
+            default:
+<span class="nc" id="L529">                return super.onOptionsItemSelected(item);</span>
+        }
+    }
+
+    @Override
+    public void onPause() {
+<span class="nc" id="L535">        super.onPause();</span>
+<span class="nc" id="L536">        EventBus.getDefault().unregister(this);</span>
+<span class="nc" id="L537">    }</span>
+
+    private void performCommentAction(ReaderComment comment, ReaderCommentMenuActionType action) {
+<span class="nc bnc" id="L540" title="All 7 branches missed.">        switch (action) {</span>
+            case APPROVE:
+<span class="nc" id="L542">                break;</span>
+            case EDIT:
+<span class="nc" id="L544">                openCommentEditor(comment);</span>
+<span class="nc" id="L545">                break;</span>
+            case UNAPPROVE:
+<span class="nc" id="L547">                moderateComment(comment, CommentStatus.UNAPPROVED, R.string.comment_unapproved,</span>
+                        Stat.COMMENT_UNAPPROVED);
+<span class="nc" id="L549">                break;</span>
+            case SPAM:
+<span class="nc" id="L551">                moderateComment(comment, CommentStatus.SPAM, R.string.comment_spammed, Stat.COMMENT_SPAMMED);</span>
+<span class="nc" id="L552">                break;</span>
+            case TRASH:
+<span class="nc" id="L554">                moderateComment(comment, CommentStatus.TRASH, R.string.comment_trashed, Stat.COMMENT_TRASHED);</span>
+<span class="nc" id="L555">                break;</span>
+            case SHARE:
+<span class="nc" id="L557">                shareComment(comment.getShortUrl());</span>
+<span class="nc" id="L558">                break;</span>
+            case DIVIDER_NO_ACTION:
+                break;
+        }
+<span class="nc" id="L562">    }</span>
+
+    private void openCommentEditor(ReaderComment comment) {
+<span class="nc" id="L565">        SiteModel postSite = mSiteStore.getSiteBySiteId(comment.blogId);</span>
+<span class="nc" id="L566">        final Intent intent = UnifiedCommentsEditActivity.createIntent(this,</span>
+                new ReaderCommentIdentifier(comment.blogId, comment.postId, comment.commentId), postSite);
+<span class="nc" id="L568">        startActivity(intent);</span>
+<span class="nc" id="L569">    }</span>
+
+    private void moderateComment(ReaderComment comment, CommentStatus newStatus, int undoMessage, Stat tracker) {
+<span class="nc" id="L572">        getCommentAdapter().removeComment(comment.commentId);</span>
+<span class="nc" id="L573">        checkEmptyView();</span>
+
+<span class="nc" id="L575">        Snackbar snackbar = WPSnackbar.make(findViewById(R.id.coordinator_layout), undoMessage, Snackbar.LENGTH_LONG)</span>
+<span class="nc" id="L576">                                      .setAction(R.string.undo, view -&gt; {</span>
+<span class="nc" id="L577">                                          getCommentAdapter().refreshComments();</span>
+<span class="nc" id="L578">                                      });</span>
+
+<span class="nc" id="L580">        snackbar.addCallback(new BaseCallback&lt;Snackbar&gt;() {</span>
+            @Override public void onDismissed(Snackbar transientBottomBar, int event) {
+<span class="nc" id="L582">                super.onDismissed(transientBottomBar, event);</span>
+
+<span class="nc bnc" id="L584" title="All 2 branches missed.">                if (event == DISMISS_EVENT_ACTION) {</span>
+<span class="nc" id="L585">                    AnalyticsUtils.trackCommentActionWithReaderPostDetails(Stat.COMMENT_MODERATION_UNDO,</span>
+<span class="nc" id="L586">                            AnalyticsCommentActionSource.READER, mPost);</span>
+<span class="nc" id="L587">                    return;</span>
+                }
+
+<span class="nc" id="L590">                AnalyticsUtils.trackCommentActionWithReaderPostDetails(tracker,</span>
+<span class="nc" id="L591">                        AnalyticsCommentActionSource.READER, mPost);</span>
+<span class="nc" id="L592">                ReaderCommentActions.moderateComment(comment, newStatus);</span>
+<span class="nc" id="L593">            }</span>
+        });
+
+<span class="nc" id="L596">        snackbar.show();</span>
+<span class="nc" id="L597">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(ReaderEvents.CommentModerated event) {
+<span class="nc bnc" id="L602" title="All 2 branches missed.">        if (isFinishing()) {</span>
+<span class="nc" id="L603">            return;</span>
+        }
+
+<span class="nc bnc" id="L606" title="All 2 branches missed.">        if (!event.isSuccess()) {</span>
+<span class="nc" id="L607">            ToastUtils.showToast(ReaderCommentListActivity.this, R.string.comment_moderation_error);</span>
+<span class="nc" id="L608">            getCommentAdapter().refreshComments();</span>
+        } else {
+            // we do try to remove the comment in case you did PTR and it appeared in the list again
+<span class="nc" id="L611">            getCommentAdapter().removeComment(event.getCommentId());</span>
+        }
+<span class="nc" id="L613">        checkEmptyView();</span>
+<span class="nc" id="L614">    }</span>
+
+
+    private void shareComment(String commentUrl) {
+<span class="nc" id="L618">        mReaderTracker.trackPost(</span>
+                Stat.READER_ARTICLE_COMMENT_SHARED,
+                mPost
+        );
+
+<span class="nc" id="L623">        Intent shareIntent = new Intent(Intent.ACTION_SEND);</span>
+<span class="nc" id="L624">        shareIntent.setType(&quot;text/plain&quot;);</span>
+<span class="nc" id="L625">        shareIntent.putExtra(Intent.EXTRA_TEXT, commentUrl);</span>
+
+<span class="nc" id="L627">        startActivity(Intent.createChooser(shareIntent, getString(R.string.share_link)));</span>
+<span class="nc" id="L628">    }</span>
+
+    private void setReplyToCommentId(long commentId, boolean doFocus) {
+<span class="nc bnc" id="L631" title="All 2 branches missed.">        if (mReplyToCommentId == commentId) {</span>
+<span class="nc" id="L632">            mReplyToCommentId = 0;</span>
+        } else {
+<span class="nc" id="L634">            mReplyToCommentId = commentId;</span>
+        }
+<span class="nc bnc" id="L636" title="All 2 branches missed.">        mEditComment.setHint(mReplyToCommentId == 0</span>
+<span class="nc" id="L637">                ? R.string.reader_hint_comment_on_post</span>
+<span class="nc" id="L638">                : R.string.reader_hint_comment_on_comment</span>
+        );
+
+<span class="nc bnc" id="L641" title="All 2 branches missed.">        if (doFocus) {</span>
+<span class="nc" id="L642">            mEditComment.postDelayed(() -&gt; {</span>
+<span class="nc" id="L643">                final boolean isFocusableInTouchMode = mEditComment.isFocusableInTouchMode();</span>
+
+<span class="nc" id="L645">                mEditComment.setFocusableInTouchMode(true);</span>
+<span class="nc" id="L646">                EditTextUtils.showSoftInput(mEditComment);</span>
+
+<span class="nc" id="L648">                mEditComment.setFocusableInTouchMode(isFocusableInTouchMode);</span>
+
+<span class="nc" id="L650">                setupReplyToComment();</span>
+<span class="nc" id="L651">            }, 200);</span>
+        } else {
+<span class="nc" id="L653">            setupReplyToComment();</span>
+        }
+<span class="nc" id="L655">    }</span>
+
+    private void setupReplyToComment() {
+        // if a comment is being replied to, highlight it and scroll it to the top so the user can
+        // see which comment they're replying to - note that scrolling is delayed to give time for
+        // listView to reposition due to soft keyboard appearing
+<span class="nc" id="L661">        getCommentAdapter().setHighlightCommentId(mReplyToCommentId, false);</span>
+<span class="nc" id="L662">        getCommentAdapter().setReplyTargetComment(mReplyToCommentId);</span>
+<span class="nc" id="L663">        getCommentAdapter().notifyDataSetChanged();</span>
+<span class="nc bnc" id="L664" title="All 2 branches missed.">        if (mReplyToCommentId != 0) {</span>
+<span class="nc" id="L665">            scrollToCommentId(mReplyToCommentId);</span>
+
+            // reset to replying to the post when user hasn't entered any text and hits
+            // the back button in the editText to hide the soft keyboard
+<span class="nc" id="L669">            mEditComment.setOnBackListener(() -&gt; {</span>
+<span class="nc bnc" id="L670" title="All 2 branches missed.">                if (EditTextUtils.isEmpty(mEditComment)) {</span>
+<span class="nc" id="L671">                    setReplyToCommentId(0, false);</span>
+                }
+<span class="nc" id="L673">            });</span>
+        } else {
+<span class="nc" id="L675">            mEditComment.setOnBackListener(null);</span>
+        }
+<span class="nc" id="L677">    }</span>
+
+    @Override
+    public void onSaveInstanceState(@NonNull Bundle outState) {
+<span class="nc" id="L681">        outState.putLong(ReaderConstants.ARG_BLOG_ID, mBlogId);</span>
+<span class="nc" id="L682">        outState.putLong(ReaderConstants.ARG_POST_ID, mPostId);</span>
+<span class="nc" id="L683">        outState.putInt(ReaderConstants.KEY_RESTORE_POSITION, getCurrentPosition());</span>
+<span class="nc" id="L684">        outState.putLong(KEY_REPLY_TO_COMMENT_ID, mReplyToCommentId);</span>
+<span class="nc" id="L685">        outState.putBoolean(KEY_HAS_UPDATED_COMMENTS, mHasUpdatedComments);</span>
+<span class="nc" id="L686">        outState.putString(ReaderConstants.ARG_INTERCEPTED_URI, mInterceptedUri);</span>
+<span class="nc" id="L687">        outState.putString(ReaderConstants.ARG_SOURCE, mSource);</span>
+
+<span class="nc" id="L689">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L690">    }</span>
+
+    private void showCommentsClosedMessage(boolean show) {
+<span class="nc" id="L693">        TextView txtCommentsClosed = findViewById(R.id.text_comments_closed);</span>
+<span class="nc bnc" id="L694" title="All 2 branches missed.">        if (txtCommentsClosed != null) {</span>
+<span class="nc bnc" id="L695" title="All 2 branches missed.">            txtCommentsClosed.setVisibility(show ? View.VISIBLE : View.GONE);</span>
+        }
+<span class="nc" id="L697">    }</span>
+
+    private boolean loadPost() {
+<span class="nc" id="L700">        mPost = ReaderPostTable.getBlogPost(mBlogId, mPostId, false);</span>
+<span class="nc bnc" id="L701" title="All 2 branches missed.">        if (mPost == null) {</span>
+<span class="nc" id="L702">            return false;</span>
+        }
+
+<span class="nc bnc" id="L705" title="All 2 branches missed.">        if (!mAccountStore.hasAccessToken()) {</span>
+<span class="nc" id="L706">            mCommentBox.setVisibility(View.GONE);</span>
+<span class="nc" id="L707">            showCommentsClosedMessage(false);</span>
+<span class="nc bnc" id="L708" title="All 2 branches missed.">        } else if (mPost.isCommentsOpen) {</span>
+<span class="nc" id="L709">            mCommentBox.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L710">            showCommentsClosedMessage(false);</span>
+
+<span class="nc" id="L712">            mEditComment.setOnEditorActionListener((v, actionId, event) -&gt; {</span>
+<span class="nc bnc" id="L713" title="All 4 branches missed.">                if (actionId == EditorInfo.IME_ACTION_DONE || actionId == EditorInfo.IME_ACTION_SEND) {</span>
+<span class="nc" id="L714">                    submitComment();</span>
+                }
+<span class="nc" id="L716">                return false;</span>
+            });
+
+<span class="nc" id="L719">            mSubmitReplyBtn.setOnClickListener(v -&gt; submitComment());</span>
+        } else {
+<span class="nc" id="L721">            mCommentBox.setVisibility(View.GONE);</span>
+<span class="nc" id="L722">            mEditComment.setEnabled(false);</span>
+<span class="nc" id="L723">            showCommentsClosedMessage(true);</span>
+        }
+
+<span class="nc" id="L726">        return true;</span>
+    }
+
+    @Override
+    public void onDestroy() {
+<span class="nc bnc" id="L731" title="All 2 branches missed.">        if (mSuggestionServiceConnectionManager != null) {</span>
+<span class="nc" id="L732">            mSuggestionServiceConnectionManager.unbindFromService();</span>
+        }
+<span class="nc" id="L734">        super.onDestroy();</span>
+<span class="nc" id="L735">    }</span>
+
+    private boolean hasCommentAdapter() {
+<span class="nc bnc" id="L738" title="All 2 branches missed.">        return (mCommentAdapter != null);</span>
+    }
+
+    private ReaderCommentAdapter getCommentAdapter() {
+<span class="nc bnc" id="L742" title="All 2 branches missed.">        if (mCommentAdapter == null) {</span>
+<span class="nc" id="L743">            mCommentAdapter = new ReaderCommentAdapter(WPActivityUtils.getThemedContext(this), getPost());</span>
+
+            // adapter calls this when user taps reply icon
+<span class="nc" id="L746">            mCommentAdapter.setReplyListener(commentId -&gt; setReplyToCommentId(commentId, true));</span>
+            // adapter calls this when user taps share icon
+<span class="nc" id="L748">            mCommentAdapter.setCommentMenuActionListener(this::performCommentAction);</span>
+
+            // Enable post title click if we came here directly from notifications or deep linking
+<span class="nc bnc" id="L751" title="All 2 branches missed.">            if (mDirectOperation != null) {</span>
+<span class="nc" id="L752">                mCommentAdapter.enableHeaderClicks();</span>
+            }
+
+            // adapter calls this when data has been loaded &amp; displayed
+<span class="nc" id="L756">            mCommentAdapter.setDataLoadedListener(isEmpty -&gt; {</span>
+<span class="nc bnc" id="L757" title="All 2 branches missed.">                if (!isFinishing()) {</span>
+<span class="nc bnc" id="L758" title="All 4 branches missed.">                    if (isEmpty || !mHasUpdatedComments) {</span>
+<span class="nc" id="L759">                        updateComments(isEmpty, false);</span>
+<span class="nc bnc" id="L760" title="All 4 branches missed.">                    } else if (mCommentId &gt; 0 || mDirectOperation != null) {</span>
+<span class="nc bnc" id="L761" title="All 2 branches missed.">                        if (mCommentId &gt; 0) {</span>
+                            // Scroll to the commentId once if it was passed to this activity
+<span class="nc" id="L763">                            smoothScrollToCommentId(mCommentId);</span>
+                        }
+
+<span class="nc" id="L766">                        doDirectOperation();</span>
+<span class="nc bnc" id="L767" title="All 2 branches missed.">                    } else if (mRestorePosition &gt; 0) {</span>
+<span class="nc" id="L768">                        mViewModel.scrollToPosition(mRestorePosition, false);</span>
+                    }
+<span class="nc" id="L770">                    mRestorePosition = 0;</span>
+<span class="nc" id="L771">                    checkEmptyView();</span>
+                }
+<span class="nc" id="L773">            });</span>
+
+            // adapter uses this to request more comments from server when it reaches the end and
+            // detects that more comments exist on the server than are stored locally
+<span class="nc" id="L777">            mCommentAdapter.setDataRequestedListener(() -&gt; {</span>
+<span class="nc bnc" id="L778" title="All 2 branches missed.">                if (!mIsUpdatingComments) {</span>
+<span class="nc" id="L779">                    AppLog.i(T.READER, &quot;reader comments &gt; requesting next page of comments&quot;);</span>
+<span class="nc" id="L780">                    updateComments(true, true);</span>
+                }
+<span class="nc" id="L782">            });</span>
+        }
+<span class="nc" id="L784">        return mCommentAdapter;</span>
+    }
+
+    private void doDirectOperation() {
+<span class="nc bnc" id="L788" title="All 2 branches missed.">        if (mDirectOperation != null) {</span>
+<span class="nc bnc" id="L789" title="All 4 branches missed.">            switch (mDirectOperation) {</span>
+                case COMMENT_JUMP:
+<span class="nc" id="L791">                    mCommentAdapter.setHighlightCommentId(mCommentId, false);</span>
+
+                    // clear up the direct operation vars. Only performing it once.
+<span class="nc" id="L794">                    mDirectOperation = null;</span>
+<span class="nc" id="L795">                    mCommentId = 0;</span>
+<span class="nc" id="L796">                    break;</span>
+                case COMMENT_REPLY:
+<span class="nc" id="L798">                    setReplyToCommentId(mCommentId, mAccountStore.hasAccessToken());</span>
+
+                    // clear up the direct operation vars. Only performing it once.
+<span class="nc" id="L801">                    mDirectOperation = null;</span>
+<span class="nc" id="L802">                    mCommentId = 0;</span>
+<span class="nc" id="L803">                    break;</span>
+                case COMMENT_LIKE:
+<span class="nc" id="L805">                    getCommentAdapter().setHighlightCommentId(mCommentId, false);</span>
+<span class="nc bnc" id="L806" title="All 2 branches missed.">                    if (!mAccountStore.hasAccessToken()) {</span>
+<span class="nc" id="L807">                        WPSnackbar.make(mCoordinator,</span>
+                                R.string.reader_snackbar_err_cannot_like_post_logged_out,
+                                Snackbar.LENGTH_INDEFINITE)
+<span class="nc" id="L810">                                  .setAction(R.string.sign_in, mSignInClickListener)</span>
+<span class="nc" id="L811">                                  .show();</span>
+                    } else {
+<span class="nc" id="L813">                        ReaderComment comment = ReaderCommentTable.getComment(mPost.blogId, mPost.postId, mCommentId);</span>
+<span class="nc bnc" id="L814" title="All 2 branches missed.">                        if (comment == null) {</span>
+<span class="nc" id="L815">                            ToastUtils.showToast(</span>
+                                    ReaderCommentListActivity.this,
+                                    R.string.reader_toast_err_comment_not_found
+                            );
+<span class="nc bnc" id="L819" title="All 2 branches missed.">                        } else if (comment.isLikedByCurrentUser) {</span>
+<span class="nc" id="L820">                            ToastUtils.showToast(</span>
+                                    ReaderCommentListActivity.this,
+                                    R.string.reader_toast_err_already_liked
+                            );
+                        } else {
+<span class="nc" id="L825">                            long wpComUserId = mAccountStore.getAccount().getUserId();</span>
+<span class="nc bnc" id="L826" title="All 2 branches missed.">                            if (ReaderCommentActions.performLikeAction(comment, true, wpComUserId)</span>
+<span class="nc bnc" id="L827" title="All 2 branches missed.">                                &amp;&amp; getCommentAdapter().refreshComment(mCommentId)) {</span>
+<span class="nc" id="L828">                                getCommentAdapter().setAnimateLikeCommentId(mCommentId);</span>
+
+<span class="nc" id="L830">                                mReaderTracker.trackPost(</span>
+                                        AnalyticsTracker.Stat.READER_ARTICLE_COMMENT_LIKED,
+                                        mPost
+                                );
+<span class="nc" id="L834">                                mReaderTracker.trackPost(</span>
+                                        AnalyticsTracker.Stat.COMMENT_LIKED,
+                                        mPost,
+<span class="nc" id="L837">                                        AnalyticsCommentActionSource.READER.toString()</span>
+                                );
+                            } else {
+<span class="nc" id="L840">                                ToastUtils.showToast(</span>
+                                        ReaderCommentListActivity.this,
+                                        R.string.reader_toast_err_generic
+                                );
+                            }
+                        }
+
+                        // clear up the direct operation vars. Only performing it once.
+<span class="nc" id="L848">                        mDirectOperation = null;</span>
+                    }
+<span class="nc" id="L850">                    break;</span>
+                case POST_LIKE:
+                    // nothing special to do in this case
+<span class="nc" id="L853">                    break;</span>
+            }
+        } else {
+<span class="nc" id="L856">            mCommentId = 0;</span>
+        }
+<span class="nc" id="L858">    }</span>
+
+    private ReaderPost getPost() {
+<span class="nc" id="L861">        return mPost;</span>
+    }
+
+    private void showProgress() {
+<span class="nc" id="L865">        ProgressBar progress = findViewById(R.id.progress_loading);</span>
+<span class="nc bnc" id="L866" title="All 2 branches missed.">        if (progress != null) {</span>
+<span class="nc" id="L867">            progress.setVisibility(View.VISIBLE);</span>
+        }
+<span class="nc" id="L869">    }</span>
+
+    private void hideProgress() {
+<span class="nc" id="L872">        ProgressBar progress = findViewById(R.id.progress_loading);</span>
+<span class="nc bnc" id="L873" title="All 2 branches missed.">        if (progress != null) {</span>
+<span class="nc" id="L874">            progress.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L876">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(ReaderEvents.UpdateCommentsStarted event) {
+<span class="nc" id="L881">        mIsUpdatingComments = true;</span>
+<span class="nc" id="L882">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(ReaderEvents.UpdateCommentsEnded event) {
+<span class="nc bnc" id="L887" title="All 2 branches missed.">        if (isFinishing()) {</span>
+<span class="nc" id="L888">            return;</span>
+        }
+
+<span class="nc" id="L891">        mIsUpdatingComments = false;</span>
+<span class="nc" id="L892">        mHasUpdatedComments = true;</span>
+<span class="nc" id="L893">        hideProgress();</span>
+
+<span class="nc bnc" id="L895" title="All 2 branches missed.">        if (event.getResult().isNewOrChanged()) {</span>
+<span class="nc" id="L896">            mRestorePosition = getCurrentPosition();</span>
+<span class="nc" id="L897">            refreshComments();</span>
+        } else {
+<span class="nc" id="L899">            checkEmptyView();</span>
+        }
+
+<span class="nc" id="L902">        setRefreshing(false);</span>
+<span class="nc" id="L903">    }</span>
+
+    /*
+     * request comments for this post
+     */
+    private void updateComments(boolean showProgress, boolean requestNextPage) {
+<span class="nc bnc" id="L909" title="All 2 branches missed.">        if (mIsUpdatingComments) {</span>
+<span class="nc" id="L910">            AppLog.w(T.READER, &quot;reader comments &gt; already updating comments&quot;);</span>
+<span class="nc" id="L911">            setRefreshing(false);</span>
+<span class="nc" id="L912">            return;</span>
+        }
+<span class="nc bnc" id="L914" title="All 2 branches missed.">        if (!NetworkUtils.isNetworkAvailable(this)) {</span>
+<span class="nc" id="L915">            AppLog.w(T.READER, &quot;reader comments &gt; no connection, update canceled&quot;);</span>
+<span class="nc" id="L916">            setRefreshing(false);</span>
+<span class="nc" id="L917">            return;</span>
+        }
+
+<span class="nc bnc" id="L920" title="All 2 branches missed.">        if (showProgress) {</span>
+<span class="nc" id="L921">            showProgress();</span>
+        }
+<span class="nc" id="L923">        ReaderCommentService.startService(this, mPost.blogId, mPost.postId, requestNextPage);</span>
+<span class="nc" id="L924">    }</span>
+
+    private void checkEmptyView() {
+<span class="nc" id="L927">        TextView txtEmpty = findViewById(R.id.text_empty);</span>
+<span class="nc bnc" id="L928" title="All 2 branches missed.">        if (txtEmpty == null) {</span>
+<span class="nc" id="L929">            return;</span>
+        }
+
+<span class="nc bnc" id="L932" title="All 2 branches missed.">        boolean isEmpty = hasCommentAdapter()</span>
+<span class="nc bnc" id="L933" title="All 4 branches missed.">                          &amp;&amp; getCommentAdapter().isEmpty()</span>
+                          &amp;&amp; !mIsSubmittingComment;
+<span class="nc bnc" id="L935" title="All 4 branches missed.">        if (isEmpty &amp;&amp; !NetworkUtils.isNetworkAvailable(this)) {</span>
+<span class="nc" id="L936">            txtEmpty.setText(R.string.no_network_message);</span>
+<span class="nc" id="L937">            txtEmpty.setVisibility(View.VISIBLE);</span>
+<span class="nc bnc" id="L938" title="All 4 branches missed.">        } else if (isEmpty &amp;&amp; mHasUpdatedComments) {</span>
+<span class="nc" id="L939">            txtEmpty.setText(R.string.reader_empty_comments);</span>
+<span class="nc" id="L940">            txtEmpty.setVisibility(View.VISIBLE);</span>
+        } else {
+<span class="nc" id="L942">            txtEmpty.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L944">    }</span>
+
+    /*
+     * refresh adapter so latest comments appear
+     */
+    private void refreshComments() {
+<span class="nc" id="L950">        AppLog.d(T.READER, &quot;reader comments &gt; refreshComments&quot;);</span>
+<span class="nc" id="L951">        getCommentAdapter().refreshComments();</span>
+<span class="nc" id="L952">    }</span>
+
+    /*
+     * scrolls the passed comment to the top of the listView
+     */
+    private void scrollToCommentId(long commentId) {
+<span class="nc" id="L958">        int position = getCommentAdapter().positionOfCommentId(commentId);</span>
+<span class="nc bnc" id="L959" title="All 2 branches missed.">        if (position &gt; -1) {</span>
+<span class="nc" id="L960">            mViewModel.scrollToPosition(position, false);</span>
+        }
+<span class="nc" id="L962">    }</span>
+
+    /*
+     * Smoothly scrolls the passed comment to the top of the listView
+     */
+    private void smoothScrollToCommentId(long commentId) {
+<span class="nc" id="L968">        int position = getCommentAdapter().positionOfCommentId(commentId);</span>
+<span class="nc bnc" id="L969" title="All 2 branches missed.">        if (position &gt; -1) {</span>
+<span class="nc" id="L970">            mViewModel.scrollToPosition(position, true);</span>
+        }
+<span class="nc" id="L972">    }</span>
+
+    /*
+     * submit the text typed into the comment box as a comment on the current post
+     */
+    private void submitComment() {
+<span class="nc" id="L978">        final String commentText = EditTextUtils.getText(mEditComment);</span>
+<span class="nc bnc" id="L979" title="All 2 branches missed.">        if (TextUtils.isEmpty(commentText)) {</span>
+<span class="nc" id="L980">            return;</span>
+        }
+
+<span class="nc bnc" id="L983" title="All 2 branches missed.">        if (!NetworkUtils.checkConnection(this)) {</span>
+<span class="nc" id="L984">            return;</span>
+        }
+
+<span class="nc bnc" id="L987" title="All 2 branches missed.">        if (mReplyToCommentId != 0) {</span>
+<span class="nc" id="L988">            mReaderTracker.trackPost(AnalyticsTracker.Stat.READER_ARTICLE_COMMENT_REPLIED_TO, mPost);</span>
+        } else {
+<span class="nc" id="L990">            mReaderTracker.trackPost(AnalyticsTracker.Stat.READER_ARTICLE_COMMENTED_ON, mPost);</span>
+        }
+
+<span class="nc" id="L993">        mSubmitReplyBtn.setEnabled(false);</span>
+<span class="nc" id="L994">        mEditComment.setEnabled(false);</span>
+<span class="nc" id="L995">        mIsSubmittingComment = true;</span>
+
+        // generate a &quot;fake&quot; comment id to assign to the new comment so we can add it to the db
+        // and reflect it in the adapter before the API call returns
+<span class="nc" id="L999">        final long fakeCommentId = ReaderCommentActions.generateFakeCommentId();</span>
+
+<span class="nc" id="L1001">        ReaderActions.CommentActionListener actionListener = (succeeded, newComment) -&gt; {</span>
+<span class="nc bnc" id="L1002" title="All 2 branches missed.">            if (isFinishing()) {</span>
+<span class="nc" id="L1003">                return;</span>
+            }
+<span class="nc" id="L1005">            mIsSubmittingComment = false;</span>
+<span class="nc" id="L1006">            mEditComment.setEnabled(true);</span>
+<span class="nc bnc" id="L1007" title="All 2 branches missed.">            if (succeeded) {</span>
+<span class="nc" id="L1008">                mSubmitReplyBtn.setEnabled(false);</span>
+                // stop highlighting the fake comment and replace it with the real one
+<span class="nc" id="L1010">                getCommentAdapter().setHighlightCommentId(0, false);</span>
+<span class="nc" id="L1011">                getCommentAdapter().setReplyTargetComment(0);</span>
+<span class="nc" id="L1012">                getCommentAdapter().replaceComment(fakeCommentId, newComment);</span>
+<span class="nc" id="L1013">                getCommentAdapter().refreshPost();</span>
+<span class="nc" id="L1014">                setReplyToCommentId(0, false);</span>
+<span class="nc" id="L1015">                mEditComment.getAutoSaveTextHelper().clearSavedText(mEditComment);</span>
+            } else {
+<span class="nc" id="L1017">                mEditComment.setText(commentText);</span>
+<span class="nc" id="L1018">                mSubmitReplyBtn.setEnabled(true);</span>
+<span class="nc" id="L1019">                getCommentAdapter().removeComment(fakeCommentId);</span>
+<span class="nc" id="L1020">                ToastUtils.showToast(</span>
+                        ReaderCommentListActivity.this, R.string.reader_toast_err_comment_failed,
+                        ToastUtils.Duration.LONG);
+            }
+<span class="nc" id="L1024">            checkEmptyView();</span>
+<span class="nc" id="L1025">        };</span>
+
+<span class="nc" id="L1027">        long wpComUserId = mAccountStore.getAccount().getUserId();</span>
+<span class="nc" id="L1028">        ReaderComment newComment = ReaderCommentActions.submitPostComment(</span>
+<span class="nc" id="L1029">                getPost(),</span>
+                fakeCommentId,
+                commentText,
+                mReplyToCommentId,
+                actionListener,
+                wpComUserId);
+
+<span class="nc bnc" id="L1036" title="All 2 branches missed.">        if (newComment != null) {</span>
+<span class="nc" id="L1037">            mEditComment.setText(null);</span>
+            // add the &quot;fake&quot; comment to the adapter, highlight it, and show a progress bar
+            // next to it while it's submitted
+<span class="nc" id="L1040">            getCommentAdapter().setHighlightCommentId(newComment.commentId, true);</span>
+<span class="nc" id="L1041">            getCommentAdapter().setReplyTargetComment(0);</span>
+<span class="nc" id="L1042">            getCommentAdapter().addComment(newComment);</span>
+            // make sure it's scrolled into view
+<span class="nc" id="L1044">            scrollToCommentId(fakeCommentId);</span>
+<span class="nc" id="L1045">            checkEmptyView();</span>
+        }
+<span class="nc" id="L1047">    }</span>
+
+    private int getCurrentPosition() {
+<span class="nc bnc" id="L1050" title="All 4 branches missed.">        if (mRecyclerView != null &amp;&amp; hasCommentAdapter()) {</span>
+<span class="nc" id="L1051">            return ((LinearLayoutManager) mRecyclerView.getLayoutManager()).findFirstVisibleItemPosition();</span>
+        } else {
+<span class="nc" id="L1053">            return 0;</span>
+        }
+    }
+
+    private void setRefreshing(boolean refreshing) {
+<span class="nc" id="L1058">        mSwipeToRefreshHelper.setRefreshing(refreshing);</span>
+<span class="nc" id="L1059">    }</span>
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+<span class="nc" id="L1063">        super.onActivityResult(requestCode, resultCode, data);</span>
+
+        // if user is returning from login, make sure to update the post and its comments
+<span class="nc bnc" id="L1066" title="All 4 branches missed.">        if (requestCode == RequestCodes.DO_LOGIN &amp;&amp; resultCode == Activity.RESULT_OK) {</span>
+<span class="nc" id="L1067">            mUpdateOnResume = true;</span>
+        }
+<span class="nc" id="L1069">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

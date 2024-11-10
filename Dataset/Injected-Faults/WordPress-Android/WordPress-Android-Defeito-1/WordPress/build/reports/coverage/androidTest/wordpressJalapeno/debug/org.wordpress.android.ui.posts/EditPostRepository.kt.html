@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EditPostRepository.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts</a> &gt; <span class="el_source">EditPostRepository.kt</span></div><h1>EditPostRepository.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts
+
+import androidx.annotation.MainThread
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.PostImmutableModel
+import org.wordpress.android.fluxc.model.PostModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.post.PostLocation
+import org.wordpress.android.fluxc.model.post.PostStatus
+import org.wordpress.android.fluxc.model.post.PostStatus.DRAFT
+import org.wordpress.android.fluxc.model.post.PostStatus.fromPost
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.posts.EditPostRepository.UpdatePostResult.NoChanges
+import org.wordpress.android.ui.posts.EditPostRepository.UpdatePostResult.Updated
+import org.wordpress.android.ui.uploads.UploadService
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.DateTimeUtils
+import org.wordpress.android.util.LocaleManagerWrapper
+import org.wordpress.android.viewmodel.Event
+import java.util.Arrays
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.CoroutineContext
+
+<span class="fc" id="L35">class EditPostRepository</span>
+<span class="fc" id="L36">@Inject constructor(</span>
+<span class="fc" id="L37">    private val localeManagerWrapper: LocaleManagerWrapper,</span>
+<span class="fc" id="L38">    private val postStore: PostStore,</span>
+<span class="fc" id="L39">    private val postUtils: PostUtilsWrapper,</span>
+<span class="fc" id="L40">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="fc" id="L41">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+) : CoroutineScope {
+<span class="fc" id="L43">    private var job: Job = Job()</span>
+
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L46">        get() = mainDispatcher + job</span>
+
+    private var post: PostModel? = null
+    private var postForUndo: PostModel? = null
+    private var postSnapshotWhenEditorOpened: PostModel? = null
+    private var postSnapshot: PostModel? = null
+    val id: Int
+<span class="nc" id="L53">        get() = post!!.id</span>
+    val localSiteId: Int
+<span class="nc" id="L55">        get() = post!!.localSiteId</span>
+    val remotePostId: Long
+<span class="nc" id="L57">        get() = post!!.remotePostId</span>
+    val title: String
+<span class="nc" id="L59">        get() = post!!.title</span>
+    val autoSaveTitle: String?
+<span class="nc" id="L61">        get() = post!!.autoSaveTitle</span>
+    val content: String
+<span class="nc" id="L63">        get() = post!!.content</span>
+    val autoSaveContent: String?
+<span class="nc" id="L65">        get() = post!!.autoSaveContent</span>
+    val excerpt: String
+<span class="nc" id="L67">        get() = post!!.excerpt</span>
+    val autoSaveExcerpt: String?
+<span class="nc" id="L69">        get() = post!!.autoSaveExcerpt</span>
+    val password: String
+<span class="nc" id="L71">        get() = post!!.password</span>
+    val status: PostStatus
+<span class="nc" id="L73">        get() = fromPost(getPost())</span>
+    val isPage: Boolean
+<span class="nc" id="L75">        get() = post!!.isPage</span>
+    val isLocalDraft: Boolean
+<span class="nc" id="L77">        get() = post!!.isLocalDraft</span>
+    val isLocallyChanged: Boolean
+<span class="nc" id="L79">        get() = post!!.isLocallyChanged</span>
+    val featuredImageId: Long
+<span class="nc" id="L81">        get() = post!!.featuredImageId</span>
+    val dateCreated: String
+<span class="nc" id="L83">        get() = post!!.dateCreated</span>
+    val changesConfirmedContentHashcode: Int
+<span class="nc" id="L85">        get() = post!!.changesConfirmedContentHashcode</span>
+    val postFormat: String
+<span class="nc" id="L87">        get() = post!!.postFormat</span>
+    val slug: String
+<span class="nc" id="L89">        get() = post!!.slug</span>
+    val link: String
+<span class="nc" id="L91">        get() = post!!.link</span>
+    val location: PostLocation
+<span class="nc" id="L93">        get() = post!!.location</span>
+    val tagNameList: List&lt;String&gt;
+<span class="nc" id="L95">        get() = post!!.tagNameList</span>
+    val dateLocallyChanged: String
+<span class="nc" id="L97">        get() = post!!.dateLocallyChanged</span>
+
+    private var locked = false
+
+<span class="fc" id="L101">    private val _postChanged = MutableLiveData&lt;Event&lt;PostImmutableModel&gt;&gt;()</span>
+<span class="pc" id="L102">    val postChanged: LiveData&lt;Event&lt;PostImmutableModel&gt;&gt; = _postChanged</span>
+
+    @MainThread
+    fun &lt;T&gt; update(action: (PostModel) -&gt; T): T {
+<span class="nc" id="L106">        reportTransactionState(true)</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">        val result = action(requireNotNull(post))</span>
+<span class="nc" id="L108">        reportTransactionState(false)</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">        _postChanged.value = Event(requireNotNull(post))</span>
+<span class="nc" id="L110">        return result</span>
+    }
+
+<span class="nc" id="L113">    fun updateAsync(</span>
+        action: (PostModel) -&gt; Boolean,
+<span class="nc" id="L115">        onCompleted: ((PostImmutableModel, UpdatePostResult) -&gt; Unit)? = null</span>
+    ) {
+<span class="nc" id="L117">        launch {</span>
+<span class="nc" id="L118">            reportTransactionState(true)</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">            val isUpdated = withContext(bgDispatcher) {</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">                action(requireNotNull(post))</span>
+            }
+<span class="nc" id="L122">            reportTransactionState(false)</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">            if (isUpdated) {</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">                requireNotNull(post).let {</span>
+<span class="nc" id="L125">                    _postChanged.value = Event(it)</span>
+<span class="nc" id="L126">                }</span>
+            }
+<span class="nc bnc" id="L128" title="All 6 branches missed.">            onCompleted?.invoke(requireNotNull(post), if (isUpdated) Updated else NoChanges)</span>
+<span class="nc" id="L129">        }</span>
+<span class="nc" id="L130">    }</span>
+
+    fun replace(action: (PostModel) -&gt; PostModel) {
+<span class="nc" id="L133">        reportTransactionState(true)</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        this.post = action(requireNotNull(post))</span>
+<span class="nc" id="L135">        reportTransactionState(false)</span>
+<span class="nc" id="L136">    }</span>
+
+    fun set(action: () -&gt; PostModel) {
+<span class="nc" id="L139">        reportTransactionState(true)</span>
+<span class="nc" id="L140">        this.post = action()</span>
+<span class="nc" id="L141">        reportTransactionState(false)</span>
+<span class="nc" id="L142">    }</span>
+
+    @Synchronized
+    private fun reportTransactionState(lock: Boolean) {
+<span class="nc bnc" id="L146" title="All 4 branches missed.">        if (lock &amp;&amp; locked) {</span>
+<span class="nc" id="L147">            val message = &quot;EditPostRepository: Transaction is writing on a locked thread ${Arrays.toString(</span>
+<span class="nc" id="L148">                    Thread.currentThread().stackTrace</span>
+            )}&quot;
+<span class="nc" id="L150">            AppLog.e(T.EDITOR, message)</span>
+        }
+<span class="nc" id="L152">        locked = lock</span>
+<span class="nc" id="L153">    }</span>
+
+<span class="nc bnc" id="L155" title="All 2 branches missed.">    fun hasLocation() = requireNotNull(post).hasLocation()</span>
+
+<span class="nc bnc" id="L157" title="All 2 branches missed.">    fun hasPost() = post != null</span>
+<span class="nc" id="L158">    fun getPost(): PostImmutableModel? = post</span>
+<span class="nc" id="L159">    fun getEditablePost() = post</span>
+
+<span class="nc" id="L161">    fun getPostForUndo() = postForUndo</span>
+
+    fun hasStatus(status: PostStatus): Boolean {
+<span class="nc bnc" id="L164" title="All 2 branches missed.">        return post?.status == status.toString()</span>
+    }
+
+    fun getPendingMediaForPost(): Set&lt;MediaModel&gt; =
+<span class="nc" id="L168">            UploadService.getPendingMediaForPost(post)</span>
+
+    fun getPendingOrInProgressMediaUploadsForPost(): List&lt;MediaModel&gt; =
+<span class="nc" id="L171">            UploadService.getPendingOrInProgressMediaUploadsForPost(post)</span>
+
+    fun updatePublishDateIfShouldBePublishedImmediately(post: PostModel) {
+<span class="nc bnc" id="L174" title="All 2 branches missed.">        if (postUtils.shouldPublishImmediately(fromPost(post), post.dateCreated)) {</span>
+<span class="nc" id="L175">            post.setDateCreated(DateTimeUtils.iso8601FromDate(localeManagerWrapper.getCurrentCalendar().time))</span>
+        }
+<span class="nc" id="L177">    }</span>
+
+<span class="nc bnc" id="L179" title="All 2 branches missed.">    fun isPostPublishable() = post?.let { postUtils.isPublishable(it) } ?: false</span>
+
+    fun saveForUndo() {
+<span class="nc bnc" id="L182" title="All 2 branches missed.">        postForUndo = post?.clone()</span>
+<span class="nc" id="L183">    }</span>
+
+    fun undo() {
+<span class="nc bnc" id="L186" title="All 2 branches missed.">        this.post = postForUndo?.clone()</span>
+<span class="nc" id="L187">    }</span>
+
+    fun postHasChanges(): Boolean {
+<span class="nc bnc" id="L190" title="All 2 branches missed.">        checkNotNull(postSnapshot) { &quot;Post snapshot cannot be null at this point&quot; }</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">        return post != postSnapshot ||</span>
+<span class="nc bnc" id="L192" title="All 6 branches missed.">                post?.changesConfirmedContentHashcode != postSnapshot?.changesConfirmedContentHashcode</span>
+    }
+
+    fun savePostSnapshot() {
+<span class="nc bnc" id="L196" title="All 2 branches missed.">        postSnapshot = post?.clone()</span>
+<span class="nc" id="L197">    }</span>
+
+    fun savePostSnapshotWhenEditorOpened() {
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        postSnapshotWhenEditorOpened = post?.clone()</span>
+<span class="nc" id="L201">    }</span>
+
+<span class="nc bnc" id="L203" title="All 2 branches missed.">    fun hasPostSnapshotWhenEditorOpened() = postSnapshotWhenEditorOpened != null</span>
+
+    fun updateStatusFromPostSnapshotWhenEditorOpened() {
+        // the user has just tapped on &quot;PUBLISH&quot; on an empty post, make sure to set the status back to the
+        // original post's status as we could not proceed with the action
+<span class="nc" id="L208">        reportTransactionState(true)</span>
+<span class="nc bnc" id="L209" title="All 6 branches missed.">        requireNotNull(post).setStatus(postSnapshotWhenEditorOpened?.status ?: DRAFT.toString())</span>
+<span class="nc" id="L210">        reportTransactionState(false)</span>
+<span class="nc" id="L211">    }</span>
+
+<span class="nc" id="L213">    fun postWasChangedInCurrentSession() = postUtils.postHasEdits(postSnapshotWhenEditorOpened,</span>
+<span class="nc bnc" id="L214" title="All 2 branches missed.">            requireNotNull(post)</span>
+<span class="nc" id="L215">    )</span>
+
+    fun loadPostByLocalPostId(postId: Int) {
+<span class="nc" id="L218">        reportTransactionState(true)</span>
+<span class="nc" id="L219">        post = postStore.getPostByLocalPostId(postId)</span>
+<span class="nc" id="L220">        savePostSnapshot()</span>
+<span class="nc" id="L221">        reportTransactionState(false)</span>
+<span class="nc" id="L222">    }</span>
+
+    fun loadPostByRemotePostId(remotePostId: Long, site: SiteModel) {
+<span class="nc" id="L225">        reportTransactionState(true)</span>
+<span class="nc" id="L226">        post = postStore.getPostByRemotePostId(remotePostId, site)</span>
+<span class="nc" id="L227">        savePostSnapshot()</span>
+<span class="nc" id="L228">        reportTransactionState(false)</span>
+<span class="nc" id="L229">    }</span>
+
+    sealed class UpdatePostResult {
+<span class="nc" id="L232">        object Updated : UpdatePostResult()</span>
+<span class="nc" id="L233">        object NoChanges : UpdatePostResult()</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

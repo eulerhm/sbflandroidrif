@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderDiscoverDataProvider.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.repository</a> &gt; <span class="el_source">ReaderDiscoverDataProvider.kt</span></div><h1>ReaderDiscoverDataProvider.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.repository
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode.BACKGROUND
+import org.wordpress.android.models.ReaderTag
+import org.wordpress.android.models.discover.ReaderDiscoverCards
+import org.wordpress.android.modules.IO_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.reader.ReaderEvents.FetchDiscoverCardsEnded
+import org.wordpress.android.ui.reader.ReaderEvents.FollowedTagsChanged
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.CHANGED
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.FAILED
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.HAS_NEW
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.UNCHANGED
+import org.wordpress.android.ui.reader.repository.ReaderDiscoverCommunication.Error.RemoteRequestFailure
+import org.wordpress.android.ui.reader.repository.ReaderDiscoverCommunication.Started
+import org.wordpress.android.ui.reader.repository.ReaderDiscoverCommunication.Success
+import org.wordpress.android.ui.reader.repository.ReaderRepositoryEvent.ReaderPostTableActionEnded
+import org.wordpress.android.ui.reader.repository.usecases.FetchDiscoverCardsUseCase
+import org.wordpress.android.ui.reader.repository.usecases.GetDiscoverCardsUseCase
+import org.wordpress.android.ui.reader.repository.usecases.ShouldAutoUpdateTagUseCase
+import org.wordpress.android.ui.reader.services.discover.ReaderDiscoverLogic.DiscoverTasks
+import org.wordpress.android.ui.reader.services.discover.ReaderDiscoverLogic.DiscoverTasks.REQUEST_FIRST_PAGE
+import org.wordpress.android.ui.reader.services.discover.ReaderDiscoverLogic.DiscoverTasks.REQUEST_MORE
+import org.wordpress.android.ui.reader.utils.ReaderTagWrapper
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T.READER
+import org.wordpress.android.util.EventBusWrapper
+import org.wordpress.android.util.perform
+import org.wordpress.android.util.throttle
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ReactiveMutableLiveData
+import java.util.concurrent.atomic.AtomicBoolean
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.CoroutineContext
+
+private const val DISCOVER_FEED_THROTTLE = 500L
+
+<span class="nc" id="L47">class ReaderDiscoverDataProvider @Inject constructor(</span>
+<span class="nc" id="L48">    @Named(IO_THREAD) private val ioDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L49">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L50">    private val eventBusWrapper: EventBusWrapper,</span>
+<span class="nc" id="L51">    private val readerTagWrapper: ReaderTagWrapper,</span>
+<span class="nc" id="L52">    private val getDiscoverCardsUseCase: GetDiscoverCardsUseCase,</span>
+<span class="nc" id="L53">    private val shouldAutoUpdateTagUseCase: ShouldAutoUpdateTagUseCase,</span>
+<span class="nc" id="L54">    private val fetchDiscoverCardsUseCase: FetchDiscoverCardsUseCase</span>
+) : CoroutineScope {
+<span class="nc" id="L56">    private var job: Job = Job()</span>
+
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L59">        get() = ioDispatcher + job</span>
+
+    private var isStarted = false
+    // Indicates that the data was changed in the db while no-one was subscribed to the feed.
+<span class="nc" id="L63">    private val isDirty = AtomicBoolean()</span>
+    private var isLoadMoreRequestInProgress = false
+<span class="nc" id="L65">    private val _discoverFeed = ReactiveMutableLiveData&lt;ReaderDiscoverCards&gt;(</span>
+<span class="nc" id="L66">            onActive = { onActiveDiscoverFeed() }, onInactive = { onInactiveDiscoverFeed() })</span>
+<span class="nc" id="L67">    val discoverFeed: LiveData&lt;ReaderDiscoverCards&gt; = _discoverFeed</span>
+            /* Since we listen to all updates of the database the feed is sometimes updated several times within a few
+            ms. For example, when we are about to insert posts, we delete them first. However, we don't need/want
+            to propagate this state to the VM. */
+<span class="nc" id="L71">            .throttle(</span>
+<span class="nc" id="L72">                    this,</span>
+<span class="nc" id="L73">                    offset = DISCOVER_FEED_THROTTLE,</span>
+<span class="nc" id="L74">                    backgroundDispatcher = ioDispatcher,</span>
+<span class="nc" id="L75">                    mainDispatcher = mainDispatcher</span>
+            )
+
+<span class="nc" id="L78">    private var hasMoreCards = true</span>
+
+<span class="nc" id="L80">    private val _communicationChannel = MutableLiveData&lt;Event&lt;ReaderDiscoverCommunication&gt;&gt;()</span>
+<span class="nc" id="L81">    val communicationChannel: LiveData&lt;Event&lt;ReaderDiscoverCommunication&gt;&gt; = _communicationChannel</span>
+<span class="nc" id="L82">            .perform {</span>
+<span class="nc bnc" id="L83" title="All 4 branches missed.">                if (it.peekContent().task == REQUEST_MORE &amp;&amp; it.peekContent() !is Started) {</span>
+<span class="nc" id="L84">                    AppLog.w(READER, &quot;reader discover load more cards task is finished&quot;)</span>
+<span class="nc" id="L85">                    isLoadMoreRequestInProgress = false</span>
+                }
+<span class="nc" id="L87">            }</span>
+
+    val readerTag: ReaderTag
+<span class="nc" id="L90">        get() = readerTagWrapper.createDiscoverPostCardsTag()</span>
+
+    fun start() {
+<span class="nc bnc" id="L93" title="All 2 branches missed.">        if (isStarted) return</span>
+
+<span class="nc" id="L95">        isStarted = true</span>
+<span class="nc" id="L96">        eventBusWrapper.register(this)</span>
+<span class="nc" id="L97">    }</span>
+
+    fun stop() {
+<span class="nc" id="L100">        eventBusWrapper.unregister(this)</span>
+<span class="nc" id="L101">        job.cancel()</span>
+<span class="nc" id="L102">    }</span>
+
+    suspend fun refreshCards() {
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        withContext(ioDispatcher) {</span>
+<span class="nc" id="L106">            val response = fetchDiscoverCardsUseCase.fetch(REQUEST_FIRST_PAGE)</span>
+<span class="nc" id="L107">            _communicationChannel.postValue(Event(response))</span>
+<span class="nc" id="L108">        }</span>
+<span class="nc" id="L109">    }</span>
+
+    suspend fun loadMoreCards() {
+<span class="nc bnc" id="L112" title="All 2 branches missed.">        if (isLoadMoreRequestInProgress) {</span>
+<span class="nc" id="L113">            AppLog.w(READER, &quot;reader discover load more cards task is already running&quot;)</span>
+<span class="nc" id="L114">            return</span>
+        }
+
+<span class="nc" id="L117">        isLoadMoreRequestInProgress = true</span>
+
+<span class="nc bnc" id="L119" title="All 2 branches missed.">        if (hasMoreCards) {</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">            withContext(ioDispatcher) {</span>
+<span class="nc" id="L121">                val response = fetchDiscoverCardsUseCase.fetch(REQUEST_MORE)</span>
+<span class="nc" id="L122">                _communicationChannel.postValue(Event(response))</span>
+<span class="nc" id="L123">            }</span>
+        }
+<span class="nc" id="L125">    }</span>
+
+    // Internal functionality
+    private suspend fun loadCards() {
+<span class="nc" id="L129">        withContext(ioDispatcher) {</span>
+<span class="nc" id="L130">            val forceReload = isDirty.getAndSet(false)</span>
+<span class="nc bnc" id="L131" title="All 6 branches missed.">            val existsInMemory = discoverFeed.value?.cards?.isNotEmpty() ?: false</span>
+<span class="nc" id="L132">            val refresh = shouldAutoUpdateTagUseCase.get(readerTag)</span>
+<span class="nc bnc" id="L133" title="All 4 branches missed.">            if (forceReload || !existsInMemory) {</span>
+<span class="nc" id="L134">                val result = getDiscoverCardsUseCase.get()</span>
+<span class="nc bnc" id="L135" title="All 4 branches missed.">                if (result.cards.isNotEmpty()) {</span>
+<span class="nc" id="L136">                    _discoverFeed.postValue(result)</span>
+                }
+            }
+
+<span class="nc bnc" id="L140" title="All 2 branches missed.">            if (refresh) {</span>
+<span class="nc" id="L141">                val response = fetchDiscoverCardsUseCase.fetch(REQUEST_FIRST_PAGE)</span>
+<span class="nc" id="L142">                _communicationChannel.postValue(Event(response))</span>
+            }
+<span class="nc" id="L144">        }</span>
+<span class="nc" id="L145">    }</span>
+
+    private suspend fun reloadPosts() {
+<span class="nc" id="L148">        withContext(ioDispatcher) {</span>
+<span class="nc" id="L149">            val result = getDiscoverCardsUseCase.get()</span>
+<span class="nc" id="L150">            _discoverFeed.postValue(result)</span>
+<span class="nc" id="L151">        }</span>
+<span class="nc" id="L152">    }</span>
+
+    // Handlers for ReaderPostServices
+    private fun onUpdated(task: DiscoverTasks?) {
+<span class="nc" id="L156">        hasMoreCards = true</span>
+<span class="nc" id="L157">        launch {</span>
+<span class="nc" id="L158">            reloadPosts()</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">            if (task != null) {</span>
+<span class="nc" id="L160">                _communicationChannel.postValue(Event(Success(task)))</span>
+            }
+<span class="nc" id="L162">        }</span>
+<span class="nc" id="L163">    }</span>
+
+    private fun onUnchanged(task: DiscoverTasks) {
+<span class="nc" id="L166">        hasMoreCards = false</span>
+<span class="nc" id="L167">        _communicationChannel.postValue(</span>
+<span class="nc" id="L168">                Event(Success(task))</span>
+        )
+<span class="nc" id="L170">    }</span>
+
+    private fun onFailed(task: DiscoverTasks) {
+<span class="nc" id="L173">        _communicationChannel.postValue(</span>
+<span class="nc" id="L174">                Event(RemoteRequestFailure(task))</span>
+        )
+<span class="nc" id="L176">    }</span>
+
+    // React to discoverFeed observers
+    private fun onActiveDiscoverFeed() {
+<span class="nc" id="L180">        launch {</span>
+<span class="nc" id="L181">            loadCards()</span>
+<span class="nc" id="L182">        }</span>
+<span class="nc" id="L183">    }</span>
+
+    private fun onInactiveDiscoverFeed() {
+<span class="nc" id="L186">    }</span>
+
+    // Event bus events
+    @Subscribe(threadMode = BACKGROUND)
+    @SuppressWarnings(&quot;unused&quot;)
+    fun onReaderPostTableAction(event: ReaderPostTableActionEnded) {
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        if (_discoverFeed.hasObservers()) {</span>
+<span class="nc" id="L193">            isDirty.compareAndSet(true, false)</span>
+<span class="nc" id="L194">            onUpdated(null)</span>
+        } else {
+<span class="nc" id="L196">            isDirty.compareAndSet(false, true)</span>
+        }
+<span class="nc" id="L198">    }</span>
+
+    @Subscribe(threadMode = BACKGROUND)
+    fun onCardsUpdated(event: FetchDiscoverCardsEnded) {
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        event.result?.let {</span>
+<span class="nc bnc" id="L203" title="All 4 branches missed.">            when (it) {</span>
+<span class="nc" id="L204">                HAS_NEW, CHANGED -&gt; onUpdated(event.task)</span>
+<span class="nc" id="L205">                UNCHANGED -&gt; onUnchanged(event.task)</span>
+<span class="nc" id="L206">                FAILED -&gt; onFailed(event.task)</span>
+            }
+<span class="nc" id="L208">        }</span>
+<span class="nc" id="L209">    }</span>
+
+    @Subscribe(threadMode = BACKGROUND)
+    fun onFollowedTagsChanged(event: FollowedTagsChanged) {
+<span class="nc" id="L213">        launch {</span>
+<span class="nc" id="L214">            refreshCards()</span>
+<span class="nc" id="L215">        }</span>
+<span class="nc" id="L216">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

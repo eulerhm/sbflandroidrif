@@ -1,0 +1,375 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AccountDataManager.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">debugAndroidTest</a> &gt; <a href="index.source.html" class="el_package">com.github.pockethub.android.persistence</a> &gt; <span class="el_source">AccountDataManager.java</span></div><h1>AccountDataManager.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (c) 2015 PocketHub
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.github.pockethub.android.persistence;
+
+import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteOpenHelper;
+import android.database.sqlite.SQLiteQueryBuilder;
+import android.util.Log;
+
+import com.github.pockethub.android.GetFilterLabels;
+import com.github.pockethub.android.GetFilters;
+import com.github.pockethub.android.RequestReader;
+import com.github.pockethub.android.RequestWriter;
+import com.github.pockethub.android.Users;
+import com.github.pockethub.android.core.issue.IssueFilter;
+import com.meisolsson.githubsdk.model.Label;
+import com.meisolsson.githubsdk.model.Milestone;
+import com.meisolsson.githubsdk.model.Permissions;
+import com.meisolsson.githubsdk.model.Repository;
+import com.meisolsson.githubsdk.model.User;
+import io.reactivex.Single;
+
+import javax.inject.Inject;
+import javax.inject.Named;
+import java.io.File;
+import java.io.IOException;
+import java.text.MessageFormat;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+
+/**
+ * Manager cache for an account
+ */
+public class AccountDataManager {
+
+    private static final String TAG = &quot;AccountDataManager&quot;;
+
+<span class="nc" id="L54">    private static final Executor EXECUTOR = Executors.newFixedThreadPool(10);</span>
+
+    /**
+     * Format version to bump if serialization format changes and cache should
+     * be ignored
+     */
+    private static final int FORMAT_VERSION = 4;
+
+    @Inject
+    protected Context context;
+
+    @Inject
+    protected DatabaseCache dbCache;
+
+    @Inject
+    protected OrganizationRepositoriesFactory allRepos;
+
+    @Inject
+    protected Organizations userAndOrgsResource;
+
+    @Inject
+    @Named(&quot;cacheDir&quot;)
+    protected File root;
+
+    @Inject
+<span class="nc" id="L79">    public AccountDataManager() {}</span>
+
+    /**
+     * @return context
+     */
+    public Context getContext() {
+<span class="nc" id="L85">        return context;</span>
+    }
+
+    /**
+     * Read data from file
+     *
+     * @param file
+     * @return data
+     */
+    @SuppressWarnings(&quot;unchecked&quot;)
+    private &lt;V&gt; V read(final File file) {
+<span class="nc" id="L96">        long start = System.currentTimeMillis();</span>
+<span class="nc" id="L97">        long length = file.length();</span>
+<span class="nc" id="L98">        Object data = new RequestReader(file, FORMAT_VERSION).read();</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        if (data != null) {</span>
+<span class="nc" id="L100">            Log.d(TAG, MessageFormat.format(</span>
+                    &quot;Cache hit to {0}, {1} ms to load {2} bytes&quot;,
+<span class="nc" id="L102">                    file.getName(), (System.currentTimeMillis() - start),</span>
+<span class="nc" id="L103">                    length));</span>
+        }
+<span class="nc" id="L105">        return (V) data;</span>
+    }
+
+    /**
+     * Write data to file
+     *
+     * @param file
+     * @param data
+     * @return this manager
+     */
+    private AccountDataManager write(File file, Object data) {
+<span class="nc" id="L116">        new RequestWriter(file, FORMAT_VERSION).write(data);</span>
+<span class="nc" id="L117">        return this;</span>
+    }
+
+    /**
+     * Query tables for columns
+     *
+     * @param helper
+     * @param tables
+     * @param columns
+     * @return cursor
+     */
+    protected Cursor query(SQLiteOpenHelper helper, String tables,
+            String[] columns) {
+<span class="nc" id="L130">        return query(helper, tables, columns, null, null);</span>
+    }
+
+    /**
+     * Query tables for columns
+     *
+     * @param helper
+     * @param tables
+     * @param columns
+     * @param selection
+     * @param selectionArgs
+     * @return cursor
+     */
+    protected Cursor query(SQLiteOpenHelper helper, String tables,
+            String[] columns, String selection, String[] selectionArgs) {
+<span class="nc" id="L145">        SQLiteQueryBuilder builder = new SQLiteQueryBuilder();</span>
+<span class="nc" id="L146">        builder.setTables(tables);</span>
+<span class="nc" id="L147">        return builder.query(helper.getReadableDatabase(), columns, selection,</span>
+                selectionArgs, null, null, null);
+    }
+
+    /**
+     * Get organizations
+     * &lt;p/&gt;
+     * This method may perform file and/or network I/O and should never be
+     * called on the UI-thread
+     *
+     * @param forceReload
+     * @return list of user and Orgs
+     * @throws IOException
+     */
+    public List&lt;User&gt; getOrgs(boolean forceReload) throws IOException {
+<span class="nc bnc" id="L162" title="All 2 branches missed.">        return forceReload ? dbCache.requestAndStore(userAndOrgsResource)</span>
+<span class="nc" id="L163">                : dbCache.loadOrRequest(userAndOrgsResource);</span>
+    }
+
+    /**
+     * Get repositories for given {@link User}
+     * &lt;p/&gt;
+     * This method may perform network I/O and should never be called on the
+     * UI-thread
+     *
+     * @param user
+     * @param forceReload
+     *            if true, cached data will not be returned
+     * @return list of repositories
+     * @throws IOException
+     */
+    public List&lt;Repository&gt; getRepos(final User user, boolean forceReload)
+            throws IOException {
+<span class="nc" id="L180">        OrganizationRepositories resource = allRepos.create(user);</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">        return forceReload ? dbCache.requestAndStore(resource) : dbCache</span>
+<span class="nc" id="L182">                .loadOrRequest(resource);</span>
+    }
+
+    /**
+     * Get bookmarked issue filters
+     * &lt;p/&gt;
+     * This method may perform network I/O and should never be called on the
+     * UI-thread
+     *
+     * @return non-null but possibly empty collection of issue filters
+     */
+    public List&lt;IssueFilter&gt; getIssueFilters() {
+<span class="nc" id="L194">        List&lt;GetFilters&gt; filters = dbCache.database.getIssue_filterQueries()</span>
+<span class="nc" id="L195">                .getFilters()</span>
+<span class="nc" id="L196">                .executeAsList();</span>
+
+<span class="nc" id="L198">        List&lt;IssueFilter&gt; issueFilters = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        for (GetFilters f : filters) {</span>
+<span class="nc" id="L201">            Users owner = dbCache.database.getOrganizationsQueries().selectUser(f.getOwnerId()).executeAsOne();</span>
+
+<span class="nc" id="L203">            Repository.Builder builder = Repository.builder()</span>
+<span class="nc" id="L204">                    .id(f.getRepoId())</span>
+<span class="nc" id="L205">                    .name(f.getName())</span>
+<span class="nc" id="L206">                    .owner(</span>
+<span class="nc" id="L207">                            User.builder()</span>
+<span class="nc" id="L208">                                    .id(owner.getId())</span>
+<span class="nc" id="L209">                                    .login(owner.getLogin())</span>
+<span class="nc" id="L210">                                    .name(owner.getName())</span>
+<span class="nc" id="L211">                                    .avatarUrl(owner.getAvatarurl())</span>
+<span class="nc" id="L212">                                    .build()</span>
+                    )
+<span class="nc" id="L214">                    .isPrivate(f.getPrivate())</span>
+<span class="nc" id="L215">                    .isFork(f.getFork())</span>
+<span class="nc" id="L216">                    .description(f.getDescription())</span>
+<span class="nc" id="L217">                    .forksCount(f.getForks())</span>
+<span class="nc" id="L218">                    .watchersCount(f.getWatchers())</span>
+<span class="nc" id="L219">                    .language(f.getLanguage())</span>
+<span class="nc" id="L220">                    .hasIssues(f.getHasIssues())</span>
+<span class="nc" id="L221">                    .mirrorUrl(f.getMirrorUrl())</span>
+<span class="nc" id="L222">                    .permissions(</span>
+<span class="nc" id="L223">                            Permissions.builder()</span>
+<span class="nc" id="L224">                                    .admin(f.getPermissions_admin())</span>
+<span class="nc" id="L225">                                    .pull(f.getPermissions_pull())</span>
+<span class="nc" id="L226">                                    .push(f.getPermissions_push())</span>
+<span class="nc" id="L227">                                    .build()</span>
+                    );
+
+<span class="nc bnc" id="L230" title="All 2 branches missed.">            if (f.getOrgId() != null) {</span>
+<span class="nc" id="L231">                Users org = dbCache.database.getOrganizationsQueries().selectUser(f.getOrgId()).executeAsOne();</span>
+<span class="nc" id="L232">                builder.organization(</span>
+<span class="nc" id="L233">                        User.builder()</span>
+<span class="nc" id="L234">                                .id(org.getId())</span>
+<span class="nc" id="L235">                                .login(org.getLogin())</span>
+<span class="nc" id="L236">                                .name(org.getName())</span>
+<span class="nc" id="L237">                                .avatarUrl(org.getAvatarurl())</span>
+<span class="nc" id="L238">                                .build()</span>
+                );
+            }
+
+<span class="nc" id="L242">            Repository repo = builder.build();</span>
+<span class="nc" id="L243">            IssueFilter filter = new IssueFilter(repo, f.getId());</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">            if (f.getLogin() != null) {</span>
+<span class="nc" id="L245">                filter.setAssignee(</span>
+<span class="nc" id="L246">                        User.builder()</span>
+<span class="nc" id="L247">                                .id(f.getId__())</span>
+<span class="nc" id="L248">                                .name(f.getName_())</span>
+<span class="nc" id="L249">                                .login(f.getLogin())</span>
+<span class="nc" id="L250">                                .avatarUrl(f.getAvatarurl())</span>
+<span class="nc" id="L251">                                .build()</span>
+                );
+            }
+
+<span class="nc bnc" id="L255" title="All 2 branches missed.">            if (f.getMilestone_id() != null) {</span>
+<span class="nc" id="L256">                filter.setMilestone(Milestone.builder().id(f.getMilestone_id()).build());</span>
+            }
+
+<span class="nc" id="L259">            filter.setDirection(f.getDirection());</span>
+<span class="nc" id="L260">            filter.setOpen(f.getOpen());</span>
+<span class="nc" id="L261">            filter.setSortType(f.getSort_type());</span>
+
+<span class="nc" id="L263">            List&lt;GetFilterLabels&gt; filterLabels = dbCache.database.getIssue_filterQueries()</span>
+<span class="nc" id="L264">                    .getFilterLabels(filter.getId())</span>
+<span class="nc" id="L265">                    .executeAsList();</span>
+
+<span class="nc bnc" id="L267" title="All 2 branches missed.">            for (GetFilterLabels filterLabel : filterLabels) {</span>
+<span class="nc" id="L268">                filter.addLabel(</span>
+<span class="nc" id="L269">                        Label.builder()</span>
+<span class="nc" id="L270">                                .name(filterLabel.getName())</span>
+<span class="nc" id="L271">                                .color(filterLabel.getColor())</span>
+<span class="nc" id="L272">                                .build()</span>
+                );
+<span class="nc" id="L274">            }</span>
+
+<span class="nc" id="L276">            issueFilters.add(filter);</span>
+<span class="nc" id="L277">        }</span>
+
+<span class="nc" id="L279">        return issueFilters;</span>
+    }
+
+    /**
+     * Add issue filter to store
+     * &lt;p/&gt;
+     * This method may perform file I/O and should never be called on the
+     * UI-thread
+     *
+     * @param filter
+     */
+    public Single&lt;IssueFilter&gt; addIssueFilter(final IssueFilter filter) {
+<span class="nc" id="L291">        Repository repo = filter.getRepository();</span>
+<span class="nc" id="L292">        dbCache.getDatabase().getRepositoriesQueries().replaceRepo(</span>
+<span class="nc" id="L293">                repo.id(),</span>
+<span class="nc" id="L294">                repo.name(),</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">                repo.organization() != null ? repo.organization().id() : null,</span>
+<span class="nc" id="L296">                repo.owner().id(),</span>
+<span class="nc" id="L297">                repo.isPrivate(),</span>
+<span class="nc" id="L298">                repo.isFork(),</span>
+<span class="nc" id="L299">                repo.description(),</span>
+<span class="nc" id="L300">                repo.forksCount(),</span>
+<span class="nc" id="L301">                repo.watchersCount(),</span>
+<span class="nc" id="L302">                repo.language(),</span>
+<span class="nc" id="L303">                repo.hasIssues(),</span>
+<span class="nc" id="L304">                repo.mirrorUrl(),</span>
+<span class="nc" id="L305">                repo.permissions().admin(),</span>
+<span class="nc" id="L306">                repo.permissions().pull(),</span>
+<span class="nc" id="L307">                repo.permissions().push()</span>
+        );
+
+<span class="nc bnc" id="L310" title="All 2 branches missed.">        for (Label label : filter.getLabels()) {</span>
+<span class="nc" id="L311">            dbCache.database.getIssue_filterQueries().insertOrReplaceLabel(</span>
+<span class="nc" id="L312">                    repo.id(),</span>
+<span class="nc" id="L313">                    label.name(),</span>
+<span class="nc" id="L314">                    label.color()</span>
+            );
+<span class="nc" id="L316">            dbCache.database.getIssue_filterQueries().insertOrReplaceIssueFilterLabel(</span>
+<span class="nc" id="L317">                    filter.getId(),</span>
+<span class="nc" id="L318">                    repo.id(),</span>
+<span class="nc" id="L319">                    label.name()</span>
+            );
+<span class="nc" id="L321">        }</span>
+
+<span class="nc bnc" id="L323" title="All 2 branches missed.">        if (filter.getMilestone() != null) {</span>
+<span class="nc" id="L324">            dbCache.database.getIssue_filterQueries().insertOrReplaceMilestone(</span>
+<span class="nc" id="L325">                    repo.id(),</span>
+<span class="nc" id="L326">                    filter.getMilestone().title(),</span>
+<span class="nc" id="L327">                    filter.getMilestone().state(),</span>
+<span class="nc" id="L328">                    filter.getMilestone().id(),</span>
+<span class="nc" id="L329">                    filter.getMilestone().number().longValue()</span>
+            );
+        }
+
+<span class="nc bnc" id="L333" title="All 2 branches missed.">        if (filter.getAssignee() != null) {</span>
+<span class="nc" id="L334">            dbCache.database.getOrganizationsQueries().replaceUser(</span>
+<span class="nc" id="L335">                    filter.getAssignee().id(),</span>
+<span class="nc" id="L336">                    filter.getAssignee().login(),</span>
+<span class="nc" id="L337">                    filter.getAssignee().name(),</span>
+<span class="nc" id="L338">                    filter.getAssignee().avatarUrl()</span>
+            );
+        }
+
+<span class="nc" id="L342">        dbCache.database.getIssue_filterQueries().insertOrReplaceIssueFilter(</span>
+<span class="nc" id="L343">                filter.getId(),</span>
+<span class="nc" id="L344">                repo.id(),</span>
+<span class="nc bnc" id="L345" title="All 2 branches missed.">                filter.getMilestone() != null ? filter.getMilestone().id() : null,</span>
+<span class="nc bnc" id="L346" title="All 2 branches missed.">                filter.getAssignee() != null ? filter.getAssignee().id() : null,</span>
+<span class="nc" id="L347">                filter.isOpen(),</span>
+<span class="nc" id="L348">                filter.getDirection(),</span>
+<span class="nc" id="L349">                filter.getSortType()</span>
+        );
+<span class="nc" id="L351">        return Single.just(filter);</span>
+    }
+
+    /**
+     * Add issue filter from store
+     * &lt;p/&gt;
+     * This method may perform file I/O and should never be called on the
+     * UI-thread
+     *
+     * @param filter
+     */
+    public Single&lt;IssueFilter&gt; removeIssueFilter(IssueFilter filter) {
+<span class="nc" id="L363">        dbCache.database.getIssue_filterQueries().removeIssueFilter(filter.getId());</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">        for (Label label : filter.getLabels()) {</span>
+<span class="nc" id="L365">            dbCache.database.getIssue_filterQueries().removeIssueFilterLabel(</span>
+<span class="nc" id="L366">                    filter.getId(),</span>
+<span class="nc" id="L367">                    filter.getRepository().id(),</span>
+<span class="nc" id="L368">                    label.name()</span>
+            );
+<span class="nc" id="L370">        }</span>
+
+<span class="nc" id="L372">        return Single.just(filter);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.7.9.201702052155</span>Generated by the Android Gradle plugin 3.6.1</div></body></html>

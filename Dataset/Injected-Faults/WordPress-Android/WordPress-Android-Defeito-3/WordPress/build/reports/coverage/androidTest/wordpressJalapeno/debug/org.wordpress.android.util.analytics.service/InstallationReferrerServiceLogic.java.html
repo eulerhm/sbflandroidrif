@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>InstallationReferrerServiceLogic.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.util.analytics.service</a> &gt; <span class="el_source">InstallationReferrerServiceLogic.java</span></div><h1>InstallationReferrerServiceLogic.java</h1><pre class="source lang-java linenums">package org.wordpress.android.util.analytics.service;
+
+import android.content.Context;
+import android.os.Bundle;
+import android.os.RemoteException;
+
+import com.android.installreferrer.api.InstallReferrerClient;
+import com.android.installreferrer.api.InstallReferrerClient.InstallReferrerResponse;
+import com.android.installreferrer.api.InstallReferrerStateListener;
+import com.android.installreferrer.api.ReferrerDetails;
+
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.wordpress.android.util.analytics.service.InstallationReferrerServiceStarter.ARG_REFERRER;
+
+/**
+ * Background service to retrieve installation referrer information.
+ */
+
+public class InstallationReferrerServiceLogic {
+    private ServiceCompletionListener mCompletionListener;
+    private Object mListenerCompanion;
+    private InstallReferrerClient mReferrerClient;
+    private Context mContext;
+
+<span class="nc" id="L33">    public InstallationReferrerServiceLogic(Context context, ServiceCompletionListener completionListener) {</span>
+<span class="nc" id="L34">        mCompletionListener = completionListener;</span>
+<span class="nc" id="L35">        mContext = context;</span>
+<span class="nc" id="L36">    }</span>
+
+    public void onDestroy() {
+<span class="nc" id="L39">        AppLog.i(T.UTILS, &quot;installation referrer service destroyed&quot;);</span>
+<span class="nc" id="L40">    }</span>
+
+    public void performTask(Bundle extras, Object companion) {
+<span class="nc" id="L43">        mListenerCompanion = companion;</span>
+
+        // if a referrer string has been passed already (coming from com.android.vending.INSTALL_REFERRER receiver),
+        // just send it to tracks
+<span class="nc bnc" id="L47" title="All 4 branches missed.">        if (extras != null &amp;&amp; extras.containsKey(ARG_REFERRER)) {</span>
+<span class="nc" id="L48">            Map&lt;String, Object&gt; properties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L49">            properties.put(&quot;install_referrer&quot;, extras.getString(ARG_REFERRER));</span>
+<span class="nc" id="L50">            AnalyticsTracker.track(AnalyticsTracker.Stat.INSTALLATION_REFERRER_OBTAINED, properties);</span>
+            // mark referrer as obtained now
+<span class="nc" id="L52">            AppPrefs.setInstallationReferrerObtained(true);</span>
+<span class="nc" id="L53">            stopService();</span>
+<span class="nc" id="L54">            return;</span>
+        }
+
+
+        // if not, try to obtain it from Play Store app connection through the Install Referrer API Library if possible
+<span class="nc" id="L59">        mReferrerClient = InstallReferrerClient.newBuilder(mContext).build();</span>
+<span class="nc" id="L60">        final InstallReferrerStateListener installReferrerStateListener = new InstallReferrerStateListener() {</span>
+            @Override
+            public void onInstallReferrerSetupFinished(int responseCode) {
+<span class="nc bnc" id="L63" title="All 6 branches missed.">                switch (responseCode) {</span>
+                    case InstallReferrerResponse.OK:
+                        // Connection established
+                        try {
+<span class="nc" id="L67">                            AppLog.i(T.UTILS, &quot;installation referrer connected&quot;);</span>
+<span class="nc" id="L68">                            ReferrerDetails response = mReferrerClient.getInstallReferrer();</span>
+                            // mark referrer as obtained so we don't try fetching it again
+                            // Citing here:
+                            //  Caution: The install referrer information will be available for 90 days and won't
+                            //  change unless the application is reinstalled. To avoid unnecessary API calls in your
+                            //  app, you should invoke the API only once during the first execution after install.
+                            // read more: https://developer.android.com/google/play/installreferrer/library
+<span class="nc" id="L75">                            AppPrefs.setInstallationReferrerObtained(true);</span>
+
+                            // handle and send information to Tracks here
+<span class="nc" id="L78">                            Map&lt;String, Object&gt; properties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L79">                            properties.put(&quot;install_referrer&quot;, response.getInstallReferrer());</span>
+<span class="nc" id="L80">                            properties.put(&quot;install_referrer_timestamp_begin&quot;,</span>
+<span class="nc" id="L81">                                    response.getInstallBeginTimestampSeconds());</span>
+<span class="nc" id="L82">                            properties.put(&quot;install_referrer_timestamp_click&quot;,</span>
+<span class="nc" id="L83">                                    response.getReferrerClickTimestampSeconds());</span>
+<span class="nc" id="L84">                            AnalyticsTracker.track(AnalyticsTracker.Stat.INSTALLATION_REFERRER_OBTAINED, properties);</span>
+<span class="nc" id="L85">                            mReferrerClient.endConnection();</span>
+<span class="nc" id="L86">                        } catch (RemoteException | IllegalStateException e) {</span>
+<span class="nc" id="L87">                            e.printStackTrace();</span>
+<span class="nc" id="L88">                            AppLog.e(T.UTILS,</span>
+<span class="nc" id="L89">                                    &quot;installation referrer: &quot; + e.getClass().getSimpleName() + &quot; occurred&quot;, e);</span>
+<span class="nc" id="L90">                        }</span>
+<span class="nc" id="L91">                        break;</span>
+                    case InstallReferrerResponse.FEATURE_NOT_SUPPORTED:
+                        // API not available on the current Play Store app
+                        // just log but DO NOT mark AppPrefs.setInstallationReferrerObtained(true);,
+                        // because the user could update to a version of Google PLay that supports it
+                        // and we can obtain it also from the old com.android.vending.INSTALL_REFERRER intent
+<span class="nc" id="L97">                        AppLog.i(T.UTILS, &quot;installation referrer: feature not supported&quot;);</span>
+<span class="nc" id="L98">                        break;</span>
+                    case InstallReferrerResponse.SERVICE_UNAVAILABLE:
+                        // Connection could not be established
+                        // same as above, this error can be retried
+                        // just log but DO NOT mark AppPrefs.setInstallationReferrerObtained(true);,
+                        // we can obtain it also from the old com.android.vending.INSTALL_REFERRER intent
+                        // if this is retried but the error persists
+<span class="nc" id="L105">                        AppLog.i(T.UTILS, &quot;installation referrer: service unavailable&quot;);</span>
+<span class="nc" id="L106">                        break;</span>
+                    case InstallReferrerResponse.PERMISSION_ERROR:
+                        // Fix for this issue https://github.com/wordpress-mobile/WordPress-Android/issues/10532 was
+                        // added to Referrer Service library, and currently instead of crashing we should get this
+                        // response. For now we will ignore it and log for informational purposes.
+<span class="nc" id="L111">                        AppLog.i(T.UTILS, &quot;installation referrer: app is not allowed to bind to the Service&quot;);</span>
+<span class="nc" id="L112">                        break;</span>
+                    case InstallReferrerResponse.DEVELOPER_ERROR:
+<span class="nc" id="L114">                        break;</span>
+                    case InstallReferrerResponse.SERVICE_DISCONNECTED:
+                        break;
+                }
+
+<span class="nc" id="L119">                stopService();</span>
+<span class="nc" id="L120">            }</span>
+
+            @Override
+            public void onInstallReferrerServiceDisconnected() {
+                // Try to restart the connection on the next request to
+                // Google Play by calling the startConnection() method.
+<span class="nc" id="L126">                stopService();</span>
+<span class="nc" id="L127">            }</span>
+        };
+        try {
+<span class="nc" id="L130">            mReferrerClient.startConnection(installReferrerStateListener);</span>
+<span class="nc" id="L131">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L132">            AppLog.e(T.UTILS, &quot;installation referrer start connection failed!&quot;, e);</span>
+<span class="nc" id="L133">            AnalyticsTracker.track(Stat.INSTALLATION_REFERRER_FAILED);</span>
+
+            // just bail if we were not able to connect to the installation referrer service
+<span class="nc" id="L136">            stopService();</span>
+<span class="nc" id="L137">        }</span>
+<span class="nc" id="L138">    }</span>
+
+    private void stopService() {
+<span class="nc" id="L141">        mCompletionListener.onCompleted(mListenerCompanion);</span>
+<span class="nc" id="L142">    }</span>
+
+    interface ServiceCompletionListener {
+        void onCompleted(Object companion);
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

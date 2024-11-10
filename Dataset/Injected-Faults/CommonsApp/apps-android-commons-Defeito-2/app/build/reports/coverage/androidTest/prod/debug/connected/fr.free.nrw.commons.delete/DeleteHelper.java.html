@@ -1,0 +1,259 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DeleteHelper.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.delete</a> &gt; <span class="el_source">DeleteHelper.java</span></div><h1>DeleteHelper.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.delete;
+
+import static fr.free.nrw.commons.notification.NotificationHelper.NOTIFICATION_DELETE;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import static fr.free.nrw.commons.utils.LangCodeUtils.getLocalizedResources;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.net.Uri;
+import androidx.appcompat.app.AlertDialog;
+import fr.free.nrw.commons.BuildConfig;
+import fr.free.nrw.commons.Media;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.actions.PageEditClient;
+import fr.free.nrw.commons.notification.NotificationHelper;
+import fr.free.nrw.commons.review.ReviewController;
+import fr.free.nrw.commons.utils.ViewUtilWrapper;
+import io.reactivex.Observable;
+import io.reactivex.Single;
+import io.reactivex.SingleSource;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.schedulers.Schedulers;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Locale;
+import java.util.concurrent.Callable;
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Singleton;
+import timber.log.Timber;
+
+/**
+ * Refactored async task to Rx
+ */
+@Singleton
+public class DeleteHelper {
+    private final NotificationHelper notificationHelper;
+    private final PageEditClient pageEditClient;
+    private final ViewUtilWrapper viewUtil;
+    private final String username;
+    private AlertDialog d;
+    private DialogInterface.OnMultiChoiceClickListener listener;
+
+    @Inject
+    public DeleteHelper(NotificationHelper notificationHelper,
+                        @Named(&quot;commons-page-edit&quot;) PageEditClient pageEditClient,
+                        ViewUtilWrapper viewUtil,
+<span class="nc" id="L50">                        @Named(&quot;username&quot;) String username) {</span>
+<span class="nc" id="L51">        this.notificationHelper = notificationHelper;</span>
+<span class="nc" id="L52">        this.pageEditClient = pageEditClient;</span>
+<span class="nc" id="L53">        this.viewUtil = viewUtil;</span>
+<span class="nc" id="L54">        this.username = username;</span>
+<span class="nc" id="L55">    }</span>
+
+    /**
+     * Public interface to nominate a particular media file for deletion
+     * @param context
+     * @param media
+     * @param reason
+     * @return
+     */
+    public Single&lt;Boolean&gt; makeDeletion(Context context, Media media, String reason) {
+<span class="nc" id="L65">        viewUtil.showShortToast(context, &quot;Trying to nominate &quot; + media.getDisplayTitle() + &quot; for deletion&quot;);</span>
+
+<span class="nc" id="L67">        return delete(media, reason)</span>
+<span class="nc" id="L68">                .flatMapSingle(result -&gt; Single.just(showDeletionNotification(context, media, result)))</span>
+<span class="nc" id="L69">                .firstOrError();</span>
+    }
+
+    /**
+     * Makes several API calls to nominate the file for deletion
+     * @param media
+     * @param reason
+     * @return
+     */
+    private Observable&lt;Boolean&gt; delete(Media media, String reason) {
+<span class="nc" id="L79">        Timber.d(&quot;thread is delete %s&quot;, Thread.currentThread().getName());</span>
+<span class="nc" id="L80">        String summary = &quot;Nominating &quot; + media.getFilename() + &quot; for deletion.&quot;;</span>
+<span class="nc" id="L81">        Calendar calendar = Calendar.getInstance();</span>
+<span class="nc" id="L82">        String fileDeleteString = &quot;{{delete|reason=&quot; + reason +</span>
+<span class="nc" id="L83">                &quot;|subpage=&quot; + media.getFilename() +</span>
+<span class="nc" id="L84">                &quot;|day=&quot; + calendar.get(Calendar.DAY_OF_MONTH) +</span>
+<span class="nc" id="L85">                &quot;|month=&quot; + calendar.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.ENGLISH) +</span>
+<span class="nc" id="L86">                &quot;|year=&quot; + calendar.get(Calendar.YEAR) +</span>
+                &quot;}}&quot;;
+
+<span class="nc" id="L89">        String subpageString = &quot;=== [[:&quot; + media.getFilename() + &quot;]] ===\n&quot; +</span>
+                reason +
+                &quot; ~~~~&quot;;
+
+<span class="nc" id="L93">        String logPageString = &quot;\n{{Commons:Deletion requests/&quot; + media.getFilename() +</span>
+                &quot;}}\n&quot;;
+<span class="nc" id="L95">        SimpleDateFormat sdf = new SimpleDateFormat(&quot;yyyy/MM/dd&quot;, Locale.getDefault());</span>
+<span class="nc" id="L96">        String date = sdf.format(calendar.getTime());</span>
+
+<span class="nc" id="L98">        String userPageString = &quot;\n{{subst:idw|&quot; + media.getFilename() +</span>
+                &quot;}} ~~~~&quot;;
+
+<span class="nc" id="L101">        String creator = media.getAuthor();</span>
+<span class="nc bnc" id="L102" title="All 4 branches missed.">        if (creator == null || creator.isEmpty()) {</span>
+<span class="nc" id="L103">            throw new RuntimeException(&quot;Failed to nominate for deletion&quot;);</span>
+        }
+
+<span class="nc" id="L106">        return pageEditClient.prependEdit(media.getFilename(), fileDeleteString + &quot;\n&quot;, summary)</span>
+<span class="nc" id="L107">                .flatMap(result -&gt; {</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">                    if (result) {</span>
+<span class="nc" id="L109">                        return pageEditClient.edit(&quot;Commons:Deletion_requests/&quot; + media.getFilename(), subpageString + &quot;\n&quot;, summary);</span>
+                    }
+<span class="nc" id="L111">                    throw new RuntimeException(&quot;Failed to nominate for deletion&quot;);</span>
+<span class="nc" id="L112">                }).flatMap(result -&gt; {</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">                    if (result) {</span>
+<span class="nc" id="L114">                        return pageEditClient.appendEdit(&quot;Commons:Deletion_requests/&quot; + date, logPageString + &quot;\n&quot;, summary);</span>
+                    }
+<span class="nc" id="L116">                    throw new RuntimeException(&quot;Failed to nominate for deletion&quot;);</span>
+<span class="nc" id="L117">                }).flatMap(result -&gt; {</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">                    if (result) {</span>
+<span class="nc" id="L119">                        return pageEditClient.appendEdit(&quot;User_Talk:&quot; + creator, userPageString + &quot;\n&quot;, summary);</span>
+                    }
+<span class="nc" id="L121">                    throw new RuntimeException(&quot;Failed to nominate for deletion&quot;);</span>
+                });
+    }
+
+    private boolean showDeletionNotification(Context context, Media media, boolean result) {
+        String message;
+<span class="nc" id="L127">        String title = context.getString(R.string.delete_helper_show_deletion_title);</span>
+
+<span class="nc bnc" id="L129" title="All 2 branches missed.">        if (result) {</span>
+<span class="nc" id="L130">            title += &quot;: &quot; + context.getString(R.string.delete_helper_show_deletion_title_success);</span>
+<span class="nc" id="L131">            message = context.getString((R.string.delete_helper_show_deletion_message_if),media.getDisplayTitle());</span>
+        } else {
+<span class="nc" id="L133">            title += &quot;: &quot; + context.getString(R.string.delete_helper_show_deletion_title_failed);</span>
+<span class="nc" id="L134">            message = context.getString(R.string.delete_helper_show_deletion_message_else) ;</span>
+        }
+
+<span class="nc" id="L137">        String urlForDelete = BuildConfig.COMMONS_URL + &quot;/wiki/Commons:Deletion_requests/&quot; + media.getFilename();</span>
+<span class="nc" id="L138">        Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(urlForDelete));</span>
+<span class="nc" id="L139">        notificationHelper.showNotification(context, title, message, NOTIFICATION_DELETE, browserIntent);</span>
+<span class="nc" id="L140">        return result;</span>
+    }
+
+    /**
+     * Invoked when a reason needs to be asked before nominating for deletion
+     * @param media
+     * @param context
+     * @param question
+     * @param problem
+     */
+    @SuppressLint(&quot;CheckResult&quot;)
+    public void askReasonAndExecute(Media media,
+                                    Context context,
+                                    String question,
+                                    ReviewController.DeleteReason problem,
+                                    ReviewController.ReviewCallback reviewCallback) {
+<span class="nc" id="L156">        AlertDialog.Builder alert = new AlertDialog.Builder(context);</span>
+<span class="nc" id="L157">        alert.setTitle(question);</span>
+
+<span class="nc" id="L159">        boolean[] checkedItems = {false, false, false, false};</span>
+<span class="nc" id="L160">        ArrayList&lt;Integer&gt; mUserReason = new ArrayList&lt;&gt;();</span>
+
+        final String[] reasonList;
+        final String[] reasonListEnglish;
+
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        if (problem == ReviewController.DeleteReason.SPAM) {</span>
+<span class="nc" id="L166">            reasonList = new String[] {</span>
+<span class="nc" id="L167">                context.getString(R.string.delete_helper_ask_spam_selfie),</span>
+<span class="nc" id="L168">                context.getString(R.string.delete_helper_ask_spam_blurry),</span>
+<span class="nc" id="L169">                context.getString(R.string.delete_helper_ask_spam_nonsense)</span>
+            };
+<span class="nc" id="L171">            reasonListEnglish = new String[] {</span>
+<span class="nc" id="L172">                getLocalizedResources(context, Locale.ENGLISH).getString(R.string.delete_helper_ask_spam_selfie),</span>
+<span class="nc" id="L173">                getLocalizedResources(context, Locale.ENGLISH).getString(R.string.delete_helper_ask_spam_blurry),</span>
+<span class="nc" id="L174">                getLocalizedResources(context, Locale.ENGLISH).getString(R.string.delete_helper_ask_spam_nonsense)</span>
+            };
+<span class="nc bnc" id="L176" title="All 2 branches missed.">        } else if (problem == ReviewController.DeleteReason.COPYRIGHT_VIOLATION) {</span>
+<span class="nc" id="L177">            reasonList = new String[] {</span>
+<span class="nc" id="L178">                context.getString(R.string.delete_helper_ask_reason_copyright_press_photo),</span>
+<span class="nc" id="L179">                context.getString(R.string.delete_helper_ask_reason_copyright_internet_photo),</span>
+<span class="nc" id="L180">                context.getString(R.string.delete_helper_ask_reason_copyright_logo),</span>
+<span class="nc" id="L181">                context.getString(R.string.delete_helper_ask_reason_copyright_no_freedom_of_panorama)</span>
+            };
+<span class="nc" id="L183">            reasonListEnglish = new String[] {</span>
+<span class="nc" id="L184">                getLocalizedResources(context, Locale.ENGLISH).getString(R.string.delete_helper_ask_reason_copyright_press_photo),</span>
+<span class="nc" id="L185">                getLocalizedResources(context, Locale.ENGLISH).getString(R.string.delete_helper_ask_reason_copyright_internet_photo),</span>
+<span class="nc" id="L186">                getLocalizedResources(context, Locale.ENGLISH).getString(R.string.delete_helper_ask_reason_copyright_logo),</span>
+<span class="nc" id="L187">                getLocalizedResources(context, Locale.ENGLISH).getString(R.string.delete_helper_ask_reason_copyright_no_freedom_of_panorama)</span>
+            };
+        } else {
+<span class="nc" id="L190">            reasonList = new String[] {};</span>
+<span class="nc" id="L191">            reasonListEnglish = new String[] {};</span>
+        }
+
+<span class="nc" id="L194">        alert.setMultiChoiceItems(reasonList, checkedItems, listener = (dialogInterface, position, isChecked) -&gt; {</span>
+
+<span class="nc bnc" id="L196" title="All 2 branches missed.">            if (isChecked) {</span>
+<span class="nc" id="L197">                mUserReason.add(position);</span>
+            } else {
+<span class="nc" id="L199">                mUserReason.remove((Integer.valueOf(position)));</span>
+            }
+
+            // disable the OK button if no reason selected
+<span class="nc" id="L203">            ((AlertDialog) dialogInterface).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">                !mUserReason.isEmpty());</span>
+<span class="nc" id="L205">        });</span>
+
+<span class="nc" id="L207">        alert.setPositiveButton(context.getString(R.string.ok), (dialogInterface, i) -&gt; {</span>
+
+<span class="nc" id="L209">            String reason = getLocalizedResources(context, Locale.ENGLISH).getString(R.string.delete_helper_ask_alert_set_positive_button_reason) + &quot; &quot;;</span>
+
+<span class="nc bnc" id="L211" title="All 2 branches missed.">            for (int j = 0; j &lt; mUserReason.size(); j++) {</span>
+<span class="nc" id="L212">                reason = reason + reasonListEnglish[mUserReason.get(j)];</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                if (j != mUserReason.size() - 1) {</span>
+<span class="nc" id="L214">                    reason = reason + &quot;, &quot;;</span>
+                }
+            }
+
+<span class="nc" id="L218">            Timber.d(&quot;thread is askReasonAndExecute %s&quot;, Thread.currentThread().getName());</span>
+
+<span class="nc" id="L220">            String finalReason = reason;</span>
+
+<span class="nc" id="L222">            Single.defer((Callable&lt;SingleSource&lt;Boolean&gt;&gt;) () -&gt;</span>
+<span class="nc" id="L223">                makeDeletion(context, media, finalReason))</span>
+<span class="nc" id="L224">                .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L225">                .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L226">                .subscribe(aBoolean -&gt; {</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">                    if (aBoolean) {</span>
+<span class="nc" id="L228">                        reviewCallback.onSuccess();</span>
+                    } else {
+<span class="nc" id="L230">                        reviewCallback.onFailure();</span>
+                    }
+<span class="nc" id="L232">                });</span>
+
+<span class="nc" id="L234">        });</span>
+<span class="nc" id="L235">        alert.setNegativeButton(context.getString(R.string.cancel), (dialog, which) -&gt; reviewCallback.onFailure());</span>
+<span class="nc" id="L236">        d = alert.create();</span>
+<span class="nc" id="L237">        d.show();</span>
+
+        // disable the OK button by default
+<span class="nc" id="L240">        d.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);</span>
+<span class="nc" id="L241">    }</span>
+
+    /**
+     * returns the instance of shown AlertDialog,
+     * used for taking reference during unit test
+     * */
+    public AlertDialog getDialog(){
+<span class="nc" id="L248">        return  d;</span>
+    }
+
+    /**
+     * returns the instance of shown DialogInterface.OnMultiChoiceClickListener,
+     * used for taking reference during unit test
+     * */
+    public DialogInterface.OnMultiChoiceClickListener getListener(){
+<span class="nc" id="L256">        return listener;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

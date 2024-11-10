@@ -1,0 +1,384 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SubFilterViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.subfilter</a> &gt; <span class="el_source">SubFilterViewModel.kt</span></div><h1>SubFilterViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.subfilter
+
+import android.annotation.SuppressLint
+import android.os.Bundle
+import androidx.annotation.VisibleForTesting
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.withContext
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.datasets.ReaderBlogTable
+import org.wordpress.android.datasets.ReaderTagTable
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.models.ReaderTag
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.Organization.NO_ORGANIZATION
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.reader.ReaderEvents
+import org.wordpress.android.ui.reader.ReaderTypes.ReaderPostListType
+import org.wordpress.android.ui.reader.services.update.ReaderUpdateLogic.UpdateTask
+import org.wordpress.android.ui.reader.subfilter.BottomSheetUiState.BottomSheetHidden
+import org.wordpress.android.ui.reader.subfilter.BottomSheetUiState.BottomSheetVisible
+import org.wordpress.android.ui.reader.subfilter.SubfilterCategory.SITES
+import org.wordpress.android.ui.reader.subfilter.SubfilterCategory.TAGS
+import org.wordpress.android.ui.reader.subfilter.SubfilterListItem.Site
+import org.wordpress.android.ui.reader.subfilter.SubfilterListItem.SiteAll
+import org.wordpress.android.ui.reader.subfilter.SubfilterListItem.Tag
+import org.wordpress.android.ui.reader.tracker.ReaderTracker
+import org.wordpress.android.ui.reader.tracker.ReaderTrackerType
+import org.wordpress.android.ui.reader.utils.ReaderUtils
+import org.wordpress.android.ui.reader.viewmodels.ReaderModeInfo
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.EventBusWrapper
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import java.util.EnumSet
+import javax.inject.Inject
+import javax.inject.Named
+
+<span class="nc" id="L48">class SubFilterViewModel @Inject constructor(</span>
+<span class="nc" id="L49">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L50">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L51">    private val appPrefsWrapper: AppPrefsWrapper,</span>
+<span class="nc" id="L52">    private val subfilterListItemMapper: SubfilterListItemMapper,</span>
+<span class="nc" id="L53">    private val eventBusWrapper: EventBusWrapper,</span>
+<span class="nc" id="L54">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L55">    private val readerTracker: ReaderTracker</span>
+<span class="nc" id="L56">) : ScopedViewModel(bgDispatcher) {</span>
+<span class="nc" id="L57">    private val _subFilters = MutableLiveData&lt;List&lt;SubfilterListItem&gt;&gt;()</span>
+<span class="nc" id="L58">    val subFilters: LiveData&lt;List&lt;SubfilterListItem&gt;&gt; = _subFilters</span>
+
+<span class="nc" id="L60">    private val _currentSubFilter = MutableLiveData&lt;SubfilterListItem&gt;()</span>
+<span class="nc" id="L61">    val currentSubFilter: LiveData&lt;SubfilterListItem&gt; = _currentSubFilter</span>
+
+<span class="nc" id="L63">    private val _readerModeInfo = SingleLiveEvent&lt;ReaderModeInfo&gt;()</span>
+<span class="nc" id="L64">    val readerModeInfo: LiveData&lt;ReaderModeInfo&gt; = _readerModeInfo</span>
+
+<span class="nc" id="L66">    private val _bottomSheetUiState = MutableLiveData&lt;Event&lt;BottomSheetUiState&gt;&gt;()</span>
+<span class="nc" id="L67">    val bottomSheetUiState: LiveData&lt;Event&lt;BottomSheetUiState&gt;&gt; = _bottomSheetUiState</span>
+
+<span class="nc" id="L69">    private val _filtersMatchCount = MutableLiveData&lt;HashMap&lt;SubfilterCategory, Int&gt;&gt;()</span>
+<span class="nc" id="L70">    val filtersMatchCount: LiveData&lt;HashMap&lt;SubfilterCategory, Int&gt;&gt; = _filtersMatchCount</span>
+
+<span class="nc" id="L72">    private val _bottomSheetEmptyViewAction = MutableLiveData&lt;Event&lt;ActionType&gt;&gt;()</span>
+<span class="nc" id="L73">    val bottomSheetEmptyViewAction: LiveData&lt;Event&lt;ActionType&gt;&gt; = _bottomSheetEmptyViewAction</span>
+
+<span class="nc" id="L75">    private val _updateTagsAndSites = MutableLiveData&lt;Event&lt;EnumSet&lt;UpdateTask&gt;&gt;&gt;()</span>
+<span class="nc" id="L76">    val updateTagsAndSites: LiveData&lt;Event&lt;EnumSet&lt;UpdateTask&gt;&gt;&gt; = _updateTagsAndSites</span>
+
+    private var lastKnownUserId: Long? = null
+    private var lastTokenAvailableStatus: Boolean? = null
+
+    private var isStarted = false
+<span class="nc" id="L82">    private var isFirstLoad = true</span>
+    private var mTagFragmentStartedWith: ReaderTag? = null
+
+    /**
+     * Tag may be null for Blog previews for instance.
+     */
+    fun start(mTagFragmentStartedWith: ReaderTag?, tag: ReaderTag?, savedInstanceState: Bundle?) {
+<span class="nc bnc" id="L89" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L90">            return</span>
+        }
+
+<span class="nc" id="L93">        isStarted = true</span>
+
+<span class="nc" id="L95">        this.mTagFragmentStartedWith = mTagFragmentStartedWith</span>
+
+<span class="nc" id="L97">        var subfilterJson: String? = null</span>
+
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        savedInstanceState?.let {</span>
+<span class="nc" id="L100">            isFirstLoad = it.getBoolean(ARG_IS_FIRST_LOAD)</span>
+<span class="nc" id="L101">            subfilterJson = it.getString(ARG_CURRENT_SUBFILTER_JSON)</span>
+<span class="nc" id="L102">        }</span>
+
+<span class="nc" id="L104">        eventBusWrapper.register(this)</span>
+
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        tag?.let {</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">            val currentSubfilter = subfilterJson?.let { json -&gt;</span>
+<span class="nc" id="L108">                subfilterListItemMapper.fromJson(</span>
+<span class="nc" id="L109">                        json = json,</span>
+<span class="nc" id="L110">                        onClickAction = ::onSubfilterClicked,</span>
+<span class="nc" id="L111">                        isSelected = true</span>
+                )
+            }
+<span class="nc bnc" id="L114" title="All 2 branches missed.">            updateSubfilter(currentSubfilter ?: getCurrentSubfilterValue())</span>
+<span class="nc" id="L115">            initSubfiltersTracking(tag.isFilterable)</span>
+<span class="nc" id="L116">        }</span>
+
+<span class="nc" id="L118">        _filtersMatchCount.value = hashMapOf()</span>
+<span class="nc" id="L119">    }</span>
+
+    fun loadSubFilters() {
+<span class="nc" id="L122">        launch {</span>
+<span class="nc" id="L123">            val filterList = ArrayList&lt;SubfilterListItem&gt;()</span>
+
+<span class="nc bnc" id="L125" title="All 2 branches missed.">            if (accountStore.hasAccessToken()) {</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">                val organization = mTagFragmentStartedWith?.organization</span>
+
+<span class="nc" id="L128">                val followedBlogs = ReaderBlogTable.getFollowedBlogs().let { blogList -&gt;</span>
+                    // Filtering out all blogs not belonging to this VM organization if valid
+<span class="nc" id="L130">                    blogList.filter { blog -&gt;</span>
+<span class="nc bnc" id="L131" title="All 4 branches missed.">                        organization?.let {</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">                            blog.organizationId == organization.orgId</span>
+<span class="nc" id="L133">                        } ?: false</span>
+                    }
+                }
+
+<span class="nc" id="L137">                filterList.addAll(</span>
+<span class="nc" id="L138">                    followedBlogs.map { blog -&gt;</span>
+<span class="nc" id="L139">                        Site(</span>
+<span class="nc" id="L140">                            onClickAction = ::onSubfilterClicked,</span>
+<span class="nc" id="L141">                            blog = blog,</span>
+<span class="nc" id="L142">                            isSelected = false</span>
+                        )
+                    }
+                )
+            }
+
+<span class="nc" id="L148">            val tags = ReaderTagTable.getFollowedTags()</span>
+
+<span class="nc bnc" id="L150" title="All 2 branches missed.">            for (tag in tags) {</span>
+<span class="nc" id="L151">                filterList.add(Tag(</span>
+<span class="nc" id="L152">                        onClickAction = ::onSubfilterClicked,</span>
+<span class="nc" id="L153">                        tag = tag,</span>
+<span class="nc" id="L154">                        isSelected = false</span>
+                ))
+            }
+
+<span class="nc bnc" id="L158" title="All 2 branches missed.">            withContext(mainDispatcher) {</span>
+<span class="nc" id="L159">                _subFilters.value = filterList</span>
+<span class="nc" id="L160">            }</span>
+<span class="nc" id="L161">        }</span>
+<span class="nc" id="L162">    }</span>
+
+    private fun onSubfilterClicked(filter: SubfilterListItem) {
+<span class="nc" id="L165">        _bottomSheetUiState.postValue(Event(BottomSheetHidden))</span>
+<span class="nc" id="L166">        updateSubfilter(filter)</span>
+<span class="nc" id="L167">    }</span>
+
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun initSubfiltersTracking(show: Boolean) {
+<span class="nc" id="L171">        val isCurrentSubfilterTracked = getCurrentSubfilterValue().isTrackedItem</span>
+
+<span class="nc bnc" id="L173" title="All 2 branches missed.">        if (show) {</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">            if (isCurrentSubfilterTracked) {</span>
+<span class="nc" id="L175">                readerTracker.start(ReaderTrackerType.SUBFILTERED_LIST)</span>
+            } else {
+<span class="nc" id="L177">                readerTracker.stop(ReaderTrackerType.SUBFILTERED_LIST)</span>
+            }
+        } else {
+<span class="nc" id="L180">            readerTracker.stop(ReaderTrackerType.SUBFILTERED_LIST)</span>
+        }
+<span class="nc" id="L182">    }</span>
+
+    fun getCurrentSubfilterValue(): SubfilterListItem {
+<span class="nc bnc" id="L185" title="All 2 branches missed.">        return _currentSubFilter.value ?: SiteAll(</span>
+<span class="nc" id="L186">                onClickAction = ::onSubfilterClicked,</span>
+<span class="nc" id="L187">                isSelected = true</span>
+        )
+    }
+
+    private fun getCurrentSubfilterJson(): String {
+<span class="nc" id="L192">        return subfilterListItemMapper.toJson(getCurrentSubfilterValue())</span>
+    }
+
+    fun setSubfilterFromTag(tag: ReaderTag) {
+<span class="nc" id="L196">        updateSubfilter(</span>
+<span class="nc" id="L197">                Tag(</span>
+<span class="nc" id="L198">                        onClickAction = ::onSubfilterClicked,</span>
+<span class="nc" id="L199">                        tag = tag,</span>
+<span class="nc" id="L200">                        isSelected = true</span>
+                ))
+<span class="nc" id="L202">    }</span>
+
+    fun setDefaultSubfilter() {
+<span class="nc" id="L205">        updateSubfilter(</span>
+<span class="nc" id="L206">                SiteAll(</span>
+<span class="nc" id="L207">                        onClickAction = ::onSubfilterClicked,</span>
+<span class="nc" id="L208">                        isSelected = true</span>
+                ))
+<span class="nc" id="L210">    }</span>
+
+    fun onSubFiltersListButtonClicked() {
+<span class="nc" id="L213">        _updateTagsAndSites.value = Event(EnumSet.of(</span>
+<span class="nc" id="L214">                UpdateTask.TAGS,</span>
+<span class="nc" id="L215">                UpdateTask.FOLLOWED_BLOGS</span>
+        ))
+<span class="nc" id="L217">        _bottomSheetUiState.value = Event(BottomSheetVisible(</span>
+<span class="nc bnc" id="L218" title="All 4 branches missed.">                mTagFragmentStartedWith?.let {</span>
+<span class="nc" id="L219">                    UiStringText(it.label)</span>
+<span class="nc" id="L220">                } ?: UiStringRes(R.string.reader_filter_main_title),</span>
+<span class="nc bnc" id="L221" title="All 4 branches missed.">                if (mTagFragmentStartedWith?.organization == NO_ORGANIZATION) listOf(SITES, TAGS) else listOf(SITES)</span>
+        ))
+<span class="nc" id="L223">    }</span>
+
+    fun onBottomSheetCancelled() {
+<span class="nc" id="L226">        readerTracker.track(Stat.READER_FILTER_SHEET_DISMISSED)</span>
+<span class="nc" id="L227">        _bottomSheetUiState.value = Event(BottomSheetHidden)</span>
+<span class="nc" id="L228">    }</span>
+
+    private fun changeSubfilter(
+        subfilterListItem: SubfilterListItem,
+        requestNewerPosts: Boolean,
+        streamTag: ReaderTag?
+    ) {
+<span class="nc bnc" id="L235" title="All 5 branches missed.">        when (subfilterListItem.type) {</span>
+            SubfilterListItem.ItemType.SECTION_TITLE,
+            SubfilterListItem.ItemType.DIVIDER -&gt; {
+                // nop
+            }
+<span class="nc" id="L240">            SubfilterListItem.ItemType.SITE_ALL -&gt; _readerModeInfo.value = (ReaderModeInfo(</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">                    streamTag ?: ReaderUtils.getDefaultTag(),</span>
+<span class="nc" id="L242">                    ReaderPostListType.TAG_FOLLOWED,</span>
+<span class="nc" id="L243">                    0,</span>
+<span class="nc" id="L244">                    0,</span>
+<span class="nc" id="L245">                    requestNewerPosts,</span>
+<span class="nc" id="L246">                    subfilterListItem.label,</span>
+<span class="nc" id="L247">                    isFirstLoad,</span>
+<span class="nc" id="L248">                    false</span>
+            ))
+            SubfilterListItem.ItemType.SITE -&gt; {
+<span class="nc" id="L251">                val currentFeedId = (subfilterListItem as Site).blog.feedId</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">                val currentBlogId = if (subfilterListItem.blog.hasFeedUrl()) {</span>
+<span class="nc" id="L253">                    currentFeedId</span>
+                } else {
+<span class="nc" id="L255">                    subfilterListItem.blog.blogId</span>
+                }
+
+<span class="nc" id="L258">                _readerModeInfo.value = (ReaderModeInfo(</span>
+<span class="nc" id="L259">                        null,</span>
+<span class="nc" id="L260">                        ReaderPostListType.BLOG_PREVIEW,</span>
+<span class="nc" id="L261">                        currentBlogId,</span>
+<span class="nc" id="L262">                        currentFeedId,</span>
+<span class="nc" id="L263">                        requestNewerPosts,</span>
+<span class="nc" id="L264">                        subfilterListItem.label,</span>
+<span class="nc" id="L265">                        isFirstLoad,</span>
+<span class="nc" id="L266">                        true</span>
+                ))
+            }
+<span class="nc" id="L269">            SubfilterListItem.ItemType.TAG -&gt; _readerModeInfo.value = (ReaderModeInfo(</span>
+<span class="nc" id="L270">                    (subfilterListItem as Tag).tag,</span>
+<span class="nc" id="L271">                    ReaderPostListType.TAG_FOLLOWED,</span>
+<span class="nc" id="L272">                    0,</span>
+<span class="nc" id="L273">                    0,</span>
+<span class="nc" id="L274">                    requestNewerPosts,</span>
+<span class="nc" id="L275">                    subfilterListItem.label,</span>
+<span class="nc" id="L276">                    isFirstLoad,</span>
+<span class="nc" id="L277">                    true</span>
+            ))
+        }
+<span class="nc" id="L280">        isFirstLoad = false</span>
+<span class="nc" id="L281">    }</span>
+
+    fun onSubfilterSelected(subfilterListItem: SubfilterListItem) {
+<span class="nc" id="L284">        readerTracker.track(Stat.READER_FILTER_SHEET_ITEM_SELECTED)</span>
+<span class="nc" id="L285">        changeSubfilter(subfilterListItem, true, mTagFragmentStartedWith)</span>
+<span class="nc" id="L286">    }</span>
+
+    fun onSubfilterReselected() {
+<span class="nc" id="L289">        changeSubfilter(getCurrentSubfilterValue(), false, mTagFragmentStartedWith)</span>
+<span class="nc" id="L290">    }</span>
+
+    @SuppressLint(&quot;NullSafeMutableLiveData&quot;)
+    fun onSubfilterPageUpdated(category: SubfilterCategory, count: Int) {
+<span class="nc" id="L294">        val currentValue = _filtersMatchCount.value</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">        currentValue?.put(category, count)</span>
+<span class="nc" id="L296">        _filtersMatchCount.postValue(currentValue)</span>
+<span class="nc" id="L297">    }</span>
+
+    fun onBottomSheetActionClicked(action: ActionType) {
+<span class="nc" id="L300">        _bottomSheetUiState.postValue(Event(BottomSheetHidden))</span>
+<span class="nc" id="L301">        _bottomSheetEmptyViewAction.postValue(Event(action))</span>
+<span class="nc" id="L302">    }</span>
+
+    private fun updateSubfilter(filter: SubfilterListItem) {
+<span class="nc bnc" id="L305" title="All 2 branches missed.">        if (filter.isTrackedItem) {</span>
+<span class="nc" id="L306">            readerTracker.start(ReaderTrackerType.SUBFILTERED_LIST)</span>
+        } else {
+<span class="nc" id="L308">            readerTracker.stop(ReaderTrackerType.SUBFILTERED_LIST)</span>
+        }
+<span class="nc" id="L310">        _currentSubFilter.value = filter</span>
+<span class="nc" id="L311">    }</span>
+
+    fun onUserComesToReader() {
+        // TODO I think this method could be simplified, I don't think we need to store the data in the sharedPref
+<span class="nc bnc" id="L315" title="All 2 branches missed.">        if (lastKnownUserId == null) {</span>
+<span class="nc" id="L316">            lastKnownUserId = appPrefsWrapper.getLastReaderKnownUserId()</span>
+        }
+
+<span class="nc bnc" id="L319" title="All 2 branches missed.">        if (lastTokenAvailableStatus == null) {</span>
+<span class="nc" id="L320">            lastTokenAvailableStatus = appPrefsWrapper.getLastReaderKnownAccessTokenStatus()</span>
+        }
+
+<span class="nc bnc" id="L323" title="All 4 branches missed.">        val userIdChanged = accountStore.hasAccessToken() &amp;&amp; accountStore.account != null &amp;&amp;</span>
+<span class="nc bnc" id="L324" title="All 4 branches missed.">                accountStore.account.userId != lastKnownUserId</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">        val accessTokenStatusChanged = accountStore.hasAccessToken() != lastTokenAvailableStatus</span>
+
+<span class="nc bnc" id="L327" title="All 2 branches missed.">        if (userIdChanged) {</span>
+<span class="nc" id="L328">            lastKnownUserId = accountStore.account.userId</span>
+<span class="nc" id="L329">            appPrefsWrapper.setLastReaderKnownUserId(accountStore.account.userId)</span>
+        }
+
+<span class="nc bnc" id="L332" title="All 2 branches missed.">        if (accessTokenStatusChanged) {</span>
+<span class="nc" id="L333">            lastTokenAvailableStatus = accountStore.hasAccessToken()</span>
+<span class="nc" id="L334">            appPrefsWrapper.setLastReaderKnownAccessTokenStatus(accountStore.hasAccessToken())</span>
+        }
+
+<span class="nc bnc" id="L337" title="All 4 branches missed.">        if (userIdChanged || accessTokenStatusChanged) {</span>
+<span class="nc" id="L338">            _updateTagsAndSites.value = Event(EnumSet.of(</span>
+<span class="nc" id="L339">                    UpdateTask.TAGS,</span>
+<span class="nc" id="L340">                    UpdateTask.FOLLOWED_BLOGS</span>
+            ))
+
+<span class="nc" id="L343">            setDefaultSubfilter()</span>
+        }
+<span class="nc" id="L345">    }</span>
+
+    fun trackOnPageSelected(tab: String) {
+<span class="nc" id="L348">        readerTracker.track(Stat.READER_FILTER_SHEET_TAB_SELECTED, mutableMapOf(TRACK_TAB to tab))</span>
+<span class="nc" id="L349">    }</span>
+
+    fun onSaveInstanceState(outState: Bundle) {
+<span class="nc" id="L352">        outState.putString(</span>
+<span class="nc" id="L353">                ARG_CURRENT_SUBFILTER_JSON, getCurrentSubfilterJson()</span>
+        )
+<span class="nc" id="L355">        outState.putBoolean(ARG_IS_FIRST_LOAD, isFirstLoad)</span>
+<span class="nc" id="L356">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onEventMainThread(event: ReaderEvents.FollowedTagsChanged) {
+<span class="nc" id="L360">        AppLog.d(T.READER, &quot;Subfilter bottom sheet &gt; followed tags changed&quot;)</span>
+<span class="nc" id="L361">        loadSubFilters()</span>
+<span class="nc" id="L362">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onEventMainThread(event: ReaderEvents.FollowedBlogsChanged) {
+<span class="nc" id="L366">        AppLog.d(T.READER, &quot;Subfilter bottom sheet &gt; followed blogs changed&quot;)</span>
+<span class="nc" id="L367">        loadSubFilters()</span>
+<span class="nc" id="L368">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L371">        super.onCleared()</span>
+<span class="nc" id="L372">        eventBusWrapper.unregister(this)</span>
+<span class="nc" id="L373">    }</span>
+
+    companion object {
+        const val SUBFILTER_VM_BASE_KEY = &quot;SUBFILTER_VIEW_MODEL_BASE_KEY&quot;
+
+        const val ARG_CURRENT_SUBFILTER_JSON = &quot;current_subfilter_json&quot;
+        const val ARG_IS_FIRST_LOAD = &quot;is_first_load&quot;
+
+        const val TRACK_TAB = &quot;tab&quot;
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

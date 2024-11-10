@@ -1,0 +1,1211 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MediaBrowserActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.media</a> &gt; <span class="el_source">MediaBrowserActivity.java</span></div><h1>MediaBrowserActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.media;
+
+import android.Manifest;
+import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.ServiceConnection;
+import android.net.ConnectivityManager;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.text.TextUtils;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.MenuItem.OnActionExpandListener;
+import android.view.View;
+import android.view.ViewTreeObserver;
+import android.widget.LinearLayout;
+import android.widget.PopupMenu;
+import android.widget.RelativeLayout;
+import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.view.ActionMode;
+import androidx.appcompat.widget.SearchView;
+import androidx.appcompat.widget.SearchView.OnQueryTextListener;
+import androidx.core.view.MenuItemCompat;
+import androidx.core.view.ViewCompat;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentManager.OnBackStackChangedListener;
+import androidx.fragment.app.FragmentTransaction;
+
+import com.google.android.material.tabs.TabLayout;
+
+import org.greenrobot.eventbus.EventBus;
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.jetbrains.annotations.NotNull;
+import org.wordpress.android.BuildConfig;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.MediaActionBuilder;
+import org.wordpress.android.fluxc.generated.SiteActionBuilder;
+import org.wordpress.android.fluxc.model.MediaModel;
+import org.wordpress.android.fluxc.model.MediaModel.MediaUploadState;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.MediaStore;
+import org.wordpress.android.fluxc.store.MediaStore.CancelMediaPayload;
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaChanged;
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaListFetched;
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaUploaded;
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartExistingSiteTask;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.fluxc.store.SiteStore.OnSiteChanged;
+import org.wordpress.android.push.NotificationType;
+import org.wordpress.android.ui.ActivityId;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.ui.RequestCodes;
+import org.wordpress.android.ui.media.MediaGridFragment.MediaFilter;
+import org.wordpress.android.ui.media.MediaGridFragment.MediaGridListener;
+import org.wordpress.android.ui.media.services.MediaDeleteService;
+import org.wordpress.android.ui.mysite.SelectedSiteRepository;
+import org.wordpress.android.ui.mysite.cards.quickstart.QuickStartRepository;
+import org.wordpress.android.ui.notifications.SystemNotificationsTracker;
+import org.wordpress.android.ui.photopicker.MediaPickerConstants;
+import org.wordpress.android.ui.photopicker.MediaPickerLauncher;
+import org.wordpress.android.ui.plans.PlansConstants;
+import org.wordpress.android.ui.uploads.UploadService;
+import org.wordpress.android.ui.uploads.UploadUtilsWrapper;
+import org.wordpress.android.util.ActivityUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.DisplayUtils;
+import org.wordpress.android.util.FluxCUtils;
+import org.wordpress.android.util.FormatUtils;
+import org.wordpress.android.util.ListUtils;
+import org.wordpress.android.util.MediaUtils;
+import org.wordpress.android.util.MediaUtilsWrapper;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.PermissionUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.WPMediaUtils;
+import org.wordpress.android.util.WPPermissionUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+import org.wordpress.android.widgets.AppRatingDialog;
+import org.wordpress.android.widgets.QuickStartFocusPoint;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+import javax.inject.Inject;
+
+import static org.wordpress.android.analytics.AnalyticsTracker.Stat.APP_REVIEWS_EVENT_INCREMENTED_BY_UPLOADING_MEDIA;
+import static org.wordpress.android.push.NotificationsProcessingService.ARG_NOTIFICATION_TYPE;
+import static org.wordpress.android.util.ToastUtils.Duration.LONG;
+
+/**
+ * The main activity in which the user can browse their media.
+ */
+<span class="nc" id="L109">public class MediaBrowserActivity extends LocaleAwareActivity implements MediaGridListener,</span>
+        OnQueryTextListener, OnActionExpandListener,
+        WPMediaUtils.LaunchCameraCallback {
+    public static final String ARG_BROWSER_TYPE = &quot;media_browser_type&quot;;
+    public static final String ARG_FILTER = &quot;filter&quot;;
+    public static final String RESULT_IDS = &quot;result_ids&quot;;
+
+    private static final String SAVED_QUERY = &quot;SAVED_QUERY&quot;;
+    private static final String BUNDLE_MEDIA_CAPTURE_PATH = &quot;mediaCapturePath&quot;;
+    private static final String SHOW_AUDIO_TAB = &quot;showAudioTab&quot;;
+
+    @Inject Dispatcher mDispatcher;
+    @Inject MediaStore mMediaStore;
+    @Inject SiteStore mSiteStore;
+    @Inject UploadUtilsWrapper mUploadUtilsWrapper;
+    @Inject SystemNotificationsTracker mSystemNotificationsTracker;
+    @Inject MediaPickerLauncher mMediaPickerLauncher;
+    @Inject MediaUtilsWrapper mMediaUtilsWrapper;
+    @Inject QuickStartRepository mQuickStartRepository;
+    @Inject SelectedSiteRepository mSelectedSiteRepository;
+
+    private SiteModel mSite;
+
+    private MediaGridFragment mMediaGridFragment;
+    private SearchView mSearchView;
+    private MenuItem mSearchMenuItem;
+    private Menu mMenu;
+    private TabLayout mTabLayout;
+    private RelativeLayout mQuotaBar;
+    private TextView mQuotaText;
+
+    private MediaDeleteService.MediaDeleteBinder mDeleteService;
+    private boolean mDeleteServiceBound;
+
+    private String mQuery;
+    private String mMediaCapturePath;
+    private MediaBrowserType mBrowserType;
+    private AddMenuItem mLastAddMediaItemClicked;
+    private MenuItem menuNewMediaItem;
+    private QuickStartFocusPoint mMenuNewMediaQuickStartFocusPoint;
+
+    private boolean mShowAudioTab;
+
+<span class="nc" id="L152">    private enum AddMenuItem {</span>
+<span class="nc" id="L153">        ITEM_CAPTURE_PHOTO,</span>
+<span class="nc" id="L154">        ITEM_CAPTURE_VIDEO,</span>
+<span class="nc" id="L155">        ITEM_CHOOSE_FILE,</span>
+<span class="nc" id="L156">        ITEM_CHOOSE_STOCK_MEDIA,</span>
+<span class="nc" id="L157">        ITEM_CHOOSE_GIF</span>
+    }
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L162">        super.onCreate(savedInstanceState);</span>
+
+<span class="nc" id="L164">        ((WordPress) getApplication()).component().inject(this);</span>
+
+<span class="nc bnc" id="L166" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L167">            mSite = (SiteModel) getIntent().getSerializableExtra(WordPress.SITE);</span>
+<span class="nc" id="L168">            mBrowserType = (MediaBrowserType) getIntent().getSerializableExtra(ARG_BROWSER_TYPE);</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">            mShowAudioTab = mMediaStore.getSiteAudio(mSite).size() &gt; 0;</span>
+        } else {
+<span class="nc" id="L171">            mSite = (SiteModel) savedInstanceState.getSerializable(WordPress.SITE);</span>
+<span class="nc" id="L172">            mBrowserType = (MediaBrowserType) savedInstanceState.getSerializable(ARG_BROWSER_TYPE);</span>
+<span class="nc" id="L173">            mMediaCapturePath = savedInstanceState.getString(BUNDLE_MEDIA_CAPTURE_PATH);</span>
+<span class="nc" id="L174">            mQuery = savedInstanceState.getString(SAVED_QUERY);</span>
+<span class="nc" id="L175">            mShowAudioTab = savedInstanceState.getBoolean(SHOW_AUDIO_TAB);</span>
+        }
+
+<span class="nc bnc" id="L178" title="All 2 branches missed.">        if (mSite == null) {</span>
+<span class="nc" id="L179">            ToastUtils.showToast(this, R.string.blog_not_found, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L180">            finish();</span>
+<span class="nc" id="L181">            return;</span>
+        }
+
+<span class="nc bnc" id="L184" title="All 2 branches missed.">        if (mBrowserType == null) {</span>
+            // default to browser mode if missing type
+<span class="nc" id="L186">            AppLog.w(AppLog.T.MEDIA, &quot;MediaBrowserType is null. Defaulting to MediaBrowserType.BROWSER mode.&quot;);</span>
+<span class="nc" id="L187">            mBrowserType = MediaBrowserType.BROWSER;</span>
+        }
+
+<span class="nc" id="L190">        setContentView(R.layout.media_browser_activity);</span>
+
+<span class="nc" id="L192">        setSupportActionBar(findViewById(R.id.toolbar_main));</span>
+<span class="nc" id="L193">        ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">        if (actionBar != null) {</span>
+<span class="nc" id="L195">            actionBar.setDisplayShowTitleEnabled(true);</span>
+<span class="nc" id="L196">            actionBar.setDisplayHomeAsUpEnabled(true);</span>
+<span class="nc" id="L197">            actionBar.setTitle(R.string.wp_media_title);</span>
+        }
+
+<span class="nc" id="L200">        FragmentManager fm = getSupportFragmentManager();</span>
+<span class="nc" id="L201">        fm.addOnBackStackChangedListener(mOnBackStackChangedListener);</span>
+
+        // if media was shared add it to the library
+<span class="nc" id="L204">        handleSharedMedia();</span>
+
+<span class="nc" id="L206">        mTabLayout = findViewById(R.id.tab_layout);</span>
+
+<span class="nc" id="L208">        setupTabs();</span>
+
+        MediaFilter filter;
+<span class="nc bnc" id="L211" title="All 2 branches missed.">        if (mBrowserType.isSingleImagePicker()) {</span>
+<span class="nc" id="L212">            filter = MediaFilter.FILTER_IMAGES;</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">        } else if (mBrowserType == MediaBrowserType.GUTENBERG_IMAGE_PICKER) {</span>
+<span class="nc" id="L214">            filter = MediaFilter.FILTER_IMAGES;</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">        } else if (mBrowserType == MediaBrowserType.GUTENBERG_VIDEO_PICKER) {</span>
+<span class="nc" id="L216">            filter = MediaFilter.FILTER_VIDEOS;</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">        } else if (mBrowserType == MediaBrowserType.GUTENBERG_SINGLE_AUDIO_FILE_PICKER) {</span>
+<span class="nc" id="L218">            filter = MediaFilter.FILTER_AUDIO;</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">        } else if (savedInstanceState != null) {</span>
+<span class="nc" id="L220">            filter = (MediaFilter) savedInstanceState.getSerializable(ARG_FILTER);</span>
+        } else {
+<span class="nc" id="L222">            filter = MediaFilter.FILTER_ALL;</span>
+        }
+
+<span class="nc" id="L225">        mMediaGridFragment = (MediaGridFragment) fm.findFragmentByTag(MediaGridFragment.TAG);</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">        if (mMediaGridFragment == null) {</span>
+<span class="nc" id="L227">            mMediaGridFragment = MediaGridFragment.newInstance(mSite, mBrowserType, filter);</span>
+<span class="nc" id="L228">            getSupportFragmentManager().beginTransaction()</span>
+<span class="nc" id="L229">                    .replace(R.id.media_browser_container, mMediaGridFragment, MediaGridFragment.TAG)</span>
+<span class="nc" id="L230">                    .setTransition(FragmentTransaction.TRANSIT_FRAGMENT_FADE)</span>
+<span class="nc" id="L231">                    .commit();</span>
+        } else {
+<span class="nc" id="L233">            setFilter(filter);</span>
+        }
+
+<span class="nc" id="L236">        mQuotaBar = findViewById(R.id.quota_bar);</span>
+<span class="nc" id="L237">        mQuotaText = findViewById(R.id.quota_text);</span>
+
+<span class="nc" id="L239">        showQuota(true);</span>
+<span class="nc" id="L240">    }</span>
+
+    @Override protected void onNewIntent(Intent intent) {
+<span class="nc" id="L243">        super.onNewIntent(intent);</span>
+
+<span class="nc bnc" id="L245" title="All 2 branches missed.">        if (intent.hasExtra(ARG_NOTIFICATION_TYPE)) {</span>
+<span class="nc" id="L246">            NotificationType notificationType =</span>
+<span class="nc" id="L247">                    (NotificationType) intent.getSerializableExtra(ARG_NOTIFICATION_TYPE);</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">            if (notificationType != null) {</span>
+<span class="nc" id="L249">                mSystemNotificationsTracker.trackTappedNotification(notificationType);</span>
+            }
+        }
+<span class="nc" id="L252">    }</span>
+
+    private void formatQuotaDiskSpace() {
+<span class="nc" id="L255">        final String[] units = new String[] {</span>
+<span class="nc" id="L256">                getString(R.string.file_size_in_bytes),</span>
+<span class="nc" id="L257">                getString(R.string.file_size_in_kilobytes),</span>
+<span class="nc" id="L258">                getString(R.string.file_size_in_megabytes),</span>
+<span class="nc" id="L259">                getString(R.string.file_size_in_gigabytes),</span>
+<span class="nc" id="L260">                getString(R.string.file_size_in_terabytes)</span>
+        };
+
+        String quota;
+
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (mSite.getPlanId() == PlansConstants.BUSINESS_PLAN_ID) {</span>
+<span class="nc" id="L266">            String space = FormatUtils.formatFileSize(mSite.getSpaceUsed(), units);</span>
+<span class="nc" id="L267">            quota = String.format(getString(R.string.site_settings_quota_space_unlimited), space);</span>
+<span class="nc" id="L268">        } else {</span>
+<span class="nc" id="L269">            String percentage = FormatUtils.formatPercentageLimit100(mSite.getSpacePercentUsed() / 100, true);</span>
+
+<span class="nc" id="L271">            String space = FormatUtils.formatFileSize(mSite.getSpaceAllowed(), units);</span>
+<span class="nc" id="L272">            quota = String.format(getString(R.string.site_settings_quota_space_value), percentage, space);</span>
+        }
+
+<span class="nc" id="L275">        mQuotaText.setText(getString(R.string.media_space_used, quota));</span>
+<span class="nc" id="L276">        mQuotaText.setTextColor(</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">                getResources().getColor(mSite.getSpacePercentUsed() &gt; 90 ? R.color.error_50 : R.color.neutral));</span>
+<span class="nc" id="L278">    }</span>
+
+    private void showQuota(boolean show) {
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        if (!mBrowserType.canFilter()) {</span>
+<span class="nc" id="L282">            mQuotaBar.setVisibility(View.GONE);</span>
+<span class="nc bnc" id="L283" title="All 6 branches missed.">        } else if (show &amp;&amp; mSite != null &amp;&amp; mSite.hasDiskSpaceQuotaInformation()) {</span>
+<span class="nc" id="L284">            mQuotaBar.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L285">            formatQuotaDiskSpace();</span>
+<span class="nc bnc" id="L286" title="All 2 branches missed.">        } else if (!show) {</span>
+<span class="nc" id="L287">            mQuotaBar.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L289">    }</span>
+
+    public MediaDeleteService getMediaDeleteService() {
+<span class="nc bnc" id="L292" title="All 2 branches missed.">        if (mDeleteService == null) {</span>
+<span class="nc" id="L293">            return null;</span>
+        }
+<span class="nc" id="L295">        return mDeleteService.getService();</span>
+    }
+
+    /*
+     * only show tabs when the user can filter the media by type
+     */
+    private boolean shouldShowTabs() {
+<span class="nc" id="L302">        return mBrowserType.canFilter();</span>
+    }
+
+    private void enableTabs(boolean enable) {
+<span class="nc bnc" id="L306" title="All 2 branches missed.">        if (!shouldShowTabs()) return;</span>
+
+<span class="nc bnc" id="L308" title="All 4 branches missed.">        if (enable &amp;&amp; mTabLayout.getVisibility() != View.VISIBLE) {</span>
+<span class="nc" id="L309">            mTabLayout.setVisibility(View.VISIBLE);</span>
+<span class="nc bnc" id="L310" title="All 4 branches missed.">        } else if (!enable &amp;&amp; mTabLayout.getVisibility() == View.VISIBLE) {</span>
+<span class="nc" id="L311">            mTabLayout.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L313">    }</span>
+
+    private void setupTabs() {
+<span class="nc bnc" id="L316" title="All 2 branches missed.">        if (shouldShowTabs()) {</span>
+<span class="nc" id="L317">            mTabLayout.removeAllTabs();</span>
+<span class="nc" id="L318">            mTabLayout.addTab(mTabLayout.newTab().setText(R.string.media_all)); // FILTER_ALL</span>
+<span class="nc" id="L319">            mTabLayout.addTab(mTabLayout.newTab().setText(R.string.media_images)); // FILTER_IMAGES</span>
+<span class="nc" id="L320">            mTabLayout.addTab(mTabLayout.newTab().setText(R.string.media_documents)); // FILTER_DOCUMENTS</span>
+<span class="nc" id="L321">            mTabLayout.addTab(mTabLayout.newTab().setText(R.string.media_videos)); // FILTER_VIDEOS</span>
+<span class="nc bnc" id="L322" title="All 2 branches missed.">            if (mShowAudioTab) {</span>
+<span class="nc" id="L323">                mTabLayout.addTab(mTabLayout.newTab().setText(R.string.media_audio)); // FILTER_AUDIO</span>
+            }
+
+<span class="nc" id="L326">            mTabLayout.clearOnTabSelectedListeners();</span>
+<span class="nc" id="L327">            mTabLayout.addOnTabSelectedListener(new TabLayout.OnTabSelectedListener() {</span>
+                @Override
+                public void onTabSelected(TabLayout.Tab tab) {
+<span class="nc" id="L330">                    setFilter(getFilterForPosition(tab.getPosition()));</span>
+<span class="nc" id="L331">                }</span>
+                @Override
+                public void onTabUnselected(TabLayout.Tab tab) {
+                    // noop
+<span class="nc" id="L335">                }</span>
+                @Override
+                public void onTabReselected(TabLayout.Tab tab) {
+<span class="nc" id="L338">                    setFilter(getFilterForPosition(tab.getPosition()));</span>
+<span class="nc" id="L339">                }</span>
+            });
+
+            // tabMode is set to scrollable in layout, set to fixed if there's enough space to show them all
+<span class="nc" id="L343">            mTabLayout.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {</span>
+                @Override
+                public void onGlobalLayout() {
+<span class="nc" id="L346">                    mTabLayout.getViewTreeObserver().removeOnGlobalLayoutListener(this);</span>
+
+<span class="nc bnc" id="L348" title="All 2 branches missed.">                    if (mTabLayout.getChildCount() &gt; 0) {</span>
+<span class="nc" id="L349">                        int tabLayoutWidth = 0;</span>
+<span class="nc" id="L350">                        LinearLayout tabFirstChild = (LinearLayout) mTabLayout.getChildAt(0);</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">                        for (int i = 0; i &lt; mTabLayout.getTabCount(); i++) {</span>
+<span class="nc" id="L352">                            LinearLayout tabView = (LinearLayout) (tabFirstChild.getChildAt(i));</span>
+<span class="nc" id="L353">                            tabLayoutWidth += (tabView.getMeasuredWidth() + ViewCompat.getPaddingStart(tabView)</span>
+<span class="nc" id="L354">                                               + ViewCompat.getPaddingEnd(tabView));</span>
+                        }
+
+<span class="nc" id="L357">                        int displayWidth = DisplayUtils.getWindowPixelWidth(MediaBrowserActivity.this);</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">                        if (tabLayoutWidth &lt; displayWidth) {</span>
+<span class="nc" id="L359">                            mTabLayout.setTabMode(TabLayout.MODE_FIXED);</span>
+<span class="nc" id="L360">                            mTabLayout.setTabGravity(TabLayout.GRAVITY_FILL);</span>
+                        }
+                    }
+<span class="nc" id="L363">                }</span>
+            });
+        } else {
+<span class="nc" id="L366">            mTabLayout.setVisibility(View.GONE);</span>
+        }
+<span class="nc" id="L368">    }</span>
+
+    private void refreshTabs() {
+<span class="nc bnc" id="L371" title="All 2 branches missed.">        boolean hasAudio = mMediaStore.getSiteAudio(mSite).size() &gt; 0;</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">        if (mShowAudioTab != hasAudio) {</span>
+<span class="nc" id="L373">            mShowAudioTab = hasAudio;</span>
+<span class="nc" id="L374">            setupTabs();</span>
+        }
+<span class="nc" id="L376">    }</span>
+
+    private int getPositionForFilter(@NonNull MediaFilter filter) {
+<span class="nc" id="L379">        return filter.getValue();</span>
+    }
+
+    private MediaFilter getFilterForPosition(int position) {
+<span class="nc bnc" id="L383" title="All 2 branches missed.">        for (MediaFilter filter : MediaFilter.values()) {</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">            if (filter.getValue() == position) {</span>
+<span class="nc" id="L385">                return filter;</span>
+            }
+        }
+<span class="nc" id="L388">        return MediaFilter.FILTER_ALL;</span>
+    }
+
+    private void setFilter(@NonNull MediaFilter filter) {
+<span class="nc" id="L392">        int position = getPositionForFilter(filter);</span>
+<span class="nc bnc" id="L393" title="All 4 branches missed.">        if (shouldShowTabs()</span>
+                &amp;&amp; mTabLayout != null
+<span class="nc bnc" id="L395" title="All 2 branches missed.">                &amp;&amp; mTabLayout.getSelectedTabPosition() != position) {</span>
+<span class="nc" id="L396">            mTabLayout.setScrollPosition(position, 0f, true);</span>
+        }
+
+<span class="nc bnc" id="L399" title="All 2 branches missed.">        if (mMediaGridFragment != null</span>
+<span class="nc bnc" id="L400" title="All 4 branches missed.">                &amp;&amp; (mMediaGridFragment.getFilter() != filter || mMediaGridFragment.isEmpty())) {</span>
+<span class="nc" id="L401">            mMediaGridFragment.setFilter(filter);</span>
+        }
+<span class="nc" id="L403">    }</span>
+
+    @Override
+    public void onStart() {
+<span class="nc" id="L407">        super.onStart();</span>
+<span class="nc" id="L408">        registerReceiver(mReceiver, new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));</span>
+<span class="nc" id="L409">        mDispatcher.register(this);</span>
+<span class="nc" id="L410">        EventBus.getDefault().register(this);</span>
+<span class="nc" id="L411">    }</span>
+
+    @Override
+    protected void onPause() {
+<span class="nc" id="L415">        super.onPause();</span>
+
+<span class="nc bnc" id="L417" title="All 2 branches missed.">        if (mSearchMenuItem != null) {</span>
+<span class="nc" id="L418">            String tempQuery = mQuery;</span>
+<span class="nc" id="L419">            MenuItemCompat.collapseActionView(mSearchMenuItem);</span>
+<span class="nc" id="L420">            mQuery = tempQuery;</span>
+        }
+<span class="nc" id="L422">    }</span>
+
+    @Override
+    protected void onResume() {
+<span class="nc" id="L426">        super.onResume();</span>
+<span class="nc" id="L427">        startMediaDeleteService(null);</span>
+<span class="nc" id="L428">        ActivityId.trackLastActivity(ActivityId.MEDIA);</span>
+<span class="nc" id="L429">    }</span>
+
+    @Override
+    public void onStop() {
+<span class="nc" id="L433">        EventBus.getDefault().unregister(this);</span>
+<span class="nc" id="L434">        unregisterReceiver(mReceiver);</span>
+<span class="nc" id="L435">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L436">        super.onStop();</span>
+<span class="nc" id="L437">    }</span>
+
+    @Override
+    protected void onDestroy() {
+<span class="nc" id="L441">        super.onDestroy();</span>
+<span class="nc" id="L442">        doUnbindDeleteService();</span>
+<span class="nc" id="L443">    }</span>
+
+    @Override
+    protected void onSaveInstanceState(@NotNull Bundle outState) {
+<span class="nc" id="L447">        super.onSaveInstanceState(outState);</span>
+
+<span class="nc" id="L449">        outState.putString(SAVED_QUERY, mQuery);</span>
+<span class="nc" id="L450">        outState.putSerializable(WordPress.SITE, mSite);</span>
+<span class="nc" id="L451">        outState.putSerializable(ARG_BROWSER_TYPE, mBrowserType);</span>
+<span class="nc" id="L452">        outState.putBoolean(SHOW_AUDIO_TAB, mShowAudioTab);</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">        if (mMediaGridFragment != null) {</span>
+<span class="nc" id="L454">            outState.putSerializable(ARG_FILTER, mMediaGridFragment.getFilter());</span>
+        }
+<span class="nc bnc" id="L456" title="All 2 branches missed.">        if (!TextUtils.isEmpty(mMediaCapturePath)) {</span>
+<span class="nc" id="L457">            outState.putString(BUNDLE_MEDIA_CAPTURE_PATH, mMediaCapturePath);</span>
+        }
+<span class="nc" id="L459">    }</span>
+
+    private void getMediaFromDeviceAndTrack(Uri videoUri, int requestCode) {
+<span class="nc" id="L462">        final String mimeType = getContentResolver().getType(videoUri);</span>
+
+<span class="nc bnc" id="L464" title="All 2 branches missed.">        if (mMediaUtilsWrapper.isProhibitedVideoDuration(this, mSite, videoUri)) {</span>
+<span class="nc" id="L465">            ToastUtils.showToast(this, R.string.error_media_video_duration_exceeds_limit, LONG);</span>
+        } else {
+<span class="nc" id="L467">            fetchMediaAndDoNext(videoUri, requestCode, mimeType);</span>
+        }
+<span class="nc" id="L469">    }</span>
+
+    private void fetchMediaAndDoNext(Uri imageUri, int requestCode, String mimeType) {
+<span class="nc" id="L472">        WPMediaUtils.fetchMediaAndDoNext(this, imageUri,</span>
+<span class="nc" id="L473">                uri -&gt; queueFileForUpload(getOptimizedPictureIfNecessary(uri), mimeType));</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">        trackAddMediaFromDeviceEvents(</span>
+                false,
+                requestCode == RequestCodes.VIDEO_LIBRARY,
+                imageUri
+        );
+<span class="nc" id="L479">    }</span>
+
+    private void checkRecordedVideoDurationBeforeUploadAndTrack() {
+<span class="nc" id="L482">        Uri uri = MediaUtils.getLastRecordedVideoUri(this);</span>
+
+<span class="nc bnc" id="L484" title="All 2 branches missed.">        if (mMediaUtilsWrapper.isProhibitedVideoDuration(this, mSite, uri)) {</span>
+<span class="nc" id="L485">            ToastUtils.showToast(this, R.string.error_media_video_duration_exceeds_limit, LONG);</span>
+        } else {
+<span class="nc" id="L487">            queueFileForUpload(uri, getContentResolver().getType(uri));</span>
+        }
+
+<span class="nc" id="L490">        trackAddMediaFromDeviceEvents(true, true, uri);</span>
+<span class="nc" id="L491">    }</span>
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+<span class="nc" id="L495">        super.onActivityResult(requestCode, resultCode, data);</span>
+
+<span class="nc bnc" id="L497" title="All 7 branches missed.">        switch (requestCode) {</span>
+            case RequestCodes.PICTURE_LIBRARY:
+            case RequestCodes.VIDEO_LIBRARY:
+            case RequestCodes.FILE_LIBRARY:
+            case RequestCodes.AUDIO_LIBRARY:
+<span class="nc bnc" id="L502" title="All 4 branches missed.">                if (resultCode == Activity.RESULT_OK &amp;&amp; data != null) {</span>
+<span class="nc bnc" id="L503" title="All 2 branches missed.">                    if (data.hasExtra(MediaPickerConstants.EXTRA_MEDIA_URIS)) {</span>
+<span class="nc" id="L504">                        List&lt;Uri&gt; uris = convertStringArrayIntoUrisList(</span>
+<span class="nc" id="L505">                                data.getStringArrayExtra(MediaPickerConstants.EXTRA_MEDIA_URIS));</span>
+<span class="nc bnc" id="L506" title="All 2 branches missed.">                        for (Uri uri : uris) {</span>
+<span class="nc" id="L507">                            getMediaFromDeviceAndTrack(uri, requestCode);</span>
+<span class="nc" id="L508">                        }</span>
+<span class="nc" id="L509">                    }</span>
+                }
+                break;
+            case RequestCodes.TAKE_PHOTO:
+<span class="nc bnc" id="L513" title="All 2 branches missed.">                if (resultCode == Activity.RESULT_OK) {</span>
+<span class="nc" id="L514">                    WPMediaUtils.scanMediaFile(this, mMediaCapturePath);</span>
+<span class="nc" id="L515">                    Uri uri = getOptimizedPictureIfNecessary(Uri.parse(mMediaCapturePath));</span>
+<span class="nc" id="L516">                    mMediaCapturePath = null;</span>
+<span class="nc" id="L517">                    queueFileForUpload(uri, getContentResolver().getType(uri));</span>
+<span class="nc" id="L518">                    trackAddMediaFromDeviceEvents(true, false, uri);</span>
+<span class="nc" id="L519">                }</span>
+                break;
+            case RequestCodes.TAKE_VIDEO:
+<span class="nc bnc" id="L522" title="All 2 branches missed.">                if (resultCode == Activity.RESULT_OK) {</span>
+<span class="nc" id="L523">                    checkRecordedVideoDurationBeforeUploadAndTrack();</span>
+                }
+                break;
+            case RequestCodes.MEDIA_SETTINGS:
+<span class="nc bnc" id="L527" title="All 2 branches missed.">                if (resultCode == MediaSettingsActivity.RESULT_MEDIA_DELETED) {</span>
+<span class="nc" id="L528">                    reloadMediaGrid();</span>
+<span class="nc" id="L529">                    refreshTabs();</span>
+                }
+                break;
+            case RequestCodes.STOCK_MEDIA_PICKER_MULTI_SELECT:
+<span class="nc bnc" id="L533" title="All 2 branches missed.">                if (resultCode == RESULT_OK) {</span>
+<span class="nc" id="L534">                    reloadMediaGrid();</span>
+                }
+                break;
+            case RequestCodes.GIF_PICKER_SINGLE_SELECT:
+            case RequestCodes.GIF_PICKER_MULTI_SELECT:
+<span class="nc bnc" id="L539" title="All 2 branches missed.">                if (resultCode == RESULT_OK</span>
+<span class="nc bnc" id="L540" title="All 2 branches missed.">                    &amp;&amp; data.hasExtra(MediaPickerConstants.EXTRA_SAVED_MEDIA_MODEL_LOCAL_IDS)) {</span>
+<span class="nc" id="L541">                    int[] mediaLocalIds = data.getIntArrayExtra(MediaPickerConstants.EXTRA_SAVED_MEDIA_MODEL_LOCAL_IDS);</span>
+
+<span class="nc" id="L543">                    ArrayList&lt;MediaModel&gt; mediaModels = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L544" title="All 2 branches missed.">                    for (int localId : mediaLocalIds) {</span>
+<span class="nc" id="L545">                        mediaModels.add(mMediaStore.getMediaWithLocalId(localId));</span>
+                    }
+
+<span class="nc" id="L548">                    addMediaToUploadService(mediaModels);</span>
+                }
+                break;
+        }
+<span class="nc" id="L552">    }</span>
+
+    private List&lt;Uri&gt; convertStringArrayIntoUrisList(String[] stringArray) {
+<span class="nc" id="L555">        List&lt;Uri&gt; uris = new ArrayList&lt;&gt;(stringArray.length);</span>
+<span class="nc bnc" id="L556" title="All 2 branches missed.">        for (String stringUri : stringArray) {</span>
+<span class="nc" id="L557">            uris.add(Uri.parse(stringUri));</span>
+        }
+<span class="nc" id="L559">        return uris;</span>
+    }
+
+    /**
+     * Analytics about new media
+     *
+     * @param isNewMedia Whether is a fresh (just taken) photo/video or not
+     * @param isVideo Whether is a video or not
+     * @param uri The URI of the media on the device, or null
+     */
+    private void trackAddMediaFromDeviceEvents(boolean isNewMedia, boolean isVideo, Uri uri) {
+<span class="nc bnc" id="L570" title="All 2 branches missed.">        if (uri == null) {</span>
+<span class="nc" id="L571">            AppLog.e(AppLog.T.MEDIA, &quot;Cannot track new media event if mediaURI is null!!&quot;);</span>
+<span class="nc" id="L572">            return;</span>
+        }
+
+<span class="nc" id="L575">        Map&lt;String, Object&gt; properties = AnalyticsUtils.getMediaProperties(this, isVideo, uri, null);</span>
+<span class="nc bnc" id="L576" title="All 2 branches missed.">        properties.put(&quot;via&quot;, isNewMedia ? &quot;device_camera&quot; : &quot;device_library&quot;);</span>
+
+<span class="nc bnc" id="L578" title="All 2 branches missed.">        if (isVideo) {</span>
+<span class="nc" id="L579">            AnalyticsTracker.track(AnalyticsTracker.Stat.MEDIA_LIBRARY_ADDED_VIDEO, properties);</span>
+        } else {
+<span class="nc" id="L581">            AnalyticsTracker.track(AnalyticsTracker.Stat.MEDIA_LIBRARY_ADDED_PHOTO, properties);</span>
+        }
+<span class="nc" id="L583">    }</span>
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] results) {
+<span class="nc" id="L587">        super.onRequestPermissionsResult(requestCode, permissions, results);</span>
+<span class="nc" id="L588">        boolean allGranted = WPPermissionUtils.setPermissionListAsked(</span>
+                this, requestCode, permissions, results, true);
+
+<span class="nc bnc" id="L591" title="All 4 branches missed.">        if (allGranted &amp;&amp; requestCode == WPPermissionUtils.MEDIA_BROWSER_PERMISSION_REQUEST_CODE) {</span>
+<span class="nc" id="L592">            doAddMediaItemClicked(mLastAddMediaItemClicked);</span>
+        }
+<span class="nc" id="L594">    }</span>
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+<span class="nc" id="L598">        mMenu = menu;</span>
+<span class="nc" id="L599">        getMenuInflater().inflate(R.menu.media_browser, menu);</span>
+
+<span class="nc" id="L601">        mSearchMenuItem = menu.findItem(R.id.menu_search);</span>
+<span class="nc" id="L602">        mSearchMenuItem.setOnActionExpandListener(this);</span>
+
+<span class="nc" id="L604">        mSearchView = (SearchView) mSearchMenuItem.getActionView();</span>
+<span class="nc" id="L605">        mSearchView.setOnQueryTextListener(this);</span>
+<span class="nc" id="L606">        mSearchView.setMaxWidth(Integer.MAX_VALUE);</span>
+
+<span class="nc" id="L608">        menuNewMediaItem = menu.findItem(R.id.menu_new_media);</span>
+<span class="nc" id="L609">        mMenuNewMediaQuickStartFocusPoint = menuNewMediaItem.getActionView()</span>
+<span class="nc" id="L610">                                                            .findViewById(R.id.menu_add_media_quick_start_focus_point);</span>
+
+<span class="nc" id="L612">        menuNewMediaItem.getActionView().setOnClickListener(v -&gt; {</span>
+<span class="nc" id="L613">            showAddMediaPopup();</span>
+<span class="nc" id="L614">            completeUploadMediaQuickStartTask();</span>
+<span class="nc" id="L615">            updateMenuNewMediaQuickStartFocusPoint(false);</span>
+<span class="nc" id="L616">        });</span>
+
+        // open search bar if we were searching for something before
+<span class="nc bnc" id="L619" title="All 6 branches missed.">        if (!TextUtils.isEmpty(mQuery) &amp;&amp; mMediaGridFragment != null &amp;&amp; mMediaGridFragment.isVisible()) {</span>
+<span class="nc" id="L620">            String tempQuery = mQuery; // temporary hold onto query</span>
+<span class="nc" id="L621">            MenuItemCompat.expandActionView(mSearchMenuItem); // this will reset mQuery</span>
+<span class="nc" id="L622">            onQueryTextSubmit(tempQuery);</span>
+<span class="nc" id="L623">            mSearchView.setQuery(mQuery, true);</span>
+        }
+
+        // hide &quot;add media&quot; if the user doesn't have upload permission or this is a multiselect picker
+<span class="nc bnc" id="L627" title="All 2 branches missed.">        if (mBrowserType.canMultiselect()</span>
+<span class="nc bnc" id="L628" title="All 2 branches missed.">            || !WPMediaUtils.currentUserCanUploadMedia(mSite)) {</span>
+<span class="nc" id="L629">            menuNewMediaItem.setVisible(false);</span>
+<span class="nc" id="L630">            mMediaGridFragment.showActionableEmptyViewButton(false);</span>
+        }
+
+<span class="nc" id="L633">        return super.onCreateOptionsMenu(menu);</span>
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc bnc" id="L638" title="All 4 branches missed.">        switch (item.getItemId()) {</span>
+            case android.R.id.home:
+<span class="nc" id="L640">                onBackPressed();</span>
+<span class="nc" id="L641">                return true;</span>
+            case R.id.menu_new_media:
+                // Do Nothing (handled in action view click listener)
+<span class="nc" id="L644">                return true;</span>
+            case R.id.menu_search:
+<span class="nc" id="L646">                mSearchMenuItem = item;</span>
+<span class="nc" id="L647">                mSearchMenuItem.setOnActionExpandListener(this);</span>
+<span class="nc" id="L648">                mSearchMenuItem.expandActionView();</span>
+
+<span class="nc" id="L650">                mSearchView = (SearchView) item.getActionView();</span>
+<span class="nc" id="L651">                mSearchView.setOnQueryTextListener(this);</span>
+
+                // load last saved query
+<span class="nc bnc" id="L654" title="All 2 branches missed.">                if (!TextUtils.isEmpty(mQuery)) {</span>
+<span class="nc" id="L655">                    onQueryTextSubmit(mQuery);</span>
+<span class="nc" id="L656">                    mSearchView.setQuery(mQuery, true);</span>
+                }
+<span class="nc" id="L658">                return true;</span>
+        }
+
+<span class="nc" id="L661">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    @Override
+    public boolean onMenuItemActionExpand(MenuItem item) {
+<span class="nc" id="L666">        mMenu.findItem(R.id.menu_new_media).setVisible(false);</span>
+<span class="nc" id="L667">        mMediaGridFragment.showActionableEmptyViewButton(false);</span>
+
+<span class="nc" id="L669">        enableTabs(false);</span>
+<span class="nc" id="L670">        showQuota(false);</span>
+
+        // load last search query
+<span class="nc bnc" id="L673" title="All 2 branches missed.">        if (!TextUtils.isEmpty(mQuery)) {</span>
+<span class="nc" id="L674">            onQueryTextChange(mQuery);</span>
+        }
+
+<span class="nc" id="L677">        return true;</span>
+    }
+
+    @Override
+    public boolean onMenuItemActionCollapse(MenuItem item) {
+<span class="nc" id="L682">        mMenu.findItem(R.id.menu_new_media).setVisible(true);</span>
+<span class="nc" id="L683">        mMediaGridFragment.showActionableEmptyViewButton(true);</span>
+<span class="nc" id="L684">        invalidateOptionsMenu();</span>
+
+<span class="nc" id="L686">        enableTabs(true);</span>
+<span class="nc" id="L687">        showQuota(true);</span>
+
+<span class="nc" id="L689">        return true;</span>
+    }
+
+    @Override
+    public boolean onQueryTextSubmit(String query) {
+<span class="nc bnc" id="L694" title="All 2 branches missed.">        if (mMediaGridFragment != null) {</span>
+<span class="nc" id="L695">            mMediaGridFragment.search(query);</span>
+        }
+
+<span class="nc" id="L698">        mQuery = query;</span>
+<span class="nc" id="L699">        mSearchView.clearFocus();</span>
+
+<span class="nc" id="L701">        return true;</span>
+    }
+
+    @Override
+    public boolean onQueryTextChange(String newText) {
+<span class="nc bnc" id="L706" title="All 2 branches missed.">        if (mMediaGridFragment != null) {</span>
+<span class="nc" id="L707">            mMediaGridFragment.search(newText);</span>
+        }
+
+<span class="nc" id="L710">        mQuery = newText;</span>
+
+<span class="nc" id="L712">        return true;</span>
+    }
+
+    @Override
+    public void onMediaItemSelected(int localMediaId, boolean isLongClick) {
+<span class="nc" id="L717">        MediaModel media = mMediaStore.getMediaWithLocalId(localMediaId);</span>
+<span class="nc bnc" id="L718" title="All 2 branches missed.">        if (media == null) {</span>
+<span class="nc" id="L719">            AppLog.w(AppLog.T.MEDIA, &quot;Media browser &gt; unable to load localMediaId = &quot; + localMediaId);</span>
+<span class="nc" id="L720">            ToastUtils.showToast(this, R.string.error_media_load);</span>
+<span class="nc" id="L721">            return;</span>
+        }
+
+        // do nothing for failed uploads
+<span class="nc bnc" id="L725" title="All 2 branches missed.">        if (MediaUploadState.fromString(media.getUploadState()) == MediaUploadState.FAILED) {</span>
+<span class="nc" id="L726">            return;</span>
+        }
+
+        // show detail view when tapped if we're browsing media, when used as a picker show detail
+        // when long tapped (to mimic native photo picker)
+<span class="nc bnc" id="L731" title="All 4 branches missed.">        if (mBrowserType.isBrowser() &amp;&amp; !isLongClick</span>
+<span class="nc bnc" id="L732" title="All 4 branches missed.">            || mBrowserType.isPicker() &amp;&amp; isLongClick) {</span>
+<span class="nc" id="L733">            showMediaSettings(media);</span>
+<span class="nc bnc" id="L734" title="All 4 branches missed.">        } else if ((mBrowserType.isSingleImagePicker() || mBrowserType.isSingleMediaPicker() || mBrowserType</span>
+<span class="nc bnc" id="L735" title="All 2 branches missed.">                .isSingleFilePicker() || mBrowserType</span>
+<span class="nc bnc" id="L736" title="All 4 branches missed.">                            .isSingleAudioFilePicker()) &amp;&amp; !isLongClick) {</span>
+            // if we're picking a single media item, we're done
+<span class="nc" id="L738">            Intent intent = new Intent();</span>
+<span class="nc" id="L739">            ArrayList&lt;Long&gt; remoteMediaIds = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L740">            remoteMediaIds.add(media.getMediaId());</span>
+<span class="nc" id="L741">            intent.putExtra(RESULT_IDS, ListUtils.toLongArray(remoteMediaIds));</span>
+<span class="nc" id="L742">            setResult(RESULT_OK, intent);</span>
+<span class="nc" id="L743">            finish();</span>
+        }
+<span class="nc" id="L745">    }</span>
+
+    @Override
+    public void onMediaRequestRetry(int localMediaId) {
+<span class="nc" id="L749">        MediaModel media = mMediaStore.getMediaWithLocalId(localMediaId);</span>
+<span class="nc bnc" id="L750" title="All 2 branches missed.">        if (media != null) {</span>
+<span class="nc" id="L751">            addMediaToUploadService(media);</span>
+        } else {
+<span class="nc" id="L753">            ToastUtils.showToast(this, R.string.error_media_not_found);</span>
+        }
+<span class="nc" id="L755">    }</span>
+
+    @Override
+    public void onMediaRequestDelete(int localMediaId) {
+<span class="nc" id="L759">        ArrayList&lt;Integer&gt; ids = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L760">        ids.add(localMediaId);</span>
+<span class="nc" id="L761">        deleteMedia(ids);</span>
+<span class="nc" id="L762">    }</span>
+
+    private void showMediaSettings(@NonNull MediaModel media) {
+<span class="nc" id="L765">        List&lt;MediaModel&gt; mediaList = mMediaGridFragment.getFilteredMedia();</span>
+<span class="nc" id="L766">        ArrayList&lt;String&gt; idList = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L767" title="All 2 branches missed.">        for (MediaModel thisMedia : mediaList) {</span>
+<span class="nc" id="L768">            idList.add(Integer.toString(thisMedia.getId()));</span>
+<span class="nc" id="L769">        }</span>
+<span class="nc" id="L770">        MediaSettingsActivity.showForResult(this, mSite, media, idList);</span>
+<span class="nc" id="L771">    }</span>
+
+    @Override
+    public void onMediaCapturePathReady(String mediaCapturePath) {
+<span class="nc" id="L775">        mMediaCapturePath = mediaCapturePath;</span>
+<span class="nc" id="L776">    }</span>
+
+    private void showMediaToastError(@StringRes int message, @Nullable String messageDetail) {
+<span class="nc bnc" id="L779" title="All 2 branches missed.">        if (isFinishing()) {</span>
+<span class="nc" id="L780">            return;</span>
+        }
+<span class="nc" id="L782">        String errorMessage = getString(message);</span>
+<span class="nc bnc" id="L783" title="All 2 branches missed.">        if (!TextUtils.isEmpty(messageDetail)) {</span>
+<span class="nc" id="L784">            errorMessage += &quot;. &quot; + messageDetail;</span>
+        }
+<span class="nc" id="L786">        ToastUtils.showToast(this, errorMessage, LONG);</span>
+<span class="nc" id="L787">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onMediaChanged(OnMediaChanged event) {
+<span class="nc" id="L792">        AppLog.d(AppLog.T.MEDIA, &quot;MediaBrowser onMediaChanged &gt; &quot; + event.cause);</span>
+
+<span class="nc bnc" id="L794" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L795">            AppLog.w(AppLog.T.MEDIA, &quot;Received onMediaChanged error: &quot; + event.error.type</span>
+                    + &quot; - &quot; + event.error.message);
+<span class="nc" id="L797">            showMediaToastError(R.string.media_generic_error, event.error.message);</span>
+<span class="nc" id="L798">            return;</span>
+        }
+
+<span class="nc bnc" id="L801" title="All 2 branches missed.">        switch (event.cause) {</span>
+            case DELETE_MEDIA:
+<span class="nc bnc" id="L803" title="All 2 branches missed.">                if (event.mediaList != null) {</span>
+                    // If the media was deleted, remove it from multi select if it was selected
+<span class="nc bnc" id="L805" title="All 2 branches missed.">                    for (MediaModel mediaModel : event.mediaList) {</span>
+<span class="nc" id="L806">                        int localMediaId = mediaModel.getId();</span>
+<span class="nc" id="L807">                        mMediaGridFragment.removeFromMultiSelect(localMediaId);</span>
+<span class="nc" id="L808">                    }</span>
+                }
+                break;
+        }
+
+<span class="nc bnc" id="L813" title="All 4 branches missed.">        if (event.mediaList != null &amp;&amp; event.mediaList.size() == 1) {</span>
+<span class="nc" id="L814">            updateMediaGridItem(event.mediaList.get(0), true);</span>
+        } else {
+<span class="nc" id="L816">            reloadMediaGrid();</span>
+        }
+<span class="nc" id="L818">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onMediaUploaded(OnMediaUploaded event) {
+<span class="nc" id="L823">        mDispatcher.dispatch(SiteActionBuilder.newFetchSiteAction(mSite));</span>
+
+<span class="nc bnc" id="L825" title="All 2 branches missed.">        if (event.media != null) {</span>
+<span class="nc" id="L826">            updateMediaGridItem(event.media, event.isError());</span>
+        } else {
+<span class="nc" id="L828">            reloadMediaGrid();</span>
+        }
+<span class="nc" id="L830">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onMediaListFetched(OnMediaListFetched event) {
+<span class="nc bnc" id="L835" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L836">            return;</span>
+        }
+<span class="nc" id="L838">        refreshTabs();</span>
+<span class="nc" id="L839">    }</span>
+
+    @Override
+    public void onSupportActionModeStarted(@NonNull ActionMode mode) {
+<span class="nc" id="L843">        super.onSupportActionModeStarted(mode);</span>
+<span class="nc" id="L844">        enableTabs(false);</span>
+<span class="nc" id="L845">        showQuota(false);</span>
+<span class="nc" id="L846">    }</span>
+
+    @Override
+    public void onSupportActionModeFinished(@NonNull ActionMode mode) {
+<span class="nc" id="L850">        super.onSupportActionModeFinished(mode);</span>
+<span class="nc" id="L851">        enableTabs(true);</span>
+<span class="nc" id="L852">        showQuota(true);</span>
+<span class="nc" id="L853">    }</span>
+
+    // TODO: in a future PR this and startMediaDeleteService() can be simplified since multiselect delete was dropped
+    private void deleteMedia(final ArrayList&lt;Integer&gt; ids) {
+<span class="nc" id="L857">        final ArrayList&lt;MediaModel&gt; mediaToDelete = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L858">        int processedItemCount = 0;</span>
+
+<span class="nc bnc" id="L860" title="All 2 branches missed.">        for (int currentId : ids) {</span>
+<span class="nc" id="L861">            MediaModel mediaModel = mMediaStore.getMediaWithLocalId(currentId);</span>
+<span class="nc bnc" id="L862" title="All 2 branches missed.">            if (mediaModel == null) {</span>
+<span class="nc" id="L863">                continue;</span>
+            }
+
+            // if uploading, first issue a cancel upload command
+<span class="nc bnc" id="L867" title="All 2 branches missed.">            if (UploadService.isPendingOrInProgressMediaUpload(mediaModel)) {</span>
+<span class="nc" id="L868">                CancelMediaPayload payload = new CancelMediaPayload(mSite, mediaModel, false);</span>
+<span class="nc" id="L869">                mDispatcher.dispatch(MediaActionBuilder.newCancelMediaUploadAction(payload));</span>
+            }
+
+<span class="nc bnc" id="L872" title="All 2 branches missed.">            if (mediaModel.getUploadState() != null</span>
+<span class="nc bnc" id="L873" title="All 2 branches missed.">                    &amp;&amp; MediaUtils.isLocalFile(mediaModel.getUploadState().toLowerCase(Locale.ROOT))) {</span>
+<span class="nc" id="L874">                mDispatcher.dispatch(MediaActionBuilder.newRemoveMediaAction(mediaModel));</span>
+            } else {
+<span class="nc" id="L876">                mediaToDelete.add(mediaModel);</span>
+<span class="nc" id="L877">                mediaModel.setUploadState(MediaUploadState.DELETING);</span>
+<span class="nc" id="L878">                mDispatcher.dispatch(MediaActionBuilder.newUpdateMediaAction(mediaModel));</span>
+            }
+<span class="nc" id="L880">            processedItemCount++;</span>
+<span class="nc" id="L881">        }</span>
+
+<span class="nc bnc" id="L883" title="All 2 branches missed.">        if (processedItemCount != ids.size()) {</span>
+<span class="nc" id="L884">            ToastUtils.showToast(this, R.string.cannot_delete_multi_media_items, LONG);</span>
+        }
+
+        // mark items for delete without actually deleting items yet,
+        // and then refresh the grid
+<span class="nc bnc" id="L889" title="All 2 branches missed.">        if (!mediaToDelete.isEmpty()) {</span>
+<span class="nc" id="L890">            startMediaDeleteService(mediaToDelete);</span>
+        }
+<span class="nc" id="L892">    }</span>
+
+    private void uploadList(List&lt;Uri&gt; uriList) {
+<span class="nc bnc" id="L895" title="All 4 branches missed.">        if (uriList == null || uriList.size() == 0) {</span>
+<span class="nc" id="L896">            return;</span>
+        }
+<span class="nc bnc" id="L898" title="All 2 branches missed.">        for (Uri uri : uriList) {</span>
+<span class="nc bnc" id="L899" title="All 2 branches missed.">            if (uri != null) {</span>
+<span class="nc" id="L900">                WPMediaUtils.fetchMediaAndDoNext(this, uri,</span>
+<span class="nc" id="L901">                        downloadedUri -&gt; queueFileForUpload(</span>
+<span class="nc" id="L902">                                getOptimizedPictureIfNecessary(downloadedUri),</span>
+<span class="nc" id="L903">                                getContentResolver().getType(downloadedUri)));</span>
+            }
+<span class="nc" id="L905">        }</span>
+<span class="nc" id="L906">    }</span>
+
+<span class="nc" id="L908">    private final OnBackStackChangedListener mOnBackStackChangedListener =</span>
+<span class="nc" id="L909">            () -&gt; ActivityUtils.hideKeyboard(MediaBrowserActivity.this);</span>
+
+    private void doBindDeleteService(Intent intent) {
+<span class="nc" id="L912">        mDeleteServiceBound = bindService(intent, mDeleteConnection,</span>
+                Context.BIND_AUTO_CREATE | Context.BIND_ABOVE_CLIENT);
+<span class="nc" id="L914">    }</span>
+
+    private void doUnbindDeleteService() {
+<span class="nc bnc" id="L917" title="All 2 branches missed.">        if (mDeleteServiceBound) {</span>
+<span class="nc" id="L918">            unbindService(mDeleteConnection);</span>
+<span class="nc" id="L919">            mDeleteServiceBound = false;</span>
+        }
+<span class="nc" id="L921">    }</span>
+
+<span class="nc" id="L923">    private final ServiceConnection mDeleteConnection = new ServiceConnection() {</span>
+        @Override
+        public void onServiceConnected(ComponentName className, IBinder service) {
+<span class="nc" id="L926">            mDeleteService = (MediaDeleteService.MediaDeleteBinder) service;</span>
+<span class="nc" id="L927">        }</span>
+
+        @Override
+        public void onServiceDisconnected(ComponentName arg0) {
+<span class="nc" id="L931">            mDeleteService = null;</span>
+<span class="nc" id="L932">        }</span>
+    };
+
+<span class="nc" id="L935">    private final BroadcastReceiver mReceiver = new BroadcastReceiver() {</span>
+        @Override
+        public void onReceive(Context context, Intent intent) {
+<span class="nc bnc" id="L938" title="All 2 branches missed.">            if (ConnectivityManager.CONNECTIVITY_ACTION.equals(intent.getAction())) {</span>
+                // Coming from zero connection. Continue what's pending for delete
+<span class="nc bnc" id="L940" title="All 2 branches missed.">                if (mMediaStore.hasSiteMediaToDelete(mSite)) {</span>
+<span class="nc" id="L941">                    startMediaDeleteService(null);</span>
+                }
+            }
+<span class="nc" id="L944">        }</span>
+    };
+
+    public void showAddMediaPopup() {
+<span class="nc" id="L948">        View anchor = findViewById(R.id.menu_new_media);</span>
+<span class="nc" id="L949">        PopupMenu popup = new PopupMenu(this, anchor);</span>
+
+<span class="nc" id="L951">        popup.getMenu().add(R.string.photo_picker_capture_photo).setOnMenuItemClickListener(</span>
+                item -&gt; {
+<span class="nc" id="L953">                    doAddMediaItemClicked(AddMenuItem.ITEM_CAPTURE_PHOTO);</span>
+<span class="nc" id="L954">                    return true;</span>
+                });
+
+<span class="nc bnc" id="L957" title="All 2 branches missed.">        if (!mBrowserType.isSingleImagePicker()) {</span>
+<span class="nc" id="L958">            popup.getMenu().add(R.string.photo_picker_capture_video).setOnMenuItemClickListener(</span>
+                    item -&gt; {
+<span class="nc" id="L960">                        doAddMediaItemClicked(AddMenuItem.ITEM_CAPTURE_VIDEO);</span>
+<span class="nc" id="L961">                        return true;</span>
+                    });
+        }
+
+<span class="nc" id="L965">        popup.getMenu().add(R.string.photo_picker_choose_file).setOnMenuItemClickListener(</span>
+                item -&gt; {
+<span class="nc" id="L967">                    doAddMediaItemClicked(AddMenuItem.ITEM_CHOOSE_FILE);</span>
+<span class="nc" id="L968">                    return true;</span>
+                });
+
+<span class="nc bnc" id="L971" title="All 4 branches missed.">        if (mBrowserType.isBrowser() &amp;&amp; mSite.isUsingWpComRestApi()) {</span>
+<span class="nc" id="L972">            popup.getMenu().add(R.string.photo_picker_stock_media).setOnMenuItemClickListener(</span>
+                    item -&gt; {
+<span class="nc" id="L974">                        doAddMediaItemClicked(AddMenuItem.ITEM_CHOOSE_STOCK_MEDIA);</span>
+<span class="nc" id="L975">                        return true;</span>
+                    });
+        }
+
+<span class="nc bnc" id="L979" title="All 2 branches missed.">        if (mBrowserType.isBrowser()) {</span>
+<span class="nc" id="L980">            popup.getMenu().add(R.string.photo_picker_gif).setOnMenuItemClickListener(</span>
+                    item -&gt; {
+<span class="nc" id="L982">                        doAddMediaItemClicked(AddMenuItem.ITEM_CHOOSE_GIF);</span>
+<span class="nc" id="L983">                        return true;</span>
+                    });
+        }
+
+<span class="nc" id="L987">        popup.show();</span>
+<span class="nc" id="L988">    }</span>
+
+    private void completeUploadMediaQuickStartTask() {
+<span class="nc bnc" id="L991" title="All 2 branches missed.">        if (mSelectedSiteRepository.getSelectedSite() != null</span>
+<span class="nc bnc" id="L992" title="All 2 branches missed.">            &amp;&amp; mQuickStartRepository.isPendingTask(QuickStartExistingSiteTask.UPLOAD_MEDIA)) {</span>
+<span class="nc" id="L993">            mQuickStartRepository.completeTask(QuickStartExistingSiteTask.UPLOAD_MEDIA);</span>
+        }
+<span class="nc" id="L995">    }</span>
+
+    private void doAddMediaItemClicked(@NonNull AddMenuItem item) {
+<span class="nc" id="L998">        mLastAddMediaItemClicked = item;</span>
+
+        // stock photos item requires no permission, all other items do
+<span class="nc bnc" id="L1001" title="All 2 branches missed.">        if (item != AddMenuItem.ITEM_CHOOSE_STOCK_MEDIA) {</span>
+            String[] permissions;
+<span class="nc bnc" id="L1003" title="All 4 branches missed.">            if (item == AddMenuItem.ITEM_CAPTURE_PHOTO || item == AddMenuItem.ITEM_CAPTURE_VIDEO) {</span>
+<span class="nc" id="L1004">                permissions = new String[]{Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE};</span>
+            } else {
+<span class="nc" id="L1006">                permissions = new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE};</span>
+            }
+<span class="nc bnc" id="L1008" title="All 2 branches missed.">            if (!PermissionUtils.checkAndRequestPermissions(</span>
+                    this, WPPermissionUtils.MEDIA_BROWSER_PERMISSION_REQUEST_CODE, permissions)) {
+<span class="nc" id="L1010">                return;</span>
+            }
+        }
+
+<span class="nc bnc" id="L1014" title="All 6 branches missed.">        switch (item) {</span>
+            case ITEM_CAPTURE_PHOTO:
+<span class="nc" id="L1016">                WPMediaUtils.launchCamera(this, BuildConfig.APPLICATION_ID, this);</span>
+<span class="nc" id="L1017">                break;</span>
+            case ITEM_CAPTURE_VIDEO:
+<span class="nc" id="L1019">                WPMediaUtils.launchVideoCamera(this);</span>
+<span class="nc" id="L1020">                break;</span>
+            case ITEM_CHOOSE_FILE:
+<span class="nc" id="L1022">                mMediaPickerLauncher.showFilePicker(this, true, mSite);</span>
+<span class="nc" id="L1023">                break;</span>
+            case ITEM_CHOOSE_STOCK_MEDIA:
+<span class="nc" id="L1025">                mMediaPickerLauncher.showStockMediaPickerForResult(this,</span>
+                        mSite, RequestCodes.STOCK_MEDIA_PICKER_MULTI_SELECT, true);
+<span class="nc" id="L1027">                break;</span>
+            case ITEM_CHOOSE_GIF:
+<span class="nc" id="L1029">                mMediaPickerLauncher.showGifPickerForResult(</span>
+                        this,
+                        mSite,
+                        true
+                );
+                break;
+        }
+<span class="nc" id="L1036">    }</span>
+
+    private Uri getOptimizedPictureIfNecessary(Uri originalUri) {
+<span class="nc" id="L1039">        String filePath = MediaUtils.getRealPathFromURI(this, originalUri);</span>
+<span class="nc bnc" id="L1040" title="All 2 branches missed.">        if (TextUtils.isEmpty(filePath)) {</span>
+<span class="nc" id="L1041">            return originalUri;</span>
+        }
+<span class="nc" id="L1043">        Uri optimizedMedia = WPMediaUtils.getOptimizedMedia(this, filePath, false);</span>
+<span class="nc bnc" id="L1044" title="All 2 branches missed.">        if (optimizedMedia != null) {</span>
+<span class="nc" id="L1045">            return optimizedMedia;</span>
+        } else {
+            // Optimization is OFF. Make sure the picture is in portrait for .org site
+            // Fix for the rotation issue https://github.com/wordpress-mobile/WordPress-Android/issues/5737
+<span class="nc bnc" id="L1049" title="All 2 branches missed.">            if (!mSite.isWPCom()) {</span>
+                // If it's not wpcom we must rotate the picture locally
+<span class="nc" id="L1051">                Uri rotatedMedia = WPMediaUtils.fixOrientationIssue(this, filePath, false);</span>
+<span class="nc bnc" id="L1052" title="All 2 branches missed.">                if (rotatedMedia != null) {</span>
+<span class="nc" id="L1053">                    return rotatedMedia;</span>
+                }
+            }
+        }
+
+<span class="nc" id="L1058">        return originalUri;</span>
+    }
+
+    private void addMediaToUploadService(@NonNull MediaModel media) {
+<span class="nc" id="L1062">        ArrayList&lt;MediaModel&gt; mediaList = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1063">        mediaList.add(media);</span>
+
+<span class="nc" id="L1065">        addMediaToUploadService(mediaList);</span>
+<span class="nc" id="L1066">    }</span>
+
+    private void addMediaToUploadService(@NonNull ArrayList&lt;MediaModel&gt; mediaModels) {
+        // Start the upload service if it's not started and fill the media queue
+<span class="nc bnc" id="L1070" title="All 2 branches missed.">        if (!NetworkUtils.isNetworkAvailable(this)) {</span>
+<span class="nc" id="L1071">            AppLog.v(AppLog.T.MEDIA, &quot;Unable to start UploadService, internet connection required.&quot;);</span>
+<span class="nc" id="L1072">            ToastUtils.showToast(this, R.string.no_network_message, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L1073">            return;</span>
+        }
+
+<span class="nc" id="L1076">        UploadService.uploadMedia(this, mediaModels);</span>
+<span class="nc" id="L1077">        AppRatingDialog.INSTANCE.incrementInteractions(APP_REVIEWS_EVENT_INCREMENTED_BY_UPLOADING_MEDIA);</span>
+<span class="nc" id="L1078">    }</span>
+
+    private void queueFileForUpload(Uri uri, String mimeType) {
+<span class="nc" id="L1081">        MediaModel media = FluxCUtils.mediaModelFromLocalUri(this, uri, mimeType, mMediaStore, mSite.getId());</span>
+<span class="nc bnc" id="L1082" title="All 2 branches missed.">        if (media == null) {</span>
+<span class="nc" id="L1083">            ToastUtils.showToast(this, R.string.file_not_found, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L1084">            return;</span>
+        }
+
+<span class="nc" id="L1087">        mDispatcher.dispatch(MediaActionBuilder.newUpdateMediaAction(media));</span>
+<span class="nc" id="L1088">        addMediaToUploadService(media);</span>
+
+<span class="nc" id="L1090">        updateMediaGridItem(media, false);</span>
+<span class="nc" id="L1091">    }</span>
+
+    private void handleSharedMedia() {
+<span class="nc" id="L1094">        Intent intent = getIntent();</span>
+
+        final List&lt;Uri&gt; multiStream;
+<span class="nc bnc" id="L1097" title="All 2 branches missed.">        if (Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())) {</span>
+<span class="nc" id="L1098">            multiStream = intent.getParcelableArrayListExtra((Intent.EXTRA_STREAM));</span>
+<span class="nc bnc" id="L1099" title="All 2 branches missed.">        } else if (Intent.ACTION_SEND.equals(intent.getAction())) {</span>
+<span class="nc" id="L1100">            multiStream = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L1101">            multiStream.add(intent.getParcelableExtra(Intent.EXTRA_STREAM));</span>
+        } else {
+<span class="nc" id="L1103">            multiStream = null;</span>
+        }
+
+<span class="nc bnc" id="L1106" title="All 2 branches missed.">        if (multiStream != null) {</span>
+<span class="nc" id="L1107">            uploadList(multiStream);</span>
+        }
+
+        // clear the intent's action, so that in case the user rotates, we don't re-upload the same files
+<span class="nc" id="L1111">        getIntent().setAction(null);</span>
+<span class="nc" id="L1112">    }</span>
+
+    private void startMediaDeleteService(ArrayList&lt;MediaModel&gt; mediaToDelete) {
+<span class="nc bnc" id="L1115" title="All 2 branches missed.">        if (!NetworkUtils.isNetworkAvailable(this)) {</span>
+<span class="nc" id="L1116">            AppLog.v(AppLog.T.MEDIA, &quot;Unable to start MediaDeleteService, internet connection required.&quot;);</span>
+<span class="nc" id="L1117">            return;</span>
+        }
+
+<span class="nc bnc" id="L1120" title="All 2 branches missed.">        if (mDeleteService != null) {</span>
+<span class="nc bnc" id="L1121" title="All 4 branches missed.">            if (mediaToDelete != null &amp;&amp; !mediaToDelete.isEmpty()) {</span>
+<span class="nc bnc" id="L1122" title="All 2 branches missed.">                for (MediaModel media : mediaToDelete) {</span>
+<span class="nc" id="L1123">                    mDeleteService.addMediaToDeleteQueue(media);</span>
+<span class="nc" id="L1124">                }</span>
+            }
+        } else {
+<span class="nc" id="L1127">            Intent intent = new Intent(this, MediaDeleteService.class);</span>
+<span class="nc" id="L1128">            intent.putExtra(MediaDeleteService.SITE_KEY, mSite);</span>
+<span class="nc bnc" id="L1129" title="All 2 branches missed.">            if (mediaToDelete != null) {</span>
+<span class="nc" id="L1130">                intent.putExtra(MediaDeleteService.MEDIA_LIST_KEY, mediaToDelete);</span>
+<span class="nc" id="L1131">                doBindDeleteService(intent);</span>
+            }
+<span class="nc" id="L1133">            startService(intent);</span>
+        }
+<span class="nc" id="L1135">    }</span>
+
+    private void updateMediaGridItem(@NonNull MediaModel media, boolean forceUpdate) {
+<span class="nc bnc" id="L1138" title="All 2 branches missed.">        if (mMediaGridFragment != null) {</span>
+<span class="nc bnc" id="L1139" title="All 2 branches missed.">            if (mMediaStore.getMediaWithLocalId(media.getId()) != null) {</span>
+<span class="nc" id="L1140">                mMediaGridFragment.updateMediaItem(media, forceUpdate);</span>
+            } else {
+<span class="nc" id="L1142">                mMediaGridFragment.removeMediaItem(media);</span>
+            }
+        }
+<span class="nc" id="L1145">    }</span>
+
+    private void updateMediaGridForTheseMedia(List&lt;MediaModel&gt; mediaModelList) {
+<span class="nc bnc" id="L1148" title="All 2 branches missed.">        if (mediaModelList != null) {</span>
+<span class="nc bnc" id="L1149" title="All 2 branches missed.">            for (MediaModel media : mediaModelList) {</span>
+<span class="nc" id="L1150">                updateMediaGridItem(media, true);</span>
+<span class="nc" id="L1151">            }</span>
+        }
+<span class="nc" id="L1153">    }</span>
+
+    private void reloadMediaGrid() {
+<span class="nc bnc" id="L1156" title="All 2 branches missed.">        if (mMediaGridFragment != null) {</span>
+<span class="nc" id="L1157">            mMediaGridFragment.reload();</span>
+<span class="nc" id="L1158">            mDispatcher.dispatch(SiteActionBuilder.newFetchSiteAction(mSite));</span>
+        }
+<span class="nc" id="L1160">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onSiteChanged(OnSiteChanged event) {
+<span class="nc" id="L1165">        SiteModel site = mSiteStore.getSiteByLocalId(mSite.getId());</span>
+
+<span class="nc bnc" id="L1167" title="All 2 branches missed.">        if (site != null) {</span>
+<span class="nc" id="L1168">            mSite = site;</span>
+<span class="nc" id="L1169">            showQuota(true);</span>
+        }
+<span class="nc" id="L1171">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(sticky = true, threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(UploadService.UploadErrorEvent event) {
+<span class="nc" id="L1176">        EventBus.getDefault().removeStickyEvent(event);</span>
+<span class="nc bnc" id="L1177" title="All 4 branches missed.">        if (event.mediaModelList != null &amp;&amp; !event.mediaModelList.isEmpty()) {</span>
+<span class="nc" id="L1178">            mUploadUtilsWrapper.onMediaUploadedSnackbarHandler(</span>
+                    this,
+<span class="nc" id="L1180">                    findViewById(R.id.tab_layout),</span>
+                    true,
+<span class="nc bnc" id="L1182" title="All 2 branches missed.">                    !TextUtils.isEmpty(event.errorMessage)</span>
+<span class="nc bnc" id="L1183" title="All 2 branches missed.">                    &amp;&amp; event.errorMessage.contains(getString(R.string.error_media_quota_exceeded))</span>
+<span class="nc" id="L1184">                        ? null</span>
+<span class="nc" id="L1185">                        : event.mediaModelList,</span>
+                    mSite,
+                    event.errorMessage
+            );
+<span class="nc" id="L1189">            updateMediaGridForTheseMedia(event.mediaModelList);</span>
+        }
+<span class="nc" id="L1191">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(sticky = true, threadMode = ThreadMode.MAIN)
+    public void onEventMainThread(UploadService.UploadMediaSuccessEvent event) {
+<span class="nc" id="L1196">        EventBus.getDefault().removeStickyEvent(event);</span>
+<span class="nc bnc" id="L1197" title="All 4 branches missed.">        if (event.mediaModelList != null &amp;&amp; !event.mediaModelList.isEmpty()) {</span>
+<span class="nc" id="L1198">            mUploadUtilsWrapper.onMediaUploadedSnackbarHandler(this,</span>
+<span class="nc" id="L1199">                    findViewById(R.id.tab_layout), false,</span>
+                    event.mediaModelList, mSite, event.successMessage);
+<span class="nc" id="L1201">            updateMediaGridForTheseMedia(event.mediaModelList);</span>
+        }
+<span class="nc" id="L1203">    }</span>
+
+    public void updateMenuNewMediaQuickStartFocusPoint(boolean shouldShow) {
+<span class="nc bnc" id="L1206" title="All 4 branches missed.">        if (mMenuNewMediaQuickStartFocusPoint != null &amp;&amp; menuNewMediaItem.isVisible()) {</span>
+<span class="nc" id="L1207">            mMenuNewMediaQuickStartFocusPoint.setVisibleOrGone(shouldShow);</span>
+        }
+<span class="nc" id="L1209">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

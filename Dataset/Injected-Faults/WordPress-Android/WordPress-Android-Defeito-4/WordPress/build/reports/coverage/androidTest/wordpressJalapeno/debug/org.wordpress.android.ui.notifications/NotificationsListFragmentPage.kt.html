@@ -1,0 +1,510 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>NotificationsListFragmentPage.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.notifications</a> &gt; <span class="el_source">NotificationsListFragmentPage.kt</span></div><h1>NotificationsListFragmentPage.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.notifications
+
+import android.app.Activity
+import android.content.Intent
+import android.os.Bundle
+import android.text.TextUtils
+import android.view.View
+import android.view.animation.Animation
+import android.view.animation.Animation.AnimationListener
+import androidx.annotation.StringRes
+import androidx.fragment.app.Fragment
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.RecyclerView.OnScrollListener
+import org.greenrobot.eventbus.EventBus
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode.MAIN
+import org.wordpress.android.BuildConfig
+import org.wordpress.android.R
+import org.wordpress.android.WordPress
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.APP_REVIEWS_EVENT_INCREMENTED_BY_CHECKING_NOTIFICATION
+import org.wordpress.android.databinding.NotificationsListFragmentPageBinding
+import org.wordpress.android.datasets.NotificationsTable
+import org.wordpress.android.fluxc.model.CommentStatus
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.push.GCMMessageHandler
+import org.wordpress.android.ui.ActivityLauncher
+import org.wordpress.android.ui.PagePostCreationSourcesDetail.POST_FROM_NOTIFS_EMPTY_VIEW
+import org.wordpress.android.ui.RequestCodes
+import org.wordpress.android.ui.ViewPagerFragment
+import org.wordpress.android.ui.main.WPMainActivity
+import org.wordpress.android.ui.main.WPMainActivity.OnScrollToTopListener
+import org.wordpress.android.ui.notifications.NotificationEvents.NoteLikeOrModerationStatusChanged
+import org.wordpress.android.ui.notifications.NotificationEvents.NotificationsChanged
+import org.wordpress.android.ui.notifications.NotificationEvents.NotificationsRefreshCompleted
+import org.wordpress.android.ui.notifications.NotificationEvents.NotificationsRefreshError
+import org.wordpress.android.ui.notifications.NotificationEvents.NotificationsUnseenStatus
+import org.wordpress.android.ui.notifications.adapters.NotesAdapter
+import org.wordpress.android.ui.notifications.adapters.NotesAdapter.DataLoadedListener
+import org.wordpress.android.ui.notifications.adapters.NotesAdapter.FILTERS
+import org.wordpress.android.ui.notifications.adapters.NotesAdapter.FILTERS.FILTER_ALL
+import org.wordpress.android.ui.notifications.adapters.NotesAdapter.FILTERS.FILTER_COMMENT
+import org.wordpress.android.ui.notifications.adapters.NotesAdapter.FILTERS.FILTER_FOLLOW
+import org.wordpress.android.ui.notifications.adapters.NotesAdapter.FILTERS.FILTER_LIKE
+import org.wordpress.android.ui.notifications.adapters.NotesAdapter.FILTERS.FILTER_UNREAD
+import org.wordpress.android.ui.notifications.services.NotificationsUpdateServiceStarter
+import org.wordpress.android.ui.notifications.utils.NotificationsActions
+import org.wordpress.android.util.AniUtils
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.DisplayUtils
+import org.wordpress.android.util.NetworkUtils
+import org.wordpress.android.util.WPSwipeToRefreshHelper
+import org.wordpress.android.util.helpers.SwipeToRefreshHelper
+import org.wordpress.android.widgets.AppRatingDialog.incrementInteractions
+import javax.inject.Inject
+
+<span class="nc" id="L59">class NotificationsListFragmentPage : ViewPagerFragment(R.layout.notifications_list_fragment_page),</span>
+        OnScrollToTopListener,
+        DataLoadedListener {
+    private var notesAdapter: NotesAdapter? = null
+    private var swipeToRefreshHelper: SwipeToRefreshHelper? = null
+    private var isAnimatingOutNewNotificationsBar = false
+    private var shouldRefreshNotifications = false
+    private var tabPosition = 0
+
+<span class="nc bnc" id="L68" title="All 2 branches missed.">    @Inject lateinit var accountStore: AccountStore</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">    @Inject lateinit var gcmMessageHandler: GCMMessageHandler</span>
+
+<span class="nc" id="L71">    private val showNewUnseenNotificationsRunnable = Runnable {</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">        if (isAdded) {</span>
+<span class="nc bnc" id="L73" title="All 4 branches missed.">            binding?.notificationsList?.addOnScrollListener(mOnScrollListener)</span>
+        }
+<span class="nc" id="L75">    }</span>
+
+    private var binding: NotificationsListFragmentPageBinding? = null
+
+    interface OnNoteClickListener {
+        fun onClickNote(noteId: String?)
+    }
+
+    override fun onActivityCreated(savedInstanceState: Bundle?) {
+<span class="nc" id="L84">        super.onActivityCreated(savedInstanceState)</span>
+<span class="nc" id="L85">        val adapter = createOrGetNotesAdapter()</span>
+<span class="nc bnc" id="L86" title="All 4 branches missed.">        binding?.notificationsList?.adapter = adapter</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L88">            tabPosition = savedInstanceState.getInt(KEY_TAB_POSITION, NotificationsListFragment.TAB_POSITION_ALL)</span>
+        }
+<span class="nc bnc" id="L90" title="All 6 branches missed.">        when (tabPosition) {</span>
+<span class="nc" id="L91">            NotificationsListFragment.TAB_POSITION_ALL -&gt; adapter.setFilter(FILTER_ALL)</span>
+<span class="nc" id="L92">            NotificationsListFragment.TAB_POSITION_COMMENT -&gt; adapter.setFilter(FILTER_COMMENT)</span>
+<span class="nc" id="L93">            NotificationsListFragment.TAB_POSITION_FOLLOW -&gt; adapter.setFilter(FILTER_FOLLOW)</span>
+<span class="nc" id="L94">            NotificationsListFragment.TAB_POSITION_LIKE -&gt; adapter.setFilter(FILTER_LIKE)</span>
+<span class="nc" id="L95">            NotificationsListFragment.TAB_POSITION_UNREAD -&gt; adapter.setFilter(FILTER_UNREAD)</span>
+<span class="nc" id="L96">            else -&gt; adapter.setFilter(FILTER_ALL)</span>
+        }
+<span class="nc" id="L98">    }</span>
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+<span class="nc bnc" id="L101" title="All 2 branches missed.">        if (requestCode == RequestCodes.NOTE_DETAIL) {</span>
+<span class="nc" id="L102">            shouldRefreshNotifications = false</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">            if (resultCode == Activity.RESULT_OK) {</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">                val noteId = data?.getStringExtra(NotificationsListFragment.NOTE_MODERATE_ID_EXTRA)</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                val newStatus = data?.getStringExtra(NotificationsListFragment.NOTE_MODERATE_STATUS_EXTRA)</span>
+<span class="nc bnc" id="L106" title="All 12 branches missed.">                if (!noteId.isNullOrBlank() &amp;&amp; !newStatus.isNullOrBlank()) {</span>
+<span class="nc" id="L107">                    updateNote(noteId, CommentStatus.fromString(newStatus))</span>
+                }
+            }
+        }
+<span class="nc" id="L111">    }</span>
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+<span class="nc" id="L114">        super.onCreate(savedInstanceState)</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">        (requireActivity().application as WordPress).component().inject(this)</span>
+<span class="nc" id="L116">        shouldRefreshNotifications = true</span>
+<span class="nc" id="L117">    }</span>
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+<span class="nc" id="L120">        super.onViewCreated(view, savedInstanceState)</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">        arguments?.let {</span>
+<span class="nc" id="L122">            tabPosition = it.getInt(KEY_TAB_POSITION, NotificationsListFragment.TAB_POSITION_ALL)</span>
+<span class="nc" id="L123">        }</span>
+<span class="nc" id="L124">        binding = NotificationsListFragmentPageBinding.bind(view).apply {</span>
+<span class="nc" id="L125">            notificationsList.layoutManager = LinearLayoutManager(activity)</span>
+<span class="nc" id="L126">            swipeToRefreshHelper = WPSwipeToRefreshHelper.buildSwipeToRefreshHelper(notificationsRefresh) {</span>
+<span class="nc" id="L127">                hideNewNotificationsBar()</span>
+<span class="nc" id="L128">                fetchNotesFromRemote()</span>
+<span class="nc" id="L129">            }</span>
+<span class="nc" id="L130">            layoutNewNotificatons.visibility = View.GONE</span>
+<span class="nc" id="L131">            layoutNewNotificatons.setOnClickListener { onScrollToTop() }</span>
+<span class="nc" id="L132">        }</span>
+<span class="nc" id="L133">    }</span>
+
+    override fun onDestroyView() {
+<span class="nc" id="L136">        super.onDestroyView()</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">        notesAdapter?.cancelReloadNotesTask()</span>
+<span class="nc" id="L138">        notesAdapter = null</span>
+<span class="nc" id="L139">        swipeToRefreshHelper = null</span>
+<span class="nc bnc" id="L140" title="All 4 branches missed.">        binding?.notificationsList?.adapter = null</span>
+<span class="nc bnc" id="L141" title="All 4 branches missed.">        binding?.notificationsList?.removeCallbacks(showNewUnseenNotificationsRunnable)</span>
+<span class="nc" id="L142">        binding = null</span>
+<span class="nc" id="L143">    }</span>
+
+    override fun onDataLoaded(itemsCount: Int) {
+<span class="nc bnc" id="L146" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L147">            AppLog.d(T.NOTIFS,</span>
+<span class="nc" id="L148">                    &quot;NotificationsListFragmentPage.onDataLoaded occurred when fragment is not attached.&quot;)</span>
+        }
+<span class="nc bnc" id="L150" title="All 2 branches missed.">        binding?.apply {</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">            if (itemsCount &gt; 0) {</span>
+<span class="nc" id="L152">                hideEmptyView()</span>
+            } else {
+<span class="nc" id="L154">                showEmptyViewForCurrentFilter()</span>
+            }
+<span class="nc" id="L156">        }</span>
+<span class="nc" id="L157">    }</span>
+
+    override fun onPause() {
+<span class="nc" id="L160">        super.onPause()</span>
+<span class="nc" id="L161">        shouldRefreshNotifications = true</span>
+<span class="nc" id="L162">    }</span>
+
+    override fun getScrollableViewForUniqueIdProvision(): View? {
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        return binding?.notificationsList</span>
+    }
+
+    override fun onResume() {
+<span class="nc" id="L169">        super.onResume()</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        binding?.hideNewNotificationsBar()</span>
+<span class="nc" id="L171">        EventBus.getDefault().post(NotificationsUnseenStatus(false))</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">        if (accountStore.hasAccessToken()) {</span>
+<span class="nc" id="L173">            notesAdapter!!.reloadNotesFromDBAsync()</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">            if (shouldRefreshNotifications) {</span>
+<span class="nc" id="L175">                fetchNotesFromRemote()</span>
+            }
+        }
+<span class="nc" id="L178">    }</span>
+
+    override fun onSaveInstanceState(outState: Bundle) {
+<span class="nc" id="L181">        outState.putInt(KEY_TAB_POSITION, tabPosition)</span>
+<span class="nc" id="L182">        super.onSaveInstanceState(outState)</span>
+<span class="nc" id="L183">    }</span>
+
+    override fun onScrollToTop() {
+<span class="nc bnc" id="L186" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L187">            return</span>
+        }
+<span class="nc bnc" id="L189" title="All 2 branches missed.">        binding?.apply {</span>
+<span class="nc" id="L190">            clearPendingNotificationsItemsOnUI()</span>
+<span class="nc bnc" id="L191" title="All 2 branches missed.">            val layoutManager = notificationsList.layoutManager as LinearLayoutManager</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">            if (layoutManager.findFirstCompletelyVisibleItemPosition() &gt; 0) {</span>
+<span class="nc" id="L193">                layoutManager.smoothScrollToPosition(notificationsList, null, 0)</span>
+            }
+<span class="nc" id="L195">        }</span>
+<span class="nc" id="L196">    }</span>
+
+    override fun onStart() {
+<span class="nc" id="L199">        super.onStart()</span>
+<span class="nc" id="L200">        EventBus.getDefault().register(this)</span>
+<span class="nc" id="L201">    }</span>
+
+    override fun onStop() {
+<span class="nc" id="L204">        EventBus.getDefault().unregister(this)</span>
+<span class="nc" id="L205">        super.onStop()</span>
+<span class="nc" id="L206">    }</span>
+
+<span class="nc" id="L208">    private val mOnNoteClickListener: OnNoteClickListener = object : OnNoteClickListener {</span>
+        override fun onClickNote(noteId: String?) {
+<span class="nc bnc" id="L210" title="All 2 branches missed.">            if (!isAdded) {</span>
+<span class="nc" id="L211">                return</span>
+            }
+<span class="nc bnc" id="L213" title="All 2 branches missed.">            if (TextUtils.isEmpty(noteId)) {</span>
+<span class="nc" id="L214">                return</span>
+            }
+<span class="nc" id="L216">            incrementInteractions(APP_REVIEWS_EVENT_INCREMENTED_BY_CHECKING_NOTIFICATION)</span>
+
+            // Open the latest version of this note in case it has changed, which can happen if the note was tapped
+            // from the list after it was updated by another fragment (such as NotificationsDetailListFragment).
+<span class="nc" id="L220">            openNoteForReply(activity, noteId, false, null, notesAdapter!!.currentFilter, false)</span>
+<span class="nc" id="L221">        }</span>
+    }
+<span class="nc" id="L223">    private val mOnScrollListener: OnScrollListener = object : OnScrollListener() {</span>
+        override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+<span class="nc" id="L225">            super.onScrolled(recyclerView, dx, dy)</span>
+<span class="nc bnc" id="L226" title="All 4 branches missed.">            binding?.notificationsList?.removeOnScrollListener(this)</span>
+<span class="nc bnc" id="L227" title="All 2 branches missed.">            binding?.clearPendingNotificationsItemsOnUI()</span>
+<span class="nc" id="L228">        }</span>
+    }
+
+    private fun NotificationsListFragmentPageBinding.clearPendingNotificationsItemsOnUI() {
+<span class="nc" id="L232">        hideNewNotificationsBar()</span>
+<span class="nc" id="L233">        EventBus.getDefault().post(NotificationsUnseenStatus(false))</span>
+<span class="nc" id="L234">        NotificationsActions.updateNotesSeenTimestamp()</span>
+<span class="nc" id="L235">        Thread { gcmMessageHandler.removeAllNotifications(activity) }.start()</span>
+<span class="nc" id="L236">    }</span>
+
+    private fun fetchNotesFromRemote() {
+<span class="nc bnc" id="L239" title="All 4 branches missed.">        if (!isAdded || notesAdapter == null) {</span>
+<span class="nc" id="L240">            return</span>
+        }
+<span class="nc bnc" id="L242" title="All 2 branches missed.">        if (!NetworkUtils.isNetworkAvailable(activity)) {</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">            swipeToRefreshHelper?.isRefreshing = false</span>
+<span class="nc" id="L244">            return</span>
+        }
+<span class="nc" id="L246">        NotificationsUpdateServiceStarter.startService(activity)</span>
+<span class="nc" id="L247">    }</span>
+
+    val selectedSite: SiteModel?
+<span class="nc bnc" id="L250" title="All 4 branches missed.">        get() = (activity as? WPMainActivity)?.selectedSite</span>
+
+    private fun NotificationsListFragmentPageBinding.hideEmptyView() {
+<span class="nc bnc" id="L253" title="All 2 branches missed.">        if (isAdded) {</span>
+<span class="nc" id="L254">            actionableEmptyView.visibility = View.GONE</span>
+<span class="nc" id="L255">            notificationsList.visibility = View.VISIBLE</span>
+        }
+<span class="nc" id="L257">    }</span>
+
+    private fun NotificationsListFragmentPageBinding.hideNewNotificationsBar() {
+<span class="nc bnc" id="L260" title="All 6 branches missed.">        if (!isAdded || !isNewNotificationsBarShowing || isAnimatingOutNewNotificationsBar) {</span>
+<span class="nc" id="L261">            return</span>
+        }
+<span class="nc" id="L263">        isAnimatingOutNewNotificationsBar = true</span>
+<span class="nc" id="L264">        val listener: AnimationListener = object : AnimationListener {</span>
+<span class="nc" id="L265">            override fun onAnimationStart(animation: Animation) {}</span>
+            override fun onAnimationEnd(animation: Animation) {
+<span class="nc bnc" id="L267" title="All 2 branches missed.">                if (isAdded) {</span>
+<span class="nc" id="L268">                    layoutNewNotificatons.visibility = View.GONE</span>
+<span class="nc" id="L269">                    isAnimatingOutNewNotificationsBar = false</span>
+                }
+<span class="nc" id="L271">            }</span>
+
+<span class="nc" id="L273">            override fun onAnimationRepeat(animation: Animation) {}</span>
+        }
+<span class="nc" id="L275">        AniUtils.startAnimation(layoutNewNotificatons, R.anim.notifications_bottom_bar_out, listener)</span>
+<span class="nc" id="L276">    }</span>
+
+    private val isNewNotificationsBarShowing: Boolean
+<span class="nc bnc" id="L279" title="All 6 branches missed.">        get() = binding?.layoutNewNotificatons?.visibility == View.VISIBLE</span>
+
+    private fun performActionForActiveFilter() {
+<span class="nc bnc" id="L282" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L283">            return</span>
+        }
+<span class="nc bnc" id="L285" title="All 2 branches missed.">        if (!accountStore.hasAccessToken()) {</span>
+<span class="nc" id="L286">            ActivityLauncher.showSignInForResult(activity)</span>
+<span class="nc" id="L287">            return</span>
+        }
+<span class="nc bnc" id="L289" title="All 2 branches missed.">        if (tabPosition == NotificationsListFragment.TAB_POSITION_UNREAD) {</span>
+<span class="nc" id="L290">            ActivityLauncher.addNewPostForResult(activity, selectedSite, false, POST_FROM_NOTIFS_EMPTY_VIEW, -1, null)</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">        } else if (activity is WPMainActivity) {</span>
+<span class="nc" id="L292">            (requireActivity() as WPMainActivity).setReaderPageActive()</span>
+        }
+<span class="nc" id="L294">    }</span>
+
+<span class="nc" id="L296">    private fun NotificationsListFragmentPageBinding.showEmptyView(</span>
+        @StringRes titleResId: Int,
+<span class="nc" id="L298">        @StringRes descriptionResId: Int = 0,</span>
+<span class="nc" id="L299">        @StringRes buttonResId: Int = 0</span>
+    ) {
+<span class="nc bnc" id="L301" title="All 2 branches missed.">        if (isAdded) {</span>
+<span class="nc" id="L302">            actionableEmptyView.visibility = View.VISIBLE</span>
+<span class="nc" id="L303">            notificationsList.visibility = View.GONE</span>
+<span class="nc" id="L304">            actionableEmptyView.title.setText(titleResId)</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">            if (descriptionResId != 0) {</span>
+<span class="nc" id="L306">                actionableEmptyView.subtitle.setText(descriptionResId)</span>
+<span class="nc" id="L307">                actionableEmptyView.subtitle.visibility = View.VISIBLE</span>
+            } else {
+<span class="nc" id="L309">                actionableEmptyView.subtitle.visibility = View.GONE</span>
+            }
+<span class="nc bnc" id="L311" title="All 2 branches missed.">            if (buttonResId != 0) {</span>
+<span class="nc" id="L312">                actionableEmptyView.button.setText(buttonResId)</span>
+<span class="nc" id="L313">                actionableEmptyView.button.visibility = View.VISIBLE</span>
+            } else {
+<span class="nc" id="L315">                actionableEmptyView.button.visibility = View.GONE</span>
+            }
+<span class="nc" id="L317">            actionableEmptyView.button.setOnClickListener { performActionForActiveFilter() }</span>
+        }
+<span class="nc" id="L319">    }</span>
+
+    // Show different empty view message and action button based on selected tab.
+    private fun NotificationsListFragmentPageBinding.showEmptyViewForCurrentFilter() {
+<span class="nc bnc" id="L323" title="All 2 branches missed.">        if (!accountStore.hasAccessToken()) {</span>
+<span class="nc" id="L324">            return</span>
+        }
+        val titleResId: Int
+<span class="nc" id="L327">        var descriptionResId = 0</span>
+<span class="nc" id="L328">        var buttonResId = 0</span>
+<span class="nc bnc" id="L329" title="All 6 branches missed.">        when (tabPosition) {</span>
+            NotificationsListFragment.TAB_POSITION_ALL -&gt; {
+<span class="nc" id="L331">                titleResId = R.string.notifications_empty_all</span>
+<span class="nc" id="L332">                descriptionResId = R.string.notifications_empty_action_all</span>
+<span class="nc" id="L333">                buttonResId = R.string.notifications_empty_view_reader</span>
+            }
+            NotificationsListFragment.TAB_POSITION_COMMENT -&gt; {
+<span class="nc" id="L336">                titleResId = R.string.notifications_empty_comments</span>
+<span class="nc" id="L337">                descriptionResId = R.string.notifications_empty_action_comments</span>
+<span class="nc" id="L338">                buttonResId = R.string.notifications_empty_view_reader</span>
+            }
+            NotificationsListFragment.TAB_POSITION_FOLLOW -&gt; {
+<span class="nc" id="L341">                titleResId = R.string.notifications_empty_followers</span>
+<span class="nc" id="L342">                descriptionResId = R.string.notifications_empty_action_followers_likes</span>
+<span class="nc" id="L343">                buttonResId = R.string.notifications_empty_view_reader</span>
+            }
+            NotificationsListFragment.TAB_POSITION_LIKE -&gt; {
+<span class="nc" id="L346">                titleResId = R.string.notifications_empty_likes</span>
+<span class="nc" id="L347">                descriptionResId = R.string.notifications_empty_action_followers_likes</span>
+<span class="nc" id="L348">                buttonResId = R.string.notifications_empty_view_reader</span>
+            }
+            NotificationsListFragment.TAB_POSITION_UNREAD -&gt; {
+<span class="nc bnc" id="L351" title="All 2 branches missed.">                if (selectedSite == null) {</span>
+<span class="nc" id="L352">                    titleResId = R.string.notifications_empty_unread</span>
+                } else {
+<span class="nc" id="L354">                    titleResId = R.string.notifications_empty_unread</span>
+<span class="nc" id="L355">                    descriptionResId = R.string.notifications_empty_action_unread</span>
+<span class="nc" id="L356">                    buttonResId = R.string.posts_empty_list_button</span>
+                }
+            }
+<span class="nc" id="L359">            else -&gt; titleResId = R.string.notifications_empty_list</span>
+        }
+<span class="nc" id="L361">        if (BuildConfig.ENABLE_READER) {</span>
+<span class="nc" id="L362">            showEmptyView(titleResId, descriptionResId, buttonResId)</span>
+        } else {
+            showEmptyView(titleResId)
+        }
+<span class="nc bnc" id="L366" title="All 2 branches missed.">        actionableEmptyView.image.visibility = if (DisplayUtils.isLandscape(context)) View.GONE else View.VISIBLE</span>
+<span class="nc" id="L367">    }</span>
+
+    private fun NotificationsListFragmentPageBinding.showNewNotificationsBar() {
+<span class="nc bnc" id="L370" title="All 4 branches missed.">        if (!isAdded || isNewNotificationsBarShowing) {</span>
+<span class="nc" id="L371">            return</span>
+        }
+<span class="nc" id="L373">        AniUtils.startAnimation(layoutNewNotificatons, R.anim.notifications_bottom_bar_in)</span>
+<span class="nc" id="L374">        layoutNewNotificatons.visibility = View.VISIBLE</span>
+<span class="nc" id="L375">    }</span>
+
+    private fun NotificationsListFragmentPageBinding.showNewUnseenNotificationsUI() {
+<span class="nc bnc" id="L378" title="All 4 branches missed.">        if (!isAdded || notificationsList.layoutManager == null) {</span>
+<span class="nc" id="L379">            return</span>
+        }
+<span class="nc" id="L381">        notificationsList.clearOnScrollListeners()</span>
+<span class="nc" id="L382">        notificationsList.removeCallbacks(showNewUnseenNotificationsRunnable)</span>
+<span class="nc" id="L383">        notificationsList.postDelayed(showNewUnseenNotificationsRunnable, 1000L)</span>
+<span class="nc" id="L384">        val first = notificationsList.layoutManager!!.getChildAt(0)</span>
+        // Show new notifications bar if first item is not visible on the screen.
+<span class="nc bnc" id="L386" title="All 4 branches missed.">        if (first != null &amp;&amp; notificationsList.layoutManager!!.getPosition(first) &gt; 0) {</span>
+<span class="nc" id="L387">            showNewNotificationsBar()</span>
+        }
+<span class="nc" id="L389">    }</span>
+
+    private fun updateNote(noteId: String, status: CommentStatus) {
+<span class="nc" id="L392">        val note = NotificationsTable.getNoteById(noteId)</span>
+<span class="nc bnc" id="L393" title="All 2 branches missed.">        if (note != null) {</span>
+<span class="nc" id="L394">            note.localStatus = status.toString()</span>
+<span class="nc" id="L395">            NotificationsTable.saveNote(note)</span>
+<span class="nc" id="L396">            EventBus.getDefault().post(NotificationsChanged())</span>
+        }
+<span class="nc" id="L398">    }</span>
+
+    private fun createOrGetNotesAdapter(): NotesAdapter {
+<span class="nc bnc" id="L401" title="All 2 branches missed.">        return notesAdapter ?: NotesAdapter(requireActivity(), this, null).apply {</span>
+<span class="nc" id="L402">            notesAdapter = this</span>
+<span class="nc" id="L403">            this.setOnNoteClickListener(mOnNoteClickListener)</span>
+<span class="nc" id="L404">        }</span>
+    }
+
+    @Subscribe(sticky = true, threadMode = MAIN)
+    fun onEventMainThread(event: NoteLikeOrModerationStatusChanged) {
+<span class="nc" id="L409">        NotificationsActions.downloadNoteAndUpdateDB(</span>
+<span class="nc" id="L410">                event.noteId,</span>
+                {
+<span class="nc" id="L412">                    EventBus.getDefault()</span>
+<span class="nc" id="L413">                            .removeStickyEvent(</span>
+                                    NoteLikeOrModerationStatusChanged::class.java
+                            )
+<span class="nc" id="L416">                }</span>
+        ) {
+<span class="nc" id="L418">            EventBus.getDefault().removeStickyEvent(</span>
+                    NoteLikeOrModerationStatusChanged::class.java
+            )
+<span class="nc" id="L421">        }</span>
+<span class="nc" id="L422">    }</span>
+
+    @Subscribe(threadMode = MAIN)
+    fun onEventMainThread(event: NotificationsChanged) {
+<span class="nc bnc" id="L426" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L427">            return</span>
+        }
+<span class="nc" id="L429">        notesAdapter!!.reloadNotesFromDBAsync()</span>
+<span class="nc bnc" id="L430" title="All 2 branches missed.">        if (event.hasUnseenNotes) {</span>
+<span class="nc bnc" id="L431" title="All 2 branches missed.">            binding?.showNewUnseenNotificationsUI()</span>
+        }
+<span class="nc" id="L433">    }</span>
+
+    @Subscribe(threadMode = MAIN)
+    fun onEventMainThread(event: NotificationsRefreshCompleted) {
+<span class="nc bnc" id="L437" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L438">            return</span>
+        }
+<span class="nc bnc" id="L440" title="All 2 branches missed.">        swipeToRefreshHelper?.isRefreshing = false</span>
+<span class="nc" id="L441">        notesAdapter!!.addAll(event.notes, true)</span>
+<span class="nc" id="L442">    }</span>
+
+    @Subscribe(threadMode = MAIN)
+    fun onEventMainThread(error: NotificationsRefreshError?) {
+<span class="nc bnc" id="L446" title="All 2 branches missed.">        if (isAdded) {</span>
+<span class="nc bnc" id="L447" title="All 2 branches missed.">            swipeToRefreshHelper?.isRefreshing = false</span>
+        }
+<span class="nc" id="L449">    }</span>
+
+    @Subscribe(threadMode = MAIN)
+    fun onEventMainThread(event: NotificationsUnseenStatus) {
+<span class="nc bnc" id="L453" title="All 2 branches missed.">        if (!isAdded) {</span>
+<span class="nc" id="L454">            return</span>
+        }
+<span class="nc bnc" id="L456" title="All 2 branches missed.">        binding?.apply {</span>
+<span class="nc bnc" id="L457" title="All 2 branches missed.">            if (event.hasUnseenNotes) {</span>
+<span class="nc" id="L458">                showNewUnseenNotificationsUI()</span>
+            } else {
+<span class="nc" id="L460">                hideNewNotificationsBar()</span>
+            }
+<span class="nc" id="L462">        }</span>
+<span class="nc" id="L463">    }</span>
+
+    companion object {
+        private const val KEY_TAB_POSITION = &quot;tabPosition&quot;
+        fun newInstance(position: Int): Fragment {
+<span class="nc" id="L468">            val fragment = NotificationsListFragmentPage()</span>
+<span class="nc" id="L469">            val bundle = Bundle()</span>
+<span class="nc" id="L470">            bundle.putInt(KEY_TAB_POSITION, position)</span>
+<span class="nc" id="L471">            fragment.arguments = bundle</span>
+<span class="nc" id="L472">            return fragment</span>
+        }
+
+        private fun getOpenNoteIntent(activity: Activity, noteId: String): Intent {
+<span class="nc" id="L476">            val detailIntent = Intent(activity, NotificationsDetailActivity::class.java)</span>
+<span class="nc" id="L477">            detailIntent.putExtra(NotificationsListFragment.NOTE_ID_EXTRA, noteId)</span>
+<span class="nc" id="L478">            return detailIntent</span>
+        }
+
+        fun openNoteForReply(
+            activity: Activity?,
+            noteId: String?,
+            shouldShowKeyboard: Boolean,
+            replyText: String?,
+            filter: FILTERS?,
+            isTappedFromPushNotification: Boolean
+        ) {
+<span class="nc bnc" id="L489" title="All 6 branches missed.">            if (noteId == null || activity == null || activity.isFinishing) {</span>
+<span class="nc" id="L490">                return</span>
+            }
+<span class="nc" id="L492">            val detailIntent = getOpenNoteIntent(activity, noteId)</span>
+<span class="nc" id="L493">            detailIntent.putExtra(NotificationsListFragment.NOTE_INSTANT_REPLY_EXTRA, shouldShowKeyboard)</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">            if (!TextUtils.isEmpty(replyText)) {</span>
+<span class="nc" id="L495">                detailIntent.putExtra(NotificationsListFragment.NOTE_PREFILLED_REPLY_EXTRA, replyText)</span>
+            }
+<span class="nc" id="L497">            detailIntent.putExtra(NotificationsListFragment.NOTE_CURRENT_LIST_FILTER_EXTRA, filter)</span>
+<span class="nc" id="L498">            detailIntent.putExtra(</span>
+<span class="nc" id="L499">                    NotificationsUpdateServiceStarter.IS_TAPPED_ON_NOTIFICATION,</span>
+<span class="nc" id="L500">                    isTappedFromPushNotification</span>
+            )
+<span class="nc" id="L502">            openNoteForReplyWithParams(detailIntent, activity)</span>
+<span class="nc" id="L503">        }</span>
+
+        private fun openNoteForReplyWithParams(detailIntent: Intent, activity: Activity) {
+<span class="nc" id="L506">            activity.startActivityForResult(detailIntent, RequestCodes.NOTE_DETAIL)</span>
+<span class="nc" id="L507">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

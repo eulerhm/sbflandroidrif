@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ContributionController.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.contributions</a> &gt; <span class="el_source">ContributionController.java</span></div><h1>ContributionController.java</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.contributions;
+
+import static fr.free.nrw.commons.wikidata.WikidataConstants.PLACE_OBJECT;
+
+import android.Manifest;
+import android.Manifest.permission;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.widget.Toast;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.annotation.NonNull;
+import fr.free.nrw.commons.R;
+import fr.free.nrw.commons.filepicker.DefaultCallback;
+import fr.free.nrw.commons.filepicker.FilePicker;
+import fr.free.nrw.commons.filepicker.FilePicker.ImageSource;
+import fr.free.nrw.commons.filepicker.UploadableFile;
+import fr.free.nrw.commons.kvstore.JsonKvStore;
+import fr.free.nrw.commons.location.LatLng;
+import fr.free.nrw.commons.location.LocationPermissionsHelper;
+import fr.free.nrw.commons.location.LocationPermissionsHelper.Dialog;
+import fr.free.nrw.commons.location.LocationPermissionsHelper.LocationPermissionCallback;
+import fr.free.nrw.commons.location.LocationServiceManager;
+import fr.free.nrw.commons.nearby.Place;
+import fr.free.nrw.commons.upload.UploadActivity;
+import fr.free.nrw.commons.utils.DialogUtil;
+import fr.free.nrw.commons.utils.PermissionUtils;
+import fr.free.nrw.commons.utils.ViewUtil;
+import java.util.ArrayList;
+import java.util.List;
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Singleton;
+
+@Singleton
+public class ContributionController {
+
+    public static final String ACTION_INTERNAL_UPLOADS = &quot;internalImageUploads&quot;;
+    private final JsonKvStore defaultKvStore;
+    private LatLng locationBeforeImageCapture;
+    private boolean isInAppCameraUpload;
+    public LocationPermissionCallback locationPermissionCallback;
+    private LocationPermissionsHelper locationPermissionsHelper;
+
+    @Inject
+    LocationServiceManager locationManager;
+
+    @Inject
+<span class="nc" id="L49">    public ContributionController(@Named(&quot;default_preferences&quot;) JsonKvStore defaultKvStore) {</span>
+<span class="nc" id="L50">        this.defaultKvStore = defaultKvStore;</span>
+<span class="nc" id="L51">    }</span>
+
+    /**
+     * Check for permissions and initiate camera click
+     */
+    public void initiateCameraPick(Activity activity,
+        ActivityResultLauncher&lt;String[]&gt; inAppCameraLocationPermissionLauncher) {
+<span class="nc" id="L58">        boolean useExtStorage = defaultKvStore.getBoolean(&quot;useExternalStorage&quot;, true);</span>
+<span class="nc bnc" id="L59" title="All 2 branches missed.">        if (!useExtStorage) {</span>
+<span class="nc" id="L60">            initiateCameraUpload(activity);</span>
+<span class="nc" id="L61">            return;</span>
+        }
+
+<span class="nc" id="L64">        PermissionUtils.checkPermissionsAndPerformAction(activity,</span>
+            () -&gt; {
+<span class="nc bnc" id="L66" title="All 2 branches missed.">                if (defaultKvStore.getBoolean(&quot;inAppCameraFirstRun&quot;)) {</span>
+<span class="nc" id="L67">                    defaultKvStore.putBoolean(&quot;inAppCameraFirstRun&quot;, false);</span>
+<span class="nc" id="L68">                    askUserToAllowLocationAccess(activity, inAppCameraLocationPermissionLauncher);</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">                } else if (defaultKvStore.getBoolean(&quot;inAppCameraLocationPref&quot;)) {</span>
+<span class="nc" id="L70">                    createDialogsAndHandleLocationPermissions(activity,</span>
+                        inAppCameraLocationPermissionLauncher);
+                } else {
+<span class="nc" id="L73">                    initiateCameraUpload(activity);</span>
+                }
+<span class="nc" id="L75">            },</span>
+            R.string.storage_permission_title,
+            R.string.write_storage_permission_rationale,
+            PermissionUtils.PERMISSIONS_STORAGE);
+<span class="nc" id="L79">    }</span>
+
+    /**
+     * Asks users to provide location access
+     *
+     * @param activity
+     */
+    private void createDialogsAndHandleLocationPermissions(Activity activity,
+        ActivityResultLauncher&lt;String[]&gt; inAppCameraLocationPermissionLauncher) {
+<span class="nc" id="L88">        LocationPermissionsHelper.Dialog locationAccessDialog = new Dialog(</span>
+            R.string.location_permission_title,
+            R.string.in_app_camera_location_permission_rationale
+        );
+
+<span class="nc" id="L93">        LocationPermissionsHelper.Dialog locationOffDialog = new Dialog(</span>
+            R.string.ask_to_turn_location_on,
+            R.string.in_app_camera_needs_location
+        );
+<span class="nc" id="L97">        locationPermissionCallback = new LocationPermissionCallback() {</span>
+            @Override
+            public void onLocationPermissionDenied(String toastMessage) {
+<span class="nc" id="L100">                Toast.makeText(</span>
+                    activity,
+                    toastMessage,
+                    Toast.LENGTH_LONG
+<span class="nc" id="L104">                ).show();</span>
+<span class="nc" id="L105">                initiateCameraUpload(activity);</span>
+<span class="nc" id="L106">            }</span>
+
+            @Override
+            public void onLocationPermissionGranted() {
+<span class="nc" id="L110">                initiateCameraUpload(activity);</span>
+<span class="nc" id="L111">            }</span>
+        };
+
+<span class="nc" id="L114">        locationPermissionsHelper = new LocationPermissionsHelper(</span>
+            activity, locationManager, locationPermissionCallback);
+<span class="nc bnc" id="L116" title="All 2 branches missed.">        if (inAppCameraLocationPermissionLauncher != null) {</span>
+<span class="nc" id="L117">            inAppCameraLocationPermissionLauncher.launch(</span>
+                new String[]{permission.ACCESS_FINE_LOCATION});
+        } else {
+<span class="nc" id="L120">            locationPermissionsHelper.handleLocationPermissions(locationAccessDialog,</span>
+                locationOffDialog);
+        }
+
+<span class="nc" id="L124">    }</span>
+
+    public void handleShowRationaleFlowCameraLocation(Activity activity) {
+<span class="nc" id="L127">        DialogUtil.showAlertDialog(activity, activity.getString(R.string.location_permission_title),</span>
+<span class="nc" id="L128">            activity.getString(R.string.in_app_camera_location_permission_rationale),</span>
+<span class="nc" id="L129">            activity.getString(android.R.string.ok),</span>
+<span class="nc" id="L130">            activity.getString(android.R.string.cancel),</span>
+            () -&gt; {
+<span class="nc bnc" id="L132" title="All 2 branches missed.">                if (!locationPermissionsHelper.isLocationAccessToAppsTurnedOn()) {</span>
+<span class="nc" id="L133">                    locationPermissionsHelper.showLocationOffDialog(activity);</span>
+                }
+<span class="nc" id="L135">            },</span>
+<span class="nc" id="L136">            () -&gt; locationPermissionCallback.onLocationPermissionDenied(</span>
+<span class="nc" id="L137">                activity.getString(R.string.in_app_camera_location_permission_denied)),</span>
+            null,
+            false);
+<span class="nc" id="L140">    }</span>
+
+    /**
+     * Suggest user to attach location information with pictures. If the user selects &quot;Yes&quot;, then:
+     * &lt;p&gt;
+     * Location is taken from the EXIF if the default camera application does not redact location
+     * tags.
+     * &lt;p&gt;
+     * Otherwise, if the EXIF metadata does not have location information, then location captured by
+     * the app is used
+     *
+     * @param activity
+     */
+    private void askUserToAllowLocationAccess(Activity activity,
+        ActivityResultLauncher&lt;String[]&gt; inAppCameraLocationPermissionLauncher) {
+<span class="nc" id="L155">        DialogUtil.showAlertDialog(activity,</span>
+<span class="nc" id="L156">            activity.getString(R.string.in_app_camera_location_permission_title),</span>
+<span class="nc" id="L157">            activity.getString(R.string.in_app_camera_location_access_explanation),</span>
+<span class="nc" id="L158">            activity.getString(R.string.option_allow),</span>
+<span class="nc" id="L159">            activity.getString(R.string.option_dismiss),</span>
+            () -&gt; {
+<span class="nc" id="L161">                defaultKvStore.putBoolean(&quot;inAppCameraLocationPref&quot;, true);</span>
+<span class="nc" id="L162">                createDialogsAndHandleLocationPermissions(activity,</span>
+                    inAppCameraLocationPermissionLauncher);
+<span class="nc" id="L164">            },</span>
+            () -&gt; {
+<span class="nc" id="L166">                defaultKvStore.putBoolean(&quot;inAppCameraLocationPref&quot;, false);</span>
+<span class="nc" id="L167">                initiateCameraUpload(activity);</span>
+<span class="nc" id="L168">            },</span>
+            null,
+            true);
+<span class="nc" id="L171">    }</span>
+
+    /**
+     * Initiate gallery picker
+     */
+    public void initiateGalleryPick(final Activity activity, final boolean allowMultipleUploads) {
+<span class="nc" id="L177">        initiateGalleryUpload(activity, allowMultipleUploads);</span>
+<span class="nc" id="L178">    }</span>
+
+    /**
+     * Initiate gallery picker with permission
+     */
+    public void initiateCustomGalleryPickWithPermission(final Activity activity) {
+<span class="nc" id="L184">        setPickerConfiguration(activity, true);</span>
+
+<span class="nc" id="L186">        PermissionUtils.checkPermissionsAndPerformAction(activity,</span>
+<span class="nc" id="L187">            () -&gt; FilePicker.openCustomSelector(activity, 0),</span>
+            R.string.storage_permission_title,
+            R.string.write_storage_permission_rationale,
+            PermissionUtils.PERMISSIONS_STORAGE);
+<span class="nc" id="L191">    }</span>
+
+
+    /**
+     * Open chooser for gallery uploads
+     */
+    private void initiateGalleryUpload(final Activity activity,
+        final boolean allowMultipleUploads) {
+<span class="nc" id="L199">        setPickerConfiguration(activity, allowMultipleUploads);</span>
+<span class="nc" id="L200">        boolean openDocumentIntentPreferred = defaultKvStore.getBoolean(</span>
+            &quot;openDocumentPhotoPickerPref&quot;, true);
+<span class="nc" id="L202">        FilePicker.openGallery(activity, 0, openDocumentIntentPreferred);</span>
+<span class="nc" id="L203">    }</span>
+
+    /**
+     * Sets configuration for file picker
+     */
+    private void setPickerConfiguration(Activity activity,
+        boolean allowMultipleUploads) {
+<span class="nc" id="L210">        boolean copyToExternalStorage = defaultKvStore.getBoolean(&quot;useExternalStorage&quot;, true);</span>
+<span class="nc" id="L211">        FilePicker.configuration(activity)</span>
+<span class="nc" id="L212">            .setCopyTakenPhotosToPublicGalleryAppFolder(copyToExternalStorage)</span>
+<span class="nc" id="L213">            .setAllowMultiplePickInGallery(allowMultipleUploads);</span>
+<span class="nc" id="L214">    }</span>
+
+    /**
+     * Initiate camera upload by opening camera
+     */
+    private void initiateCameraUpload(Activity activity) {
+<span class="nc" id="L220">        setPickerConfiguration(activity, false);</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">        if (defaultKvStore.getBoolean(&quot;inAppCameraLocationPref&quot;, false)) {</span>
+<span class="nc" id="L222">            locationBeforeImageCapture = locationManager.getLastLocation();</span>
+        }
+<span class="nc" id="L224">        isInAppCameraUpload = true;</span>
+<span class="nc" id="L225">        FilePicker.openCameraForImage(activity, 0);</span>
+<span class="nc" id="L226">    }</span>
+
+    /**
+     * Attaches callback for file picker.
+     */
+    public void handleActivityResult(Activity activity, int requestCode, int resultCode,
+        Intent data) {
+<span class="nc" id="L233">        FilePicker.handleActivityResult(requestCode, resultCode, data, activity,</span>
+<span class="nc" id="L234">            new DefaultCallback() {</span>
+
+                @Override
+                public void onCanceled(final ImageSource source, final int type) {
+<span class="nc" id="L238">                    super.onCanceled(source, type);</span>
+<span class="nc" id="L239">                    defaultKvStore.remove(PLACE_OBJECT);</span>
+<span class="nc" id="L240">                }</span>
+
+                @Override
+                public void onImagePickerError(Exception e, FilePicker.ImageSource source,
+                    int type) {
+<span class="nc" id="L245">                    ViewUtil.showShortToast(activity, R.string.error_occurred_in_picking_images);</span>
+<span class="nc" id="L246">                }</span>
+
+                @Override
+                public void onImagesPicked(@NonNull List&lt;UploadableFile&gt; imagesFiles,
+                    FilePicker.ImageSource source, int type) {
+<span class="nc" id="L251">                    Intent intent = handleImagesPicked(activity, imagesFiles);</span>
+<span class="nc" id="L252">                    activity.startActivity(intent);</span>
+<span class="nc" id="L253">                }</span>
+            });
+<span class="nc" id="L255">    }</span>
+
+    public List&lt;UploadableFile&gt; handleExternalImagesPicked(Activity activity,
+        Intent data) {
+<span class="nc" id="L259">        return FilePicker.handleExternalImagesPicked(data, activity);</span>
+    }
+
+    /**
+     * Returns intent to be passed to upload activity Attaches place object for nearby uploads and
+     * location before image capture if in-app camera is used
+     */
+    private Intent handleImagesPicked(Context context,
+        List&lt;UploadableFile&gt; imagesFiles) {
+<span class="nc" id="L268">        Intent shareIntent = new Intent(context, UploadActivity.class);</span>
+<span class="nc" id="L269">        shareIntent.setAction(ACTION_INTERNAL_UPLOADS);</span>
+<span class="nc" id="L270">        shareIntent</span>
+<span class="nc" id="L271">            .putParcelableArrayListExtra(UploadActivity.EXTRA_FILES, new ArrayList&lt;&gt;(imagesFiles));</span>
+<span class="nc" id="L272">        Place place = defaultKvStore.getJson(PLACE_OBJECT, Place.class);</span>
+
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        if (place != null) {</span>
+<span class="nc" id="L275">            shareIntent.putExtra(PLACE_OBJECT, place);</span>
+        }
+
+<span class="nc bnc" id="L278" title="All 2 branches missed.">        if (locationBeforeImageCapture != null) {</span>
+<span class="nc" id="L279">            shareIntent.putExtra(</span>
+                UploadActivity.LOCATION_BEFORE_IMAGE_CAPTURE,
+                locationBeforeImageCapture);
+        }
+
+<span class="nc" id="L284">        shareIntent.putExtra(</span>
+            UploadActivity.IN_APP_CAMERA_UPLOAD,
+            isInAppCameraUpload
+        );
+<span class="nc" id="L288">        isInAppCameraUpload = false;    // reset the flag for next use</span>
+<span class="nc" id="L289">        return shareIntent;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

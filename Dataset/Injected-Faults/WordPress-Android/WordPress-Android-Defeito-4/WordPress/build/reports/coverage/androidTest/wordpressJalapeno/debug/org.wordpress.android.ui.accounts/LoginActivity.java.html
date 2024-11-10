@@ -1,0 +1,983 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>LoginActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.accounts</a> &gt; <span class="el_source">LoginActivity.java</span></div><h1>LoginActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.accounts;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Bundle;
+import android.view.MenuItem;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentTransaction;
+import androidx.lifecycle.ViewModelProvider;
+
+import com.google.android.gms.auth.api.credentials.Credential;
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.api.GoogleApiClient.ConnectionCallbacks;
+import com.google.android.gms.common.api.GoogleApiClient.OnConnectionFailedListener;
+import com.google.android.material.snackbar.Snackbar;
+
+import org.jetbrains.annotations.NotNull;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.network.MemorizingTrustManager;
+import org.wordpress.android.fluxc.store.AccountStore.AuthEmailPayloadScheme;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.fluxc.store.SiteStore.ConnectSiteInfoPayload;
+import org.wordpress.android.login.AuthOptions;
+import org.wordpress.android.login.GoogleFragment;
+import org.wordpress.android.login.GoogleFragment.GoogleListener;
+import org.wordpress.android.login.Login2FaFragment;
+import org.wordpress.android.login.LoginAnalyticsListener;
+import org.wordpress.android.login.LoginEmailFragment;
+import org.wordpress.android.login.LoginEmailPasswordFragment;
+import org.wordpress.android.login.LoginGoogleFragment;
+import org.wordpress.android.login.LoginListener;
+import org.wordpress.android.login.LoginMagicLinkRequestFragment;
+import org.wordpress.android.login.LoginMagicLinkSentFragment;
+import org.wordpress.android.login.LoginMode;
+import org.wordpress.android.login.LoginSiteAddressFragment;
+import org.wordpress.android.login.LoginUsernamePasswordFragment;
+import org.wordpress.android.login.SignupConfirmationFragment;
+import org.wordpress.android.login.SignupGoogleFragment;
+import org.wordpress.android.login.SignupMagicLinkFragment;
+import org.wordpress.android.support.ZendeskExtraTags;
+import org.wordpress.android.support.ZendeskHelper;
+import org.wordpress.android.ui.ActivityLauncher;
+import org.wordpress.android.ui.JetpackConnectionSource;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.ui.RequestCodes;
+import org.wordpress.android.ui.accounts.HelpActivity.Origin;
+import org.wordpress.android.ui.accounts.LoginNavigationEvents.ShowNoJetpackSites;
+import org.wordpress.android.ui.accounts.LoginNavigationEvents.ShowSiteAddressError;
+import org.wordpress.android.ui.accounts.SmartLockHelper.Callback;
+import org.wordpress.android.ui.accounts.UnifiedLoginTracker.Click;
+import org.wordpress.android.ui.accounts.UnifiedLoginTracker.Flow;
+import org.wordpress.android.ui.accounts.UnifiedLoginTracker.Source;
+import org.wordpress.android.ui.accounts.login.LoginPrologueFragment;
+import org.wordpress.android.ui.accounts.login.LoginPrologueListener;
+import org.wordpress.android.ui.accounts.login.jetpack.LoginNoSitesFragment;
+import org.wordpress.android.ui.accounts.login.jetpack.LoginSiteCheckErrorFragment;
+import org.wordpress.android.ui.main.SitePickerActivity;
+import org.wordpress.android.ui.notifications.services.NotificationsUpdateServiceStarter;
+import org.wordpress.android.ui.posts.BasicFragmentDialog;
+import org.wordpress.android.ui.posts.BasicFragmentDialog.BasicDialogPositiveClickInterface;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.ui.reader.services.update.ReaderUpdateLogic;
+import org.wordpress.android.ui.reader.services.update.ReaderUpdateServiceStarter;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.BuildConfigWrapper;
+import org.wordpress.android.util.SelfSignedSSLUtils;
+import org.wordpress.android.util.StringUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.WPActivityUtils;
+import org.wordpress.android.util.WPUrlUtils;
+import org.wordpress.android.widgets.WPSnackbar;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.List;
+
+import javax.inject.Inject;
+
+import static org.wordpress.android.util.ActivityUtils.hideKeyboard;
+
+import dagger.android.AndroidInjector;
+import dagger.android.DispatchingAndroidInjector;
+import dagger.android.HasAndroidInjector;
+
+<span class="nc" id="L94">public class LoginActivity extends LocaleAwareActivity implements ConnectionCallbacks, OnConnectionFailedListener,</span>
+        Callback, LoginListener, GoogleListener, LoginPrologueListener,
+        HasAndroidInjector, BasicDialogPositiveClickInterface {
+    public static final String ARG_JETPACK_CONNECT_SOURCE = &quot;ARG_JETPACK_CONNECT_SOURCE&quot;;
+    public static final String MAGIC_LOGIN = &quot;magic-login&quot;;
+    public static final String TOKEN_PARAMETER = &quot;token&quot;;
+
+    private static final String KEY_SMARTLOCK_HELPER_STATE = &quot;KEY_SMARTLOCK_HELPER_STATE&quot;;
+    private static final String KEY_SIGNUP_FROM_LOGIN_ENABLED = &quot;KEY_SIGNUP_FROM_LOGIN_ENABLED&quot;;
+    private static final String KEY_SITE_LOGIN_AVAILABLE_FROM_PROLOGUE = &quot;KEY_SITE_LOGIN_AVAILABLE_FROM_PROLOGUE&quot;;
+    private static final String KEY_UNIFIED_TRACKER_SOURCE = &quot;KEY_UNIFIED_TRACKER_SOURCE&quot;;
+    private static final String KEY_UNIFIED_TRACKER_FLOW = &quot;KEY_UNIFIED_TRACKER_FLOW&quot;;
+
+    private static final String FORGOT_PASSWORD_URL_SUFFIX = &quot;wp-login.php?action=lostpassword&quot;;
+
+    private static final String GOOGLE_ERROR_DIALOG_TAG = &quot;google_error_dialog_tag&quot;;
+
+<span class="nc" id="L111">    private enum SmartLockHelperState {</span>
+<span class="nc" id="L112">        NOT_TRIGGERED,</span>
+<span class="nc" id="L113">        TRIGGER_FILL_IN_ON_CONNECT,</span>
+<span class="nc" id="L114">        FINISH_ON_CONNECT,</span>
+<span class="nc" id="L115">        FINISHED</span>
+    }
+
+    private SmartLockHelper mSmartLockHelper;
+<span class="nc" id="L119">    private SmartLockHelperState mSmartLockHelperState = SmartLockHelperState.NOT_TRIGGERED;</span>
+    private JetpackConnectionSource mJetpackConnectSource;
+    private boolean mIsJetpackConnect;
+
+    private boolean mIsSignupFromLoginEnabled;
+    private boolean mIsSmartLockTriggeredFromPrologue;
+    private boolean mIsSiteLoginAvailableFromPrologue;
+
+    private LoginMode mLoginMode;
+    private LoginViewModel mViewModel;
+
+    @Inject DispatchingAndroidInjector&lt;Object&gt; mDispatchingAndroidInjector;
+    @Inject protected LoginAnalyticsListener mLoginAnalyticsListener;
+    @Inject ZendeskHelper mZendeskHelper;
+    @Inject UnifiedLoginTracker mUnifiedLoginTracker;
+    @Inject protected SiteStore mSiteStore;
+    @Inject protected ViewModelProvider.Factory mViewModelFactory;
+    @Inject BuildConfigWrapper mBuildConfigWrapper;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L140">        ((WordPress) getApplication()).component().inject(this);</span>
+<span class="nc" id="L141">        super.onCreate(savedInstanceState);</span>
+
+<span class="nc" id="L143">        LoginFlowThemeHelper.injectMissingCustomAttributes(getTheme());</span>
+
+<span class="nc" id="L145">        setContentView(R.layout.login_activity);</span>
+
+<span class="nc bnc" id="L147" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">            if (getIntent() != null) {</span>
+<span class="nc" id="L149">                mJetpackConnectSource =</span>
+<span class="nc" id="L150">                        (JetpackConnectionSource) getIntent().getSerializableExtra(ARG_JETPACK_CONNECT_SOURCE);</span>
+            }
+
+<span class="nc" id="L153">            mLoginAnalyticsListener.trackLoginAccessed();</span>
+
+<span class="nc bnc" id="L155" title="All 9 branches missed.">            switch (getLoginMode()) {</span>
+                case FULL:
+<span class="nc" id="L157">                    mUnifiedLoginTracker.setSource(Source.DEFAULT);</span>
+<span class="nc" id="L158">                    mIsSignupFromLoginEnabled = true;</span>
+<span class="nc" id="L159">                    loginFromPrologue();</span>
+<span class="nc" id="L160">                    break;</span>
+                case JETPACK_LOGIN_ONLY:
+<span class="nc" id="L162">                    mUnifiedLoginTracker.setSource(Source.DEFAULT);</span>
+<span class="nc" id="L163">                    mIsSignupFromLoginEnabled = mBuildConfigWrapper.isSignupEnabled();</span>
+<span class="nc" id="L164">                    loginFromPrologue();</span>
+<span class="nc" id="L165">                    break;</span>
+                case WPCOM_LOGIN_ONLY:
+<span class="nc" id="L167">                    mUnifiedLoginTracker.setSource(Source.ADD_WORDPRESS_COM_ACCOUNT);</span>
+<span class="nc" id="L168">                    mIsSignupFromLoginEnabled = true;</span>
+<span class="nc" id="L169">                    checkSmartLockPasswordAndStartLogin();</span>
+<span class="nc" id="L170">                    break;</span>
+                case SELFHOSTED_ONLY:
+<span class="nc" id="L172">                    mUnifiedLoginTracker.setSource(Source.SELF_HOSTED);</span>
+<span class="nc" id="L173">                    showFragment(new LoginSiteAddressFragment(), LoginSiteAddressFragment.TAG);</span>
+<span class="nc" id="L174">                    break;</span>
+                case JETPACK_STATS:
+<span class="nc" id="L176">                    mUnifiedLoginTracker.setSource(Source.JETPACK);</span>
+<span class="nc" id="L177">                    mIsSignupFromLoginEnabled = true;</span>
+<span class="nc" id="L178">                    checkSmartLockPasswordAndStartLogin();</span>
+<span class="nc" id="L179">                    break;</span>
+                case WPCOM_LOGIN_DEEPLINK:
+<span class="nc" id="L181">                    mUnifiedLoginTracker.setSource(Source.DEEPLINK);</span>
+<span class="nc" id="L182">                    checkSmartLockPasswordAndStartLogin();</span>
+<span class="nc" id="L183">                    break;</span>
+                case WPCOM_REAUTHENTICATE:
+<span class="nc" id="L185">                    mUnifiedLoginTracker.setSource(Source.REAUTHENTICATION);</span>
+<span class="nc" id="L186">                    checkSmartLockPasswordAndStartLogin();</span>
+<span class="nc" id="L187">                    break;</span>
+                case SHARE_INTENT:
+<span class="nc" id="L189">                    mUnifiedLoginTracker.setSource(Source.SHARE);</span>
+<span class="nc" id="L190">                    checkSmartLockPasswordAndStartLogin();</span>
+<span class="nc" id="L191">                    break;</span>
+                case WOO_LOGIN_MODE:
+<span class="nc" id="L193">                    break;</span>
+            }
+        } else {
+<span class="nc" id="L196">            mSmartLockHelperState = SmartLockHelperState.valueOf(</span>
+<span class="nc" id="L197">                    savedInstanceState.getString(KEY_SMARTLOCK_HELPER_STATE));</span>
+
+<span class="nc bnc" id="L199" title="All 2 branches missed.">            if (mSmartLockHelperState != SmartLockHelperState.NOT_TRIGGERED) {</span>
+                // reconnect SmartLockHelper
+<span class="nc" id="L201">                initSmartLockHelperConnection();</span>
+            }
+
+<span class="nc" id="L204">            mIsSignupFromLoginEnabled = savedInstanceState.getBoolean(KEY_SIGNUP_FROM_LOGIN_ENABLED);</span>
+<span class="nc" id="L205">            mIsSiteLoginAvailableFromPrologue = savedInstanceState.getBoolean(KEY_SITE_LOGIN_AVAILABLE_FROM_PROLOGUE);</span>
+<span class="nc" id="L206">            String source = savedInstanceState.getString(KEY_UNIFIED_TRACKER_SOURCE);</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">            if (source != null) {</span>
+<span class="nc" id="L208">                mUnifiedLoginTracker.setSource(source);</span>
+            }
+<span class="nc" id="L210">            mUnifiedLoginTracker.setFlow(savedInstanceState.getString(KEY_UNIFIED_TRACKER_FLOW));</span>
+        }
+
+<span class="nc" id="L213">        initViewModel();</span>
+<span class="nc" id="L214">    }</span>
+
+    private void initViewModel() {
+<span class="nc" id="L217">        mViewModel = new ViewModelProvider(this, mViewModelFactory).get(LoginViewModel.class);</span>
+
+        // initObservers
+<span class="nc" id="L220">        mViewModel.getNavigationEvents().observe(this, event -&gt; {</span>
+<span class="nc" id="L221">            LoginNavigationEvents loginEvent = event.getContentIfNotHandled();</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">            if (loginEvent instanceof ShowSiteAddressError) {</span>
+<span class="nc" id="L223">                showSiteAddressError((ShowSiteAddressError) loginEvent);</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">            } else if (loginEvent instanceof ShowNoJetpackSites) {</span>
+<span class="nc" id="L225">                showNoJetpackSites();</span>
+            }
+<span class="nc" id="L227">        });</span>
+<span class="nc" id="L228">    }</span>
+
+    private void loginFromPrologue() {
+<span class="nc" id="L231">        showFragment(new LoginPrologueFragment(), LoginPrologueFragment.TAG);</span>
+<span class="nc" id="L232">        mIsSmartLockTriggeredFromPrologue = true;</span>
+<span class="nc" id="L233">        mIsSiteLoginAvailableFromPrologue = true;</span>
+<span class="nc" id="L234">        initSmartLockIfNotFinished(true);</span>
+<span class="nc" id="L235">    }</span>
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+<span class="nc" id="L239">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L240">        outState.putString(KEY_SMARTLOCK_HELPER_STATE, mSmartLockHelperState.name());</span>
+<span class="nc" id="L241">        outState.putBoolean(KEY_SIGNUP_FROM_LOGIN_ENABLED, mIsSignupFromLoginEnabled);</span>
+<span class="nc" id="L242">        outState.putBoolean(KEY_SITE_LOGIN_AVAILABLE_FROM_PROLOGUE, mIsSiteLoginAvailableFromPrologue);</span>
+<span class="nc" id="L243">        outState.putString(KEY_UNIFIED_TRACKER_SOURCE, mUnifiedLoginTracker.getSource().getValue());</span>
+<span class="nc" id="L244">        Flow flow = mUnifiedLoginTracker.getFlow();</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">        if (flow != null) {</span>
+<span class="nc" id="L246">            outState.putString(KEY_UNIFIED_TRACKER_FLOW, flow.getValue());</span>
+        }
+<span class="nc" id="L248">    }</span>
+
+    private void showFragment(Fragment fragment, String tag) {
+<span class="nc" id="L251">        FragmentTransaction fragmentTransaction = getSupportFragmentManager().beginTransaction();</span>
+<span class="nc" id="L252">        fragmentTransaction.replace(R.id.fragment_container, fragment, tag);</span>
+<span class="nc" id="L253">        fragmentTransaction.commit();</span>
+<span class="nc" id="L254">    }</span>
+
+    private void slideInFragment(Fragment fragment, boolean shouldAddToBackStack, String tag) {
+<span class="nc" id="L257">        FragmentTransaction fragmentTransaction = getSupportFragmentManager().beginTransaction();</span>
+<span class="nc" id="L258">        fragmentTransaction.setCustomAnimations(R.anim.activity_slide_in_from_right, R.anim.activity_slide_out_to_left,</span>
+                R.anim.activity_slide_in_from_left, R.anim.activity_slide_out_to_right);
+<span class="nc" id="L260">        fragmentTransaction.replace(R.id.fragment_container, fragment, tag);</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">        if (shouldAddToBackStack) {</span>
+<span class="nc" id="L262">            fragmentTransaction.addToBackStack(null);</span>
+        }
+<span class="nc" id="L264">        fragmentTransaction.commitAllowingStateLoss();</span>
+<span class="nc" id="L265">    }</span>
+
+    private void addGoogleFragment(GoogleFragment googleFragment, String tag) {
+<span class="nc" id="L268">        FragmentTransaction fragmentTransaction = getSupportFragmentManager().beginTransaction();</span>
+<span class="nc" id="L269">        googleFragment.setRetainInstance(true);</span>
+<span class="nc" id="L270">        fragmentTransaction.add(googleFragment, tag);</span>
+<span class="nc" id="L271">        fragmentTransaction.commit();</span>
+<span class="nc" id="L272">    }</span>
+
+    private LoginPrologueFragment getLoginPrologueFragment() {
+<span class="nc" id="L275">        Fragment fragment = getSupportFragmentManager().findFragmentByTag(LoginPrologueFragment.TAG);</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">        return fragment == null ? null : (LoginPrologueFragment) fragment;</span>
+    }
+
+    private LoginEmailFragment getLoginEmailFragment() {
+<span class="nc" id="L280">        Fragment fragment = getSupportFragmentManager().findFragmentByTag(LoginEmailFragment.TAG);</span>
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        return fragment == null ? null : (LoginEmailFragment) fragment;</span>
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc bnc" id="L286" title="All 2 branches missed.">        if (item.getItemId() == android.R.id.home) {</span>
+<span class="nc" id="L287">            onBackPressed();</span>
+<span class="nc" id="L288">            return true;</span>
+        }
+
+<span class="nc" id="L291">        return false;</span>
+    }
+
+    @Override
+    public LoginMode getLoginMode() {
+<span class="nc bnc" id="L296" title="All 2 branches missed.">        if (mLoginMode != null) {</span>
+            // returned the cached value
+<span class="nc" id="L298">            return mLoginMode;</span>
+        }
+
+        // compute and cache the Login mode
+<span class="nc" id="L302">        mLoginMode = LoginMode.fromIntent(getIntent());</span>
+
+<span class="nc" id="L304">        return mLoginMode;</span>
+    }
+
+    private void loggedInAndFinish(ArrayList&lt;Integer&gt; oldSitesIds, boolean doLoginUpdate) {
+<span class="nc bnc" id="L308" title="All 6 branches missed.">        switch (getLoginMode()) {</span>
+            case JETPACK_LOGIN_ONLY:
+<span class="nc bnc" id="L310" title="All 4 branches missed.">                if (!mSiteStore.hasSite() &amp;&amp; !mBuildConfigWrapper.isSiteCreationEnabled()) {</span>
+<span class="nc" id="L311">                    handleNoJetpackSites();</span>
+                } else {
+<span class="nc bnc" id="L313" title="All 2 branches missed.">                    if (!mSiteStore.hasSite()</span>
+<span class="nc bnc" id="L314" title="All 4 branches missed.">                        &amp;&amp; AppPrefs.shouldShowPostSignupInterstitial()</span>
+                        &amp;&amp; !doLoginUpdate
+<span class="nc bnc" id="L316" title="All 2 branches missed.">                        &amp;&amp; mBuildConfigWrapper.isSiteCreationEnabled()</span>
+<span class="nc bnc" id="L317" title="All 2 branches missed.">                        &amp;&amp; mBuildConfigWrapper.isSignupEnabled()</span>
+                    ) {
+<span class="nc" id="L319">                        ActivityLauncher.showPostSignupInterstitial(this);</span>
+                    } else {
+<span class="nc" id="L321">                        ActivityLauncher.showMainActivityAndLoginEpilogue(this, oldSitesIds, doLoginUpdate);</span>
+                    }
+<span class="nc" id="L323">                    setResult(Activity.RESULT_OK);</span>
+<span class="nc" id="L324">                    finish();</span>
+                }
+<span class="nc" id="L326">                break;</span>
+            case FULL:
+            case WPCOM_LOGIN_ONLY:
+<span class="nc bnc" id="L329" title="All 6 branches missed.">                if (!mSiteStore.hasSite() &amp;&amp; AppPrefs.shouldShowPostSignupInterstitial() &amp;&amp; !doLoginUpdate) {</span>
+<span class="nc" id="L330">                    ActivityLauncher.showPostSignupInterstitial(this);</span>
+                } else {
+<span class="nc" id="L332">                    ActivityLauncher.showMainActivityAndLoginEpilogue(this, oldSitesIds, doLoginUpdate);</span>
+                }
+<span class="nc" id="L334">                setResult(Activity.RESULT_OK);</span>
+<span class="nc" id="L335">                finish();</span>
+<span class="nc" id="L336">                break;</span>
+            case JETPACK_STATS:
+<span class="nc" id="L338">                ActivityLauncher.showLoginEpilogueForResult(this, oldSitesIds, true);</span>
+<span class="nc" id="L339">                break;</span>
+            case WPCOM_LOGIN_DEEPLINK:
+            case WPCOM_REAUTHENTICATE:
+<span class="nc" id="L342">                ActivityLauncher.showLoginEpilogueForResult(this, oldSitesIds, false);</span>
+<span class="nc" id="L343">                break;</span>
+            case SHARE_INTENT:
+            case SELFHOSTED_ONLY:
+                // We are comparing list of site ID's before self-hosted site was added and after, trying to find a
+                // newly added self-hosted site's ID, so we can select it
+<span class="nc" id="L348">                ArrayList&lt;Integer&gt; newSitesIds = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">                for (SiteModel site : mSiteStore.getSites()) {</span>
+<span class="nc" id="L350">                    newSitesIds.add(site.getId());</span>
+<span class="nc" id="L351">                }</span>
+<span class="nc" id="L352">                newSitesIds.removeAll(oldSitesIds);</span>
+
+<span class="nc bnc" id="L354" title="All 2 branches missed.">                if (newSitesIds.size() &gt; 0) {</span>
+<span class="nc" id="L355">                    Intent intent = new Intent();</span>
+<span class="nc" id="L356">                    intent.putExtra(SitePickerActivity.KEY_SITE_LOCAL_ID, newSitesIds.get(0));</span>
+<span class="nc" id="L357">                    setResult(Activity.RESULT_OK, intent);</span>
+<span class="nc" id="L358">                } else {</span>
+<span class="nc" id="L359">                    AppLog.e(T.MAIN, &quot;Couldn't detect newly added self-hosted site. &quot;</span>
+                                     + &quot;Expected at least 1 site ID but was 0.&quot;);
+<span class="nc" id="L361">                    ToastUtils.showToast(this, R.string.site_picker_failed_selecting_added_site);</span>
+<span class="nc" id="L362">                    setResult(Activity.RESULT_OK);</span>
+                }
+
+                // skip the epilogue when only added a self-hosted site or sharing to WordPress
+<span class="nc" id="L366">                finish();</span>
+<span class="nc" id="L367">                break;</span>
+            case WOO_LOGIN_MODE:
+                break;
+        }
+<span class="nc" id="L371">    }</span>
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+<span class="nc" id="L375">        AppLog.d(T.MAIN, &quot;LoginActivity: onActivity Result - requestCode&quot; + requestCode);</span>
+<span class="nc" id="L376">        super.onActivityResult(requestCode, resultCode, data);</span>
+
+<span class="nc bnc" id="L378" title="All 4 branches missed.">        switch (requestCode) {</span>
+            case RequestCodes.SHOW_LOGIN_EPILOGUE_AND_RETURN:
+            case RequestCodes.SHOW_SIGNUP_EPILOGUE_AND_RETURN:
+                // we showed the epilogue screen as informational and sites got loaded so, just
+                // return to login caller now
+<span class="nc" id="L383">                setResult(RESULT_OK);</span>
+<span class="nc" id="L384">                finish();</span>
+<span class="nc" id="L385">                break;</span>
+            case RequestCodes.SMART_LOCK_SAVE:
+<span class="nc bnc" id="L387" title="All 2 branches missed.">                if (resultCode == RESULT_OK) {</span>
+<span class="nc" id="L388">                    mLoginAnalyticsListener.trackLoginAutofillCredentialsUpdated();</span>
+<span class="nc" id="L389">                    AppLog.d(AppLog.T.NUX, &quot;Credentials saved&quot;);</span>
+                } else {
+<span class="nc" id="L391">                    AppLog.d(AppLog.T.NUX, &quot;Credentials save cancelled&quot;);</span>
+                }
+<span class="nc" id="L393">                break;</span>
+            case RequestCodes.SMART_LOCK_READ:
+<span class="nc bnc" id="L395" title="All 2 branches missed.">                if (resultCode == RESULT_OK) {</span>
+<span class="nc" id="L396">                    AppLog.d(AppLog.T.NUX, &quot;Credentials retrieved&quot;);</span>
+<span class="nc" id="L397">                    Credential credential = data.getParcelableExtra(Credential.EXTRA_KEY);</span>
+<span class="nc" id="L398">                    onCredentialRetrieved(credential);</span>
+<span class="nc" id="L399">                } else {</span>
+<span class="nc" id="L400">                    AppLog.e(AppLog.T.NUX, &quot;Credential read failed&quot;);</span>
+<span class="nc" id="L401">                    onCredentialsUnavailable();</span>
+                }
+                break;
+        }
+<span class="nc" id="L405">    }</span>
+
+    private void jumpToUsernamePassword(String username, String password) {
+<span class="nc" id="L408">        LoginUsernamePasswordFragment loginUsernamePasswordFragment =</span>
+<span class="nc" id="L409">                LoginUsernamePasswordFragment.newInstance(&quot;wordpress.com&quot;, &quot;wordpress.com&quot;, username, password, true);</span>
+<span class="nc" id="L410">        slideInFragment(loginUsernamePasswordFragment, true, LoginUsernamePasswordFragment.TAG);</span>
+<span class="nc" id="L411">    }</span>
+
+    private boolean initSmartLockHelperConnection() {
+<span class="nc" id="L414">        mSmartLockHelper = new SmartLockHelper(this);</span>
+<span class="nc" id="L415">        return mSmartLockHelper.initSmartLockForPasswords();</span>
+    }
+
+    private void checkSmartLockPasswordAndStartLogin() {
+<span class="nc" id="L419">        initSmartLockIfNotFinished(true);</span>
+
+<span class="nc bnc" id="L421" title="All 2 branches missed.">        if (mSmartLockHelperState == SmartLockHelperState.FINISHED) {</span>
+<span class="nc" id="L422">            startLogin();</span>
+        }
+<span class="nc" id="L424">    }</span>
+
+    /**
+     * @param triggerFillInOnConnect set to true, if you want to show an account chooser dialog when the user has
+     *                               stored their credentials in the past. Set to false, if you just want to
+     *                               initialize SmartLock eg. when you want to use it just to save users credentials.
+     */
+    private void initSmartLockIfNotFinished(boolean triggerFillInOnConnect) {
+<span class="nc bnc" id="L432" title="All 2 branches missed.">        if (mSmartLockHelperState == SmartLockHelperState.NOT_TRIGGERED) {</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">            if (initSmartLockHelperConnection()) {</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">                if (triggerFillInOnConnect) {</span>
+<span class="nc" id="L435">                    mSmartLockHelperState = SmartLockHelperState.TRIGGER_FILL_IN_ON_CONNECT;</span>
+                } else {
+<span class="nc" id="L437">                    mSmartLockHelperState = SmartLockHelperState.FINISH_ON_CONNECT;</span>
+                }
+            } else {
+                // just shortcircuit the attempt to use SmartLockHelper
+<span class="nc" id="L441">                mSmartLockHelperState = SmartLockHelperState.FINISHED;</span>
+            }
+        }
+<span class="nc" id="L444">    }</span>
+
+    private void startLogin() {
+<span class="nc bnc" id="L447" title="All 2 branches missed.">        if (getLoginEmailFragment() != null) {</span>
+            // email screen is already shown so, login has already started. Just bail.
+<span class="nc" id="L449">            return;</span>
+        }
+
+<span class="nc bnc" id="L452" title="All 2 branches missed.">        if (getLoginPrologueFragment() == null) {</span>
+            // prologue fragment is not shown so, the email screen will be the initial screen on the fragment container
+<span class="nc" id="L454">            showFragment(LoginEmailFragment.newInstance(mIsSignupFromLoginEnabled), LoginEmailFragment.TAG);</span>
+
+<span class="nc bnc" id="L456" title="All 2 branches missed.">            if (getLoginMode() == LoginMode.JETPACK_STATS) {</span>
+<span class="nc" id="L457">                mIsJetpackConnect = true;</span>
+            }
+        } else {
+            // prologue fragment is shown so, slide in the email screen (and add to history)
+<span class="nc" id="L461">            slideInFragment(LoginEmailFragment.newInstance(mIsSignupFromLoginEnabled), true, LoginEmailFragment.TAG);</span>
+        }
+<span class="nc" id="L463">    }</span>
+
+    // LoginPrologueListener implementation methods
+
+    @Override
+    public void showEmailLoginScreen() {
+<span class="nc" id="L469">        checkSmartLockPasswordAndStartLogin();</span>
+<span class="nc" id="L470">    }</span>
+
+    @Override
+    public void onTermsOfServiceClicked() {
+<span class="nc" id="L474">        AnalyticsTracker.track(AnalyticsTracker.Stat.SIGNUP_TERMS_OF_SERVICE_TAPPED);</span>
+<span class="nc" id="L475">        mUnifiedLoginTracker.trackClick(Click.TERMS_OF_SERVICE_CLICKED);</span>
+<span class="nc" id="L476">        ActivityLauncher.openUrlExternal(this, WPUrlUtils.buildTermsOfServiceUrl(this));</span>
+<span class="nc" id="L477">    }</span>
+
+    // LoginListener implementation methods
+
+    @Override
+    public void gotWpcomEmail(String email, boolean verifyEmail, @Nullable AuthOptions authOptions) {
+<span class="nc" id="L483">        initSmartLockIfNotFinished(false);</span>
+<span class="nc" id="L484">        boolean isMagicLinkEnabled =</span>
+<span class="nc bnc" id="L485" title="All 4 branches missed.">                getLoginMode() != LoginMode.WPCOM_LOGIN_DEEPLINK &amp;&amp; getLoginMode() != LoginMode.SHARE_INTENT;</span>
+
+<span class="nc bnc" id="L487" title="All 2 branches missed.">        if (authOptions != null) {</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">            if (authOptions.isPasswordless()) {</span>
+<span class="nc" id="L489">                showMagicLinkRequestScreen(email, verifyEmail, false, true);</span>
+            } else {
+<span class="nc" id="L491">                showEmailPasswordScreen(email, verifyEmail, isMagicLinkEnabled);</span>
+            }
+        } else {
+<span class="nc bnc" id="L494" title="All 2 branches missed.">            if (isMagicLinkEnabled) {</span>
+<span class="nc" id="L495">                showMagicLinkRequestScreen(email, verifyEmail, true, false);</span>
+            } else {
+<span class="nc" id="L497">                showEmailPasswordScreen(email, verifyEmail, false);</span>
+            }
+        }
+<span class="nc" id="L500">    }</span>
+
+    private void showEmailPasswordScreen(String email, boolean verifyEmail, boolean allowMagicLink) {
+<span class="nc" id="L503">        LoginEmailPasswordFragment loginEmailPasswordFragment = LoginEmailPasswordFragment</span>
+<span class="nc" id="L504">                .newInstance(email, null, null, null, false, allowMagicLink, verifyEmail);</span>
+<span class="nc" id="L505">        slideInFragment(loginEmailPasswordFragment, true, LoginEmailPasswordFragment.TAG);</span>
+<span class="nc" id="L506">    }</span>
+
+    private void showMagicLinkRequestScreen(String email, boolean verifyEmail, boolean allowPassword,
+                                            boolean forceRequestAtStart) {
+<span class="nc" id="L510">        AuthEmailPayloadScheme scheme = mViewModel.getMagicLinkScheme();</span>
+<span class="nc bnc" id="L511" title="All 2 branches missed.">        String jetpackConnectionSource = mJetpackConnectSource != null ? mJetpackConnectSource.toString() : null;</span>
+<span class="nc" id="L512">        LoginMagicLinkRequestFragment loginMagicLinkRequestFragment = LoginMagicLinkRequestFragment</span>
+<span class="nc" id="L513">                .newInstance(email, scheme, mIsJetpackConnect, jetpackConnectionSource, verifyEmail, allowPassword,</span>
+                        forceRequestAtStart);
+<span class="nc" id="L515">        slideInFragment(loginMagicLinkRequestFragment, true, LoginMagicLinkRequestFragment.TAG);</span>
+<span class="nc" id="L516">    }</span>
+
+    @Override
+    public void gotUnregisteredEmail(String email) {
+<span class="nc" id="L520">        showSignupMagicLink(email);</span>
+<span class="nc" id="L521">    }</span>
+
+    @Override
+    public void gotUnregisteredSocialAccount(String email, String displayName, String idToken, String photoUrl,
+                                             String service) {
+<span class="nc" id="L526">        SignupConfirmationFragment signupConfirmationFragment =</span>
+<span class="nc" id="L527">                SignupConfirmationFragment.newInstance(email, displayName, idToken, photoUrl, service);</span>
+<span class="nc" id="L528">        slideInFragment(signupConfirmationFragment, true, SignupConfirmationFragment.TAG);</span>
+<span class="nc" id="L529">    }</span>
+
+    @Override
+    public void loginViaSiteAddress() {
+<span class="nc" id="L533">        LoginSiteAddressFragment loginSiteAddressFragment = new LoginSiteAddressFragment();</span>
+<span class="nc" id="L534">        slideInFragment(loginSiteAddressFragment, true, LoginSiteAddressFragment.TAG);</span>
+<span class="nc" id="L535">    }</span>
+
+    @Override
+    public void loginViaSocialAccount(String email, String idToken, String service, boolean isPasswordRequired) {
+<span class="nc" id="L539">        LoginEmailPasswordFragment loginEmailPasswordFragment =</span>
+<span class="nc" id="L540">                LoginEmailPasswordFragment.newInstance(email, null, idToken, service, isPasswordRequired);</span>
+<span class="nc" id="L541">        slideInFragment(loginEmailPasswordFragment, true, LoginEmailPasswordFragment.TAG);</span>
+<span class="nc" id="L542">    }</span>
+
+    @Override
+    public void loggedInViaSocialAccount(ArrayList&lt;Integer&gt; oldSitesIds, boolean doLoginUpdate) {
+<span class="nc" id="L546">        mLoginAnalyticsListener.trackLoginSocialSuccess();</span>
+<span class="nc" id="L547">        loggedInAndFinish(oldSitesIds, doLoginUpdate);</span>
+<span class="nc" id="L548">    }</span>
+
+    @Override
+    public void loginViaWpcomUsernameInstead() {
+<span class="nc" id="L552">        jumpToUsernamePassword(null, null);</span>
+<span class="nc" id="L553">    }</span>
+
+    @Override
+    public void showMagicLinkSentScreen(String email, boolean allowPassword) {
+<span class="nc" id="L557">        LoginMagicLinkSentFragment loginMagicLinkSentFragment =</span>
+<span class="nc" id="L558">                LoginMagicLinkSentFragment.newInstance(email, allowPassword);</span>
+<span class="nc" id="L559">        slideInFragment(loginMagicLinkSentFragment, true, LoginMagicLinkSentFragment.TAG);</span>
+<span class="nc" id="L560">    }</span>
+
+    @Override
+    public void showSignupMagicLink(String email) {
+<span class="nc" id="L564">        boolean isEmailClientAvailable = WPActivityUtils.isEmailClientAvailable(this);</span>
+<span class="nc" id="L565">        AuthEmailPayloadScheme scheme = mViewModel.getMagicLinkScheme();</span>
+<span class="nc" id="L566">        SignupMagicLinkFragment signupMagicLinkFragment = SignupMagicLinkFragment.newInstance(email, mIsJetpackConnect,</span>
+<span class="nc bnc" id="L567" title="All 2 branches missed.">                mJetpackConnectSource != null ? mJetpackConnectSource.toString() : null, isEmailClientAvailable,</span>
+                scheme);
+<span class="nc" id="L569">        slideInFragment(signupMagicLinkFragment, true, SignupMagicLinkFragment.TAG);</span>
+<span class="nc" id="L570">    }</span>
+
+    @Override
+    public void showSignupSocial(String email, String displayName, String idToken, String photoUrl, String service) {
+<span class="nc bnc" id="L574" title="All 2 branches missed.">        if (GoogleFragment.SERVICE_TYPE_GOOGLE.equals(service)) {</span>
+<span class="nc" id="L575">            addGoogleFragment(SignupGoogleFragment.newInstance(email, displayName, idToken, photoUrl),</span>
+                    SignupGoogleFragment.TAG);
+        }
+<span class="nc" id="L578">    }</span>
+
+    @Override
+    public void openEmailClient(boolean isLogin) {
+<span class="nc" id="L582">        mUnifiedLoginTracker.trackClick(Click.OPEN_EMAIL_CLIENT);</span>
+<span class="nc bnc" id="L583" title="All 2 branches missed.">        if (WPActivityUtils.isEmailClientAvailable(this)) {</span>
+<span class="nc bnc" id="L584" title="All 2 branches missed.">            if (isLogin) {</span>
+<span class="nc" id="L585">                mLoginAnalyticsListener.trackLoginMagicLinkOpenEmailClientClicked();</span>
+            } else {
+<span class="nc" id="L587">                mLoginAnalyticsListener.trackSignupMagicLinkOpenEmailClientClicked();</span>
+            }
+
+<span class="nc" id="L590">            WPActivityUtils.openEmailClientChooser(this, getString(R.string.login_select_email_client));</span>
+        } else {
+<span class="nc" id="L592">            ToastUtils.showToast(this, R.string.login_email_client_not_found);</span>
+        }
+<span class="nc" id="L594">    }</span>
+
+    @Override
+    public void usePasswordInstead(String email) {
+<span class="nc" id="L598">        mLoginAnalyticsListener.trackLoginMagicLinkExited();</span>
+<span class="nc" id="L599">        LoginEmailPasswordFragment loginEmailPasswordFragment =</span>
+<span class="nc" id="L600">                LoginEmailPasswordFragment.newInstance(email, null, null, null, false);</span>
+<span class="nc" id="L601">        slideInFragment(loginEmailPasswordFragment, true, LoginEmailPasswordFragment.TAG);</span>
+<span class="nc" id="L602">    }</span>
+
+    @Override
+    public void forgotPassword(String url) {
+<span class="nc" id="L606">        mLoginAnalyticsListener.trackLoginForgotPasswordClicked();</span>
+<span class="nc" id="L607">        ActivityLauncher.openUrlExternal(this, url + FORGOT_PASSWORD_URL_SUFFIX);</span>
+<span class="nc" id="L608">    }</span>
+
+    @Override
+    public void useMagicLinkInstead(String email, boolean verifyEmail) {
+<span class="nc" id="L612">        showMagicLinkRequestScreen(email, verifyEmail, false, true);</span>
+<span class="nc" id="L613">    }</span>
+
+    @Override
+    public void needs2fa(String email, String password) {
+<span class="nc" id="L617">        Login2FaFragment login2FaFragment = Login2FaFragment.newInstance(email, password);</span>
+<span class="nc" id="L618">        slideInFragment(login2FaFragment, true, Login2FaFragment.TAG);</span>
+<span class="nc" id="L619">    }</span>
+
+    @Override
+    public void needs2faSocial(String email, String userId, String nonceAuthenticator, String nonceBackup,
+                               String nonceSms) {
+<span class="nc" id="L624">        mLoginAnalyticsListener.trackLoginSocial2faNeeded();</span>
+<span class="nc" id="L625">        Login2FaFragment login2FaFragment = Login2FaFragment.newInstanceSocial(email, userId,</span>
+                nonceAuthenticator, nonceBackup,
+                nonceSms);
+<span class="nc" id="L628">        slideInFragment(login2FaFragment, true, Login2FaFragment.TAG);</span>
+<span class="nc" id="L629">    }</span>
+
+    @Override
+    public void needs2faSocialConnect(String email, String password, String idToken, String service) {
+<span class="nc" id="L633">        mLoginAnalyticsListener.trackLoginSocial2faNeeded();</span>
+<span class="nc" id="L634">        Login2FaFragment login2FaFragment =</span>
+<span class="nc" id="L635">                Login2FaFragment.newInstanceSocialConnect(email, password, idToken, service);</span>
+<span class="nc" id="L636">        slideInFragment(login2FaFragment, true, Login2FaFragment.TAG);</span>
+<span class="nc" id="L637">    }</span>
+
+    @Override
+    public void loggedInViaPassword(ArrayList&lt;Integer&gt; oldSitesIds) {
+<span class="nc" id="L641">        loggedInAndFinish(oldSitesIds, false);</span>
+<span class="nc" id="L642">    }</span>
+
+    @Override
+    public void alreadyLoggedInWpcom(ArrayList&lt;Integer&gt; oldSitesIds) {
+<span class="nc" id="L646">        ToastUtils.showToast(this, R.string.already_logged_in_wpcom, ToastUtils.Duration.LONG);</span>
+<span class="nc" id="L647">        loggedInAndFinish(oldSitesIds, false);</span>
+<span class="nc" id="L648">    }</span>
+
+    @Override
+    public void gotWpcomSiteInfo(String siteAddress) {
+<span class="nc" id="L652">        LoginEmailFragment loginEmailFragment = LoginEmailFragment.newInstance(siteAddress);</span>
+<span class="nc" id="L653">        slideInFragment(loginEmailFragment, true, LoginEmailFragment.TAG);</span>
+<span class="nc" id="L654">    }</span>
+
+    @Override
+    public void gotXmlRpcEndpoint(String inputSiteAddress, String endpointAddress) {
+<span class="nc" id="L658">        LoginUsernamePasswordFragment loginUsernamePasswordFragment =</span>
+<span class="nc" id="L659">                LoginUsernamePasswordFragment.newInstance(inputSiteAddress, endpointAddress, null, null, false);</span>
+<span class="nc" id="L660">        slideInFragment(loginUsernamePasswordFragment, true, LoginUsernamePasswordFragment.TAG);</span>
+<span class="nc" id="L661">    }</span>
+
+    @Override
+    public void handleSslCertificateError(MemorizingTrustManager memorizingTrustManager,
+                                          final SelfSignedSSLCallback callback) {
+<span class="nc" id="L666">        SelfSignedSSLUtils.showSSLWarningDialog(this, memorizingTrustManager, new SelfSignedSSLUtils.Callback() {</span>
+            @Override
+            public void certificateTrusted() {
+<span class="nc" id="L669">                callback.certificateTrusted();</span>
+<span class="nc" id="L670">            }</span>
+        });
+<span class="nc" id="L672">    }</span>
+
+    private void viewHelpAndSupport(Origin origin) {
+<span class="nc bnc" id="L675" title="All 2 branches missed.">        List&lt;String&gt; extraSupportTags = getLoginMode() == LoginMode.JETPACK_STATS ? Collections</span>
+<span class="nc" id="L676">                .singletonList(ZendeskExtraTags.connectingJetpack) : null;</span>
+<span class="nc" id="L677">        ActivityLauncher.viewHelpAndSupport(this, origin, null, extraSupportTags);</span>
+<span class="nc" id="L678">    }</span>
+
+    @Override
+    public void helpSiteAddress(String url) {
+<span class="nc" id="L682">        viewHelpAndSupport(Origin.LOGIN_SITE_ADDRESS);</span>
+<span class="nc" id="L683">    }</span>
+
+    @Override
+    public void helpFindingSiteAddress(String username, SiteStore siteStore) {
+<span class="nc" id="L687">        mUnifiedLoginTracker.trackClick(Click.HELP_FINDING_SITE_ADDRESS);</span>
+<span class="nc" id="L688">        mZendeskHelper.createNewTicket(this, Origin.LOGIN_SITE_ADDRESS, null);</span>
+<span class="nc" id="L689">    }</span>
+
+    @Override
+    public void loggedInViaUsernamePassword(ArrayList&lt;Integer&gt; oldSitesIds) {
+<span class="nc" id="L693">        loggedInAndFinish(oldSitesIds, false);</span>
+<span class="nc" id="L694">    }</span>
+
+    @Override
+    public void helpEmailScreen(String email) {
+<span class="nc" id="L698">        viewHelpAndSupport(Origin.LOGIN_EMAIL);</span>
+<span class="nc" id="L699">    }</span>
+
+    @Override
+    public void helpSignupEmailScreen(String email) {
+<span class="nc" id="L703">        viewHelpAndSupport(Origin.SIGNUP_EMAIL);</span>
+<span class="nc" id="L704">    }</span>
+
+    @Override
+    public void helpSignupMagicLinkScreen(String email) {
+<span class="nc" id="L708">        viewHelpAndSupport(Origin.SIGNUP_MAGIC_LINK);</span>
+<span class="nc" id="L709">    }</span>
+
+    @Override
+    public void helpSignupConfirmationScreen(String email) {
+<span class="nc" id="L713">        viewHelpAndSupport(Origin.SIGNUP_CONFIRMATION);</span>
+<span class="nc" id="L714">    }</span>
+
+    @Override
+    public void helpSocialEmailScreen(String email) {
+<span class="nc" id="L718">        viewHelpAndSupport(Origin.LOGIN_SOCIAL);</span>
+<span class="nc" id="L719">    }</span>
+
+    @Override
+    public void addGoogleLoginFragment(boolean isSignupFromLoginEnabled) {
+<span class="nc" id="L723">        addGoogleFragment(LoginGoogleFragment.newInstance(isSignupFromLoginEnabled), LoginGoogleFragment.TAG);</span>
+<span class="nc" id="L724">    }</span>
+
+    @Override
+    public void helpMagicLinkRequest(String email) {
+<span class="nc" id="L728">        viewHelpAndSupport(Origin.LOGIN_MAGIC_LINK);</span>
+<span class="nc" id="L729">    }</span>
+
+    @Override
+    public void helpMagicLinkSent(String email) {
+<span class="nc" id="L733">        viewHelpAndSupport(Origin.LOGIN_MAGIC_LINK);</span>
+<span class="nc" id="L734">    }</span>
+
+    @Override
+    public void helpEmailPasswordScreen(String email) {
+<span class="nc" id="L738">        viewHelpAndSupport(Origin.LOGIN_EMAIL_PASSWORD);</span>
+<span class="nc" id="L739">    }</span>
+
+    @Override
+    public void help2FaScreen(String email) {
+<span class="nc" id="L743">        viewHelpAndSupport(Origin.LOGIN_2FA);</span>
+<span class="nc" id="L744">    }</span>
+
+    @Override
+    public void startPostLoginServices() {
+        // Get reader tags so they're available as soon as the Reader is accessed - done for
+        // both wp.com and self-hosted (self-hosted = &quot;logged out&quot; reader) - note that this
+        // uses the application context since the activity is finished immediately below
+<span class="nc" id="L751">        ReaderUpdateServiceStarter.startService(getApplicationContext(), EnumSet.of(ReaderUpdateLogic.UpdateTask.TAGS));</span>
+
+        // Start Notification service
+<span class="nc" id="L754">        NotificationsUpdateServiceStarter.startService(getApplicationContext());</span>
+<span class="nc" id="L755">    }</span>
+
+    @Override
+    public void helpUsernamePassword(String url, String username, boolean isWpcom) {
+<span class="nc" id="L759">        viewHelpAndSupport(Origin.LOGIN_USERNAME_PASSWORD);</span>
+<span class="nc" id="L760">    }</span>
+
+    // SmartLock
+
+    @Override
+    public void saveCredentialsInSmartLock(@Nullable final String username, @Nullable final String password,
+                                           @NonNull final String displayName, @Nullable final Uri profilePicture) {
+<span class="nc bnc" id="L767" title="All 2 branches missed.">        if (getLoginMode() == LoginMode.SELFHOSTED_ONLY) {</span>
+            // bail if we are on the selfhosted flow since we haven't initialized SmartLock-for-Passwords for it.
+            // Otherwise, logging in to WPCOM via the site-picker flow (for example) results in a crash.
+            // See https://github.com/wordpress-mobile/WordPress-Android/issues/7182#issuecomment-362791364
+            // There might be more circumstances that lead to this crash though. Not all crash reports seem to
+            // originate from the site-picker.
+<span class="nc" id="L773">            return;</span>
+        }
+
+<span class="nc bnc" id="L776" title="All 2 branches missed.">        if (mSmartLockHelper == null) {</span>
+            // log some data to help us debug https://github.com/wordpress-mobile/WordPress-Android/issues/7182
+<span class="nc bnc" id="L778" title="All 2 branches missed.">            final String loginModeStr = &quot;LoginMode: &quot; + (getLoginMode() != null ? getLoginMode().name() : &quot;null&quot;);</span>
+<span class="nc" id="L779">            AppLog.w(AppLog.T.NUX, &quot;Internal inconsistency error! mSmartLockHelper found null!&quot; + loginModeStr);</span>
+
+            // bail
+<span class="nc" id="L782">            return;</span>
+        }
+
+<span class="nc" id="L785">        mSmartLockHelper.saveCredentialsInSmartLock(StringUtils.notNullStr(username), StringUtils.notNullStr(password),</span>
+                displayName, profilePicture);
+<span class="nc" id="L787">    }</span>
+
+    @Override
+    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
+<span class="nc" id="L791">        AppLog.d(AppLog.T.NUX, &quot;Connection result: &quot; + connectionResult);</span>
+<span class="nc" id="L792">        mSmartLockHelperState = SmartLockHelperState.FINISHED;</span>
+<span class="nc" id="L793">    }</span>
+
+    @Override
+    public void onConnected(Bundle bundle) {
+<span class="nc" id="L797">        AppLog.d(AppLog.T.NUX, &quot;Google API client connected&quot;);</span>
+
+<span class="nc bnc" id="L799" title="All 4 branches missed.">        switch (mSmartLockHelperState) {</span>
+            case NOT_TRIGGERED:
+                // should not reach this state here!
+<span class="nc" id="L802">                throw new RuntimeException(&quot;Internal inconsistency error!&quot;);</span>
+            case TRIGGER_FILL_IN_ON_CONNECT:
+<span class="nc" id="L804">                mSmartLockHelperState = SmartLockHelperState.FINISHED;</span>
+
+                // force account chooser
+<span class="nc" id="L807">                mSmartLockHelper.disableAutoSignIn();</span>
+
+<span class="nc" id="L809">                mSmartLockHelper.smartLockAutoFill(this);</span>
+<span class="nc" id="L810">                break;</span>
+            case FINISH_ON_CONNECT:
+<span class="nc" id="L812">                mSmartLockHelperState = SmartLockHelperState.FINISHED;</span>
+<span class="nc" id="L813">                break;</span>
+            case FINISHED:
+                // don't do anything special. We're reconnecting the GoogleApiClient on rotation.
+                break;
+        }
+<span class="nc" id="L818">    }</span>
+
+    @Override
+    public void onCredentialRetrieved(Credential credential) {
+<span class="nc" id="L822">        mLoginAnalyticsListener.trackLoginAutofillCredentialsFilled();</span>
+
+<span class="nc" id="L824">        mSmartLockHelperState = SmartLockHelperState.FINISHED;</span>
+
+<span class="nc" id="L826">        final String username = credential.getId();</span>
+<span class="nc" id="L827">        final String password = credential.getPassword();</span>
+<span class="nc" id="L828">        jumpToUsernamePassword(username, password);</span>
+<span class="nc" id="L829">    }</span>
+
+    @Override
+    public void onCredentialsUnavailable() {
+<span class="nc" id="L833">        mSmartLockHelperState = SmartLockHelperState.FINISHED;</span>
+<span class="nc bnc" id="L834" title="All 2 branches missed.">        if (mIsSmartLockTriggeredFromPrologue) {</span>
+<span class="nc" id="L835">            return;</span>
+        }
+<span class="nc" id="L837">        startLogin();</span>
+<span class="nc" id="L838">    }</span>
+
+    @Override
+    public void onConnectionSuspended(int i) {
+<span class="nc" id="L842">        AppLog.d(AppLog.T.NUX, &quot;Google API client connection suspended&quot;);</span>
+<span class="nc" id="L843">    }</span>
+
+    @Override
+    public void showSignupToLoginMessage() {
+<span class="nc" id="L847">        WPSnackbar.make(</span>
+<span class="nc" id="L848">                findViewById(R.id.main_view),</span>
+                R.string.signup_user_exists,
+                Snackbar.LENGTH_LONG
+<span class="nc" id="L851">        ).show();</span>
+<span class="nc" id="L852">    }</span>
+
+    // GoogleListener
+
+    @Override
+    public void onGoogleEmailSelected(String email) {
+<span class="nc" id="L858">        LoginEmailFragment loginEmailFragment =</span>
+<span class="nc" id="L859">                (LoginEmailFragment) getSupportFragmentManager().findFragmentByTag(LoginEmailFragment.TAG);</span>
+<span class="nc bnc" id="L860" title="All 2 branches missed.">        if (loginEmailFragment != null) {</span>
+<span class="nc" id="L861">            loginEmailFragment.setGoogleEmail(email);</span>
+        }
+<span class="nc" id="L863">    }</span>
+
+    @Override
+    public void onGoogleLoginFinished() {
+<span class="nc" id="L867">        LoginEmailFragment loginEmailFragment =</span>
+<span class="nc" id="L868">                (LoginEmailFragment) getSupportFragmentManager().findFragmentByTag(LoginEmailFragment.TAG);</span>
+<span class="nc bnc" id="L869" title="All 2 branches missed.">        if (loginEmailFragment != null) {</span>
+<span class="nc" id="L870">            loginEmailFragment.finishLogin();</span>
+        }
+<span class="nc" id="L872">    }</span>
+
+    @Override
+    public void onGoogleSignupFinished(String name, String email, String photoUrl, String username) {
+<span class="nc" id="L876">        AnalyticsTracker.track(AnalyticsTracker.Stat.SIGNUP_SOCIAL_SUCCESS);</span>
+<span class="nc bnc" id="L877" title="All 2 branches missed.">        if (mIsJetpackConnect) {</span>
+<span class="nc" id="L878">            ActivityLauncher.showSignupEpilogueForResult(this, name, email, photoUrl, username, false);</span>
+        } else {
+<span class="nc" id="L880">            ActivityLauncher.showMainActivityAndSignupEpilogue(this, name, email, photoUrl, username);</span>
+        }
+
+<span class="nc" id="L883">        setResult(Activity.RESULT_OK);</span>
+<span class="nc" id="L884">        finish();</span>
+<span class="nc" id="L885">    }</span>
+
+    @Override
+    public void onGoogleSignupError(String msg) {
+<span class="nc" id="L889">        mUnifiedLoginTracker.trackFailure(msg);</span>
+        // Only show the error dialog if the activity is still active
+<span class="nc bnc" id="L891" title="All 2 branches missed.">        if (!getSupportFragmentManager().isStateSaved()) {</span>
+<span class="nc" id="L892">            BasicFragmentDialog dialog = new BasicFragmentDialog();</span>
+<span class="nc" id="L893">            dialog.initialize(GOOGLE_ERROR_DIALOG_TAG, getString(R.string.error),</span>
+                    msg,
+<span class="nc" id="L895">                    getString(org.wordpress.android.login.R.string.login_error_button),</span>
+                    null,
+                    null);
+<span class="nc" id="L898">            dialog.show(getSupportFragmentManager(), GOOGLE_ERROR_DIALOG_TAG);</span>
+<span class="nc" id="L899">        } else {</span>
+<span class="nc" id="L900">            AppLog.d(T.MAIN, &quot;'Google sign up failed' dialog not shown, because the activity wasn't visible.&quot;);</span>
+        }
+<span class="nc" id="L902">    }</span>
+
+    @Override
+    public void onPositiveClicked(@NotNull String instanceTag) {
+<span class="nc" id="L906">        switch (instanceTag) {</span>
+            case GOOGLE_ERROR_DIALOG_TAG:
+                // just dismiss the dialog
+                break;
+        }
+<span class="nc" id="L911">    }</span>
+
+    @Override public AndroidInjector&lt;Object&gt; androidInjector() {
+<span class="nc" id="L914">        return mDispatchingAndroidInjector;</span>
+    }
+
+    @Override public void startOver() {
+        // Not used in WordPress app
+<span class="nc" id="L919">    }</span>
+
+    @Override
+    public void showHelpFindingConnectedEmail() {
+        // Not used in WordPress app
+<span class="nc" id="L924">    }</span>
+
+    @Override
+    public void gotConnectedSiteInfo(
+            @NonNull String siteAddress,
+            @Nullable String redirectUrl,
+            boolean hasJetpack) {
+        // Not used in WordPress app
+<span class="nc" id="L932">    }</span>
+
+    @Override
+    public void helpHandleDiscoveryError(
+            String siteAddress,
+            String endpointAddress,
+            String username,
+            String password,
+            String userAvatarUrl,
+            int errorMessage) {
+        // Not used in WordPress app
+<span class="nc" id="L943">    }</span>
+
+    @Override
+    public void helpNoJetpackScreen(
+            String siteAddress,
+            String endpointAddress,
+            String username,
+            String password,
+            String userAvatarUrl,
+            Boolean checkJetpackAvailability) {
+        // Not used in WordPress app
+<span class="nc" id="L954">    }</span>
+
+    @Override
+    public void loginViaSiteCredentials(String inputSiteAddress) {
+        // Not used in WordPress app
+<span class="nc" id="L959">    }</span>
+
+    @Override
+    public void handleSiteAddressError(ConnectSiteInfoPayload siteInfo) {
+<span class="nc" id="L963">        mViewModel.onHandleSiteAddressError(siteInfo);</span>
+<span class="nc" id="L964">    }</span>
+
+    public void handleNoJetpackSites() {
+        // hide keyboard if you can
+<span class="nc" id="L968">        hideKeyboard(this);</span>
+<span class="nc" id="L969">        mViewModel.onHandleNoJetpackSites();</span>
+<span class="nc" id="L970">    }</span>
+
+
+    private void showSiteAddressError(ShowSiteAddressError event) {
+<span class="nc" id="L974">        LoginSiteCheckErrorFragment fragment = LoginSiteCheckErrorFragment.Companion.newInstance(event.getUrl());</span>
+<span class="nc" id="L975">        slideInFragment(fragment, true, LoginSiteCheckErrorFragment.TAG);</span>
+<span class="nc" id="L976">    }</span>
+
+    private void showNoJetpackSites() {
+<span class="nc" id="L979">        LoginNoSitesFragment fragment = LoginNoSitesFragment.Companion.newInstance();</span>
+<span class="nc" id="L980">        slideInFragment(fragment, false, LoginNoSitesFragment.TAG);</span>
+<span class="nc" id="L981">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

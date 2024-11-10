@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AddLocalMediaToPostUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts.editor.media</a> &gt; <span class="el_source">AddLocalMediaToPostUseCase.kt</span></div><h1>AddLocalMediaToPostUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts.editor.media
+
+import android.content.Context
+import android.net.Uri
+import dagger.Reusable
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.MediaModel.MediaUploadState.QUEUED
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.ui.posts.editor.media.CopyMediaToAppStorageUseCase.CopyMediaResult
+import org.wordpress.android.ui.posts.editor.media.GetMediaModelUseCase.CreateMediaModelsResult
+import org.wordpress.android.ui.posts.editor.media.OptimizeMediaUseCase.OptimizeMediaResult
+import org.wordpress.android.util.MediaUtilsWrapper
+import javax.inject.Inject
+
+/**
+ * Processes a list of local media items in the background (optimizing, resizing, rotating, etc.), adds them to
+ * the editor one at a time and initiates their upload.
+ */
+<span class="fc" id="L19">@Reusable</span>
+<span class="fc" id="L20">class AddLocalMediaToPostUseCase @Inject constructor(</span>
+<span class="fc" id="L21">    private val copyMediaToAppStorageUseCase: CopyMediaToAppStorageUseCase,</span>
+<span class="fc" id="L22">    private val optimizeMediaUseCase: OptimizeMediaUseCase,</span>
+<span class="fc" id="L23">    private val getMediaModelUseCase: GetMediaModelUseCase,</span>
+<span class="fc" id="L24">    private val updateMediaModelUseCase: UpdateMediaModelUseCase,</span>
+<span class="fc" id="L25">    private val appendMediaToEditorUseCase: AppendMediaToEditorUseCase,</span>
+<span class="fc" id="L26">    private val uploadMediaUseCase: UploadMediaUseCase,</span>
+<span class="fc" id="L27">    private val mediaUtilsWrapper: MediaUtilsWrapper,</span>
+<span class="fc" id="L28">    private val context: Context</span>
+) {
+    /**
+     * Adds media items with existing localMediaId to the editor and optionally initiates an upload.
+     * Does NOT optimize the items.
+     */
+<span class="nc" id="L34">    suspend fun addLocalMediaToEditorAsync(</span>
+        localMediaIds: List&lt;Int&gt;,
+        editorMediaListener: EditorMediaListener,
+<span class="nc" id="L37">        doUploadAfterAdding: Boolean = true</span>
+    ) {
+        // Add media to editor and optionally initiate upload
+<span class="nc" id="L40">        addToEditorAndOptionallyUpload(</span>
+<span class="nc" id="L41">                getMediaModelUseCase.loadMediaByLocalId(localMediaIds),</span>
+<span class="nc" id="L42">                editorMediaListener,</span>
+<span class="nc bnc" id="L43" title="All 2 branches missed.">                doUploadAfterAdding</span>
+        )
+<span class="nc" id="L45">    }</span>
+
+    /**
+     * Copies files to app storage, optimizes them, adds them to the editor and optionally initiates an upload.
+     */
+<span class="nc" id="L50">    suspend fun addNewMediaToEditorAsync(</span>
+        uriList: List&lt;Uri&gt;,
+        site: SiteModel,
+        freshlyTaken: Boolean,
+        editorMediaListener: EditorMediaListener,
+<span class="nc" id="L55">        doUploadAfterAdding: Boolean = true,</span>
+<span class="nc" id="L56">        trackEvent: Boolean = true</span>
+    ): Boolean {
+<span class="nc" id="L58">        val allowedUris = uriList.filter {</span>
+            // filter out long video files on free sites
+<span class="nc bnc" id="L60" title="All 2 branches missed.">            if (mediaUtilsWrapper.isProhibitedVideoDuration(context, site, it)) {</span>
+                // put out a notice to the user that the particular video file was rejected
+<span class="nc" id="L62">                editorMediaListener.showVideoDurationLimitWarning(it.path.toString())</span>
+<span class="nc" id="L63">                return@filter false</span>
+            }
+
+<span class="nc bnc" id="L66" title="All 2 branches missed.">            return@filter true</span>
+        }
+
+<span class="nc" id="L69">        return processMediaUris(</span>
+<span class="nc" id="L70">                allowedUris,</span>
+<span class="nc" id="L71">                site,</span>
+<span class="nc" id="L72">                freshlyTaken,</span>
+<span class="nc" id="L73">                editorMediaListener,</span>
+<span class="nc" id="L74">                doUploadAfterAdding,</span>
+<span class="nc" id="L75">                trackEvent)</span>
+    }
+
+<span class="nc" id="L78">    private suspend fun processMediaUris(</span>
+        uriList: List&lt;Uri&gt;,
+        site: SiteModel,
+        freshlyTaken: Boolean,
+        editorMediaListener: EditorMediaListener,
+<span class="nc" id="L83">        doUploadAfterAdding: Boolean = true,</span>
+<span class="nc" id="L84">        trackEvent: Boolean = true</span>
+    ): Boolean {
+        // Copy files to apps storage to make sure they are permanently accessible.
+<span class="nc" id="L87">        val copyFilesResult: CopyMediaResult = copyMediaToAppStorageUseCase.copyFilesToAppStorageIfNecessary(uriList)</span>
+
+        // Optimize and rotate the media
+<span class="nc" id="L90">        val optimizeMediaResult: OptimizeMediaResult = optimizeMediaUseCase</span>
+<span class="nc" id="L91">                .optimizeMediaIfSupportedAsync(</span>
+<span class="nc" id="L92">                        site,</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">                        freshlyTaken,</span>
+<span class="nc" id="L94">                        copyFilesResult.permanentlyAccessibleUris,</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">                        trackEvent</span>
+                )
+
+        // Transform Uris to MediaModels
+<span class="nc" id="L99">        val createMediaModelsResult: CreateMediaModelsResult = getMediaModelUseCase.createMediaModelFromUri(</span>
+<span class="nc" id="L100">                site.id,</span>
+<span class="nc" id="L101">                optimizeMediaResult.optimizedMediaUris</span>
+        )
+        // here we pass a map of &quot;old&quot; (before optimisation) Uris to the new MediaModels which contain
+        // both the mediaModel ids and the optimized media URLs.
+        // this way, the listener will be able to process from other models pointing to the old URLs
+        // and make any needed updates
+<span class="nc" id="L107">        editorMediaListener.onMediaModelsCreatedFromOptimizedUris(</span>
+<span class="nc" id="L108">                uriList.zip(createMediaModelsResult.mediaModels).toMap()</span>
+        )
+
+        // Add media to editor and optionally initiate upload
+<span class="nc bnc" id="L112" title="All 2 branches missed.">        addToEditorAndOptionallyUpload(createMediaModelsResult.mediaModels, editorMediaListener, doUploadAfterAdding)</span>
+
+<span class="nc bnc" id="L114" title="All 2 branches missed.">        return !optimizeMediaResult.loadingSomeMediaFailed &amp;&amp;</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">                !createMediaModelsResult.loadingSomeMediaFailed &amp;&amp;</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">                !copyFilesResult.copyingSomeMediaFailed</span>
+    }
+
+    private fun addToEditorAndOptionallyUpload(
+        mediaModels: List&lt;MediaModel&gt;,
+        editorMediaListener: EditorMediaListener,
+        doUploadAfterAdding: Boolean
+    ) {
+        // 1. first, set the Post's data in the mediaModels and set them QUEUED if we want to upload
+<span class="nc bnc" id="L125" title="All 2 branches missed.">        if (doUploadAfterAdding) {</span>
+<span class="nc" id="L126">            updateMediaModel(mediaModels, editorMediaListener)</span>
+        }
+
+        // 2. actually append media to the Editor
+<span class="nc" id="L130">        appendMediaToEditorUseCase.addMediaToEditor(editorMediaListener, mediaModels)</span>
+
+        // 3. finally, upload
+<span class="nc bnc" id="L133" title="All 2 branches missed.">        if (doUploadAfterAdding) {</span>
+<span class="nc" id="L134">            uploadMediaUseCase.saveQueuedPostAndStartUpload(editorMediaListener, mediaModels)</span>
+        }
+<span class="nc" id="L136">    }</span>
+
+    private fun updateMediaModel(
+        mediaModels: List&lt;MediaModel&gt;,
+        editorMediaListener: EditorMediaListener
+    ) {
+<span class="nc" id="L142">        mediaModels.forEach {</span>
+<span class="nc" id="L143">            updateMediaModelUseCase.updateMediaModel(</span>
+<span class="nc" id="L144">                    it,</span>
+<span class="nc" id="L145">                    editorMediaListener.getImmutablePost(),</span>
+<span class="nc" id="L146">                    QUEUED</span>
+            )
+<span class="nc" id="L148">        }</span>
+<span class="nc" id="L149">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderFetchPostUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.usecases</a> &gt; <span class="el_source">ReaderFetchPostUseCase.kt</span></div><h1>ReaderFetchPostUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.usecases
+
+import kotlinx.coroutines.suspendCancellableCoroutine
+import org.wordpress.android.ui.reader.actions.ReaderActions
+import org.wordpress.android.ui.reader.actions.ReaderPostActionsWrapper
+import org.wordpress.android.ui.reader.usecases.ReaderFetchPostUseCase.FetchReaderPostState.AlreadyRunning
+import org.wordpress.android.ui.reader.usecases.ReaderFetchPostUseCase.FetchReaderPostState.Failed.NoNetwork
+import org.wordpress.android.ui.reader.usecases.ReaderFetchPostUseCase.FetchReaderPostState.Failed.RequestFailed
+import org.wordpress.android.ui.reader.usecases.ReaderFetchPostUseCase.FetchReaderPostState.Success
+import org.wordpress.android.ui.reader.usecases.ReaderFetchPostUseCase.FetchReaderPostState.Failed.NotAuthorised
+import org.wordpress.android.ui.reader.usecases.ReaderFetchPostUseCase.FetchReaderPostState.Failed.PostNotFound
+import org.wordpress.android.util.NetworkUtilsWrapper
+import java.net.HttpURLConnection
+import javax.inject.Inject
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+
+<span class="nc" id="L18">class ReaderFetchPostUseCase @Inject constructor(</span>
+<span class="nc" id="L19">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L20">    private val readerPostActionsWrapper: ReaderPostActionsWrapper</span>
+) {
+<span class="nc" id="L22">    private val continuations: MutableMap&lt;FetchPostRequestParams, Continuation&lt;Int&gt;?&gt; = mutableMapOf()</span>
+
+    suspend fun fetchPost(blogId: Long, postId: Long, isFeed: Boolean): FetchReaderPostState {
+<span class="nc bnc" id="L25" title="All 2 branches missed.">        return if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L26">            NoNetwork</span>
+        } else {
+<span class="nc bnc" id="L28" title="All 2 branches missed.">            val requestParams = FetchPostRequestParams(blogId, postId, isFeed)</span>
+            // There is already an action running for this request
+<span class="nc bnc" id="L30" title="All 2 branches missed.">            if (continuations[requestParams] != null) {</span>
+<span class="nc" id="L31">                AlreadyRunning</span>
+            } else {
+<span class="nc bnc" id="L33" title="All 4 branches missed.">                when (fetchPostAndWaitForResult(requestParams)) {</span>
+<span class="nc" id="L34">                    HttpURLConnection.HTTP_OK -&gt; Success</span>
+<span class="nc" id="L35">                    HttpURLConnection.HTTP_UNAUTHORIZED, HttpURLConnection.HTTP_FORBIDDEN -&gt; NotAuthorised</span>
+<span class="nc" id="L36">                    HttpURLConnection.HTTP_NOT_FOUND -&gt; PostNotFound</span>
+<span class="nc" id="L37">                    else -&gt; RequestFailed</span>
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchPostAndWaitForResult(requestParams: FetchPostRequestParams): Int {
+<span class="nc" id="L44">        val listener = object : ReaderActions.OnRequestListener&lt;String&gt; {</span>
+            override fun onSuccess(result: String?) {
+<span class="nc bnc" id="L46" title="All 2 branches missed.">                continuations[requestParams]?.resume(HttpURLConnection.HTTP_OK)</span>
+<span class="nc" id="L47">                continuations[requestParams] = null</span>
+<span class="nc" id="L48">            }</span>
+
+            override fun onFailure(statusCode: Int) {
+<span class="nc bnc" id="L51" title="All 2 branches missed.">                continuations[requestParams]?.resume(statusCode)</span>
+<span class="nc" id="L52">                continuations[requestParams] = null</span>
+<span class="nc" id="L53">            }</span>
+        }
+
+<span class="nc" id="L56">        return suspendCancellableCoroutine { cont -&gt;</span>
+<span class="nc" id="L57">            continuations[requestParams] = cont</span>
+
+<span class="nc bnc" id="L59" title="All 2 branches missed.">            if (requestParams.isFeed) {</span>
+<span class="nc" id="L60">                readerPostActionsWrapper.requestFeedPost(</span>
+<span class="nc" id="L61">                        feedId = requestParams.blogId,</span>
+<span class="nc" id="L62">                        postId = requestParams.postId,</span>
+<span class="nc" id="L63">                        requestListener = listener</span>
+                )
+            } else {
+<span class="nc" id="L66">                readerPostActionsWrapper.requestBlogPost(</span>
+<span class="nc" id="L67">                        blogId = requestParams.blogId,</span>
+<span class="nc" id="L68">                        postId = requestParams.postId,</span>
+<span class="nc" id="L69">                        requestListener = listener</span>
+                )
+            }
+<span class="nc" id="L72">        }</span>
+    }
+
+    sealed class FetchReaderPostState {
+<span class="nc" id="L76">        object Success : FetchReaderPostState()</span>
+<span class="nc" id="L77">        object AlreadyRunning : FetchReaderPostState()</span>
+<span class="nc" id="L78">        sealed class Failed : FetchReaderPostState() {</span>
+<span class="nc" id="L79">            object NoNetwork : Failed()</span>
+<span class="nc" id="L80">            object NotAuthorised : Failed()</span>
+<span class="nc" id="L81">            object PostNotFound : Failed()</span>
+<span class="nc" id="L82">            object RequestFailed : Failed()</span>
+        }
+    }
+
+<span class="nc" id="L86">    data class FetchPostRequestParams(</span>
+<span class="nc" id="L87">        val blogId: Long,</span>
+<span class="nc" id="L88">        val postId: Long,</span>
+<span class="nc" id="L89">        val isFeed: Boolean</span>
+    )
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

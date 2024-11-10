@@ -1,0 +1,1058 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PagesViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.pages</a> &gt; <span class="el_source">PagesViewModel.kt</span></div><h1>PagesViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.viewmodel.pages
+
+import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.Context
+import android.content.Intent
+import androidx.annotation.StringRes
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.PAGES_LIST_AUTHOR_FILTER_CHANGED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.PAGES_OPTIONS_PRESSED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.PAGES_SEARCH_ACCESSED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.PAGES_TAB_PRESSED
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.RemoteId
+import org.wordpress.android.fluxc.model.PostModel
+import org.wordpress.android.fluxc.model.SiteHomepageSettings.ShowOnFront.PAGE
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.page.PageModel
+import org.wordpress.android.fluxc.model.page.PageStatus
+import org.wordpress.android.fluxc.model.post.PostStatus
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.PageStore
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.fluxc.store.SiteOptionsStore
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.fluxc.utils.AppLogWrapper
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.pages.PageItem.Action
+import org.wordpress.android.ui.pages.PageItem.Action.CANCEL_AUTO_UPLOAD
+import org.wordpress.android.ui.pages.PageItem.Action.COPY
+import org.wordpress.android.ui.pages.PageItem.Action.COPY_LINK
+import org.wordpress.android.ui.pages.PageItem.Action.DELETE_PERMANENTLY
+import org.wordpress.android.ui.pages.PageItem.Action.MOVE_TO_DRAFT
+import org.wordpress.android.ui.pages.PageItem.Action.MOVE_TO_TRASH
+import org.wordpress.android.ui.pages.PageItem.Action.PUBLISH_NOW
+import org.wordpress.android.ui.pages.PageItem.Action.SET_AS_HOMEPAGE
+import org.wordpress.android.ui.pages.PageItem.Action.SET_AS_POSTS_PAGE
+import org.wordpress.android.ui.pages.PageItem.Action.SET_PARENT
+import org.wordpress.android.ui.pages.PageItem.Action.VIEW_PAGE
+import org.wordpress.android.ui.pages.PageItem.Page
+import org.wordpress.android.ui.pages.PagesAuthorFilterUIState
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.posts.AuthorFilterListItemUIState
+import org.wordpress.android.ui.posts.AuthorFilterSelection
+import org.wordpress.android.ui.posts.PostInfoType
+import org.wordpress.android.ui.posts.PostListRemotePreviewState
+import org.wordpress.android.ui.posts.PostModelUploadStatusTracker
+import org.wordpress.android.ui.posts.PreviewStateHelper
+import org.wordpress.android.ui.posts.RemotePreviewLogicHelper.RemotePreviewType
+import org.wordpress.android.ui.posts.getAuthorFilterItems
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.uploads.UploadStarter
+import org.wordpress.android.ui.uploads.UploadUtils
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T.PAGES
+import org.wordpress.android.util.EventBusWrapper
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.util.analytics.AnalyticsUtils
+import org.wordpress.android.util.extensions.clipboardManager
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import org.wordpress.android.viewmodel.helpers.DialogHolder
+import org.wordpress.android.viewmodel.pages.ActionPerformer.PageAction
+import org.wordpress.android.viewmodel.pages.ActionPerformer.PageAction.EventType.DELETE
+import org.wordpress.android.viewmodel.pages.ActionPerformer.PageAction.EventType.UPDATE
+import org.wordpress.android.viewmodel.pages.ActionPerformer.PageAction.EventType.UPLOAD
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListState
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListState.DONE
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListState.ERROR
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListState.FETCHING
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListState.REFRESHING
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListType
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListType.DRAFTS
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListType.PUBLISHED
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListType.SCHEDULED
+import org.wordpress.android.viewmodel.pages.PageListViewModel.PageListType.TRASHED
+import java.util.SortedMap
+import javax.inject.Inject
+import javax.inject.Named
+
+private const val ACTION_DELAY = 100L
+private const val SEARCH_DELAY = 200L
+private const val SCROLL_DELAY = 200L
+private const val SNACKBAR_DELAY = 500L
+private const val SEARCH_COLLAPSE_DELAY = 500L
+private const val TRACKS_SELECTED_AUTHOR_FILTER = &quot;author_filter_selection&quot;
+
+typealias LoadAutoSaveRevision = Boolean
+
+class PagesViewModel
+<span class="nc" id="L103">@Inject constructor(</span>
+<span class="nc" id="L104">    private val pageStore: PageStore,</span>
+<span class="nc" id="L105">    private val postStore: PostStore,</span>
+<span class="nc" id="L106">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L107">    private val actionPerformer: ActionPerformer,</span>
+<span class="nc" id="L108">    private val networkUtils: NetworkUtilsWrapper,</span>
+<span class="nc" id="L109">    private val eventBusWrapper: EventBusWrapper,</span>
+<span class="nc" id="L110">    private val siteStore: SiteStore,</span>
+<span class="nc" id="L111">    private val previewStateHelper: PreviewStateHelper,</span>
+<span class="nc" id="L112">    private val uploadStarter: UploadStarter,</span>
+<span class="nc" id="L113">    private val analyticsTracker: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L114">    private val autoSaveConflictResolver: AutoSaveConflictResolver,</span>
+<span class="nc" id="L115">    val uploadStatusTracker: PostModelUploadStatusTracker,</span>
+<span class="nc" id="L116">    private val pageListEventListenerFactory: PageListEventListener.Factory,</span>
+<span class="nc" id="L117">    private val siteOptionsStore: SiteOptionsStore,</span>
+<span class="nc" id="L118">    private val appLogWrapper: AppLogWrapper,</span>
+<span class="nc" id="L119">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L120">    private val prefs: AppPrefsWrapper,</span>
+<span class="nc" id="L121">    @Named(UI_THREAD) private val uiDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L122">    @Named(BG_THREAD) private val defaultDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L123">) : ScopedViewModel(uiDispatcher) {</span>
+<span class="nc" id="L124">    private val _isSearchExpanded = MutableLiveData&lt;Boolean&gt;()</span>
+<span class="nc" id="L125">    val isSearchExpanded: LiveData&lt;Boolean&gt; = _isSearchExpanded</span>
+
+<span class="nc" id="L127">    private val _listState = MutableLiveData&lt;PageListState&gt;()</span>
+<span class="nc" id="L128">    val listState: LiveData&lt;PageListState&gt; = _listState</span>
+
+<span class="nc" id="L130">    private val _isNewPageButtonVisible = MutableLiveData&lt;Boolean&gt;()</span>
+<span class="nc" id="L131">    val isNewPageButtonVisible: LiveData&lt;Boolean&gt; = _isNewPageButtonVisible</span>
+
+<span class="nc" id="L133">    private val _pages = MutableLiveData&lt;List&lt;PageModel&gt;&gt;()</span>
+<span class="nc" id="L134">    val pages: LiveData&lt;List&lt;PageModel&gt;&gt; = _pages</span>
+
+<span class="nc" id="L136">    private val _searchPages: MutableLiveData&lt;SortedMap&lt;PageListType, List&lt;PageModel&gt;&gt;?&gt; = MutableLiveData()</span>
+<span class="nc" id="L137">    val searchPages: LiveData&lt;SortedMap&lt;PageListType, List&lt;PageModel&gt;&gt;?&gt; = _searchPages</span>
+
+<span class="nc" id="L139">    private val _createNewPage = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L140">    val createNewPage: LiveData&lt;Unit&gt; = _createNewPage</span>
+
+<span class="nc" id="L142">    private val _editPage = SingleLiveEvent&lt;Triple&lt;SiteModel, PostModel?, LoadAutoSaveRevision&gt;&gt;()</span>
+<span class="nc" id="L143">    val editPage: LiveData&lt;Triple&lt;SiteModel, PostModel?, LoadAutoSaveRevision&gt;&gt; = _editPage</span>
+
+<span class="nc" id="L145">    private val _previewPage = SingleLiveEvent&lt;PostModel?&gt;()</span>
+<span class="nc" id="L146">    val previewPage: LiveData&lt;PostModel?&gt; = _previewPage</span>
+
+<span class="nc" id="L148">    private val _browsePreview = SingleLiveEvent&lt;BrowsePreview?&gt;()</span>
+<span class="nc" id="L149">    val browsePreview: LiveData&lt;BrowsePreview?&gt; = _browsePreview</span>
+
+<span class="nc" id="L151">    private val _previewState = SingleLiveEvent&lt;PostListRemotePreviewState&gt;()</span>
+<span class="nc" id="L152">    val previewState = _previewState as LiveData&lt;PostListRemotePreviewState&gt;</span>
+
+<span class="nc" id="L154">    private val _setPageParent = SingleLiveEvent&lt;PageModel?&gt;()</span>
+<span class="nc" id="L155">    val setPageParent: LiveData&lt;PageModel?&gt; = _setPageParent</span>
+
+<span class="nc" id="L157">    private val _scrollToPage = SingleLiveEvent&lt;PageModel&gt;()</span>
+<span class="nc" id="L158">    val scrollToPage: LiveData&lt;PageModel?&gt; = _scrollToPage</span>
+
+<span class="nc" id="L160">    private val _invalidateUploadStatus = MutableLiveData&lt;List&lt;LocalId&gt;&gt;()</span>
+<span class="nc" id="L161">    val invalidateUploadStatus: LiveData&lt;List&lt;LocalId&gt;&gt; = _invalidateUploadStatus</span>
+
+<span class="nc" id="L163">    private val _postUploadAction = SingleLiveEvent&lt;Triple&lt;PostModel, SiteModel, Intent&gt;&gt;()</span>
+<span class="nc" id="L164">    val postUploadAction: LiveData&lt;Triple&lt;PostModel, SiteModel, Intent&gt;&gt; = _postUploadAction</span>
+
+<span class="nc" id="L166">    private val _uploadFinishedAction = SingleLiveEvent&lt;Triple&lt;PageModel, Boolean, Boolean&gt;&gt;()</span>
+<span class="nc" id="L167">    val uploadFinishedAction: LiveData&lt;Triple&lt;PageModel, Boolean, Boolean&gt;&gt; = _uploadFinishedAction</span>
+
+<span class="nc" id="L169">    private val _publishAction = SingleLiveEvent&lt;PageModel&gt;()</span>
+<span class="nc" id="L170">    val publishAction = _publishAction</span>
+
+    private var isInitialized = false
+    private var scrollToPageId: Long? = null
+
+<span class="nc" id="L175">    private var pageMap: Map&lt;Long, PageModel&gt; = mapOf()</span>
+        set(value) {
+<span class="nc" id="L177">            field = value</span>
+<span class="nc" id="L178">            _pages.postValue(field.values.toList())</span>
+
+<span class="nc bnc" id="L180" title="All 2 branches missed.">            if (isSearchExpanded.value == true) {</span>
+<span class="nc" id="L181">                onSearch(lastSearchQuery)</span>
+            }
+<span class="nc" id="L183">        }</span>
+
+<span class="nc" id="L185">    private val _showSnackbarMessage = SingleLiveEvent&lt;SnackbarMessageHolder&gt;()</span>
+<span class="nc" id="L186">    val showSnackbarMessage: LiveData&lt;SnackbarMessageHolder&gt; = _showSnackbarMessage</span>
+
+<span class="nc" id="L188">    private val _dialogAction = SingleLiveEvent&lt;DialogHolder&gt;()</span>
+<span class="nc" id="L189">    val dialogAction: LiveData&lt;DialogHolder&gt; = _dialogAction</span>
+
+    private var _site: SiteModel? = null
+    val site: SiteModel
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        get() = checkNotNull(_site) { &quot;Trying to access unitialized site&quot; }</span>
+
+<span class="nc" id="L195">    private var _arePageActionsEnabled = true</span>
+    val arePageActionsEnabled: Boolean
+<span class="nc" id="L197">        get() = _arePageActionsEnabled</span>
+
+<span class="nc" id="L199">    private var _lastSearchQuery = &quot;&quot;</span>
+    val lastSearchQuery: String
+<span class="nc" id="L201">        get() = _lastSearchQuery</span>
+
+    private var searchJob: Job? = null
+<span class="nc" id="L204">    private var currentPageType = PUBLISHED</span>
+
+    private lateinit var pageListEventListener: PageListEventListener
+
+<span class="nc" id="L208">    private val pageListDialogHelper: PageListDialogHelper by lazy {</span>
+<span class="nc" id="L209">        PageListDialogHelper(</span>
+<span class="nc" id="L210">                showDialog = { _dialogAction.postValue(it) },</span>
+<span class="nc" id="L211">                analyticsTracker = analyticsTracker</span>
+        )
+    }
+
+<span class="nc" id="L215">    private val _authorSelectionUpdated = MutableLiveData&lt;AuthorFilterSelection&gt;()</span>
+<span class="nc" id="L216">    val authorSelectionUpdated = _authorSelectionUpdated</span>
+
+<span class="nc" id="L218">    private val _authorUIState = MutableLiveData&lt;PagesAuthorFilterUIState&gt;()</span>
+<span class="nc" id="L219">    val authorUIState: LiveData&lt;PagesAuthorFilterUIState&gt; = _authorUIState</span>
+
+<span class="nc" id="L221">    data class BrowsePreview(</span>
+<span class="nc" id="L222">        val post: PostModel,</span>
+<span class="nc" id="L223">        val previewType: RemotePreviewType</span>
+    )
+
+    fun start(site: SiteModel) {
+        // Check if VM is not already initialized
+<span class="nc bnc" id="L228" title="All 2 branches missed.">        if (_site == null) {</span>
+<span class="nc" id="L229">            _site = site</span>
+
+<span class="nc" id="L231">            loadPagesAsync()</span>
+<span class="nc" id="L232">            uploadStarter.queueUploadFromSite(site)</span>
+        }
+
+<span class="nc" id="L235">        pageListEventListener = pageListEventListenerFactory.createAndStartListening(</span>
+<span class="nc" id="L236">                dispatcher = dispatcher,</span>
+<span class="nc" id="L237">                bgDispatcher = defaultDispatcher,</span>
+<span class="nc" id="L238">                postStore = postStore,</span>
+<span class="nc" id="L239">                eventBusWrapper = eventBusWrapper,</span>
+<span class="nc" id="L240">                siteStore = siteStore,</span>
+<span class="nc" id="L241">                site = site,</span>
+<span class="nc" id="L242">                invalidateUploadStatus = this::handleInvalidateUploadStatus,</span>
+<span class="nc" id="L243">                handleRemoteAutoSave = this::handleRemoveAutoSaveEvent,</span>
+<span class="nc" id="L244">                handlePostUploadFinished = this::postUploadedFinished,</span>
+<span class="nc" id="L245">                handleHomepageSettingsChange = this::handleHomepageSettingsChange</span>
+        )
+
+<span class="nc bnc" id="L248" title="All 2 branches missed.">        val authorFilterSelection: AuthorFilterSelection = if (isFilteringByAuthorSupported) {</span>
+<span class="nc" id="L249">            prefs.postListAuthorSelection</span>
+        } else {
+<span class="nc" id="L251">            AuthorFilterSelection.EVERYONE</span>
+        }
+
+<span class="nc" id="L254">        _authorSelectionUpdated.value = authorFilterSelection</span>
+<span class="nc" id="L255">        _authorUIState.value = PagesAuthorFilterUIState(</span>
+<span class="nc" id="L256">                isAuthorFilterVisible = isFilteringByAuthorSupported,</span>
+<span class="nc" id="L257">                authorFilterSelection = authorFilterSelection,</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">                authorFilterItems = getAuthorFilterItems(authorFilterSelection, accountStore.account?.avatarUrl)</span>
+        )
+<span class="nc" id="L260">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L263">        actionPerformer.onCleanup()</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">        pageListEventListener.onDestroy()</span>
+<span class="nc" id="L265">    }</span>
+
+<span class="nc" id="L267">    private fun loadPagesAsync() = launch(defaultDispatcher) {</span>
+<span class="nc" id="L268">        refreshPages()</span>
+
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        val loadState = if (pageMap.isEmpty()) FETCHING else REFRESHING</span>
+<span class="nc" id="L271">        reloadPages(loadState)</span>
+
+<span class="nc" id="L273">        isInitialized = true</span>
+
+<span class="nc bnc" id="L275" title="All 2 branches missed.">        scrollToPageId?.let {</span>
+<span class="nc" id="L276">            onSpecificPageRequested(it)</span>
+<span class="nc" id="L277">        }</span>
+<span class="nc" id="L278">    }</span>
+
+<span class="nc" id="L280">    private suspend fun reloadPages(state: PageListState = REFRESHING, forced: Boolean = false) {</span>
+<span class="nc bnc" id="L281" title="All 4 branches missed.">        if (performIfNetworkAvailableAsync {</span>
+<span class="nc" id="L282">                    _listState.setOnUi(state)</span>
+
+<span class="nc" id="L284">                    val result = pageStore.requestPagesFromServer(site, forced)</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">                    if (result.isError) {</span>
+<span class="nc" id="L286">                        _listState.setOnUi(ERROR)</span>
+<span class="nc" id="L287">                        showSnackbar(SnackbarMessageHolder(UiStringRes(R.string.error_refresh_pages)))</span>
+<span class="nc" id="L288">                        AppLog.e(PAGES, &quot;An error occurred while fetching the Pages&quot;)</span>
+                    } else {
+<span class="nc" id="L290">                        _listState.setOnUi(DONE)</span>
+                    }
+<span class="nc" id="L292">                    refreshPages()</span>
+<span class="nc" id="L293">                }) else {</span>
+<span class="nc" id="L294">            _listState.setOnUi(DONE)</span>
+        }
+<span class="nc" id="L296">    }</span>
+
+<span class="nc" id="L298">    private suspend fun refreshPages() {</span>
+<span class="nc" id="L299">        pageMap = pageStore.getPagesFromDb(site).associateBy { it.remoteId }</span>
+<span class="nc" id="L300">    }</span>
+
+    fun onPageEditFinished(localPageId: Int, data: Intent) {
+<span class="nc" id="L303">        launch {</span>
+<span class="nc" id="L304">            refreshPages() // show local changes immediately</span>
+<span class="nc" id="L305">            withContext(defaultDispatcher) {</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">                pageStore.getPageByLocalId(pageId = localPageId, site = site)?.let {</span>
+<span class="nc" id="L307">                    _scrollToPage.postOnUi(it)</span>
+<span class="nc" id="L308">                    _postUploadAction.postValue(Triple(it.post, it.site, data))</span>
+<span class="nc" id="L309">                }</span>
+<span class="nc" id="L310">            }</span>
+<span class="nc" id="L311">        }</span>
+<span class="nc" id="L312">    }</span>
+
+    fun onPageParentSet(pageId: Long, parentId: Long) {
+<span class="nc bnc" id="L315" title="All 2 branches missed.">        launch {</span>
+<span class="nc bnc" id="L316" title="All 2 branches missed.">            pageMap[pageId]?.let { page -&gt;</span>
+<span class="nc" id="L317">                setParent(page, parentId)</span>
+<span class="nc" id="L318">            }</span>
+<span class="nc" id="L319">        }</span>
+<span class="nc" id="L320">    }</span>
+
+    fun onPageTypeChanged(type: PageListType) {
+<span class="nc" id="L323">        trackTabChangeEvent(type)</span>
+
+<span class="nc" id="L325">        currentPageType = type</span>
+<span class="nc" id="L326">        checkIfNewPageButtonShouldBeVisible()</span>
+<span class="nc" id="L327">    }</span>
+
+    private fun trackTabChangeEvent(type: PageListType) {
+<span class="nc bnc" id="L330" title="All 4 branches missed.">        val tab = when (type) {</span>
+<span class="nc" id="L331">            PUBLISHED -&gt; &quot;published&quot;</span>
+<span class="nc" id="L332">            DRAFTS -&gt; &quot;drafts&quot;</span>
+<span class="nc" id="L333">            SCHEDULED -&gt; &quot;scheduled&quot;</span>
+<span class="nc" id="L334">            TRASHED -&gt; &quot;binned&quot;</span>
+        }
+<span class="nc" id="L336">        val properties = mutableMapOf(&quot;tab_name&quot; to tab as Any)</span>
+<span class="nc" id="L337">        AnalyticsUtils.trackWithSiteDetails(PAGES_TAB_PRESSED, site, properties)</span>
+<span class="nc" id="L338">    }</span>
+
+    fun checkIfNewPageButtonShouldBeVisible() {
+<span class="nc bnc" id="L341" title="All 2 branches missed.">        val isNotEmpty = pageMap.values.any { currentPageType.pageStatuses.contains(it.status) }</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">        val hasNoExceptions = !currentPageType.pageStatuses.contains(PageStatus.TRASHED) &amp;&amp;</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">                _isSearchExpanded.value != true</span>
+<span class="nc bnc" id="L344" title="All 4 branches missed.">        _isNewPageButtonVisible.postOnUi(isNotEmpty &amp;&amp; hasNoExceptions)</span>
+<span class="nc" id="L345">    }</span>
+
+<span class="nc" id="L347">    fun onSearch(searchQuery: String, delay: Long = SEARCH_DELAY) {</span>
+<span class="nc bnc" id="L348" title="All 2 branches missed.">        searchJob?.cancel()</span>
+<span class="nc bnc" id="L349" title="All 4 branches missed.">        if (searchQuery.isNotEmpty()) {</span>
+<span class="nc" id="L350">            searchJob = launch {</span>
+<span class="nc" id="L351">                delay(delay)</span>
+<span class="nc" id="L352">                searchJob = null</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">                if (isActive) {</span>
+<span class="nc" id="L354">                    _lastSearchQuery = searchQuery</span>
+<span class="nc" id="L355">                    val result = groupedSearch(site, searchQuery)</span>
+<span class="nc" id="L356">                    _searchPages.postValue(result)</span>
+                }
+<span class="nc" id="L358">            }</span>
+        } else {
+<span class="nc" id="L360">            clearSearch()</span>
+        }
+<span class="nc" id="L362">    }</span>
+
+    @SuppressLint(&quot;NullSafeMutableLiveData&quot;)
+    fun onSpecificPageRequested(remotePageId: Long) {
+<span class="nc bnc" id="L366" title="All 2 branches missed.">        if (isInitialized) {</span>
+<span class="nc" id="L367">            val page = pageMap[remotePageId]</span>
+<span class="nc bnc" id="L368" title="All 2 branches missed.">            if (page != null) {</span>
+<span class="nc" id="L369">                _scrollToPage.postValue(page)</span>
+            } else {
+<span class="nc" id="L371">                _showSnackbarMessage.postValue(SnackbarMessageHolder(UiStringRes(R.string.pages_open_page_error)))</span>
+            }
+        } else {
+<span class="nc" id="L374">            scrollToPageId = remotePageId</span>
+        }
+<span class="nc" id="L376">    }</span>
+
+    fun updatePreviewAndDialogState(newState: PostListRemotePreviewState, postInfo: PostInfoType) {
+        // We need only transitions, so...
+<span class="nc bnc" id="L380" title="All 2 branches missed.">        if (_previewState.value == newState) return</span>
+
+        // update the state
+<span class="nc" id="L383">        val prevState = _previewState.value</span>
+<span class="nc" id="L384">        _previewState.postValue(newState)</span>
+
+        // take care of exit actions on state transition
+<span class="nc" id="L387">        previewStateHelper.managePreviewStateTransitions(</span>
+<span class="nc" id="L388">                newState,</span>
+<span class="nc" id="L389">                prevState,</span>
+<span class="nc" id="L390">                postInfo,</span>
+<span class="nc" id="L391">                this::handleRemotePreview</span>
+        )
+<span class="nc" id="L393">    }</span>
+
+    private suspend fun groupedSearch(
+        site: SiteModel,
+        searchQuery: String
+<span class="nc" id="L398">    ): SortedMap&lt;PageListType, List&lt;PageModel&gt;&gt; = withContext(defaultDispatcher) {</span>
+<span class="nc" id="L399">        val list = pageStore.search(site, searchQuery)</span>
+<span class="nc" id="L400">                .groupBy { PageListType.fromPageStatus(it.status) }</span>
+
+<span class="nc" id="L402">        return@withContext list.toSortedMap { previous, next -&gt;</span>
+<span class="nc" id="L403">            when {</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">                previous == next -&gt; 0</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                previous == PUBLISHED -&gt; -1</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">                next == PUBLISHED -&gt; 1</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">                previous == DRAFTS -&gt; -1</span>
+<span class="nc bnc" id="L408" title="All 2 branches missed.">                next == DRAFTS -&gt; 1</span>
+<span class="nc bnc" id="L409" title="All 2 branches missed.">                previous == SCHEDULED -&gt; -1</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">                next == SCHEDULED -&gt; 1</span>
+<span class="nc" id="L411">                else -&gt; throw IllegalArgumentException(&quot;Unexpected page type&quot;)</span>
+            }
+        }
+<span class="nc" id="L414">    }</span>
+
+    fun onSearchExpanded(restorePreviousSearch: Boolean) {
+<span class="nc bnc" id="L417" title="All 2 branches missed.">        if (isSearchExpanded.value != true) {</span>
+<span class="nc" id="L418">            AnalyticsUtils.trackWithSiteDetails(PAGES_SEARCH_ACCESSED, site)</span>
+
+<span class="nc bnc" id="L420" title="All 2 branches missed.">            if (!restorePreviousSearch) {</span>
+<span class="nc" id="L421">                clearSearch()</span>
+            }
+
+<span class="nc" id="L424">            _isSearchExpanded.value = true</span>
+<span class="nc" id="L425">            _isNewPageButtonVisible.value = false</span>
+        }
+<span class="nc" id="L427">    }</span>
+
+    fun onSearchCollapsed() {
+<span class="nc" id="L430">        _isSearchExpanded.value = false</span>
+<span class="nc" id="L431">        clearSearch()</span>
+
+<span class="nc" id="L433">        launch {</span>
+<span class="nc" id="L434">            delay(SEARCH_COLLAPSE_DELAY)</span>
+<span class="nc" id="L435">            checkIfNewPageButtonShouldBeVisible()</span>
+<span class="nc" id="L436">        }</span>
+<span class="nc" id="L437">    }</span>
+
+<span class="nc" id="L439">    fun onMenuAction(action: Action, page: Page, context: Context? = null): Boolean {</span>
+<span class="nc bnc" id="L440" title="All 12 branches missed.">        when (action) {</span>
+<span class="nc" id="L441">            VIEW_PAGE -&gt; previewPage(page)</span>
+<span class="nc" id="L442">            SET_PARENT -&gt; setParent(page)</span>
+<span class="nc" id="L443">            MOVE_TO_DRAFT -&gt; changePageStatus(page.remoteId, PageStatus.DRAFT)</span>
+<span class="nc" id="L444">            MOVE_TO_TRASH -&gt; changePageStatus(page.remoteId, PageStatus.TRASHED)</span>
+<span class="nc" id="L445">            PUBLISH_NOW -&gt; publishPageNow(page.remoteId)</span>
+<span class="nc" id="L446">            DELETE_PERMANENTLY -&gt; deletePage(page)</span>
+<span class="nc" id="L447">            CANCEL_AUTO_UPLOAD -&gt; cancelPendingAutoUpload(LocalId(page.localId))</span>
+<span class="nc" id="L448">            SET_AS_HOMEPAGE -&gt; setHomepage(page.remoteId)</span>
+<span class="nc" id="L449">            SET_AS_POSTS_PAGE -&gt; setPostsPage(page.remoteId)</span>
+<span class="nc" id="L450">            COPY -&gt; onCopyPage(page)</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">            COPY_LINK -&gt; context?.let { copyPageLink(page, it) }</span>
+        }
+<span class="nc" id="L453">        return true</span>
+    }
+
+    private fun deletePage(page: Page) {
+<span class="nc" id="L457">        performIfNetworkAvailable {</span>
+<span class="nc" id="L458">            pageListDialogHelper.showDeletePageConfirmationDialog(RemoteId(page.remoteId), page.title)</span>
+<span class="nc" id="L459">        }</span>
+<span class="nc" id="L460">    }</span>
+
+    private fun cancelPendingAutoUpload(pageId: LocalId) {
+<span class="nc" id="L463">        trackMenuSelectionEvent(CANCEL_AUTO_UPLOAD)</span>
+<span class="nc" id="L464">        val page = postStore.getPostByLocalPostId(pageId.value)</span>
+<span class="nc" id="L465">        val msgRes = UploadUtils.cancelPendingAutoUpload(page, dispatcher)</span>
+<span class="nc" id="L466">        _showSnackbarMessage.postValue(SnackbarMessageHolder(UiStringRes(msgRes)))</span>
+<span class="nc" id="L467">    }</span>
+
+    private fun setParent(page: Page) {
+<span class="nc" id="L470">        performIfNetworkAvailable {</span>
+<span class="nc" id="L471">            trackMenuSelectionEvent(SET_PARENT)</span>
+
+<span class="nc" id="L473">            _setPageParent.postValue(pageMap[page.remoteId])</span>
+<span class="nc" id="L474">        }</span>
+<span class="nc" id="L475">    }</span>
+
+    private fun setHomepage(homepageId: Long) {
+<span class="nc" id="L478">        performIfNetworkAvailable {</span>
+<span class="nc" id="L479">            trackMenuSelectionEvent(SET_AS_HOMEPAGE)</span>
+
+<span class="nc bnc" id="L481" title="All 2 branches missed.">            if (site.showOnFront == PAGE.value) {</span>
+<span class="nc" id="L482">                launch {</span>
+<span class="nc" id="L483">                    val result = siteOptionsStore.updatePageOnFront(</span>
+<span class="nc" id="L484">                            site,</span>
+<span class="nc" id="L485">                            homepageId</span>
+                    )
+<span class="nc" id="L487">                    val message = when (result.isError) {</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">                        true -&gt; {</span>
+<span class="nc" id="L489">                            appLogWrapper.d(PAGES, &quot;${result.error.type}: ${result.error.message}&quot;)</span>
+<span class="nc" id="L490">                            R.string.page_homepage_update_failed</span>
+                        }
+<span class="nc bnc" id="L492" title="All 2 branches missed.">                        false -&gt; {</span>
+<span class="nc" id="L493">                            R.string.page_homepage_successfully_updated</span>
+                        }
+                    }
+<span class="nc" id="L496">                    _showSnackbarMessage.postValue(SnackbarMessageHolder(UiStringRes(message)))</span>
+<span class="nc" id="L497">                }</span>
+            } else {
+<span class="nc" id="L499">                _showSnackbarMessage.postValue(</span>
+<span class="nc" id="L500">                        SnackbarMessageHolder(</span>
+<span class="nc" id="L501">                                message = UiStringRes(R.string.page_cannot_set_homepage)</span>
+                        )
+                )
+            }
+<span class="nc" id="L505">        }</span>
+<span class="nc" id="L506">    }</span>
+
+    private fun setPostsPage(remoteId: Long) {
+<span class="nc" id="L509">        performIfNetworkAvailable {</span>
+<span class="nc" id="L510">            trackMenuSelectionEvent(SET_AS_POSTS_PAGE)</span>
+
+<span class="nc bnc" id="L512" title="All 2 branches missed.">            if (site.showOnFront == PAGE.value) {</span>
+<span class="nc" id="L513">                launch {</span>
+<span class="nc" id="L514">                    val result = siteOptionsStore.updatePageForPosts(</span>
+<span class="nc" id="L515">                            site,</span>
+<span class="nc" id="L516">                            remoteId</span>
+                    )
+<span class="nc" id="L518">                    val message = when (result.isError) {</span>
+<span class="nc bnc" id="L519" title="All 2 branches missed.">                        true -&gt; {</span>
+<span class="nc" id="L520">                            appLogWrapper.d(PAGES, &quot;${result.error.type}: ${result.error.message}&quot;)</span>
+<span class="nc" id="L521">                            R.string.page_posts_page_update_failed</span>
+                        }
+<span class="nc bnc" id="L523" title="All 2 branches missed.">                        false -&gt; {</span>
+<span class="nc" id="L524">                            R.string.page_posts_page_successfully_updated</span>
+                        }
+                    }
+<span class="nc" id="L527">                    _showSnackbarMessage.postValue(SnackbarMessageHolder(UiStringRes(message)))</span>
+<span class="nc" id="L528">                }</span>
+            } else {
+<span class="nc" id="L530">                _showSnackbarMessage.postValue(</span>
+<span class="nc" id="L531">                        SnackbarMessageHolder(</span>
+<span class="nc" id="L532">                                message = UiStringRes(R.string.page_cannot_set_posts_page)</span>
+                        )
+                )
+            }
+<span class="nc" id="L536">        }</span>
+<span class="nc" id="L537">    }</span>
+
+    @Suppress(&quot;TooGenericExceptionCaught&quot;)
+    private fun copyPageLink(page: Page, context: Context) {
+<span class="nc" id="L541">        try {</span>
+            // Get the link to the page
+<span class="nc" id="L543">            val pageLink = postStore.getPostByLocalPostId(page.localId).link</span>
+            // Copy the link to the clipboard
+<span class="nc bnc" id="L545" title="All 4 branches missed.">            context.clipboardManager?.setPrimaryClip(</span>
+<span class="nc" id="L546">                    ClipData.newPlainText(&quot;${page.localId}&quot;, pageLink)</span>
+<span class="nc" id="L547">            ) ?: throw NullPointerException(&quot;ClipboardManager is not supported on this device&quot;)</span>
+
+<span class="nc" id="L549">            _showSnackbarMessage.postValue(</span>
+<span class="nc" id="L550">                    SnackbarMessageHolder(UiStringRes(R.string.media_edit_copy_url_toast))</span>
+            )
+<span class="nc" id="L552">        } catch (e: Throwable) {</span>
+            /**
+             * Ignore any exceptions here as certain devices have bugs and will fail.
+             * See https://crrev.com/542cb9cfcc927295615809b0c99917b09a219d9f for more info.
+             */
+<span class="nc" id="L557">            AppLog.e(PAGES, e)</span>
+<span class="nc" id="L558">            _showSnackbarMessage.postValue(SnackbarMessageHolder(UiStringRes(R.string.error)))</span>
+        }
+<span class="nc" id="L560">    }</span>
+
+    private fun previewPage(page: Page) {
+<span class="nc bnc" id="L563" title="All 2 branches missed.">        launch(defaultDispatcher) {</span>
+<span class="nc" id="L564">            trackMenuSelectionEvent(VIEW_PAGE)</span>
+<span class="nc" id="L565">            val pageModel = pageMap[page.remoteId]</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">            val post = if (pageModel != null) postStore.getPostByLocalPostId(pageModel.pageId) else null</span>
+<span class="nc" id="L567">            _previewPage.postValue(post)</span>
+<span class="nc" id="L568">        }</span>
+<span class="nc" id="L569">    }</span>
+
+    private fun onCopyPage(page: Page) {
+<span class="nc bnc" id="L572" title="All 2 branches missed.">        launch(defaultDispatcher) {</span>
+<span class="nc" id="L573">            trackMenuSelectionEvent(COPY)</span>
+<span class="nc" id="L574">            copyPage(page.remoteId, performChecks = true)</span>
+<span class="nc" id="L575">        }</span>
+<span class="nc" id="L576">    }</span>
+
+<span class="nc" id="L578">    private fun copyPage(pageId: Long, performChecks: Boolean = false) {</span>
+<span class="nc bnc" id="L579" title="All 2 branches missed.">        pageMap[pageId]?.let {</span>
+<span class="nc bnc" id="L580" title="All 4 branches missed.">            if (performChecks &amp;&amp; autoSaveConflictResolver.hasUnhandledAutoSave(it.post)) {</span>
+<span class="nc" id="L581">                pageListDialogHelper.showCopyConflictDialog(it.post)</span>
+<span class="nc" id="L582">                return</span>
+            }
+
+<span class="nc" id="L585">            val post = postStore.instantiatePostModel(</span>
+<span class="nc" id="L586">                    site,</span>
+<span class="nc" id="L587">                    true,</span>
+<span class="nc" id="L588">                    it.title,</span>
+<span class="nc" id="L589">                    it.post.content,</span>
+<span class="nc" id="L590">                    PostStatus.DRAFT.toString(),</span>
+<span class="nc" id="L591">                    it.post.categoryIdList,</span>
+<span class="nc" id="L592">                    it.post.postFormat,</span>
+<span class="nc" id="L593">                    false</span>
+            )
+
+<span class="nc" id="L596">            _editPage.postValue(Triple(site, post, false))</span>
+<span class="nc" id="L597">        }</span>
+<span class="nc" id="L598">    }</span>
+
+    private fun onCopyPageLocal(pageId: RemoteId) {
+<span class="nc" id="L601">        copyPage(pageId.value, performChecks = false)</span>
+<span class="nc" id="L602">    }</span>
+
+    private fun onEditPageFirst(pageId: RemoteId) {
+<span class="nc bnc" id="L605" title="All 2 branches missed.">        pageMap[pageId.value]?.let { checkAndEdit(it) }</span>
+<span class="nc" id="L606">    }</span>
+
+    private fun performIfNetworkAvailable(performAction: () -&gt; Unit): Boolean {
+<span class="nc bnc" id="L609" title="All 2 branches missed.">        return if (networkUtils.isNetworkAvailable()) {</span>
+<span class="nc" id="L610">            performAction()</span>
+<span class="nc" id="L611">            true</span>
+        } else {
+<span class="nc" id="L613">            _showSnackbarMessage.postValue(SnackbarMessageHolder(UiStringRes(R.string.no_network_message)))</span>
+<span class="nc" id="L614">            false</span>
+        }
+    }
+
+    private suspend fun performIfNetworkAvailableAsync(performAction: suspend () -&gt; Unit): Boolean {
+<span class="nc bnc" id="L619" title="All 2 branches missed.">        return if (networkUtils.isNetworkAvailable()) {</span>
+<span class="nc" id="L620">            performAction()</span>
+<span class="nc" id="L621">            true</span>
+        } else {
+<span class="nc" id="L623">            _showSnackbarMessage.postValue(SnackbarMessageHolder(UiStringRes(R.string.no_network_message)))</span>
+<span class="nc" id="L624">            false</span>
+        }
+    }
+
+    private fun trackMenuSelectionEvent(action: Action) {
+<span class="nc bnc" id="L629" title="All 11 branches missed.">        val menu = when (action) {</span>
+<span class="nc" id="L630">            VIEW_PAGE -&gt; &quot;view&quot;</span>
+<span class="nc" id="L631">            CANCEL_AUTO_UPLOAD -&gt; &quot;cancel_auto_upload&quot;</span>
+<span class="nc" id="L632">            SET_PARENT -&gt; &quot;set_parent&quot;</span>
+<span class="nc" id="L633">            SET_AS_HOMEPAGE -&gt; &quot;set_homepage&quot;</span>
+<span class="nc" id="L634">            SET_AS_POSTS_PAGE -&gt; &quot;set_posts_page&quot;</span>
+<span class="nc" id="L635">            COPY -&gt; &quot;copy&quot;</span>
+<span class="nc" id="L636">            PUBLISH_NOW -&gt; &quot;publish_now&quot;</span>
+<span class="nc" id="L637">            MOVE_TO_DRAFT -&gt; &quot;move_to_draft&quot;</span>
+<span class="nc" id="L638">            DELETE_PERMANENTLY -&gt; &quot;delete_permanently&quot;</span>
+<span class="nc" id="L639">            MOVE_TO_TRASH -&gt; &quot;move_to_bin&quot;</span>
+<span class="nc" id="L640">            COPY_LINK -&gt; &quot;copy_link&quot;</span>
+        }
+<span class="nc" id="L642">        val properties = mutableMapOf(&quot;option_name&quot; to menu as Any)</span>
+<span class="nc" id="L643">        AnalyticsUtils.trackWithSiteDetails(PAGES_OPTIONS_PRESSED, site, properties)</span>
+<span class="nc" id="L644">    }</span>
+
+    private fun publishPageNow(remoteId: Long) {
+<span class="nc" id="L647">        trackMenuSelectionEvent(PUBLISH_NOW)</span>
+<span class="nc" id="L648">        _publishAction.value = pageMap[remoteId]</span>
+<span class="nc" id="L649">        launch(uiDispatcher) {</span>
+<span class="nc" id="L650">            delay(SCROLL_DELAY)</span>
+<span class="nc bnc" id="L651" title="All 2 branches missed.">            pageMap[remoteId]?.let {</span>
+<span class="nc" id="L652">                _scrollToPage.postValue(it)</span>
+<span class="nc" id="L653">            }</span>
+<span class="nc" id="L654">        }</span>
+<span class="nc" id="L655">    }</span>
+
+    fun onImagesChanged() {
+<span class="nc" id="L658">        launch {</span>
+<span class="nc" id="L659">            refreshPages()</span>
+<span class="nc" id="L660">        }</span>
+<span class="nc" id="L661">    }</span>
+
+    fun onItemTapped(pageItem: Page) {
+<span class="nc bnc" id="L664" title="All 2 branches missed.">        if (pageItem.remoteId == site.pageForPosts) {</span>
+<span class="nc bnc" id="L665" title="All 2 branches missed.">            launch(defaultDispatcher) {</span>
+<span class="nc" id="L666">                _showSnackbarMessage.postValue(SnackbarMessageHolder(UiStringRes(R.string.page_is_posts_page_warning)))</span>
+<span class="nc" id="L667">            }</span>
+        } else {
+<span class="nc bnc" id="L669" title="All 2 branches missed.">            pageMap[pageItem.remoteId]?.let { checkAndEdit(it) }</span>
+        }
+<span class="nc" id="L671">    }</span>
+
+    private fun checkAndEdit(page: PageModel) {
+<span class="nc bnc" id="L674" title="All 2 branches missed.">        if (autoSaveConflictResolver.hasUnhandledAutoSave(page.post)) {</span>
+<span class="nc" id="L675">            pageListDialogHelper.showAutoSaveRevisionDialog(page.post)</span>
+<span class="nc" id="L676">            return</span>
+        }
+
+<span class="nc" id="L679">        editPage(RemoteId(page.remoteId))</span>
+<span class="nc" id="L680">    }</span>
+
+    fun onNewPageButtonTapped() {
+<span class="nc" id="L683">        AnalyticsUtils.trackWithSiteDetails(AnalyticsTracker.Stat.PAGES_ADD_PAGE, site)</span>
+
+<span class="nc" id="L685">        _createNewPage.asyncCall()</span>
+<span class="nc" id="L686">    }</span>
+
+    fun onPullToRefresh() {
+<span class="nc" id="L689">        uploadStarter.queueUploadFromSite(site)</span>
+<span class="nc" id="L690">        launch {</span>
+<span class="nc" id="L691">            reloadPages(FETCHING, forced = true)</span>
+<span class="nc" id="L692">        }</span>
+<span class="nc" id="L693">    }</span>
+
+    private fun setParent(page: PageModel, parentId: Long) {
+<span class="nc bnc" id="L696" title="All 2 branches missed.">        val oldParent = page.parent?.remoteId ?: 0</span>
+
+<span class="nc" id="L698">        val action = PageAction(page.remoteId, UPLOAD) {</span>
+<span class="nc bnc" id="L699" title="All 6 branches missed.">            if (page.parent?.remoteId != parentId) {</span>
+<span class="nc" id="L700">                val updatedPage = updateParent(page, parentId)</span>
+
+<span class="nc" id="L702">                pageStore.uploadPageToServer(updatedPage)</span>
+            }
+<span class="nc" id="L704">        }</span>
+
+<span class="nc" id="L706">        action.undo = {</span>
+<span class="nc" id="L707">            launch(defaultDispatcher) {</span>
+<span class="nc bnc" id="L708" title="All 2 branches missed.">                pageMap[action.remoteId]?.let { changed -&gt;</span>
+<span class="nc" id="L709">                    val updatedPage = updateParent(changed, oldParent)</span>
+
+<span class="nc" id="L711">                    pageStore.uploadPageToServer(updatedPage)</span>
+<span class="nc" id="L712">                }</span>
+<span class="nc" id="L713">            }</span>
+<span class="nc" id="L714">        }</span>
+
+<span class="nc" id="L716">        action.onSuccess = {</span>
+<span class="nc" id="L717">            launch(defaultDispatcher) {</span>
+<span class="nc" id="L718">                reloadPages()</span>
+
+<span class="nc" id="L720">                showSnackbar(</span>
+<span class="nc bnc" id="L721" title="All 2 branches missed.">                        if (action.undo != null) {</span>
+<span class="nc" id="L722">                            SnackbarMessageHolder(</span>
+<span class="nc" id="L723">                                    UiStringRes(R.string.page_parent_changed),</span>
+<span class="nc" id="L724">                                    UiStringRes(R.string.undo),</span>
+<span class="nc" id="L725">                                    action.undo!!</span>
+                            )
+                        } else {
+<span class="nc" id="L728">                            SnackbarMessageHolder(UiStringRes(R.string.page_parent_changed))</span>
+                        }
+                )
+<span class="nc" id="L731">            }</span>
+<span class="nc" id="L732">        }</span>
+<span class="nc" id="L733">        action.onError = {</span>
+<span class="nc" id="L734">            launch(defaultDispatcher) {</span>
+<span class="nc" id="L735">                refreshPages()</span>
+
+<span class="nc" id="L737">                showSnackbar(SnackbarMessageHolder(UiStringRes(R.string.page_parent_change_error)))</span>
+<span class="nc" id="L738">            }</span>
+<span class="nc" id="L739">        }</span>
+
+<span class="nc" id="L741">        launch {</span>
+<span class="nc" id="L742">            _arePageActionsEnabled = false</span>
+<span class="nc" id="L743">            actionPerformer.performAction(action)</span>
+<span class="nc" id="L744">            _arePageActionsEnabled = true</span>
+<span class="nc" id="L745">        }</span>
+<span class="nc" id="L746">    }</span>
+
+    private suspend fun showSnackbar(message: SnackbarMessageHolder) {
+<span class="nc" id="L749">        delay(SNACKBAR_DELAY)</span>
+<span class="nc" id="L750">        _showSnackbarMessage.postValue(message)</span>
+<span class="nc" id="L751">    }</span>
+
+    private fun updateParent(page: PageModel, parentId: Long): PageModel {
+<span class="nc" id="L754">        val updatedPage = page.copy(parent = pageMap[parentId])</span>
+<span class="nc" id="L755">        val updatedMap = pageMap.toMutableMap()</span>
+<span class="nc" id="L756">        updatedMap[page.remoteId] = updatedPage</span>
+<span class="nc" id="L757">        pageMap = updatedMap</span>
+<span class="nc" id="L758">        return updatedPage</span>
+    }
+
+    private fun deletePage(page: PageModel) {
+<span class="nc" id="L762">        trackMenuSelectionEvent(DELETE_PERMANENTLY)</span>
+<span class="nc" id="L763">        val action = PageAction(page.remoteId, DELETE) {</span>
+<span class="nc bnc" id="L764" title="All 4 branches missed.">            pageMap = pageMap.filter { it.key != page.remoteId }</span>
+
+<span class="nc" id="L766">            checkIfNewPageButtonShouldBeVisible()</span>
+
+<span class="nc bnc" id="L768" title="All 2 branches missed.">            if (page.remoteId &lt; 0) {</span>
+<span class="nc" id="L769">                pageStore.deletePageFromDb(page)</span>
+            } else {
+<span class="nc" id="L771">                pageStore.deletePageFromServer(page)</span>
+            }
+<span class="nc" id="L773">        }</span>
+<span class="nc" id="L774">        action.onSuccess = {</span>
+<span class="nc" id="L775">            launch(defaultDispatcher) {</span>
+<span class="nc" id="L776">                delay(ACTION_DELAY)</span>
+<span class="nc" id="L777">                reloadPages()</span>
+
+<span class="nc" id="L779">                showSnackbar(SnackbarMessageHolder(UiStringRes(R.string.page_permanently_deleted)))</span>
+<span class="nc" id="L780">            }</span>
+<span class="nc" id="L781">        }</span>
+<span class="nc" id="L782">        action.onError = {</span>
+<span class="nc" id="L783">            launch(defaultDispatcher) {</span>
+<span class="nc" id="L784">                refreshPages()</span>
+
+<span class="nc" id="L786">                showSnackbar(SnackbarMessageHolder(UiStringRes(R.string.page_delete_error)))</span>
+<span class="nc" id="L787">            }</span>
+<span class="nc" id="L788">        }</span>
+
+<span class="nc" id="L790">        launch {</span>
+<span class="nc" id="L791">            actionPerformer.performAction(action)</span>
+<span class="nc" id="L792">        }</span>
+<span class="nc" id="L793">    }</span>
+
+    private fun changePageStatus(remoteId: Long, status: PageStatus) {
+<span class="nc" id="L796">        performIfNetworkAvailable {</span>
+<span class="nc bnc" id="L797" title="All 2 branches missed.">            if (status == PageStatus.DRAFT) {</span>
+<span class="nc" id="L798">                trackMenuSelectionEvent(MOVE_TO_DRAFT)</span>
+<span class="nc bnc" id="L799" title="All 2 branches missed.">            } else if (status == PageStatus.TRASHED) {</span>
+<span class="nc" id="L800">                trackMenuSelectionEvent(MOVE_TO_TRASH)</span>
+            }
+
+<span class="nc bnc" id="L803" title="All 2 branches missed.">            pageMap[remoteId]?.let { page -&gt;</span>
+<span class="nc" id="L804">                val oldStatus = page.status</span>
+
+<span class="nc bnc" id="L806" title="All 4 branches missed.">                val action = if (status != PageStatus.TRASHED || remoteId &gt; 0) {</span>
+<span class="nc" id="L807">                    PageAction(remoteId, UPLOAD) {</span>
+<span class="nc" id="L808">                        val updatedPage = updatePageStatus(page, status)</span>
+<span class="nc" id="L809">                        pageStore.updatePageInDb(updatedPage)</span>
+<span class="nc" id="L810">                        refreshPages()</span>
+<span class="nc" id="L811">                        _scrollToPage.postOnUi(updatedPage)</span>
+<span class="nc" id="L812">                        pageStore.uploadPageToServer(updatedPage)</span>
+<span class="nc" id="L813">                    }</span>
+                } else {
+                    // Local pages are trashed locally
+<span class="nc" id="L816">                    PageAction(remoteId, UPDATE) {</span>
+<span class="nc" id="L817">                        val updatedPage = updatePageStatus(page, status)</span>
+<span class="nc" id="L818">                        pageStore.updatePageInDb(updatedPage)</span>
+<span class="nc" id="L819">                        refreshPages()</span>
+<span class="nc" id="L820">                        _scrollToPage.postOnUi(updatedPage)</span>
+<span class="nc" id="L821">                    }</span>
+                }
+
+<span class="nc" id="L824">                action.undo = {</span>
+<span class="nc" id="L825">                    val updatedPage = updatePageStatus(page.copy(remoteId = action.remoteId), oldStatus)</span>
+<span class="nc" id="L826">                    launch(defaultDispatcher) {</span>
+<span class="nc" id="L827">                        pageStore.updatePageInDb(updatedPage)</span>
+<span class="nc" id="L828">                        refreshPages()</span>
+
+<span class="nc" id="L830">                        pageStore.uploadPageToServer(updatedPage)</span>
+<span class="nc" id="L831">                    }</span>
+<span class="nc" id="L832">                }</span>
+
+<span class="nc" id="L834">                action.onSuccess = {</span>
+<span class="nc" id="L835">                    launch(defaultDispatcher) {</span>
+<span class="nc" id="L836">                        delay(ACTION_DELAY)</span>
+
+<span class="nc" id="L838">                        val message = prepareStatusChangeSnackbar(status, action.undo)</span>
+<span class="nc" id="L839">                        showSnackbar(message)</span>
+<span class="nc" id="L840">                    }</span>
+<span class="nc" id="L841">                }</span>
+<span class="nc" id="L842">                action.onError = {</span>
+<span class="nc" id="L843">                    launch(defaultDispatcher) {</span>
+<span class="nc bnc" id="L844" title="All 2 branches missed.">                        action.undo?.let { it() }</span>
+
+<span class="nc" id="L846">                        showSnackbar(SnackbarMessageHolder(UiStringRes(R.string.page_status_change_error)))</span>
+<span class="nc" id="L847">                    }</span>
+<span class="nc" id="L848">                }</span>
+
+<span class="nc" id="L850">                launch {</span>
+<span class="nc" id="L851">                    _arePageActionsEnabled = false</span>
+<span class="nc" id="L852">                    actionPerformer.performAction(action)</span>
+<span class="nc" id="L853">                    _arePageActionsEnabled = true</span>
+<span class="nc" id="L854">                }</span>
+<span class="nc" id="L855">            }</span>
+<span class="nc" id="L856">        }</span>
+<span class="nc" id="L857">    }</span>
+
+    private fun updatePageStatus(page: PageModel, oldStatus: PageStatus): PageModel {
+<span class="nc" id="L860">        val updatedPage = page.copy(status = oldStatus)</span>
+<span class="nc" id="L861">        val updatedMap = pageMap.toMutableMap()</span>
+<span class="nc" id="L862">        updatedMap[page.remoteId] = updatedPage</span>
+<span class="nc" id="L863">        pageMap = updatedMap</span>
+<span class="nc" id="L864">        return updatedPage</span>
+    }
+
+<span class="nc" id="L867">    private fun prepareStatusChangeSnackbar(newStatus: PageStatus, undo: (() -&gt; Unit)? = null): SnackbarMessageHolder {</span>
+<span class="nc bnc" id="L868" title="All 5 branches missed.">        val message = when (newStatus) {</span>
+<span class="nc" id="L869">            PageStatus.DRAFT -&gt; R.string.page_moved_to_draft</span>
+<span class="nc" id="L870">            PageStatus.PUBLISHED -&gt; R.string.page_moved_to_published</span>
+<span class="nc" id="L871">            PageStatus.TRASHED -&gt; R.string.page_moved_to_trash</span>
+<span class="nc" id="L872">            PageStatus.SCHEDULED -&gt; R.string.page_moved_to_scheduled</span>
+<span class="nc" id="L873">            else -&gt; throw NotImplementedError(&quot;Status change to ${newStatus.getTitle()} not supported&quot;)</span>
+        }
+
+<span class="nc bnc" id="L876" title="All 2 branches missed.">        return if (undo != null) {</span>
+<span class="nc" id="L877">            SnackbarMessageHolder(UiStringRes(message), UiStringRes(R.string.undo), undo)</span>
+        } else {
+<span class="nc" id="L879">            SnackbarMessageHolder(UiStringRes(message))</span>
+        }
+    }
+
+    private fun clearSearch() {
+<span class="nc" id="L884">        _lastSearchQuery = &quot;&quot;</span>
+<span class="nc" id="L885">        _searchPages.postValue(null)</span>
+<span class="nc" id="L886">    }</span>
+
+    private fun handleRemotePreview(localPostId: Int, remotePreviewType: RemotePreviewType) {
+<span class="nc bnc" id="L889" title="All 2 branches missed.">        launch(defaultDispatcher) {</span>
+<span class="nc" id="L890">            val post = postStore.getPostByLocalPostId(localPostId)</span>
+<span class="nc" id="L891">            _browsePreview.postValue(BrowsePreview(post, remotePreviewType))</span>
+<span class="nc" id="L892">        }</span>
+<span class="nc" id="L893">    }</span>
+
+    private fun handleRemoteAutoSave(post: PostModel, isError: Boolean) {
+<span class="nc bnc" id="L896" title="All 4 branches missed.">        if (isError || hasRemoteAutoSavePreviewError()) {</span>
+<span class="nc" id="L897">            updatePreviewAndDialogState(PostListRemotePreviewState.NONE, PostInfoType.PostNoInfo)</span>
+<span class="nc" id="L898">            _showSnackbarMessage.postValue(SnackbarMessageHolder(UiStringRes(R.string.remote_preview_operation_error)))</span>
+        } else {
+<span class="nc" id="L900">            updatePreviewAndDialogState(</span>
+<span class="nc" id="L901">                    PostListRemotePreviewState.PREVIEWING,</span>
+<span class="nc" id="L902">                    PostInfoType.PostInfo(</span>
+<span class="nc" id="L903">                            post = post,</span>
+<span class="nc" id="L904">                            hasError = isError</span>
+                    )
+            )
+        }
+<span class="nc" id="L908">    }</span>
+
+    fun updateAuthorFilterSelection(selectionId: Long) {
+<span class="nc" id="L911">        val selection = AuthorFilterSelection.fromId(selectionId)</span>
+
+<span class="nc" id="L913">        updateViewStateTriggerPagerChange(</span>
+<span class="nc" id="L914">                authorFilterSelection = selection,</span>
+<span class="nc bnc" id="L915" title="All 2 branches missed.">                authorFilterItems = getAuthorFilterItems(selection, accountStore.account?.avatarUrl)</span>
+        )
+<span class="nc bnc" id="L917" title="All 2 branches missed.">        if (isFilteringByAuthorSupported) {</span>
+<span class="nc" id="L918">            prefs.postListAuthorSelection = selection</span>
+        }
+<span class="nc" id="L920">    }</span>
+
+    /**
+     * Filtering by author is disable on:
+     * 1) Self-hosted sites - The XMLRPC api doesn't support filtering by author.
+     * 2) Jetpack sites - we need to pass in the self-hosted user id to be able to filter for authors
+     * which we currently can't
+     * 3) Sites on which the user doesn't have permissions to edit posts of other users.
+     *
+     * This behavior is consistent with Calypso and Posts as of 11/4/2019.
+     */
+<span class="nc" id="L931">    private val isFilteringByAuthorSupported: Boolean by lazy {</span>
+<span class="nc bnc" id="L932" title="All 4 branches missed.">        site.isWPCom &amp;&amp; site.hasCapabilityEditOthersPages</span>
+    }
+
+    @SuppressLint(&quot;NullSafeMutableLiveData&quot;)
+<span class="nc" id="L936">    private fun updateViewStateTriggerPagerChange(</span>
+<span class="nc" id="L937">        isAuthorFilterVisible: Boolean? = null,</span>
+<span class="nc" id="L938">        authorFilterSelection: AuthorFilterSelection? = null,</span>
+<span class="nc" id="L939">        authorFilterItems: List&lt;AuthorFilterListItemUIState&gt;? = null</span>
+    ) {
+<span class="nc bnc" id="L941" title="All 2 branches missed.">        val currentState = requireNotNull(authorUIState.value) {</span>
+<span class="nc" id="L942">            &quot;updateViewStateTriggerPagerChange should not be called before the initial state is set&quot;</span>
+        }
+
+<span class="nc bnc" id="L945" title="All 2 branches missed.">        _authorUIState.value = _authorUIState.value?.copy(</span>
+<span class="nc bnc" id="L946" title="All 2 branches missed.">                isAuthorFilterVisible = isAuthorFilterVisible ?: currentState.isAuthorFilterVisible,</span>
+<span class="nc bnc" id="L947" title="All 2 branches missed.">                authorFilterSelection = authorFilterSelection ?: currentState.authorFilterSelection,</span>
+<span class="nc bnc" id="L948" title="All 2 branches missed.">                authorFilterItems = authorFilterItems ?: currentState.authorFilterItems</span>
+        )
+
+<span class="nc bnc" id="L951" title="All 4 branches missed.">        if (authorFilterSelection != null &amp;&amp; currentState.authorFilterSelection != authorFilterSelection) {</span>
+<span class="nc" id="L952">            _authorSelectionUpdated.value = authorFilterSelection</span>
+
+<span class="nc" id="L954">            AnalyticsUtils.trackWithSiteDetails(</span>
+<span class="nc" id="L955">                    PAGES_LIST_AUTHOR_FILTER_CHANGED,</span>
+<span class="nc" id="L956">                    site,</span>
+<span class="nc" id="L957">                    mutableMapOf(TRACKS_SELECTED_AUTHOR_FILTER to authorFilterSelection.toString() as Any)</span>
+            )
+        }
+<span class="nc" id="L960">    }</span>
+
+    // BasicFragmentDialog Events
+
+    fun onPositiveClickedForBasicDialog(instanceTag: String) {
+<span class="nc" id="L965">        pageListDialogHelper.onPositiveClickedForBasicDialog(</span>
+<span class="nc" id="L966">                instanceTag = instanceTag,</span>
+<span class="nc" id="L967">                editPage = this::editPage,</span>
+<span class="nc" id="L968">                deletePage = this::onDeleteConfirmed,</span>
+<span class="nc" id="L969">                editPageFirst = this::onEditPageFirst</span>
+        )
+<span class="nc" id="L971">    }</span>
+
+    fun onNegativeClickedForBasicDialog(instanceTag: String) {
+<span class="nc" id="L974">        pageListDialogHelper.onNegativeClickedForBasicDialog(</span>
+<span class="nc" id="L975">                instanceTag = instanceTag,</span>
+<span class="nc" id="L976">                editPage = this::editPage,</span>
+<span class="nc" id="L977">                copyPage = this::onCopyPageLocal</span>
+        )
+<span class="nc" id="L979">    }</span>
+
+    private fun onDeleteConfirmed(pageId: RemoteId) {
+<span class="nc bnc" id="L982" title="All 2 branches missed.">        launch(defaultDispatcher) {</span>
+<span class="nc bnc" id="L983" title="All 2 branches missed.">            pageMap[pageId.value]?.let { deletePage(it) }</span>
+<span class="nc" id="L984">        }</span>
+<span class="nc" id="L985">    }</span>
+
+<span class="nc" id="L987">    private fun editPage(pageId: RemoteId, loadAutoSaveRevision: LoadAutoSaveRevision = false) {</span>
+<span class="nc" id="L988">        val page = pageMap.getValue(pageId.value)</span>
+<span class="nc bnc" id="L989" title="All 2 branches missed.">        val result = if (page.post.isLocalDraft) {</span>
+<span class="nc" id="L990">            postStore.getPostByLocalPostId(page.pageId)</span>
+        } else {
+<span class="nc" id="L992">            postStore.getPostByRemotePostId(page.remoteId, site)</span>
+        }
+<span class="nc" id="L994">        _editPage.postValue(Triple(site, result, loadAutoSaveRevision))</span>
+<span class="nc" id="L995">    }</span>
+
+<span class="nc bnc" id="L997" title="All 2 branches missed.">    private fun isRemotePreviewingFromPostsList() = _previewState.value != null &amp;&amp;</span>
+<span class="nc bnc" id="L998" title="All 2 branches missed.">            _previewState.value != PostListRemotePreviewState.NONE</span>
+
+<span class="nc bnc" id="L1000" title="All 2 branches missed.">    private fun hasRemoteAutoSavePreviewError() = _previewState.value != null &amp;&amp;</span>
+<span class="nc bnc" id="L1001" title="All 2 branches missed.">            _previewState.value == PostListRemotePreviewState.REMOTE_AUTO_SAVE_PREVIEW_ERROR</span>
+
+    private fun handleRemoveAutoSaveEvent(pageId: LocalId, isError: Boolean) {
+<span class="nc" id="L1004">        val post = postStore.getPostByLocalPostId(pageId.value)</span>
+
+<span class="nc bnc" id="L1006" title="All 2 branches missed.">        if (isRemotePreviewingFromPostsList()) {</span>
+<span class="nc" id="L1007">            handleRemoteAutoSave(post, isError)</span>
+        }
+<span class="nc" id="L1009">    }</span>
+
+    private fun handleInvalidateUploadStatus(ids: List&lt;LocalId&gt;) {
+<span class="nc" id="L1012">        launch {</span>
+<span class="nc" id="L1013">            _invalidateUploadStatus.value = ids</span>
+<span class="nc" id="L1014">            refreshPages()</span>
+<span class="nc" id="L1015">        }</span>
+<span class="nc" id="L1016">    }</span>
+
+    private fun postUploadedFinished(remoteId: RemoteId, isError: Boolean, isFirstTimePublish: Boolean) {
+<span class="nc bnc" id="L1019" title="All 2 branches missed.">        pageMap[remoteId.value]?.let {</span>
+<span class="nc" id="L1020">            _uploadFinishedAction.postValue(Triple(it, isError, isFirstTimePublish))</span>
+<span class="nc" id="L1021">        }</span>
+<span class="nc" id="L1022">    }</span>
+
+    private fun handleHomepageSettingsChange(siteModel: SiteModel) {
+<span class="nc" id="L1025">        launch {</span>
+<span class="nc" id="L1026">            _site = siteModel</span>
+<span class="nc" id="L1027">            refreshPages()</span>
+<span class="nc" id="L1028">        }</span>
+<span class="nc" id="L1029">    }</span>
+
+<span class="nc bnc" id="L1031" title="All 2 branches missed.">    private suspend fun &lt;T&gt; MutableLiveData&lt;T&gt;.setOnUi(value: T) = withContext(uiDispatcher) {</span>
+<span class="nc" id="L1032">        setValue(value)</span>
+<span class="nc" id="L1033">    }</span>
+
+    @SuppressLint(&quot;NullSafeMutableLiveData&quot;)
+    private fun &lt;T&gt; MutableLiveData&lt;T&gt;.postOnUi(value: T) {
+<span class="nc" id="L1037">        val liveData = this</span>
+<span class="nc bnc" id="L1038" title="All 2 branches missed.">        launch {</span>
+<span class="nc" id="L1039">            liveData.value = value</span>
+<span class="nc" id="L1040">        }</span>
+<span class="nc" id="L1041">    }</span>
+
+    fun shouldFilterByAuthor(): Boolean {
+<span class="nc bnc" id="L1044" title="All 4 branches missed.">        return authorUIState.value?.authorFilterSelection == AuthorFilterSelection.ME</span>
+    }
+}
+
+@StringRes fun PageStatus.getTitle(): Int {
+<span class="nc bnc" id="L1049" title="All 6 branches missed.">    return when (this) {</span>
+<span class="nc" id="L1050">        PageStatus.PUBLISHED -&gt; R.string.pages_published</span>
+<span class="nc" id="L1051">        PageStatus.DRAFT -&gt; R.string.pages_drafts</span>
+<span class="nc" id="L1052">        PageStatus.SCHEDULED -&gt; R.string.pages_scheduled</span>
+<span class="nc" id="L1053">        PageStatus.TRASHED -&gt; R.string.pages_trashed</span>
+<span class="nc" id="L1054">        PageStatus.PENDING -&gt; R.string.pages_pending</span>
+<span class="nc" id="L1055">        PageStatus.PRIVATE -&gt; R.string.pages_private</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

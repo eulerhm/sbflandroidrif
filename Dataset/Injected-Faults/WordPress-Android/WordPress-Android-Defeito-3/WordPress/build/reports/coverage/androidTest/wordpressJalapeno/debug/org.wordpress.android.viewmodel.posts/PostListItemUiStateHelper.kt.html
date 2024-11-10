@@ -1,0 +1,486 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostListItemUiStateHelper.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.posts</a> &gt; <span class="el_source">PostListItemUiStateHelper.kt</span></div><h1>PostListItemUiStateHelper.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.viewmodel.posts
+
+import org.apache.commons.text.StringEscapeUtils
+import org.wordpress.android.BuildConfig
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.POST_LIST_BUTTON_PRESSED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.POST_LIST_ITEM_SELECTED
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.RemoteId
+import org.wordpress.android.fluxc.model.PostModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.post.PostStatus
+import org.wordpress.android.fluxc.model.post.PostStatus.DRAFT
+import org.wordpress.android.fluxc.model.post.PostStatus.PENDING
+import org.wordpress.android.fluxc.model.post.PostStatus.PRIVATE
+import org.wordpress.android.fluxc.model.post.PostStatus.PUBLISHED
+import org.wordpress.android.fluxc.model.post.PostStatus.SCHEDULED
+import org.wordpress.android.fluxc.model.post.PostStatus.TRASHED
+import org.wordpress.android.fluxc.model.post.PostStatus.UNKNOWN
+import org.wordpress.android.ui.posts.AuthorFilterSelection
+import org.wordpress.android.ui.posts.AuthorFilterSelection.EVERYONE
+import org.wordpress.android.ui.posts.PostModelUploadStatusTracker
+import org.wordpress.android.ui.posts.PostUtils
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.uploads.UploadUtils
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T.POSTS
+import org.wordpress.android.util.HtmlUtils
+import org.wordpress.android.viewmodel.pages.PostModelUploadUiStateUseCase
+import org.wordpress.android.viewmodel.pages.PostModelUploadUiStateUseCase.PostUploadUiState
+import org.wordpress.android.viewmodel.pages.PostModelUploadUiStateUseCase.PostUploadUiState.NothingToUpload
+import org.wordpress.android.viewmodel.pages.PostModelUploadUiStateUseCase.PostUploadUiState.UploadFailed
+import org.wordpress.android.viewmodel.pages.PostModelUploadUiStateUseCase.PostUploadUiState.UploadQueued
+import org.wordpress.android.viewmodel.pages.PostModelUploadUiStateUseCase.PostUploadUiState.UploadWaitingForConnection
+import org.wordpress.android.viewmodel.pages.PostModelUploadUiStateUseCase.PostUploadUiState.UploadingMedia
+import org.wordpress.android.viewmodel.pages.PostModelUploadUiStateUseCase.PostUploadUiState.UploadingPost
+import org.wordpress.android.viewmodel.pages.PostPageListLabelColorUseCase
+import org.wordpress.android.viewmodel.posts.PostListItemIdentifier.LocalPostId
+import org.wordpress.android.viewmodel.posts.PostListItemIdentifier.RemotePostId
+import org.wordpress.android.viewmodel.posts.PostListItemType.PostListItemUiState
+import org.wordpress.android.viewmodel.uistate.ProgressBarUiState
+import org.wordpress.android.widgets.PostListButtonType
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_CANCEL_PENDING_AUTO_UPLOAD
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_COPY
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_COPY_URL
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_DELETE
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_DELETE_PERMANENTLY
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_EDIT
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_MOVE_TO_DRAFT
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_PREVIEW
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_PUBLISH
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_RETRY
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_SHOW_MOVE_TRASHED_POST_TO_DRAFT_DIALOG
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_STATS
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_SUBMIT
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_SYNC
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_TRASH
+import org.wordpress.android.widgets.PostListButtonType.BUTTON_VIEW
+import javax.inject.Inject
+
+private const val MAX_NUMBER_OF_VISIBLE_ACTIONS_STANDARD = 3
+
+/**
+ * Helper class which encapsulates logic for creating UiStates for items in the PostsList.
+ */
+<span class="nc" id="L70">class PostListItemUiStateHelper @Inject constructor(</span>
+<span class="nc" id="L71">    private val appPrefsWrapper: AppPrefsWrapper,</span>
+<span class="nc" id="L72">    private val uploadUiStateUseCase: PostModelUploadUiStateUseCase,</span>
+<span class="nc" id="L73">    private val labelColorUseCase: PostPageListLabelColorUseCase</span>
+) {
+    fun createPostListItemUiState(
+        authorFilterSelection: AuthorFilterSelection,
+        post: PostModel,
+        site: SiteModel,
+        unhandledConflicts: Boolean,
+        hasAutoSave: Boolean,
+        capabilitiesToPublish: Boolean,
+        statsSupported: Boolean,
+        featuredImageUrl: String?,
+        formattedDate: String,
+        performingCriticalAction: Boolean,
+        isSearch: Boolean,
+        uploadStatusTracker: PostModelUploadStatusTracker,
+        onAction: (PostModel, PostListButtonType, AnalyticsTracker.Stat) -&gt; Unit
+    ): PostListItemUiState {
+<span class="nc" id="L90">        val postStatus: PostStatus = PostStatus.fromPost(post)</span>
+<span class="nc" id="L91">        val uploadUiState = uploadUiStateUseCase.createUploadUiState(post, site, uploadStatusTracker)</span>
+
+<span class="nc" id="L93">        val onButtonClicked = { buttonType: PostListButtonType -&gt;</span>
+<span class="nc" id="L94">            onAction.invoke(post, buttonType, POST_LIST_BUTTON_PRESSED)</span>
+<span class="nc" id="L95">        }</span>
+<span class="nc" id="L96">        val buttonTypes = createButtonTypes(</span>
+<span class="nc" id="L97">                postStatus = postStatus,</span>
+<span class="nc" id="L98">                isLocalDraft = post.isLocalDraft,</span>
+<span class="nc" id="L99">                isLocallyChanged = post.isLocallyChanged,</span>
+<span class="nc" id="L100">                uploadUiState = uploadUiState,</span>
+<span class="nc" id="L101">                siteHasCapabilitiesToPublish = capabilitiesToPublish,</span>
+<span class="nc" id="L102">                statsSupported = statsSupported</span>
+        )
+<span class="nc" id="L104">        val defaultActions = createDefaultViewActions(buttonTypes, onButtonClicked)</span>
+<span class="nc" id="L105">        val compactActions = createCompactViewActions(buttonTypes, onButtonClicked)</span>
+
+<span class="nc" id="L107">        val remotePostId = RemotePostId(RemoteId(post.remotePostId))</span>
+<span class="nc" id="L108">        val localPostId = LocalPostId(LocalId(post.id))</span>
+<span class="nc" id="L109">        val title = getTitle(post = post)</span>
+<span class="nc" id="L110">        val postInfo = getPostInfoLabels(</span>
+<span class="nc" id="L111">                postStatus,</span>
+<span class="nc" id="L112">                formattedDate,</span>
+<span class="nc" id="L113">                post.authorDisplayName,</span>
+<span class="nc" id="L114">                authorFilterSelection,</span>
+<span class="nc" id="L115">                isSearch</span>
+        )
+<span class="nc" id="L117">        val statuses = getStatuses(</span>
+<span class="nc" id="L118">                postStatus = postStatus,</span>
+<span class="nc" id="L119">                post = post,</span>
+<span class="nc" id="L120">                uploadUiState = uploadUiState,</span>
+<span class="nc" id="L121">                hasUnhandledConflicts = unhandledConflicts,</span>
+<span class="nc" id="L122">                hasAutoSave = hasAutoSave</span>
+        )
+<span class="nc" id="L124">        val statusesColor = labelColorUseCase.getLabelsColor(post, uploadUiState, unhandledConflicts, hasAutoSave)</span>
+<span class="nc" id="L125">        val statusesDelimiter = UiStringRes(R.string.multiple_status_label_delimiter)</span>
+<span class="nc" id="L126">        val onSelected = {</span>
+<span class="nc bnc" id="L127" title="All 3 branches missed.">            when (postStatus) {</span>
+                TRASHED -&gt; {
+<span class="nc" id="L129">                    onAction.invoke(</span>
+<span class="nc" id="L130">                            post,</span>
+<span class="nc" id="L131">                            BUTTON_SHOW_MOVE_TRASHED_POST_TO_DRAFT_DIALOG,</span>
+<span class="nc" id="L132">                            POST_LIST_ITEM_SELECTED</span>
+                    )
+                }
+<span class="nc" id="L135">                UNKNOWN, PUBLISHED, DRAFT, PRIVATE, PENDING, SCHEDULED -&gt; onAction.invoke(</span>
+<span class="nc" id="L136">                        post,</span>
+<span class="nc" id="L137">                        BUTTON_EDIT,</span>
+<span class="nc" id="L138">                        POST_LIST_ITEM_SELECTED</span>
+                )
+            }
+<span class="nc" id="L141">        }</span>
+<span class="nc" id="L142">        val itemUiData = PostListItemUiStateData(</span>
+<span class="nc" id="L143">                remotePostId = remotePostId,</span>
+<span class="nc" id="L144">                localPostId = localPostId,</span>
+<span class="nc" id="L145">                title = title,</span>
+<span class="nc" id="L146">                excerpt = getExcerpt(post = post),</span>
+<span class="nc" id="L147">                imageUrl = featuredImageUrl,</span>
+<span class="nc" id="L148">                postInfo = postInfo,</span>
+<span class="nc" id="L149">                statuses = statuses,</span>
+<span class="nc" id="L150">                statusesColor = statusesColor,</span>
+<span class="nc" id="L151">                statusesDelimiter = statusesDelimiter,</span>
+<span class="nc" id="L152">                progressBarUiState = getProgressBarState(</span>
+<span class="nc" id="L153">                        uploadUiState = uploadUiState,</span>
+<span class="nc" id="L154">                        performingCriticalAction = performingCriticalAction</span>
+                ),
+<span class="nc" id="L156">                showOverlay = shouldShowOverlay(</span>
+<span class="nc" id="L157">                        uploadUiState = uploadUiState,</span>
+<span class="nc" id="L158">                        performingCriticalAction = performingCriticalAction</span>
+                ),
+<span class="nc bnc" id="L160" title="All 2 branches missed.">                disableRippleEffect = postStatus == TRASHED</span>
+        )
+
+<span class="nc" id="L163">        return PostListItemUiState(</span>
+<span class="nc" id="L164">                data = itemUiData,</span>
+<span class="nc" id="L165">                actions = defaultActions,</span>
+<span class="nc" id="L166">                compactActions = compactActions,</span>
+<span class="nc" id="L167">                onSelected = onSelected</span>
+        )
+    }
+
+    private fun getPostInfoLabels(
+        postStatus: PostStatus,
+        formattedDate: String,
+        displayName: String?,
+        authorFilterSelection: AuthorFilterSelection,
+        isSearch: Boolean
+    ): List&lt;UiString&gt; {
+<span class="nc" id="L178">        val uiStrings: MutableList&lt;UiString&gt; = mutableListOf()</span>
+
+<span class="nc bnc" id="L180" title="All 2 branches missed.">        if (!formattedDate.isBlank()) {</span>
+<span class="nc" id="L181">            uiStrings.add(UiStringText(formattedDate))</span>
+        }
+<span class="nc bnc" id="L183" title="All 8 branches missed.">        if (authorFilterSelection == EVERYONE &amp;&amp; !displayName.isNullOrBlank()) {</span>
+<span class="nc" id="L184">            uiStrings.add(UiStringText(displayName))</span>
+        }
+
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        if (isSearch) {</span>
+<span class="nc bnc" id="L188" title="All 7 branches missed.">            val postStatusText = when (postStatus) {</span>
+<span class="nc" id="L189">                UNKNOWN -&gt; R.string.unknown</span>
+<span class="nc" id="L190">                PUBLISHED -&gt; R.string.post_status_post_published</span>
+<span class="nc" id="L191">                DRAFT -&gt; R.string.post_status_draft</span>
+<span class="nc" id="L192">                PRIVATE -&gt; R.string.post_status_post_private</span>
+<span class="nc" id="L193">                PENDING -&gt; R.string.post_status_pending_review</span>
+<span class="nc" id="L194">                TRASHED -&gt; R.string.post_status_post_trashed</span>
+<span class="nc" id="L195">                SCHEDULED -&gt; R.string.post_status_post_scheduled</span>
+            }
+<span class="nc" id="L197">            uiStrings.add(UiStringRes(postStatusText))</span>
+        }
+<span class="nc" id="L199">        return uiStrings</span>
+    }
+
+    private fun getTitle(post: PostModel): UiString {
+<span class="nc bnc" id="L203" title="All 4 branches missed.">        return if (post.title.isNotBlank()) {</span>
+<span class="nc" id="L204">            UiStringText(StringEscapeUtils.unescapeHtml4(post.title).let { HtmlUtils.stripHtml(it) })</span>
+<span class="nc" id="L205">        } else UiStringRes(R.string.untitled_in_parentheses)</span>
+    }
+
+    private fun getExcerpt(post: PostModel): UiString? =
+<span class="nc" id="L209">            PostUtils.getPostListExcerptFromPost(post)</span>
+<span class="nc bnc" id="L210" title="All 10 branches missed.">                    .takeIf { !it.isNullOrBlank() }</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">                    ?.let { StringEscapeUtils.unescapeHtml4(it) }</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">                    ?.let { PostUtils.collapseShortcodes(it) }</span>
+<span class="nc" id="L213">                    ?.let { UiStringText(it) }</span>
+
+    private fun getProgressBarState(
+        uploadUiState: PostUploadUiState,
+        performingCriticalAction: Boolean
+    ): ProgressBarUiState {
+<span class="nc bnc" id="L219" title="All 2 branches missed.">        return if (shouldShowProgress(uploadUiState, performingCriticalAction)) {</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">            if (uploadUiState is UploadingMedia) {</span>
+<span class="nc" id="L221">                ProgressBarUiState.Determinate(uploadUiState.progress)</span>
+            } else {
+<span class="nc" id="L223">                ProgressBarUiState.Indeterminate</span>
+            }
+        } else {
+<span class="nc" id="L226">            ProgressBarUiState.Hidden</span>
+        }
+    }
+
+    private fun shouldShowProgress(uploadUiState: PostUploadUiState, performingCriticalAction: Boolean): Boolean {
+<span class="nc bnc" id="L231" title="All 6 branches missed.">        return performingCriticalAction || uploadUiState is UploadingPost || uploadUiState is UploadingMedia ||</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">                uploadUiState is UploadQueued</span>
+    }
+
+    private fun getErrorAndProgressStatuses(
+        uploadUiState: PostUploadUiState,
+        postStatus: PostStatus,
+        hasUnhandledConflicts: Boolean,
+        hasAutoSave: Boolean
+    ): MutableList&lt;UiString&gt; {
+<span class="nc" id="L241">        val labels: MutableList&lt;UiString&gt; = ArrayList()</span>
+<span class="nc" id="L242">        when {</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">            uploadUiState is UploadFailed -&gt; {</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">                getErrorLabel(uploadUiState, postStatus)?.let { labels.add(it) }</span>
+            }
+<span class="nc bnc" id="L246" title="All 4 branches missed.">            uploadUiState is UploadingPost -&gt; if (uploadUiState.isDraft) {</span>
+<span class="nc" id="L247">                labels.add(UiStringRes(R.string.post_uploading_draft))</span>
+            } else {
+<span class="nc" id="L249">                labels.add(UiStringRes(R.string.post_uploading))</span>
+            }
+<span class="nc bnc" id="L251" title="All 2 branches missed.">            uploadUiState is UploadingMedia -&gt; labels.add(UiStringRes(R.string.uploading_media))</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">            uploadUiState is UploadQueued -&gt; labels.add(UiStringRes(R.string.post_queued))</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">            uploadUiState is UploadWaitingForConnection -&gt; {</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">                getWaitingForConnectionStatus(uploadUiState.postStatus)?.let {</span>
+<span class="nc" id="L255">                    labels.add(it)</span>
+                }
+            }
+<span class="nc bnc" id="L258" title="All 2 branches missed.">            hasUnhandledConflicts -&gt; labels.add(UiStringRes(R.string.local_post_is_conflicted))</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">            hasAutoSave -&gt; labels.add(UiStringRes(R.string.local_post_autosave_revision_available))</span>
+        }
+<span class="nc" id="L261">        return labels</span>
+    }
+
+    private fun getWaitingForConnectionStatus(postStatus: PostStatus): UiString? {
+<span class="nc bnc" id="L265" title="All 6 branches missed.">        return when (postStatus) {</span>
+<span class="nc" id="L266">            UNKNOWN, PUBLISHED -&gt; (UiStringRes(R.string.post_waiting_for_connection_publish))</span>
+<span class="nc" id="L267">            PRIVATE -&gt; (UiStringRes(R.string.post_waiting_for_connection_private))</span>
+<span class="nc" id="L268">            PENDING -&gt; (UiStringRes(R.string.post_waiting_for_connection_pending))</span>
+<span class="nc" id="L269">            SCHEDULED -&gt; (UiStringRes(R.string.post_waiting_for_connection_scheduled))</span>
+<span class="nc" id="L270">            DRAFT -&gt; (UiStringRes(R.string.post_waiting_for_connection_draft))</span>
+            TRASHED -&gt; {
+<span class="nc" id="L272">                AppLog.e(</span>
+<span class="nc" id="L273">                        POSTS,</span>
+<span class="nc" id="L274">                        &quot;Developer error: This state shouldn't happen. Trashed post is in &quot; +</span>
+                                &quot;UploadWaitingForConnection state.&quot;
+                )
+<span class="nc" id="L277">                return null</span>
+            }
+        }
+    }
+
+    private fun getStatuses(
+        postStatus: PostStatus,
+        post: PostModel,
+        uploadUiState: PostUploadUiState,
+        hasUnhandledConflicts: Boolean,
+        hasAutoSave: Boolean
+    ): List&lt;UiString&gt; {
+<span class="nc" id="L289">        val labels = getErrorAndProgressStatuses(</span>
+<span class="nc" id="L290">                uploadUiState,</span>
+<span class="nc" id="L291">                postStatus,</span>
+<span class="nc" id="L292">                hasUnhandledConflicts,</span>
+<span class="nc" id="L293">                hasAutoSave</span>
+        )
+
+        // we want to show either single error/progress label or 0-n info labels.
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        if (labels.isEmpty()) {</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">            if (post.isLocalDraft) {</span>
+<span class="nc" id="L299">                labels.add(UiStringRes(R.string.local_draft))</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">            } else if (post.isLocallyChanged) {</span>
+<span class="nc" id="L301">                labels.add(UiStringRes(R.string.local_changes))</span>
+            }
+<span class="nc bnc" id="L303" title="All 2 branches missed.">            if (postStatus == PRIVATE) {</span>
+<span class="nc" id="L304">                labels.add(UiStringRes(R.string.post_status_post_private))</span>
+            }
+<span class="nc bnc" id="L306" title="All 2 branches missed.">            if (postStatus == PENDING) {</span>
+<span class="nc" id="L307">                labels.add(UiStringRes(R.string.post_status_pending_review))</span>
+            }
+<span class="nc bnc" id="L309" title="All 2 branches missed.">            if (post.sticky) {</span>
+<span class="nc" id="L310">                labels.add(UiStringRes(R.string.post_status_sticky))</span>
+            }
+        }
+<span class="nc" id="L313">        return labels</span>
+    }
+
+    private fun getErrorLabel(uploadUiState: UploadFailed, postStatus: PostStatus): UiString? {
+<span class="nc" id="L317">        return when {</span>
+<span class="nc bnc" id="L318" title="All 2 branches missed.">            uploadUiState.error.mediaError != null -&gt; getMediaUploadErrorMessage(uploadUiState, postStatus)</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">            uploadUiState.error.postError != null -&gt; UploadUtils.getErrorMessageResIdFromPostError(</span>
+<span class="nc" id="L320">                    postStatus,</span>
+<span class="nc" id="L321">                    false,</span>
+<span class="nc" id="L322">                    uploadUiState.error.postError,</span>
+<span class="nc" id="L323">                    uploadUiState.isEligibleForAutoUpload</span>
+            )
+            else -&gt; {
+<span class="nc" id="L326">                val errorMsg = &quot;MediaError and postError are both null.&quot;</span>
+<span class="nc bnc" id="L327" title="All 2 branches missed.">                if (BuildConfig.DEBUG) {</span>
+<span class="nc" id="L328">                    throw IllegalStateException(errorMsg)</span>
+                } else {
+<span class="nc" id="L330">                    AppLog.e(POSTS, errorMsg)</span>
+                }
+<span class="nc" id="L332">                UiStringRes(R.string.error_generic)</span>
+            }
+        }
+    }
+
+    private fun getMediaUploadErrorMessage(uploadUiState: UploadFailed, postStatus: PostStatus): UiStringRes {
+<span class="nc" id="L338">        return when {</span>
+<span class="nc bnc" id="L339" title="All 7 branches missed.">            uploadUiState.isEligibleForAutoUpload -&gt; when (postStatus) {</span>
+<span class="nc" id="L340">                PUBLISHED -&gt; UiStringRes(R.string.error_media_recover_post_not_published_retrying)</span>
+<span class="nc" id="L341">                PRIVATE -&gt; UiStringRes(R.string.error_media_recover_post_not_published_retrying_private)</span>
+<span class="nc" id="L342">                SCHEDULED -&gt; UiStringRes(R.string.error_media_recover_post_not_scheduled_retrying)</span>
+<span class="nc" id="L343">                PENDING -&gt; UiStringRes(R.string.error_media_recover_post_not_submitted_retrying)</span>
+<span class="nc" id="L344">                DRAFT, TRASHED, UNKNOWN -&gt; UiStringRes(R.string.error_generic_error_retrying)</span>
+            }
+<span class="nc bnc" id="L346" title="All 7 branches missed.">            uploadUiState.retryWillPushChanges -&gt; when (postStatus) {</span>
+<span class="nc" id="L347">                PUBLISHED -&gt; UiStringRes(R.string.error_media_recover_post_not_published)</span>
+<span class="nc" id="L348">                PRIVATE -&gt; UiStringRes(R.string.error_media_recover_post_not_published_private)</span>
+<span class="nc" id="L349">                SCHEDULED -&gt; UiStringRes(R.string.error_media_recover_post_not_scheduled)</span>
+<span class="nc" id="L350">                PENDING -&gt; UiStringRes(R.string.error_media_recover_post_not_submitted)</span>
+<span class="nc" id="L351">                DRAFT, TRASHED, UNKNOWN -&gt; UiStringRes(R.string.error_media_recover_post)</span>
+            }
+<span class="nc" id="L353">            else -&gt; UiStringRes(R.string.error_media_recover_post)</span>
+        }
+    }
+
+    private fun shouldShowOverlay(uploadUiState: PostUploadUiState, performingCriticalAction: Boolean): Boolean {
+        // show overlay when post upload is in progress or (media upload is in progress and the user is not using Aztec)
+<span class="nc bnc" id="L359" title="All 2 branches missed.">        return performingCriticalAction ||</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">                (uploadUiState is UploadingPost ||</span>
+<span class="nc bnc" id="L361" title="All 4 branches missed.">                        (!appPrefsWrapper.isAztecEditorEnabled &amp;&amp; uploadUiState is UploadingMedia))</span>
+    }
+
+    private fun createButtonTypes(
+        postStatus: PostStatus,
+        isLocalDraft: Boolean,
+        isLocallyChanged: Boolean,
+        uploadUiState: PostUploadUiState,
+        siteHasCapabilitiesToPublish: Boolean,
+        statsSupported: Boolean
+    ): List&lt;PostListButtonType&gt; {
+<span class="nc" id="L372">        val canRetryUpload = uploadUiState is UploadFailed</span>
+<span class="nc bnc" id="L373" title="All 2 branches missed.">        val canCancelPendingAutoUpload = (uploadUiState is UploadWaitingForConnection ||</span>
+<span class="nc bnc" id="L374" title="All 4 branches missed.">                (uploadUiState is UploadFailed &amp;&amp; uploadUiState.isEligibleForAutoUpload))</span>
+<span class="nc bnc" id="L375" title="All 6 branches missed.">        val canPublishPost = (canRetryUpload || uploadUiState is NothingToUpload || !canCancelPendingAutoUpload) &amp;&amp;</span>
+<span class="nc bnc" id="L376" title="All 6 branches missed.">                (isLocallyChanged || isLocalDraft || postStatus == DRAFT ||</span>
+<span class="nc bnc" id="L377" title="All 4 branches missed.">                        (siteHasCapabilitiesToPublish &amp;&amp; postStatus == PENDING))</span>
+
+<span class="nc bnc" id="L379" title="All 2 branches missed.">        val canShowStats = statsSupported &amp;&amp;</span>
+<span class="nc bnc" id="L380" title="All 2 branches missed.">                postStatus == PUBLISHED &amp;&amp;</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">                !isLocalDraft &amp;&amp;</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">                !isLocallyChanged</span>
+<span class="nc bnc" id="L383" title="All 4 branches missed.">        val canShowCopy = postStatus == PUBLISHED || postStatus == DRAFT</span>
+<span class="nc bnc" id="L384" title="All 4 branches missed.">        val canShowCopyUrlButton = !isLocalDraft &amp;&amp; postStatus != TRASHED</span>
+<span class="nc bnc" id="L385" title="All 4 branches missed.">        val canShowViewButton = !canRetryUpload &amp;&amp; postStatus != TRASHED</span>
+<span class="nc bnc" id="L386" title="All 4 branches missed.">        val canShowPublishButton = canRetryUpload || canPublishPost</span>
+<span class="nc" id="L387">        val buttonTypes = ArrayList&lt;PostListButtonType&gt;()</span>
+
+<span class="nc bnc" id="L389" title="All 2 branches missed.">        if (postStatus != TRASHED) {</span>
+<span class="nc" id="L390">            buttonTypes.add(BUTTON_EDIT)</span>
+        }
+
+<span class="nc bnc" id="L393" title="All 2 branches missed.">        if (canCancelPendingAutoUpload) {</span>
+<span class="nc" id="L394">            buttonTypes.add(BUTTON_CANCEL_PENDING_AUTO_UPLOAD)</span>
+        }
+
+<span class="nc bnc" id="L397" title="All 2 branches missed.">        if (canShowPublishButton) {</span>
+<span class="nc" id="L398">            buttonTypes.add(</span>
+<span class="nc" id="L399">                    when {</span>
+<span class="nc bnc" id="L400" title="All 2 branches missed.">                        canRetryUpload -&gt; BUTTON_RETRY</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">                        !siteHasCapabilitiesToPublish -&gt; BUTTON_SUBMIT</span>
+<span class="nc bnc" id="L402" title="All 4 branches missed.">                        postStatus == SCHEDULED &amp;&amp; isLocallyChanged -&gt; BUTTON_SYNC</span>
+<span class="nc" id="L403">                        else -&gt; BUTTON_PUBLISH</span>
+                    }
+            )
+        }
+
+<span class="nc bnc" id="L408" title="All 2 branches missed.">        if (canShowViewButton) {</span>
+<span class="nc bnc" id="L409" title="All 4 branches missed.">            buttonTypes.addViewOrPreviewAction(isLocalDraft || isLocallyChanged)</span>
+        }
+
+<span class="nc bnc" id="L412" title="All 2 branches missed.">        if (canShowStats) {</span>
+<span class="nc" id="L413">            buttonTypes.add(BUTTON_STATS)</span>
+        }
+
+<span class="nc bnc" id="L416" title="All 2 branches missed.">        if (canShowCopy) {</span>
+<span class="nc" id="L417">            buttonTypes.add(BUTTON_COPY)</span>
+        }
+
+<span class="nc" id="L420">        buttonTypes.addMoveToDraftActionIfAvailable(postStatus)</span>
+
+<span class="nc bnc" id="L422" title="All 2 branches missed.">        if (canShowCopyUrlButton) {</span>
+<span class="nc" id="L423">            buttonTypes.add(BUTTON_COPY_URL)</span>
+        }
+
+<span class="nc" id="L426">        buttonTypes.addDeletingOrTrashAction(isLocalDraft, postStatus)</span>
+
+<span class="nc" id="L428">        return buttonTypes</span>
+    }
+
+    private fun MutableList&lt;PostListButtonType&gt;.addViewOrPreviewAction(shouldShowPreview: Boolean) {
+<span class="nc bnc" id="L432" title="All 2 branches missed.">        add(if (shouldShowPreview) BUTTON_PREVIEW else BUTTON_VIEW)</span>
+<span class="nc" id="L433">    }</span>
+
+    private fun MutableList&lt;PostListButtonType&gt;.addDeletingOrTrashAction(
+        isLocalDraft: Boolean,
+        postStatus: PostStatus
+    ) {
+<span class="nc" id="L439">        when {</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">            isLocalDraft -&gt; add(BUTTON_DELETE)</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">            postStatus == TRASHED -&gt; add(BUTTON_DELETE_PERMANENTLY)</span>
+<span class="nc bnc" id="L442" title="All 2 branches missed.">            postStatus != TRASHED -&gt; add(BUTTON_TRASH)</span>
+        }
+<span class="nc" id="L444">    }</span>
+
+    private fun MutableList&lt;PostListButtonType&gt;.addMoveToDraftActionIfAvailable(postStatus: PostStatus) {
+<span class="nc bnc" id="L447" title="All 4 branches missed.">        val canMovePostToDraft = postStatus == PUBLISHED || postStatus == TRASHED</span>
+
+<span class="nc bnc" id="L449" title="All 2 branches missed.">        if (canMovePostToDraft) {</span>
+<span class="nc" id="L450">            add(BUTTON_MOVE_TO_DRAFT)</span>
+        }
+<span class="nc" id="L452">    }</span>
+
+    private fun createDefaultViewActions(
+        buttonTypes: List&lt;PostListButtonType&gt;,
+        onButtonClicked: (PostListButtonType) -&gt; Unit
+    ): List&lt;PostListItemAction&gt; {
+<span class="nc" id="L458">        val createSinglePostListItem = { buttonType: PostListButtonType -&gt;</span>
+<span class="nc" id="L459">            PostListItemAction.SingleItem(buttonType, onButtonClicked)</span>
+        }
+<span class="nc bnc" id="L461" title="All 2 branches missed.">        return if (buttonTypes.size &gt; MAX_NUMBER_OF_VISIBLE_ACTIONS_STANDARD) {</span>
+<span class="nc" id="L462">            val visibleItems = buttonTypes.take(MAX_NUMBER_OF_VISIBLE_ACTIONS_STANDARD - 1)</span>
+<span class="nc" id="L463">                    .map(createSinglePostListItem)</span>
+<span class="nc" id="L464">            val itemsUnderMore = buttonTypes.subList(</span>
+<span class="nc" id="L465">                    kotlin.math.max(MAX_NUMBER_OF_VISIBLE_ACTIONS_STANDARD - 1, 0),</span>
+<span class="nc" id="L466">                    buttonTypes.size</span>
+            )
+<span class="nc" id="L468">                    .map(createSinglePostListItem)</span>
+
+<span class="nc" id="L470">            visibleItems.plus(PostListItemAction.MoreItem(itemsUnderMore, onButtonClicked))</span>
+        } else {
+<span class="nc" id="L472">            buttonTypes.map(createSinglePostListItem)</span>
+        }
+    }
+
+    private fun createCompactViewActions(
+        buttonTypes: List&lt;PostListButtonType&gt;,
+        onButtonClicked: (PostListButtonType) -&gt; Unit
+    ): PostListItemAction.MoreItem {
+<span class="nc" id="L480">        val allItems = buttonTypes.map { buttonType: PostListButtonType -&gt;</span>
+<span class="nc" id="L481">            PostListItemAction.SingleItem(buttonType, onButtonClicked)</span>
+        }
+<span class="nc" id="L483">        return PostListItemAction.MoreItem(allItems, onButtonClicked)</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

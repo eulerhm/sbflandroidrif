@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ExPlat.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.util.experiments</a> &gt; <span class="el_source">ExPlat.kt</span></div><h1>ExPlat.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.util.experiments
+
+import dagger.Lazy
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import org.wordpress.android.BuildConfig
+import org.wordpress.android.fluxc.model.experiments.Assignments
+import org.wordpress.android.fluxc.model.experiments.Variation
+import org.wordpress.android.fluxc.model.experiments.Variation.Control
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.ExperimentStore
+import org.wordpress.android.fluxc.store.ExperimentStore.Platform
+import org.wordpress.android.fluxc.utils.AppLogWrapper
+import org.wordpress.android.modules.APPLICATION_SCOPE
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.experiments.ExPlat.RefreshStrategy.ALWAYS
+import org.wordpress.android.util.experiments.ExPlat.RefreshStrategy.IF_STALE
+import org.wordpress.android.util.experiments.ExPlat.RefreshStrategy.NEVER
+import javax.inject.Inject
+import javax.inject.Named
+import javax.inject.Singleton
+
+<span class="fc" id="L23">@Singleton</span>
+class ExPlat
+<span class="fc" id="L25">@Inject constructor(</span>
+<span class="fc" id="L26">    private val experiments: Lazy&lt;Set&lt;Experiment&gt;&gt;,</span>
+<span class="fc" id="L27">    private val experimentStore: ExperimentStore,</span>
+<span class="fc" id="L28">    private val appLog: AppLogWrapper,</span>
+<span class="fc" id="L29">    private val accountStore: AccountStore,</span>
+<span class="fc" id="L30">    @Named(APPLICATION_SCOPE) private val coroutineScope: CoroutineScope</span>
+) {
+<span class="fc" id="L32">    private val platform = Platform.WORDPRESS_ANDROID</span>
+<span class="fc" id="L33">    private val activeVariations = mutableMapOf&lt;String, Variation&gt;()</span>
+<span class="pc" id="L34">    private val experimentNames by lazy { experiments.get().map { it.name } }</span>
+
+    fun refreshIfNeeded() {
+<span class="nc" id="L37">        refresh(refreshStrategy = IF_STALE)</span>
+<span class="nc" id="L38">    }</span>
+
+    fun forceRefresh() {
+<span class="fc" id="L41">        refresh(refreshStrategy = ALWAYS)</span>
+<span class="fc" id="L42">    }</span>
+
+    fun clear() {
+<span class="nc" id="L45">        appLog.d(T.API, &quot;ExPlat: clearing cached assignments and active variations&quot;)</span>
+<span class="nc" id="L46">        activeVariations.clear()</span>
+<span class="nc" id="L47">        experimentStore.clearCachedAssignments()</span>
+<span class="nc" id="L48">    }</span>
+
+    /**
+     * This returns the current active [Variation] for the provided [Experiment].
+     *
+     * If no active [Variation] is found, we can assume this is the first time this method is being
+     * called for the provided [Experiment] during the current session. In this case, the [Variation]
+     * is returned from the cached [Assignments] and then set as active. If the cached [Assignments]
+     * is stale and [shouldRefreshIfStale] is `true`, then new [Assignments] are fetched and their
+     * variations are going to be returned by this method on the next session.
+     *
+     * If the provided [Experiment] was not included in [ExPlat.start], then [Control] is returned.
+     * If [BuildConfig.DEBUG] is `true`, an [IllegalArgumentException] is thrown instead.
+     */
+    internal fun getVariation(experiment: Experiment, shouldRefreshIfStale: Boolean): Variation {
+<span class="nc bnc" id="L63" title="All 2 branches missed.">        if (!experimentNames.contains(experiment.name)) {</span>
+<span class="nc" id="L64">            val message = &quot;ExPlat: experiment not found: \&quot;${experiment.name}\&quot;! &quot; +</span>
+                    &quot;Make sure to include it in the set provided via constructor.&quot;
+<span class="nc" id="L66">            appLog.e(T.API, message)</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">            if (BuildConfig.DEBUG) throw IllegalArgumentException(message) else return Control</span>
+        }
+<span class="nc" id="L69">        return activeVariations.getOrPut(experiment.name) {</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">            getAssignments(if (shouldRefreshIfStale) IF_STALE else NEVER).getVariationForExperiment(experiment.name)</span>
+        }
+    }
+
+    private fun refresh(refreshStrategy: RefreshStrategy) {
+<span class="pc bpc" id="L75" title="4 of 6 branches missed.">        if (experimentNames.isNotEmpty() &amp;&amp; accountStore.hasAccessToken()) {</span>
+<span class="nc" id="L76">            getAssignments(refreshStrategy)</span>
+        }
+<span class="fc" id="L78">    }</span>
+
+    private fun getAssignments(refreshStrategy: RefreshStrategy): Assignments {
+<span class="nc bnc" id="L81" title="All 2 branches missed.">        val cachedAssignments = experimentStore.getCachedAssignments() ?: Assignments()</span>
+<span class="nc bnc" id="L82" title="All 6 branches missed.">        if (refreshStrategy == ALWAYS || (refreshStrategy == IF_STALE &amp;&amp; cachedAssignments.isStale())) {</span>
+<span class="nc" id="L83">            coroutineScope.launch { fetchAssignments() }</span>
+        }
+<span class="nc" id="L85">        return cachedAssignments</span>
+    }
+
+<span class="nc" id="L88">    private suspend fun fetchAssignments() = experimentStore.fetchAssignments(platform, experimentNames).also {</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">        if (it.isError) {</span>
+<span class="nc" id="L90">            appLog.d(T.API, &quot;ExPlat: fetching assignments failed with result: ${it.error}&quot;)</span>
+        } else {
+<span class="nc" id="L92">            appLog.d(T.API, &quot;ExPlat: fetching assignments successful with result: ${it.assignments}&quot;)</span>
+        }
+<span class="nc" id="L94">    }</span>
+
+<span class="fc" id="L96">    private enum class RefreshStrategy { ALWAYS, IF_STALE, NEVER }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

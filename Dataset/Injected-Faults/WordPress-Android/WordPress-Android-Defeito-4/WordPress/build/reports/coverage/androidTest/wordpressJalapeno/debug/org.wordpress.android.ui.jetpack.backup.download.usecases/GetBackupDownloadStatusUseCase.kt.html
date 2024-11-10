@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GetBackupDownloadStatusUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.jetpack.backup.download.usecases</a> &gt; <span class="el_source">GetBackupDownloadStatusUseCase.kt</span></div><h1>GetBackupDownloadStatusUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.jetpack.backup.download.usecases
+
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.activity.BackupDownloadStatusModel
+import org.wordpress.android.fluxc.store.ActivityLogStore
+import org.wordpress.android.fluxc.store.ActivityLogStore.FetchBackupDownloadStatePayload
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Complete
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Empty
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Failure
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Failure.NetworkUnavailable
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Failure.RemoteRequestFailure
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState.Progress
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.NetworkUtilsWrapper
+import java.util.Calendar
+import java.util.Date
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.math.max
+
+const val DELAY_MILLIS = 1000L
+const val MAX_RETRY = 3
+const val DELAY_FACTOR = 2
+
+<span class="nc" id="L33">class GetBackupDownloadStatusUseCase @Inject constructor(</span>
+<span class="nc" id="L34">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L35">    private val activityLogStore: ActivityLogStore,</span>
+<span class="nc" id="L36">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+) {
+<span class="nc" id="L38">    private val tag = javaClass.simpleName</span>
+
+    @Suppress(&quot;ComplexMethod&quot;, &quot;LoopWithTooManyJumpStatements&quot;)
+<span class="nc" id="L41">    suspend fun getBackupDownloadStatus(</span>
+        site: SiteModel,
+<span class="nc" id="L43">        downloadId: Long? = null</span>
+<span class="nc" id="L44">    ) = flow {</span>
+<span class="nc" id="L45">        var retryAttempts = 0</span>
+<span class="nc" id="L46">        while (true) {</span>
+<span class="nc bnc" id="L47" title="All 2 branches missed.">            if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L48">                val retryAttemptsExceeded = handleError(retryAttempts++, NetworkUnavailable)</span>
+<span class="nc bnc" id="L49" title="All 2 branches missed.">                if (retryAttemptsExceeded) break else continue</span>
+            }
+<span class="nc" id="L51">            val result = activityLogStore.fetchBackupDownloadState(FetchBackupDownloadStatePayload(site))</span>
+<span class="nc bnc" id="L52" title="All 2 branches missed.">            if (result.isError) {</span>
+<span class="nc" id="L53">                val retryAttemptsExceeded = handleError(retryAttempts++, RemoteRequestFailure)</span>
+<span class="nc bnc" id="L54" title="All 2 branches missed.">                if (retryAttemptsExceeded) break else continue</span>
+            }
+<span class="nc" id="L56">            retryAttempts = 0</span>
+<span class="nc" id="L57">            val status = activityLogStore.getBackupDownloadStatusForSite(site)</span>
+<span class="nc bnc" id="L58" title="All 2 branches missed.">            if (status == null) {</span>
+<span class="nc" id="L59">                emit(Empty)</span>
+<span class="nc" id="L60">                break</span>
+            }
+<span class="nc bnc" id="L62" title="All 6 branches missed.">            if (downloadId == null || status.downloadId == downloadId) {</span>
+<span class="nc bnc" id="L63" title="All 2 branches missed.">                if (emitCompleteElseProgress(status)) break</span>
+            }
+<span class="nc" id="L65">            delay(DELAY_MILLIS)</span>
+        }
+<span class="nc" id="L67">    }.flowOn(bgDispatcher)</span>
+
+    private suspend fun FlowCollector&lt;BackupDownloadRequestState&gt;.emitCompleteElseProgress(
+        status: BackupDownloadStatusModel
+    ): Boolean {
+<span class="nc bnc" id="L72" title="All 2 branches missed.">        val published = activityLogStore.getActivityLogItemByRewindId(status.rewindId)?.published</span>
+<span class="nc bnc" id="L73" title="All 2 branches missed.">        return if (status.progress == null) {</span>
+<span class="nc" id="L74">            val isValid = isValid(status.url, status.validUntil, status.downloadId)</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">            emit(Complete(status.rewindId, status.downloadId, status.url, published, status.validUntil, isValid))</span>
+<span class="nc" id="L76">            true</span>
+        } else {
+<span class="nc" id="L78">            emit(Progress(status.rewindId, status.progress, published))</span>
+<span class="nc" id="L79">            false</span>
+        }
+    }
+
+    private suspend fun FlowCollector&lt;BackupDownloadRequestState&gt;.handleError(
+        retryAttempts: Int,
+        failure: Failure
+    ): Boolean {
+<span class="nc bnc" id="L87" title="All 2 branches missed.">        return if (retryAttempts &gt;= MAX_RETRY) {</span>
+<span class="nc" id="L88">            AppLog.d(T.JETPACK_BACKUP, &quot;$tag: Exceeded $MAX_RETRY retries while fetching status&quot;)</span>
+<span class="nc" id="L89">            emit(failure)</span>
+<span class="nc" id="L90">            true</span>
+        } else {
+<span class="nc" id="L92">            delay(DELAY_MILLIS * (max(1, DELAY_FACTOR * retryAttempts)))</span>
+<span class="nc" id="L93">            false</span>
+        }
+    }
+
+    private fun isValid(url: String?, validUntil: Date?, downloadId: Long?): Boolean {
+<span class="nc bnc" id="L98" title="All 6 branches missed.">        if (validUntil == null || url == null || downloadId == null) return false</span>
+        // Now represents the current time using the current locale and timezone
+<span class="nc" id="L100">        val now = Calendar.getInstance().apply { time = Date() }</span>
+<span class="nc" id="L101">        val expires = Calendar.getInstance().apply { time = validUntil }</span>
+<span class="nc" id="L102">        return now.before(expires)</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

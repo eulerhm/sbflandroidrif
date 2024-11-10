@@ -1,0 +1,735 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MediaGridAdapter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.media</a> &gt; <span class="el_source">MediaGridAdapter.java</span></div><h1>MediaGridAdapter.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.media;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.os.Handler;
+import android.text.TextUtils;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.ImageView.ScaleType;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.fluxc.model.MediaModel;
+import org.wordpress.android.fluxc.model.MediaModel.MediaUploadState;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.ui.utils.AuthenticationUtils;
+import org.wordpress.android.util.AccessibilityUtils;
+import org.wordpress.android.util.AniUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.ColorUtils;
+import org.wordpress.android.util.DisplayUtils;
+import org.wordpress.android.util.MediaUtils;
+import org.wordpress.android.util.PhotoPickerUtils;
+import org.wordpress.android.util.PhotonUtils;
+import org.wordpress.android.util.SiteUtils;
+import org.wordpress.android.util.StringUtils;
+import org.wordpress.android.util.UrlUtils;
+import org.wordpress.android.util.ViewUtils;
+import org.wordpress.android.util.extensions.ViewExtensionsKt;
+import org.wordpress.android.util.WPMediaUtils;
+import org.wordpress.android.util.image.ImageManager;
+import org.wordpress.android.util.image.ImageType;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+import javax.inject.Inject;
+import javax.inject.Named;
+
+import static org.wordpress.android.modules.ThreadModuleKt.APPLICATION_SCOPE;
+
+import kotlinx.coroutines.CoroutineScope;
+
+/**
+ * An adapter for the media gallery grid.
+ */
+public class MediaGridAdapter extends RecyclerView.Adapter&lt;MediaGridAdapter.GridViewHolder&gt; {
+    private MediaGridAdapterCallback mCallback;
+    private final MediaBrowserType mBrowserType;
+
+    private boolean mHasRetrievedAll;
+    private boolean mInMultiSelect;
+<span class="nc" id="L69">    private boolean mLoadThumbnails = true;</span>
+
+    private final Handler mHandler;
+    private final LayoutInflater mInflater;
+    private GridLayoutManager mLayoutManager;
+
+    private final Context mContext;
+    private final SiteModel mSite;
+
+<span class="nc" id="L78">    private final ArrayList&lt;MediaModel&gt; mMediaList = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L79">    private final ArrayList&lt;Integer&gt; mSelectedItems = new ArrayList&lt;&gt;();</span>
+
+    private final int mThumbWidth;
+    private final int mThumbHeight;
+
+    private static final float SCALE_NORMAL = 1.0f;
+    private static final float SCALE_SELECTED = .8f;
+
+    private static final String VIEW_TAG_EXTRACT_FROM_REMOTE_VIDEO_URL = &quot;view_tag_extract_from_remote_video_url&quot;;
+
+    @Inject ImageManager mImageManager;
+    @Inject AuthenticationUtils mAuthenticationUtils;
+    @Inject @Named(APPLICATION_SCOPE) CoroutineScope mAppScope;
+
+    public interface MediaGridAdapterCallback {
+        void onAdapterFetchMoreData();
+
+        void onAdapterItemClicked(int position, boolean isLongClick);
+
+        void onAdapterSelectionCountChanged(int count);
+
+        void onAdapterRequestRetry(int position);
+
+        void onAdapterRequestDelete(int position);
+    }
+
+    private static final int INVALID_POSITION = -1;
+
+    public MediaGridAdapter(@NonNull Context context, @NonNull SiteModel site, @NonNull MediaBrowserType browserType) {
+<span class="nc" id="L108">        super();</span>
+<span class="nc" id="L109">        ((WordPress) WordPress.getContext().getApplicationContext()).component().inject(this);</span>
+<span class="nc" id="L110">        setHasStableIds(true);</span>
+
+<span class="nc" id="L112">        mContext = context;</span>
+<span class="nc" id="L113">        mSite = site;</span>
+<span class="nc" id="L114">        mBrowserType = browserType;</span>
+<span class="nc" id="L115">        mInflater = LayoutInflater.from(context);</span>
+<span class="nc" id="L116">        mHandler = new Handler();</span>
+
+<span class="nc" id="L118">        int displayWidth = DisplayUtils.getWindowPixelWidth(mContext);</span>
+<span class="nc" id="L119">        mThumbWidth = displayWidth / getColumnCount(mContext);</span>
+<span class="nc" id="L120">        mThumbHeight = (int) (mThumbWidth * 0.75f);</span>
+<span class="nc" id="L121">    }</span>
+
+    @Override
+    public long getItemId(int position) {
+<span class="nc" id="L125">        return getLocalMediaIdAtPosition(position);</span>
+    }
+
+    public void setMediaList(@NonNull List&lt;MediaModel&gt; mediaList) {
+<span class="nc bnc" id="L129" title="All 2 branches missed.">        if (!isSameList(mediaList)) {</span>
+<span class="nc" id="L130">            mMediaList.clear();</span>
+<span class="nc" id="L131">            mMediaList.addAll(mediaList);</span>
+<span class="nc" id="L132">            notifyDataSetChanged();</span>
+        }
+<span class="nc" id="L134">    }</span>
+
+    @Override
+    public GridViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+<span class="nc" id="L138">        View view = mInflater.inflate(R.layout.media_grid_item, parent, false);</span>
+<span class="nc" id="L139">        return new GridViewHolder(view);</span>
+    }
+
+    /*
+     * returns the most optimal url to use when retrieving a media image for display here
+     */
+    private String getBestImageUrl(@NonNull MediaModel media) {
+        // return photon-ized url if the site allows it since this gives us the image at the
+        // exact size we need here
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (SiteUtils.isPhotonCapable(mSite)) {</span>
+<span class="nc" id="L149">            return PhotonUtils.getPhotonImageUrl(media.getUrl(), mThumbWidth, mThumbHeight,</span>
+<span class="nc" id="L150">                    mSite.isPrivateWPComAtomic());</span>
+        }
+
+        // can't use photon, so try the various image sizes - note we favor medium-large and
+        // medium because they're more bandwidth-friendly than large
+<span class="nc bnc" id="L155" title="All 2 branches missed.">        if (!TextUtils.isEmpty(media.getFileUrlMediumLargeSize())) {</span>
+<span class="nc" id="L156">            return media.getFileUrlMediumLargeSize();</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">        } else if (!TextUtils.isEmpty(media.getFileUrlMediumSize())) {</span>
+<span class="nc" id="L158">            return media.getFileUrlMediumSize();</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">        } else if (!TextUtils.isEmpty(media.getFileUrlLargeSize())) {</span>
+<span class="nc" id="L160">            return media.getFileUrlLargeSize();</span>
+        }
+
+        // next stop is to return the thumbnail, which will look pixelated in the grid but it's
+        // better than eating bandwidth showing the full-sized image
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        if (!TextUtils.isEmpty(media.getThumbnailUrl())) {</span>
+<span class="nc" id="L166">            return media.getThumbnailUrl();</span>
+        }
+
+        // last resort, return the full-sized image url
+<span class="nc" id="L170">        return UrlUtils.removeQuery(media.getUrl());</span>
+    }
+
+    @Override
+    public void onBindViewHolder(GridViewHolder holder, int position) {
+<span class="nc bnc" id="L175" title="All 2 branches missed.">        if (!isValidPosition(position)) {</span>
+<span class="nc" id="L176">            return;</span>
+        }
+
+<span class="nc" id="L179">        MediaModel media = mMediaList.get(position);</span>
+
+<span class="nc" id="L181">        String strState = media.getUploadState();</span>
+<span class="nc" id="L182">        MediaUploadState state = MediaUploadState.fromString(strState);</span>
+
+<span class="nc bnc" id="L184" title="All 4 branches missed.">        boolean isLocalFile = MediaUtils.isLocalFile(strState) &amp;&amp; !TextUtils.isEmpty(media.getFilePath());</span>
+<span class="nc" id="L185">        boolean isSelected = isItemSelected(media.getId());</span>
+<span class="nc" id="L186">        boolean canSelect = canSelectPosition(position);</span>
+<span class="nc bnc" id="L187" title="All 4 branches missed.">        boolean isImage = media.getMimeType() != null &amp;&amp; media.getMimeType().startsWith(&quot;image/&quot;);</span>
+
+<span class="nc bnc" id="L189" title="All 2 branches missed.">        if (!mLoadThumbnails) {</span>
+<span class="nc" id="L190">            holder.mFileContainer.setVisibility(View.GONE);</span>
+<span class="nc" id="L191">            mImageManager.load(holder.mImageView, ImageType.PHOTO, &quot;&quot;, ScaleType.CENTER_CROP);</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        } else if (isImage) {</span>
+<span class="nc" id="L193">            holder.mFileContainer.setVisibility(View.GONE);</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">            if (isLocalFile) {</span>
+<span class="nc" id="L195">                mImageManager.load(holder.mImageView, ImageType.PHOTO, media.getFilePath(), ScaleType.CENTER_CROP);</span>
+            } else {
+<span class="nc" id="L197">                mImageManager.load(holder.mImageView, ImageType.PHOTO, getBestImageUrl(media), ScaleType.CENTER_CROP);</span>
+            }
+<span class="nc bnc" id="L199" title="All 2 branches missed.">        } else if (media.isVideo()) {</span>
+<span class="nc" id="L200">            holder.mFileContainer.setVisibility(View.GONE);</span>
+<span class="nc" id="L201">            loadVideoThumbnail(position, media, holder.mImageView);</span>
+        } else {
+            // not an image or video, so show file name and file type
+<span class="nc" id="L204">            String fileName = media.getFileName();</span>
+<span class="nc" id="L205">            String title = media.getTitle();</span>
+<span class="nc" id="L206">            String fileExtension = MediaUtils.getExtensionForMimeType(media.getMimeType());</span>
+<span class="nc" id="L207">            holder.mFileContainer.setVisibility(View.VISIBLE);</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">            holder.mTitleView.setText(TextUtils.isEmpty(title) ? fileName : title);</span>
+<span class="nc" id="L209">            holder.mFileTypeView.setText(fileExtension.toUpperCase(Locale.ROOT));</span>
+<span class="nc" id="L210">            int placeholderResId = WPMediaUtils.getPlaceholder(fileName);</span>
+<span class="nc" id="L211">            ColorUtils.INSTANCE.setImageResourceWithTint(holder.mFileTypeImageView, placeholderResId,</span>
+                    R.color.neutral_30);
+<span class="nc" id="L213">            mImageManager.cancelRequestAndClearImageView(holder.mImageView);</span>
+        }
+<span class="nc" id="L215">        holder.mImageView.setContentDescription(mContext.getString(R.string.media_grid_item_image_desc,</span>
+<span class="nc" id="L216">                StringUtils.notNullStr(media.getFileName())));</span>
+
+<span class="nc bnc" id="L218" title="All 4 branches missed.">        if (mBrowserType.canMultiselect() &amp;&amp; canSelect) {</span>
+<span class="nc" id="L219">            holder.mSelectionCountContainer.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L220">            holder.mSelectionCountTextView.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L221">            holder.mSelectionCountTextView.setSelected(isSelected);</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">            if (isSelected) {</span>
+<span class="nc" id="L223">                int count = mSelectedItems.indexOf(media.getId()) + 1;</span>
+<span class="nc" id="L224">                holder.mSelectionCountTextView.setText(String.format(Locale.getDefault(), &quot;%d&quot;, count));</span>
+<span class="nc" id="L225">            } else {</span>
+<span class="nc" id="L226">                holder.mSelectionCountTextView.setText(null);</span>
+            }
+        } else {
+<span class="nc" id="L229">            holder.mSelectionCountContainer.setVisibility(View.GONE);</span>
+<span class="nc" id="L230">            holder.mSelectionCountTextView.setVisibility(View.GONE);</span>
+        }
+
+        // make sure the thumbnail scale reflects its selection state
+<span class="nc bnc" id="L234" title="All 2 branches missed.">        float scale = isSelected ? SCALE_SELECTED : SCALE_NORMAL;</span>
+<span class="nc bnc" id="L235" title="All 2 branches missed.">        if (holder.mImageView.getScaleX() != scale) {</span>
+<span class="nc" id="L236">            holder.mImageView.setScaleX(scale);</span>
+<span class="nc" id="L237">            holder.mImageView.setScaleY(scale);</span>
+        }
+
+        // show upload state unless it's already uploaded
+<span class="nc bnc" id="L241" title="All 2 branches missed.">        if (state != MediaUploadState.UPLOADED) {</span>
+<span class="nc" id="L242">            holder.mStateContainer.setVisibility(View.VISIBLE);</span>
+
+            // only show progress for items currently being uploaded or deleted
+<span class="nc bnc" id="L245" title="All 4 branches missed.">            boolean showProgress = state == MediaUploadState.UPLOADING || state == MediaUploadState.DELETING;</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">            holder.mProgressUpload.setVisibility(showProgress ? View.VISIBLE : View.GONE);</span>
+
+            // failed uploads can be retried or deleted, queued items can be deleted
+<span class="nc bnc" id="L249" title="All 4 branches missed.">            if (state == MediaUploadState.FAILED || state == MediaUploadState.QUEUED) {</span>
+<span class="nc" id="L250">                holder.mRetryDeleteContainer.setVisibility(View.VISIBLE);</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">                holder.mImgRetry.setVisibility(state == MediaUploadState.FAILED ? View.VISIBLE : View.GONE);</span>
+            } else {
+<span class="nc" id="L253">                holder.mRetryDeleteContainer.setVisibility(View.GONE);</span>
+            }
+<span class="nc" id="L255">            holder.mStateTextView.setText(getLabelForMediaUploadState(state));</span>
+
+            // hide the video player icon so it doesn't overlap state label
+<span class="nc" id="L258">            holder.mVideoOverlayContainer.setVisibility(View.GONE);</span>
+<span class="nc" id="L259">        } else {</span>
+<span class="nc" id="L260">            holder.mStateContainer.setVisibility(View.GONE);</span>
+<span class="nc" id="L261">            holder.mStateContainer.setOnClickListener(null);</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">            holder.mVideoOverlayContainer.setVisibility(media.isVideo() ? View.VISIBLE : View.GONE);</span>
+        }
+
+        // if we are near the end, make a call to fetch more
+<span class="nc bnc" id="L266" title="All 6 branches missed.">        if (position == getItemCount() - 1</span>
+            &amp;&amp; !mHasRetrievedAll
+            &amp;&amp; mCallback != null) {
+<span class="nc" id="L269">            mCallback.onAdapterFetchMoreData();</span>
+        }
+<span class="nc" id="L271">    }</span>
+
+    public ArrayList&lt;Integer&gt; getSelectedItems() {
+<span class="nc" id="L274">        return mSelectedItems;</span>
+    }
+
+    public int getSelectedItemCount() {
+<span class="nc" id="L278">        return mSelectedItems.size();</span>
+    }
+
+    class GridViewHolder extends RecyclerView.ViewHolder {
+        private final TextView mTitleView;
+        private final ImageView mImageView;
+        private final TextView mFileTypeView;
+        private final ImageView mFileTypeImageView;
+        private final TextView mSelectionCountTextView;
+        private final TextView mStateTextView;
+        private final ProgressBar mProgressUpload;
+        private final ViewGroup mStateContainer;
+        private final ViewGroup mFileContainer;
+        private final ViewGroup mVideoOverlayContainer;
+        private final ViewGroup mSelectionCountContainer;
+        private final ViewGroup mRetryDeleteContainer;
+        private final ImageView mImgRetry;
+        private final ImageView mImgTrash;
+
+<span class="nc" id="L297">        GridViewHolder(View view) {</span>
+<span class="nc" id="L298">            super(view);</span>
+
+<span class="nc" id="L300">            mImageView = view.findViewById(R.id.media_grid_item_image);</span>
+<span class="nc" id="L301">            mSelectionCountTextView = view.findViewById(R.id.text_selection_count);</span>
+
+<span class="nc" id="L303">            mStateContainer = view.findViewById(R.id.media_grid_item_upload_state_container);</span>
+<span class="nc" id="L304">            mStateTextView = mStateContainer.findViewById(R.id.media_grid_item_upload_state);</span>
+<span class="nc" id="L305">            mProgressUpload = mStateContainer.findViewById(R.id.media_grid_item_upload_progress);</span>
+
+<span class="nc" id="L307">            mFileContainer = view.findViewById(R.id.media_grid_item_file_container);</span>
+<span class="nc" id="L308">            mTitleView = mFileContainer.findViewById(R.id.media_grid_item_name);</span>
+<span class="nc" id="L309">            mFileTypeView = mFileContainer.findViewById(R.id.media_grid_item_filetype);</span>
+<span class="nc" id="L310">            mFileTypeImageView = mFileContainer.findViewById(R.id.media_grid_item_filetype_image);</span>
+
+<span class="nc" id="L312">            mVideoOverlayContainer = view.findViewById(R.id.frame_video_overlay);</span>
+<span class="nc" id="L313">            mSelectionCountContainer = view.findViewById(R.id.frame_selection_count);</span>
+
+            // make the progress bar white
+<span class="nc" id="L316">            mProgressUpload.getIndeterminateDrawable().setColorFilter(Color.WHITE, PorterDuff.Mode.MULTIPLY);</span>
+
+<span class="nc" id="L318">            mRetryDeleteContainer = view.findViewById(R.id.container_retry_delete);</span>
+<span class="nc" id="L319">            mImgRetry = view.findViewById(R.id.image_retry);</span>
+<span class="nc" id="L320">            mImgTrash = view.findViewById(R.id.image_trash);</span>
+
+<span class="nc" id="L322">            itemView.setOnClickListener(new OnClickListener() {</span>
+                @Override
+                public void onClick(View v) {
+<span class="nc" id="L325">                    int position = getAdapterPosition();</span>
+<span class="nc" id="L326">                    doAdapterItemClicked(position, false);</span>
+<span class="nc" id="L327">                }</span>
+            });
+
+<span class="nc" id="L330">            itemView.setOnLongClickListener(new View.OnLongClickListener() {</span>
+                @Override
+                public boolean onLongClick(View v) {
+<span class="nc" id="L333">                    int position = getAdapterPosition();</span>
+<span class="nc" id="L334">                    doAdapterItemClicked(position, true);</span>
+<span class="nc" id="L335">                    return true;</span>
+                }
+            });
+<span class="nc" id="L338">            ViewExtensionsKt.redirectContextClickToLongPressListener(itemView);</span>
+
+<span class="nc" id="L340">            mSelectionCountContainer.setOnClickListener(new OnClickListener() {</span>
+                @Override
+                public void onClick(View v) {
+<span class="nc" id="L343">                    int position = getAdapterPosition();</span>
+<span class="nc bnc" id="L344" title="All 2 branches missed.">                    if (canSelectPosition(position)) {</span>
+<span class="nc" id="L345">                        setInMultiSelect(true);</span>
+<span class="nc" id="L346">                        toggleItemSelected(GridViewHolder.this, position);</span>
+                    }
+<span class="nc" id="L348">                }</span>
+            });
+
+<span class="nc" id="L351">            mImgRetry.setOnClickListener(new OnClickListener() {</span>
+                @Override
+                public void onClick(View v) {
+<span class="nc" id="L354">                    int position = getAdapterPosition();</span>
+<span class="nc bnc" id="L355" title="All 4 branches missed.">                    if (isValidPosition(position) &amp;&amp; mCallback != null) {</span>
+<span class="nc" id="L356">                        mCallback.onAdapterRequestRetry(position);</span>
+                    }
+<span class="nc" id="L358">                }</span>
+            });
+
+<span class="nc" id="L361">            mImgTrash.setOnClickListener(new OnClickListener() {</span>
+                @Override
+                public void onClick(View v) {
+<span class="nc" id="L364">                    int position = getAdapterPosition();</span>
+<span class="nc bnc" id="L365" title="All 4 branches missed.">                    if (isValidPosition(position) &amp;&amp; mCallback != null) {</span>
+<span class="nc" id="L366">                        mCallback.onAdapterRequestDelete(position);</span>
+                    }
+<span class="nc" id="L368">                }</span>
+            });
+
+<span class="nc" id="L371">            ViewUtils.addCircularShadowOutline(mSelectionCountTextView);</span>
+<span class="nc" id="L372">            addImageSelectedToAccessibilityFocusedEvent(mImageView);</span>
+<span class="nc" id="L373">        }</span>
+
+        private void addImageSelectedToAccessibilityFocusedEvent(ImageView imageView) {
+<span class="nc" id="L376">            AccessibilityUtils.addPopulateAccessibilityEventFocusedListener(imageView, event -&gt; {</span>
+<span class="nc" id="L377">                int position = getAdapterPosition();</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">                if (isValidPosition(position)) {</span>
+<span class="nc bnc" id="L379" title="All 2 branches missed.">                    if (isItemSelectedByPosition(position)) {</span>
+<span class="nc" id="L380">                        final String imageSelectedText = imageView.getContext().getString(</span>
+                                R.string.photo_picker_image_selected);
+<span class="nc bnc" id="L382" title="All 2 branches missed.">                        if (!imageView.getContentDescription().toString().contains(imageSelectedText)) {</span>
+<span class="nc" id="L383">                            imageView.setContentDescription(</span>
+<span class="nc" id="L384">                                    imageView.getContentDescription() + &quot; &quot;</span>
+                                    + imageSelectedText);
+                        }
+                    }
+                }
+<span class="nc" id="L389">            });</span>
+<span class="nc" id="L390">        }</span>
+
+        private void doAdapterItemClicked(int position, boolean isLongClick) {
+<span class="nc bnc" id="L393" title="All 2 branches missed.">            if (!isValidPosition(position)) {</span>
+<span class="nc" id="L394">                return;</span>
+            }
+<span class="nc bnc" id="L396" title="All 4 branches missed.">            if (isInMultiSelect() &amp;&amp; !isLongClick) {</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">                if (canSelectPosition(position)) {</span>
+<span class="nc" id="L398">                    toggleItemSelected(GridViewHolder.this, position);</span>
+                }
+            } else {
+<span class="nc bnc" id="L401" title="All 6 branches missed.">                if (mBrowserType.canMultiselect() &amp;&amp; canSelectPosition(position) &amp;&amp; !isLongClick) {</span>
+<span class="nc" id="L402">                    setInMultiSelect(true);</span>
+<span class="nc" id="L403">                    toggleItemSelected(GridViewHolder.this, position);</span>
+                }
+<span class="nc bnc" id="L405" title="All 2 branches missed.">                if (mCallback != null) {</span>
+<span class="nc" id="L406">                    mCallback.onAdapterItemClicked(position, isLongClick);</span>
+                }
+            }
+<span class="nc" id="L409">        }</span>
+    }
+
+    public boolean isInMultiSelect() {
+<span class="nc" id="L413">        return mInMultiSelect;</span>
+    }
+
+    public void setInMultiSelect(boolean value) {
+<span class="nc bnc" id="L417" title="All 2 branches missed.">        if (mInMultiSelect != value) {</span>
+<span class="nc" id="L418">            mInMultiSelect = value;</span>
+<span class="nc" id="L419">            clearSelection();</span>
+        }
+<span class="nc" id="L421">    }</span>
+
+    private boolean isValidPosition(int position) {
+<span class="nc bnc" id="L424" title="All 4 branches missed.">        return position &gt;= 0 &amp;&amp; position &lt; getItemCount();</span>
+    }
+
+    public int getLocalMediaIdAtPosition(int position) {
+<span class="nc bnc" id="L428" title="All 2 branches missed.">        if (isValidPosition(position)) {</span>
+<span class="nc" id="L429">            return mMediaList.get(position).getId();</span>
+        }
+<span class="nc" id="L431">        AppLog.w(AppLog.T.MEDIA, &quot;MediaGridAdapter &gt; Invalid position &quot; + position);</span>
+<span class="nc" id="L432">        return INVALID_POSITION;</span>
+    }
+
+    /*
+     * determines whether the media item at the passed position can be selected - not allowed
+     * for local files or deleted items when used as a picker
+     */
+    private boolean canSelectPosition(int position) {
+<span class="nc bnc" id="L440" title="All 2 branches missed.">        if (!isValidPosition(position)) {</span>
+<span class="nc" id="L441">            return false;</span>
+        }
+<span class="nc bnc" id="L443" title="All 2 branches missed.">        if (mBrowserType.isPicker()) {</span>
+<span class="nc" id="L444">            MediaModel media = mMediaList.get(position);</span>
+<span class="nc bnc" id="L445" title="All 2 branches missed.">            if (MediaUtils.isLocalFile(media.getUploadState())) {</span>
+<span class="nc" id="L446">                return false;</span>
+            }
+<span class="nc" id="L448">            MediaUploadState state = MediaUploadState.fromString(media.getUploadState());</span>
+<span class="nc bnc" id="L449" title="All 4 branches missed.">            return state != MediaUploadState.DELETING &amp;&amp; state != MediaUploadState.DELETED;</span>
+        } else {
+<span class="nc" id="L451">            return true;</span>
+        }
+    }
+
+    @Override public void onViewRecycled(@NonNull GridViewHolder holder) {
+<span class="nc" id="L456">        mImageManager.cancelRequestAndClearImageView(holder.mImageView);</span>
+<span class="nc" id="L457">        holder.mImageView.setTag(R.id.media_grid_remote_thumb_extract_id, null);</span>
+<span class="nc" id="L458">        super.onViewRecycled(holder);</span>
+<span class="nc" id="L459">    }</span>
+
+    public void cancelPendingRequestsForVisibleItems(@NonNull RecyclerView recyclerView) {
+<span class="nc" id="L462">        int firstVisibleItemPosition = mLayoutManager.findFirstVisibleItemPosition();</span>
+<span class="nc" id="L463">        int lastVisibleItemPosition = mLayoutManager.findLastVisibleItemPosition();</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">        for (int i = firstVisibleItemPosition; i &lt;= lastVisibleItemPosition; i++) {</span>
+<span class="nc" id="L465">            GridViewHolder holder = (GridViewHolder) recyclerView.findViewHolderForAdapterPosition(i);</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">            if (holder != null</span>
+<span class="nc bnc" id="L467" title="All 2 branches missed.">                &amp;&amp; (VIEW_TAG_EXTRACT_FROM_REMOTE_VIDEO_URL.equals(</span>
+<span class="nc" id="L468">                        holder.mImageView.getTag(R.id.media_grid_remote_thumb_extract_id)))) {</span>
+<span class="nc" id="L469">                mImageManager.cancelRequestAndClearImageView(holder.mImageView);</span>
+            }
+        }
+<span class="nc" id="L472">    }</span>
+
+    public void refreshCurrentItems(@NonNull RecyclerView recyclerView) {
+<span class="nc" id="L475">        int firstVisibleItemPosition = mLayoutManager.findFirstVisibleItemPosition();</span>
+<span class="nc" id="L476">        int lastVisibleItemPosition = mLayoutManager.findLastVisibleItemPosition();</span>
+<span class="nc bnc" id="L477" title="All 4 branches missed.">        if (mMediaList.size() &gt;= lastVisibleItemPosition &amp;&amp; lastVisibleItemPosition &gt; -1) {</span>
+<span class="nc bnc" id="L478" title="All 2 branches missed.">            for (int i = firstVisibleItemPosition; i &lt;= lastVisibleItemPosition; i++) {</span>
+                // only refresh this one
+<span class="nc" id="L480">                GridViewHolder holder = (GridViewHolder) recyclerView.findViewHolderForAdapterPosition(i);</span>
+<span class="nc bnc" id="L481" title="All 2 branches missed.">                if (holder != null</span>
+<span class="nc bnc" id="L482" title="All 2 branches missed.">                    &amp;&amp; (VIEW_TAG_EXTRACT_FROM_REMOTE_VIDEO_URL.equals(</span>
+<span class="nc" id="L483">                            holder.mImageView.getTag(R.id.media_grid_remote_thumb_extract_id)))) {</span>
+<span class="nc" id="L484">                    notifyItemChanged(i);</span>
+                }
+            }
+        }
+<span class="nc" id="L488">    }</span>
+
+    @Override public void onAttachedToRecyclerView(@NonNull RecyclerView recyclerView) {
+<span class="nc" id="L491">        super.onAttachedToRecyclerView(recyclerView);</span>
+<span class="nc" id="L492">        mLayoutManager = (GridLayoutManager) recyclerView.getLayoutManager();</span>
+<span class="nc" id="L493">    }</span>
+
+    /*
+     * loads the thumbnail for the passed video media item - works with both local and network videos
+     */
+    private void loadVideoThumbnail(final int position, final @NonNull MediaModel media,
+                                    @NonNull final ImageView imageView) {
+        // if we have a thumbnail url, use it and be done
+<span class="nc bnc" id="L501" title="All 4 branches missed.">        if (!TextUtils.isEmpty(media.getThumbnailUrl()) &amp;&amp; !MediaUtils.isVideo(media.getThumbnailUrl())) {</span>
+<span class="nc" id="L502">            mImageManager.load(imageView, ImageType.VIDEO, media.getThumbnailUrl(), ScaleType.CENTER_CROP);</span>
+<span class="nc" id="L503">            return;</span>
+        }
+
+        // thumbnail url is empty, so either this is a local (still uploading) video or the server simply
+        // hasn't supplied the thumbnail url
+        final String filePath;
+<span class="nc bnc" id="L509" title="All 4 branches missed.">        if (!TextUtils.isEmpty(media.getFilePath()) &amp;&amp; new File(media.getFilePath()).exists()) {</span>
+<span class="nc" id="L510">            filePath = media.getFilePath();</span>
+        } else {
+<span class="nc" id="L512">            filePath = media.getUrl();</span>
+        }
+
+<span class="nc bnc" id="L515" title="All 2 branches missed.">        if (TextUtils.isEmpty(filePath)) {</span>
+<span class="nc" id="L516">            AppLog.w(AppLog.T.MEDIA, &quot;MediaGridAdapter &gt; No path to video thumbnail&quot;);</span>
+<span class="nc" id="L517">            return;</span>
+        }
+        // see if we have a cached thumbnail before retrieving it
+<span class="nc" id="L520">        Bitmap bitmap = WordPress.getBitmapCache().get(filePath);</span>
+<span class="nc bnc" id="L521" title="All 2 branches missed.">        if (bitmap != null) {</span>
+<span class="nc" id="L522">            mImageManager.load(imageView, bitmap, ScaleType.CENTER_CROP);</span>
+<span class="nc" id="L523">            return;</span>
+        }
+
+<span class="nc" id="L526">        imageView.setTag(R.id.media_grid_remote_thumb_extract_id, VIEW_TAG_EXTRACT_FROM_REMOTE_VIDEO_URL);</span>
+<span class="nc" id="L527">        mImageManager.loadThumbnailFromVideoUrl(mAppScope, imageView, filePath, ScaleType.CENTER_CROP,</span>
+<span class="nc" id="L528">                new ImageManager.RequestListener&lt;Drawable&gt;() {</span>
+                    @Override
+                    public void onLoadFailed(@Nullable Exception e, @Nullable Object model) {
+<span class="nc bnc" id="L531" title="All 2 branches missed.">                        if (e != null) {</span>
+<span class="nc" id="L532">                            AppLog.d(AppLog.T.MEDIA, &quot;MediaGridAdapter &gt; error loading video thumbnail = &quot; + e);</span>
+                        }
+<span class="nc" id="L534">                    }</span>
+
+                    @Override
+                    public void onResourceReady(@NonNull Drawable resource, @Nullable Object model) {
+<span class="nc" id="L538">                        imageView.setTag(R.id.media_grid_remote_thumb_extract_id, null);</span>
+<span class="nc" id="L539">                        Bitmap bitmap = ((BitmapDrawable) resource).getBitmap();</span>
+                        // create a copy since the original bitmap may by automatically recycled
+<span class="nc" id="L541">                        bitmap = bitmap.copy(bitmap.getConfig(), true);</span>
+<span class="nc" id="L542">                        WordPress.getBitmapCache().put(filePath, bitmap);</span>
+<span class="nc" id="L543">                    }</span>
+                });
+<span class="nc" id="L545">    }</span>
+
+    public boolean isEmpty() {
+<span class="nc" id="L548">        return mMediaList.isEmpty();</span>
+    }
+
+    @Override
+    public int getItemCount() {
+<span class="nc" id="L553">        return mMediaList.size();</span>
+    }
+
+    public static int getColumnCount(Context context) {
+<span class="nc bnc" id="L557" title="All 2 branches missed.">        return DisplayUtils.isLandscape(context) ? 4 : 3;</span>
+    }
+
+    public void setCallback(MediaGridAdapterCallback callback) {
+<span class="nc" id="L561">        mCallback = callback;</span>
+<span class="nc" id="L562">    }</span>
+
+    public void setHasRetrievedAll(boolean b) {
+<span class="nc" id="L565">        mHasRetrievedAll = b;</span>
+<span class="nc" id="L566">    }</span>
+
+    void setLoadThumbnails(boolean loadThumbnails) {
+<span class="nc bnc" id="L569" title="All 2 branches missed.">        if (loadThumbnails != mLoadThumbnails) {</span>
+<span class="nc" id="L570">            mLoadThumbnails = loadThumbnails;</span>
+<span class="nc" id="L571">            AppLog.d(AppLog.T.MEDIA, &quot;MediaGridAdapter &gt; loadThumbnails = &quot; + loadThumbnails);</span>
+<span class="nc bnc" id="L572" title="All 2 branches missed.">            if (mLoadThumbnails) {</span>
+<span class="nc" id="L573">                notifyDataSetChanged();</span>
+            }
+        }
+<span class="nc" id="L576">    }</span>
+
+    public void clearSelection() {
+<span class="nc bnc" id="L579" title="All 2 branches missed.">        if (mSelectedItems.size() &gt; 0) {</span>
+<span class="nc" id="L580">            mSelectedItems.clear();</span>
+<span class="nc" id="L581">            notifyDataSetChanged();</span>
+        }
+<span class="nc" id="L583">    }</span>
+
+    public boolean isItemSelected(int localMediaId) {
+<span class="nc" id="L586">        return mSelectedItems.contains(localMediaId);</span>
+    }
+
+    public void removeSelectionByLocalId(int localMediaId) {
+<span class="nc bnc" id="L590" title="All 2 branches missed.">        if (isItemSelected(localMediaId)) {</span>
+<span class="nc" id="L591">            mSelectedItems.remove(Integer.valueOf(localMediaId));</span>
+<span class="nc bnc" id="L592" title="All 2 branches missed.">            if (mCallback != null) {</span>
+<span class="nc" id="L593">                mCallback.onAdapterSelectionCountChanged(mSelectedItems.size());</span>
+            }
+<span class="nc" id="L595">            notifyDataSetChanged();</span>
+        }
+<span class="nc" id="L597">    }</span>
+
+    private void setItemSelectedByPosition(GridViewHolder holder, int position, boolean isVideo, boolean selected) {
+<span class="nc bnc" id="L600" title="All 2 branches missed.">        if (!isValidPosition(position)) {</span>
+<span class="nc" id="L601">            return;</span>
+        }
+
+<span class="nc" id="L604">        int localMediaId = mMediaList.get(position).getId();</span>
+<span class="nc bnc" id="L605" title="All 2 branches missed.">        if (selected) {</span>
+<span class="nc" id="L606">            mSelectedItems.add(localMediaId);</span>
+        } else {
+<span class="nc" id="L608">            mSelectedItems.remove(Integer.valueOf(localMediaId));</span>
+        }
+
+        // show and animate the count
+<span class="nc bnc" id="L612" title="All 2 branches missed.">        if (selected) {</span>
+<span class="nc" id="L613">            holder.mSelectionCountTextView</span>
+<span class="nc" id="L614">                    .setText(String.format(Locale.getDefault(), &quot;%d&quot;, mSelectedItems.indexOf(localMediaId) + 1));</span>
+        } else {
+<span class="nc" id="L616">            holder.mSelectionCountTextView.setText(null);</span>
+        }
+<span class="nc" id="L618">        AniUtils.startAnimation(holder.mSelectionCountContainer, R.anim.pop);</span>
+<span class="nc bnc" id="L619" title="All 2 branches missed.">        holder.mSelectionCountTextView.setVisibility(selected ? View.VISIBLE : View.GONE);</span>
+
+        // scale the thumbnail
+<span class="nc bnc" id="L622" title="All 2 branches missed.">        if (selected) {</span>
+<span class="nc" id="L623">            AniUtils.scale(holder.mImageView, SCALE_NORMAL, SCALE_SELECTED, AniUtils.Duration.SHORT);</span>
+        } else {
+<span class="nc" id="L625">            AniUtils.scale(holder.mImageView, SCALE_SELECTED, SCALE_NORMAL, AniUtils.Duration.SHORT);</span>
+        }
+
+        // redraw after the scale animation completes
+<span class="nc" id="L629">        long delayMs = AniUtils.Duration.SHORT.toMillis(mContext);</span>
+<span class="nc" id="L630">        new Handler().postDelayed(new Runnable() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L633">                notifyDataSetChanged();</span>
+<span class="nc" id="L634">            }</span>
+        }, delayMs);
+
+<span class="nc bnc" id="L637" title="All 2 branches missed.">        if (mCallback != null) {</span>
+<span class="nc" id="L638">            mCallback.onAdapterSelectionCountChanged(mSelectedItems.size());</span>
+        }
+
+<span class="nc" id="L641">        PhotoPickerUtils.announceSelectedMediaForAccessibility(holder.mImageView, isVideo, selected);</span>
+<span class="nc" id="L642">    }</span>
+
+    private void toggleItemSelected(GridViewHolder holder, int position) {
+<span class="nc bnc" id="L645" title="All 2 branches missed.">        if (!isValidPosition(position)) {</span>
+<span class="nc" id="L646">            return;</span>
+        }
+<span class="nc" id="L648">        boolean isSelected = isItemSelectedByPosition(position);</span>
+<span class="nc" id="L649">        boolean isVideo = isItemIsVideoByPosition(position);</span>
+<span class="nc bnc" id="L650" title="All 2 branches missed.">        setItemSelectedByPosition(holder, position, isVideo, !isSelected);</span>
+<span class="nc" id="L651">    }</span>
+
+    private boolean isItemSelectedByPosition(int position) {
+<span class="nc" id="L654">        int localMediaId = mMediaList.get(position).getId();</span>
+<span class="nc" id="L655">        return mSelectedItems.contains(localMediaId);</span>
+    }
+
+    private boolean isItemIsVideoByPosition(int position) {
+<span class="nc" id="L659">        return mMediaList.get(position).isVideo();</span>
+    }
+
+    public void setSelectedItems(ArrayList&lt;Integer&gt; selectedItems) {
+<span class="nc" id="L663">        mSelectedItems.clear();</span>
+<span class="nc" id="L664">        mSelectedItems.addAll(selectedItems);</span>
+<span class="nc bnc" id="L665" title="All 2 branches missed.">        if (mCallback != null) {</span>
+<span class="nc" id="L666">            mCallback.onAdapterSelectionCountChanged(mSelectedItems.size());</span>
+        }
+<span class="nc" id="L668">        notifyDataSetChanged();</span>
+<span class="nc" id="L669">    }</span>
+
+    private String getLabelForMediaUploadState(MediaUploadState uploadState) {
+<span class="nc bnc" id="L672" title="All 7 branches missed.">        switch (uploadState) {</span>
+            case QUEUED:
+<span class="nc" id="L674">                return mContext.getString(R.string.media_upload_state_queued);</span>
+            case UPLOADING:
+<span class="nc" id="L676">                return mContext.getString(R.string.media_upload_state_uploading);</span>
+            case DELETING:
+<span class="nc" id="L678">                return mContext.getString(R.string.media_upload_state_deleting);</span>
+            case DELETED:
+<span class="nc" id="L680">                return mContext.getString(R.string.media_upload_state_deleted);</span>
+            case FAILED:
+<span class="nc" id="L682">                return mContext.getString(R.string.media_upload_state_failed);</span>
+            case UPLOADED:
+<span class="nc" id="L684">                return mContext.getString(R.string.media_upload_state_uploaded);</span>
+        }
+<span class="nc" id="L686">        return &quot;&quot;;</span>
+    }
+
+    void updateMediaItem(@NonNull MediaModel media, boolean forceUpdate) {
+<span class="nc" id="L690">        int index = indexOfMedia(media);</span>
+<span class="nc bnc" id="L691" title="All 6 branches missed.">        if (index &gt; -1 &amp;&amp; (forceUpdate || !media.equals(mMediaList.get(index)))) {</span>
+<span class="nc" id="L692">            mMediaList.set(index, media);</span>
+<span class="nc" id="L693">            notifyItemChanged(index);</span>
+        }
+<span class="nc" id="L695">    }</span>
+
+    void removeMediaItem(@NonNull MediaModel media) {
+<span class="nc" id="L698">        int index = indexOfMedia(media);</span>
+<span class="nc bnc" id="L699" title="All 2 branches missed.">        if (index &gt; -1) {</span>
+<span class="nc" id="L700">            mMediaList.remove(index);</span>
+<span class="nc" id="L701">            notifyItemRemoved(index);</span>
+        }
+<span class="nc" id="L703">    }</span>
+
+    boolean mediaExists(@NonNull MediaModel media) {
+<span class="nc bnc" id="L706" title="All 2 branches missed.">        return indexOfMedia(media) &gt; -1;</span>
+    }
+
+    private int indexOfMedia(@NonNull MediaModel media) {
+<span class="nc bnc" id="L710" title="All 2 branches missed.">        for (int i = 0; i &lt; mMediaList.size(); i++) {</span>
+<span class="nc bnc" id="L711" title="All 2 branches missed.">            if (media.getId() == mMediaList.get(i).getId()) {</span>
+<span class="nc" id="L712">                return i;</span>
+            }
+        }
+<span class="nc" id="L715">        return -1;</span>
+    }
+
+    /*
+     * returns true if the passed list is the same as the existing one
+     */
+    private boolean isSameList(@NonNull List&lt;MediaModel&gt; otherList) {
+<span class="nc bnc" id="L722" title="All 2 branches missed.">        if (otherList.size() != mMediaList.size()) {</span>
+<span class="nc" id="L723">            return false;</span>
+        }
+
+<span class="nc bnc" id="L726" title="All 2 branches missed.">        for (MediaModel otherMedia : otherList) {</span>
+<span class="nc bnc" id="L727" title="All 2 branches missed.">            if (!mediaExists(otherMedia)) {</span>
+<span class="nc" id="L728">                return false;</span>
+            }
+<span class="nc" id="L730">        }</span>
+
+<span class="nc" id="L732">        return true;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ConversationNotificationsViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.viewmodels</a> &gt; <span class="el_source">ConversationNotificationsViewModel.kt</span></div><h1>ConversationNotificationsViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.viewmodels
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import org.wordpress.android.datasets.wrappers.ReaderPostTableWrapper
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.reader.FollowCommentsUiStateType.DISABLED
+import org.wordpress.android.ui.reader.FollowCommentsUiStateType.GONE
+import org.wordpress.android.ui.reader.FollowCommentsUiStateType.LOADING
+import org.wordpress.android.ui.reader.FollowCommentsUiStateType.VISIBLE_WITH_STATE
+import org.wordpress.android.ui.reader.FollowConversationStatusFlags
+import org.wordpress.android.ui.reader.FollowConversationUiState
+import org.wordpress.android.ui.reader.ReaderFollowCommentsHandler
+import org.wordpress.android.ui.reader.comments.ThreadedCommentsActionSource
+import org.wordpress.android.ui.reader.comments.ThreadedCommentsActionSource.UNKNOWN
+import org.wordpress.android.ui.reader.usecases.ReaderCommentsFollowUseCase.FollowCommentsState
+import org.wordpress.android.ui.reader.usecases.ReaderCommentsFollowUseCase.FollowCommentsState.Failure
+import org.wordpress.android.ui.reader.usecases.ReaderCommentsFollowUseCase.FollowCommentsState.FlagsMappedState
+import org.wordpress.android.ui.reader.usecases.ReaderCommentsFollowUseCase.FollowCommentsState.FollowCommentsNotAllowed
+import org.wordpress.android.ui.reader.usecases.ReaderCommentsFollowUseCase.FollowCommentsState.FollowStateChanged
+import org.wordpress.android.ui.reader.usecases.ReaderCommentsFollowUseCase.FollowCommentsState.Loading
+import org.wordpress.android.ui.reader.usecases.ReaderCommentsFollowUseCase.FollowCommentsState.UserNotAuthenticated
+import org.wordpress.android.util.map
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+@Suppress(&quot;TooManyFunctions&quot;)
+<span class="nc" id="L34">class ConversationNotificationsViewModel @Inject constructor(</span>
+<span class="nc" id="L35">    private val followCommentsHandler: ReaderFollowCommentsHandler,</span>
+<span class="nc" id="L36">    private val readerPostTableWrapper: ReaderPostTableWrapper,</span>
+<span class="nc" id="L37">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L38">) : ScopedViewModel(bgDispatcher) {</span>
+    private var isStarted = false
+    private var followStatusGetJob: Job? = null
+    private var followStatusSetJob: Job? = null
+
+<span class="nc" id="L43">    private val _showBottomSheetEvent = MutableLiveData&lt;Event&lt;ShowBottomSheetData&gt;&gt;()</span>
+<span class="nc" id="L44">    val showBottomSheetEvent: LiveData&lt;Event&lt;ShowBottomSheetData&gt;&gt; = _showBottomSheetEvent</span>
+
+<span class="nc" id="L46">    private val _snackbarEvents = MediatorLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L47">    val snackbarEvents: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _snackbarEvents</span>
+
+<span class="nc" id="L49">    private val _updateFollowStatus = MediatorLiveData&lt;FollowCommentsState&gt;()</span>
+<span class="nc" id="L50">    val updateFollowUiState: LiveData&lt;FollowConversationUiState&gt; =</span>
+<span class="nc" id="L51">            _updateFollowStatus.map { state -&gt; buildFollowCommentsUiState(state) }</span>
+
+<span class="nc" id="L53">    private val _pushNotificationsStatusUpdate = MediatorLiveData&lt;FollowStateChanged&gt;()</span>
+<span class="nc" id="L54">    val pushNotificationsStatusUpdate: LiveData&lt;Event&lt;Boolean&gt;&gt; =</span>
+<span class="nc" id="L55">            _pushNotificationsStatusUpdate.map { state -&gt; buildPushNotificationsUiState(state) }</span>
+
+    private var blogId: Long = 0
+    private var postId: Long = 0
+<span class="nc" id="L59">    private var source: ThreadedCommentsActionSource = UNKNOWN</span>
+
+<span class="nc" id="L61">    data class ShowBottomSheetData(val show: Boolean, val isReceivingNotifications: Boolean = false)</span>
+
+    fun start(blogId: Long, postId: Long, source: ThreadedCommentsActionSource) {
+<span class="nc bnc" id="L64" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc" id="L65">        isStarted = true</span>
+
+<span class="nc" id="L67">        this.blogId = blogId</span>
+<span class="nc" id="L68">        this.postId = postId</span>
+<span class="nc" id="L69">        this.source = source</span>
+
+<span class="nc" id="L71">        _updateFollowStatus.value = FollowCommentsNotAllowed</span>
+
+<span class="nc" id="L73">        init()</span>
+<span class="nc" id="L74">    }</span>
+
+    fun onRefresh() {
+<span class="nc" id="L77">        getFollowConversationStatus(false)</span>
+<span class="nc" id="L78">    }</span>
+
+    fun onFollowTapped() {
+<span class="nc" id="L81">        onFollowConversationClicked(true)</span>
+<span class="nc" id="L82">    }</span>
+
+    fun onUnfollowTapped() {
+<span class="nc" id="L85">        onFollowConversationClicked(false)</span>
+<span class="nc" id="L86">        _showBottomSheetEvent.value = Event(ShowBottomSheetData(false))</span>
+<span class="nc" id="L87">    }</span>
+
+<span class="nc" id="L89">    fun onChangePushNotificationsRequest(enable: Boolean, fromSnackbar: Boolean = false) {</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        followStatusSetJob?.cancel()</span>
+<span class="nc" id="L91">        followStatusSetJob = launch(bgDispatcher) {</span>
+<span class="nc" id="L92">            followCommentsHandler.handleEnableByPushNotificationsClicked(</span>
+<span class="nc" id="L93">                    blogId,</span>
+<span class="nc" id="L94">                    postId,</span>
+<span class="nc" id="L95">                    enable,</span>
+<span class="nc" id="L96">                    source,</span>
+<span class="nc" id="L97">                    getSnackbarAction(fromSnackbar, enable)</span>
+            )
+<span class="nc" id="L99">        }</span>
+<span class="nc" id="L100">    }</span>
+
+    fun onManageNotificationsTapped() {
+<span class="nc" id="L103">        val currentState = updateFollowUiState.value</span>
+<span class="nc bnc" id="L104" title="All 4 branches missed.">        val currentPushNotificationsValue = currentState?.flags?.isReceivingNotifications ?: false</span>
+<span class="nc" id="L105">        _showBottomSheetEvent.value = Event(ShowBottomSheetData(true, currentPushNotificationsValue))</span>
+<span class="nc" id="L106">    }</span>
+
+    fun onUpdatePost(blogId: Long, postId: Long) {
+<span class="nc" id="L109">        this.blogId = blogId</span>
+<span class="nc" id="L110">        this.postId = postId</span>
+<span class="nc" id="L111">    }</span>
+
+    fun onUserNavigateFromComments(flags: FollowConversationStatusFlags) {
+<span class="nc" id="L114">        _updateFollowStatus.value = FlagsMappedState(flags)</span>
+<span class="nc" id="L115">    }</span>
+
+    private fun getSnackbarAction(fromSnackbar: Boolean, askingEnable: Boolean): (() -&gt; Unit)? {
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        return if (fromSnackbar) {</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">            if (askingEnable) {</span>
+<span class="nc" id="L120">                ::disablePushNotificationsFromSnackbarAction</span>
+            } else {
+<span class="nc" id="L122">                ::enablePushNotificationsFromSnackbarAction</span>
+            }
+        } else {
+<span class="nc" id="L125">            null</span>
+        }
+    }
+
+    private fun enablePushNotificationsFromSnackbarAction() {
+<span class="nc" id="L130">        onChangePushNotificationsRequest(true, true)</span>
+<span class="nc" id="L131">    }</span>
+
+    private fun disablePushNotificationsFromSnackbarAction() {
+<span class="nc" id="L134">        onChangePushNotificationsRequest(false, true)</span>
+<span class="nc" id="L135">    }</span>
+
+    private fun init() {
+<span class="nc" id="L138">        _snackbarEvents.addSource(followCommentsHandler.snackbarEvents) { event -&gt;</span>
+<span class="nc" id="L139">            _snackbarEvents.value = event</span>
+<span class="nc" id="L140">        }</span>
+
+<span class="nc" id="L142">        _updateFollowStatus.addSource(followCommentsHandler.followStatusUpdate) { event -&gt;</span>
+<span class="nc" id="L143">            _updateFollowStatus.value = event</span>
+<span class="nc" id="L144">        }</span>
+
+<span class="nc" id="L146">        _pushNotificationsStatusUpdate.addSource(followCommentsHandler.pushNotificationsStatusUpdate) { event -&gt;</span>
+<span class="nc" id="L147">            _pushNotificationsStatusUpdate.value = event</span>
+<span class="nc" id="L148">        }</span>
+
+<span class="nc" id="L150">        getFollowConversationStatus(true)</span>
+<span class="nc" id="L151">    }</span>
+
+    private fun onFollowConversationClicked(askSubscribe: Boolean) {
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        followStatusSetJob?.cancel()</span>
+<span class="nc" id="L155">        followStatusSetJob = launch(bgDispatcher) {</span>
+<span class="nc" id="L156">            followCommentsHandler.handleFollowCommentsClicked(</span>
+<span class="nc" id="L157">                    blogId,</span>
+<span class="nc" id="L158">                    postId,</span>
+<span class="nc" id="L159">                    askSubscribe,</span>
+<span class="nc" id="L160">                    source,</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">                    if (askSubscribe) ::enablePushNotificationsFromSnackbarAction else null</span>
+            )
+<span class="nc" id="L163">        }</span>
+<span class="nc" id="L164">    }</span>
+
+    private fun getFollowConversationStatus(isInit: Boolean) {
+<span class="nc bnc" id="L167" title="All 2 branches missed.">        followStatusGetJob?.cancel()</span>
+<span class="nc" id="L168">        followStatusGetJob = launch(bgDispatcher) {</span>
+<span class="nc" id="L169">            val post = readerPostTableWrapper.getBlogPost(</span>
+<span class="nc" id="L170">                    blogId,</span>
+<span class="nc" id="L171">                    postId,</span>
+<span class="nc" id="L172">                    true</span>
+            )
+
+<span class="nc bnc" id="L175" title="All 2 branches missed.">            post?.let {</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">                if (!post.isExternal) {</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">                    followCommentsHandler.handleFollowCommentsStatusRequest(blogId, postId, isInit)</span>
+                }
+<span class="nc" id="L179">            }</span>
+<span class="nc" id="L180">        }</span>
+<span class="nc" id="L181">    }</span>
+
+<span class="nc" id="L183">    private fun mapToStateType(followCommentsState: FollowCommentsState) = when (followCommentsState) {</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">        Loading -&gt; LOADING</span>
+<span class="nc bnc" id="L185" title="All 2 branches missed.">        is FollowStateChanged -&gt; VISIBLE_WITH_STATE</span>
+<span class="nc bnc" id="L186" title="All 4 branches missed.">        is Failure, FollowCommentsNotAllowed -&gt; DISABLED</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        UserNotAuthenticated -&gt; GONE</span>
+<span class="nc" id="L188">        is FlagsMappedState -&gt; followCommentsState.flags.type</span>
+<span class="nc" id="L189">    }</span>
+
+    private fun buildFollowCommentsUiState(followCommentsState: FollowCommentsState): FollowConversationUiState {
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        if (followCommentsState is FlagsMappedState) {</span>
+<span class="nc" id="L193">            return FollowConversationUiState(</span>
+<span class="nc" id="L194">                    flags = followCommentsState.flags,</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">                    onFollowTapped = if (listOf(DISABLED, LOADING).contains(followCommentsState.flags.type)) {</span>
+<span class="nc" id="L196">                        null</span>
+                    } else {
+<span class="nc" id="L198">                        ::onFollowTapped</span>
+                    },
+<span class="nc" id="L200">                    onManageNotificationsTapped = ::onManageNotificationsTapped</span>
+            )
+        } else {
+<span class="nc" id="L203">            val stateType = mapToStateType(followCommentsState)</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">            val isFollowing = if (followCommentsState is FollowStateChanged) followCommentsState.isFollowing else false</span>
+
+<span class="nc" id="L206">            return FollowConversationUiState(</span>
+<span class="nc" id="L207">                    FollowConversationStatusFlags(</span>
+<span class="nc" id="L208">                            type = stateType,</span>
+<span class="nc" id="L209">                            isFollowing = isFollowing,</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">                            isReceivingNotifications = if (followCommentsState is FollowStateChanged) {</span>
+<span class="nc" id="L211">                                followCommentsState.isReceivingNotifications</span>
+                            } else {
+<span class="nc" id="L213">                                false</span>
+                            },
+<span class="nc bnc" id="L215" title="All 4 branches missed.">                            isMenuEnabled = stateType != DISABLED &amp;&amp; stateType != LOADING,</span>
+<span class="nc bnc" id="L216" title="All 2 branches missed.">                            showMenuShimmer = stateType == LOADING,</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                            isBellMenuVisible = if (stateType != VISIBLE_WITH_STATE) false else isFollowing,</span>
+<span class="nc bnc" id="L218" title="All 3 branches missed.">                            isFollowMenuVisible = when (stateType) {</span>
+<span class="nc" id="L219">                                DISABLED, LOADING -&gt; true</span>
+<span class="nc" id="L220">                                GONE -&gt; false</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">                                VISIBLE_WITH_STATE -&gt; !isFollowing</span>
+                            }
+                    ),
+<span class="nc bnc" id="L224" title="All 2 branches missed.">                    onFollowTapped = if (listOf(DISABLED, LOADING).contains(stateType)) null else ::onFollowTapped,</span>
+<span class="nc" id="L225">                    onManageNotificationsTapped = ::onManageNotificationsTapped</span>
+            )
+        }
+    }
+
+    private fun buildPushNotificationsUiState(followStateChanged: FollowStateChanged): Event&lt;Boolean&gt; {
+<span class="nc" id="L231">        return Event(followStateChanged.isReceivingNotifications)</span>
+    }
+
+    override fun onCleared() {
+<span class="nc" id="L235">        super.onCleared()</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        followStatusGetJob?.cancel()</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">        followStatusSetJob?.cancel()</span>
+<span class="nc" id="L238">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

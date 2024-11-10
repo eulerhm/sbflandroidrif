@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CategoriesModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.category</a> &gt; <span class="el_source">CategoriesModel.kt</span></div><h1>CategoriesModel.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.category
+
+import android.text.TextUtils
+import fr.free.nrw.commons.Media
+import fr.free.nrw.commons.upload.GpsCategoryModel
+import fr.free.nrw.commons.upload.structure.depictions.DepictedItem
+import fr.free.nrw.commons.utils.StringSortingUtils
+import io.reactivex.Observable
+import io.reactivex.functions.Function4
+import timber.log.Timber
+import java.util.*
+import javax.inject.Inject
+
+/**
+ * The model class for categories in upload
+ */
+<span class="nc" id="L17">class CategoriesModel @Inject constructor(</span>
+<span class="nc" id="L18">    private val categoryClient: CategoryClient,</span>
+<span class="nc" id="L19">    private val categoryDao: CategoryDao,</span>
+<span class="nc" id="L20">    private val gpsCategoryModel: GpsCategoryModel</span>
+) {
+<span class="nc" id="L22">    private val selectedCategories: MutableList&lt;CategoryItem&gt; = mutableListOf()</span>
+
+    /**
+     * Existing categories which are selected
+     */
+<span class="nc" id="L27">    private var selectedExistingCategories: MutableList&lt;String&gt; = mutableListOf()</span>
+
+    /**
+     * Returns if the item contains an year
+     * @param item
+     * @return
+     */
+    fun containsYear(item: String): Boolean {
+        //Check for current and previous year to exclude these categories from removal
+<span class="nc" id="L36">        val now = Calendar.getInstance()</span>
+<span class="nc" id="L37">        val year = now[Calendar.YEAR]</span>
+<span class="nc" id="L38">        val yearInString = year.toString()</span>
+<span class="nc" id="L39">        val prevYear = year - 1</span>
+<span class="nc" id="L40">        val prevYearInString = prevYear.toString()</span>
+<span class="nc" id="L41">        Timber.d(&quot;Previous year: %s&quot;, prevYearInString)</span>
+
+        //Check if item contains a 4-digit word anywhere within the string (.* is wildcard)
+        //And that item does not equal the current year or previous year
+        //And if it is an irrelevant category such as Media_needing_categories_as_of_16_June_2017(Issue #750)
+        //Check if the year in the form of XX(X)0s is relevant, i.e. in the 2000s or 2010s as stated in Issue #1029
+<span class="nc bnc" id="L47" title="All 2 branches missed.">        return item.matches(&quot;.*(19|20)\\d{2}.*&quot;.toRegex())</span>
+<span class="nc bnc" id="L48" title="All 2 branches missed.">                &amp;&amp; !item.contains(yearInString)</span>
+<span class="nc bnc" id="L49" title="All 2 branches missed.">                &amp;&amp; !item.contains(prevYearInString)</span>
+<span class="nc bnc" id="L50" title="All 2 branches missed.">                || item.matches(&quot;(.*)needing(.*)&quot;.toRegex())</span>
+<span class="nc bnc" id="L51" title="All 2 branches missed.">                || item.matches(&quot;(.*)taken on(.*)&quot;.toRegex())</span>
+<span class="nc bnc" id="L52" title="All 2 branches missed.">                || item.matches(&quot;.*0s.*&quot;.toRegex())</span>
+<span class="nc bnc" id="L53" title="All 2 branches missed.">                &amp;&amp; !item.matches(&quot;.*(200|201)0s.*&quot;.toRegex())</span>
+    }
+
+    /**
+     * Updates category count in category dao
+     * @param item
+     */
+    fun updateCategoryCount(item: CategoryItem) {
+<span class="nc" id="L61">        var category = categoryDao.find(item.name)</span>
+
+        // Newly used category...
+<span class="nc bnc" id="L64" title="All 2 branches missed.">        if (category == null) {</span>
+<span class="nc" id="L65">            category = Category(null, item.name, item.description, item.thumbnail, Date(), 0)</span>
+        }
+<span class="nc" id="L67">        category.incTimesUsed()</span>
+<span class="nc" id="L68">        categoryDao.save(category)</span>
+<span class="nc" id="L69">    }</span>
+
+    /**
+     * Regional category search
+     * @param term
+     * @param imageTitleList
+     * @return
+     */
+    fun searchAll(
+        term: String,
+        imageTitleList: List&lt;String&gt;,
+        selectedDepictions: List&lt;DepictedItem&gt;
+    ): Observable&lt;List&lt;CategoryItem&gt;&gt; {
+<span class="nc" id="L82">        return suggestionsOrSearch(term, imageTitleList, selectedDepictions)</span>
+<span class="nc" id="L83">            .map { it.map { CategoryItem(it.name, it.description, it.thumbnail, false) } }</span>
+    }
+
+    private fun suggestionsOrSearch(
+        term: String,
+        imageTitleList: List&lt;String&gt;,
+        selectedDepictions: List&lt;DepictedItem&gt;
+    ): Observable&lt;List&lt;CategoryItem&gt;&gt; {
+<span class="nc bnc" id="L91" title="All 2 branches missed.">        return if (TextUtils.isEmpty(term))</span>
+<span class="nc" id="L92">            Observable.combineLatest(</span>
+<span class="nc" id="L93">                categoriesFromDepiction(selectedDepictions),</span>
+<span class="nc" id="L94">                gpsCategoryModel.categoriesFromLocation,</span>
+<span class="nc" id="L95">                titleCategories(imageTitleList),</span>
+<span class="nc" id="L96">                Observable.just(categoryDao.recentCategories(SEARCH_CATS_LIMIT)),</span>
+<span class="nc" id="L97">                Function4(::combine)</span>
+            )
+        else
+<span class="nc" id="L100">            categoryClient.searchCategoriesForPrefix(term, SEARCH_CATS_LIMIT)</span>
+<span class="nc" id="L101">                .map { it.sortedWith(StringSortingUtils.sortBySimilarity(term)) }</span>
+<span class="nc" id="L102">                .toObservable()</span>
+    }
+
+    /**
+     * Fetches details of every category associated with selected depictions, converts them into
+     * CategoryItem and returns them in a list.
+     *
+     * @param selectedDepictions selected DepictItems
+     * @return List of CategoryItem associated with selected depictions
+     */
+    private fun categoriesFromDepiction(selectedDepictions: List&lt;DepictedItem&gt;):
+            Observable&lt;MutableList&lt;CategoryItem&gt;&gt;? {
+<span class="nc" id="L114">        return Observable.fromIterable(</span>
+<span class="nc" id="L115">                selectedDepictions.map { it.commonsCategories }.flatten())</span>
+<span class="nc" id="L116">                .map { categoryItem -&gt;</span>
+<span class="nc" id="L117">                    categoryClient.getCategoriesByName(categoryItem.name,</span>
+<span class="nc" id="L118">                        categoryItem.name, SEARCH_CATS_LIMIT).map {</span>
+
+<span class="nc" id="L120">                        CategoryItem(it[0].name, it[0].description,</span>
+<span class="nc" id="L121">                            it[0].thumbnail, it[0].isSelected)</span>
+
+<span class="nc" id="L123">                    }.blockingGet()</span>
+<span class="nc" id="L124">                }.toList().toObservable()</span>
+    }
+
+    /**
+     * Fetches details of every category by their name, converts them into
+     * CategoryItem and returns them in a list.
+     *
+     * @param categoryNames selected Categories
+     * @return List of CategoryItem
+     */
+     fun getCategoriesByName(categoryNames: List&lt;String&gt;):
+            Observable&lt;MutableList&lt;CategoryItem&gt;&gt;? {
+<span class="nc" id="L136">        return Observable.fromIterable(categoryNames)</span>
+<span class="nc" id="L137">            .map { categoryName -&gt;</span>
+<span class="nc" id="L138">                buildCategories(categoryName)</span>
+            }
+<span class="nc" id="L140">            .filter { categoryItem -&gt;</span>
+<span class="nc bnc" id="L141" title="All 2 branches missed.">                categoryItem.name != &quot;Hidden&quot;</span>
+            }
+<span class="nc" id="L143">            .toList().toObservable()</span>
+    }
+
+    /**
+     * Fetches the categories and converts them into CategoryItem
+     */
+    fun buildCategories(categoryName: String): CategoryItem {
+<span class="nc" id="L150">        return categoryClient.getCategoriesByName(categoryName,</span>
+<span class="nc" id="L151">            categoryName, SEARCH_CATS_LIMIT).map {</span>
+<span class="nc bnc" id="L152" title="All 4 branches missed.">            if(it.isNotEmpty()) {</span>
+<span class="nc" id="L153">                CategoryItem(</span>
+<span class="nc" id="L154">                    it[0].name, it[0].description,</span>
+<span class="nc" id="L155">                    it[0].thumbnail, it[0].isSelected</span>
+                )
+            } else {
+<span class="nc" id="L158">                CategoryItem(</span>
+<span class="nc" id="L159">                    &quot;Hidden&quot;, &quot;Hidden&quot;,</span>
+<span class="nc" id="L160">                    &quot;hidden&quot;, false</span>
+                )
+            }
+<span class="nc" id="L163">        }.blockingGet()</span>
+    }
+
+    private fun combine(
+        depictionCategories: List&lt;CategoryItem&gt;,
+        locationCategories: List&lt;CategoryItem&gt;,
+        titles: List&lt;CategoryItem&gt;,
+        recents: List&lt;CategoryItem&gt;
+<span class="nc" id="L171">    ) = depictionCategories + locationCategories + titles + recents</span>
+
+
+    /**
+     * Returns title based categories
+     * @param titleList
+     * @return
+     */
+    private fun titleCategories(titleList: List&lt;String&gt;) =
+<span class="nc bnc" id="L180" title="All 4 branches missed.">        if (titleList.isNotEmpty())</span>
+<span class="nc" id="L181">            Observable.combineLatest(titleList.map { getTitleCategories(it) }) { searchResults -&gt;</span>
+<span class="nc" id="L182">                searchResults.map { it as List&lt;CategoryItem&gt; }.flatten()</span>
+            }
+        else
+<span class="nc" id="L185">            Observable.just(emptyList())</span>
+
+    /**
+     * Return category for single title
+     * @param title
+     * @return
+     */
+    private fun getTitleCategories(title: String): Observable&lt;List&lt;CategoryItem&gt;&gt; {
+<span class="nc" id="L193">        return categoryClient.searchCategories(title, SEARCH_CATS_LIMIT).toObservable()</span>
+    }
+
+
+    /**
+     * Handles category item selection
+     * @param item
+     */
+    fun onCategoryItemClicked(item: CategoryItem, media: Media?) {
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        if (media == null) {</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">            if (item.isSelected) {</span>
+<span class="nc" id="L204">                selectedCategories.add(item)</span>
+<span class="nc" id="L205">                updateCategoryCount(item)</span>
+            } else {
+<span class="nc" id="L207">                selectedCategories.remove(item)</span>
+            }
+        } else {
+<span class="nc bnc" id="L210" title="All 2 branches missed.">            if (item.isSelected) {</span>
+<span class="nc bnc" id="L211" title="All 6 branches missed.">                if (media.categories?.contains(item.name) == true) {</span>
+<span class="nc" id="L212">                    selectedExistingCategories.add(item.name)</span>
+                } else {
+<span class="nc" id="L214">                    selectedCategories.add(item)</span>
+<span class="nc" id="L215">                    updateCategoryCount(item)</span>
+                }
+            } else {
+<span class="nc bnc" id="L218" title="All 6 branches missed.">                if (media.categories?.contains(item.name) == true) {</span>
+<span class="nc" id="L219">                    selectedExistingCategories.remove(item.name)</span>
+<span class="nc bnc" id="L220" title="All 4 branches missed.">                    if (!media.categories?.contains(item.name)!!) {</span>
+<span class="nc" id="L221">                        val categoriesList: MutableList&lt;String&gt; = ArrayList()</span>
+<span class="nc" id="L222">                        categoriesList.add(item.name)</span>
+<span class="nc" id="L223">                        categoriesList.addAll(media.categories!!)</span>
+<span class="nc" id="L224">                        media.categories = categoriesList</span>
+                    }
+                } else {
+<span class="nc" id="L227">                    selectedCategories.remove(item)</span>
+                }
+            }
+        }
+<span class="nc" id="L231">    }</span>
+
+    /**
+     * Get Selected Categories
+     * @return
+     */
+    fun getSelectedCategories(): List&lt;CategoryItem&gt; {
+<span class="nc" id="L238">        return selectedCategories</span>
+    }
+
+    /**
+     * Cleanup the existing in memory cache's
+     */
+    fun cleanUp() {
+<span class="nc" id="L245">        selectedCategories.clear()</span>
+<span class="nc" id="L246">        selectedExistingCategories.clear()</span>
+<span class="nc" id="L247">    }</span>
+
+    companion object {
+        const val SEARCH_CATS_LIMIT = 25
+    }
+
+    /**
+     * Provides selected existing categories
+     *
+     * @return selected existing categories
+     */
+    fun getSelectedExistingCategories(): List&lt;String&gt; {
+<span class="nc" id="L259">        return selectedExistingCategories</span>
+    }
+
+    /**
+     * Initialize existing categories
+     *
+     * @param selectedExistingCategories existing categories
+     */
+    fun setSelectedExistingCategories(selectedExistingCategories: MutableList&lt;String&gt;) {
+<span class="nc" id="L268">        this.selectedExistingCategories = selectedExistingCategories</span>
+<span class="nc" id="L269">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

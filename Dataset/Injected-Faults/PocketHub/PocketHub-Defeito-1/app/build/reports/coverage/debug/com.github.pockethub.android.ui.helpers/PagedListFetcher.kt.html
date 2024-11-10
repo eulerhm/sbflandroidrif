@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PagedListFetcher.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">debugAndroidTest</a> &gt; <a href="index.source.html" class="el_package">com.github.pockethub.android.ui.helpers</a> &gt; <span class="el_source">PagedListFetcher.kt</span></div><h1>PagedListFetcher.kt</h1><pre class="source lang-java linenums">package com.github.pockethub.android.ui.helpers
+
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleObserver
+import androidx.lifecycle.OnLifecycleEvent
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.github.pockethub.android.R
+import com.github.pockethub.android.rx.AutoDisposeUtils
+import com.meisolsson.githubsdk.model.Page
+import com.xwray.groupie.Item
+import io.reactivex.Observable
+import io.reactivex.Single
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.disposables.Disposable
+import io.reactivex.disposables.Disposables
+import io.reactivex.schedulers.Schedulers
+import retrofit2.Response
+
+<span class="nc" id="L19">class PagedListFetcher&lt;E&gt;(</span>
+    private val swipeRefreshLayout: SwipeRefreshLayout?,
+    private val lifecycle: Lifecycle,
+    private val itemListHandler: ItemListHandler,
+    private val showError: (Throwable) -&gt; Unit,
+    private val loadPage: (page: Int) -&gt; Single&lt;Response&lt;Page&lt;E&gt;&gt;&gt;,
+    private val createItem: (item: E) -&gt; Item&lt;*&gt;
+): LifecycleObserver {
+
+    /**
+     * Disposable for data load request.
+     */
+<span class="nc" id="L31">    private var dataLoadDisposable: Disposable = Disposables.disposed()</span>
+
+    private var isLoading = false
+
+<span class="nc" id="L35">    var hasMore: Boolean = true</span>
+
+<span class="nc" id="L37">    var onPageLoaded: (MutableList&lt;Item&lt;*&gt;&gt;) -&gt; MutableList&lt;Item&lt;*&gt;&gt; = { items -&gt; items }</span>
+
+    /**
+     * The current page.
+     */
+<span class="nc" id="L42">    private var page: Int = 1</span>
+
+    init {
+<span class="nc" id="L45">        lifecycle.addObserver(this)</span>
+<span class="nc bnc" id="L46" title="All 2 branches missed.">        if (swipeRefreshLayout != null) {</span>
+<span class="nc" id="L47">            swipeRefreshLayout.setOnRefreshListener(this::refresh)</span>
+<span class="nc" id="L48">            swipeRefreshLayout.setColorSchemeResources(</span>
+<span class="nc" id="L49">                R.color.pager_title_background_top_start,</span>
+<span class="nc" id="L50">                R.color.pager_title_background_end,</span>
+<span class="nc" id="L51">                R.color.text_link,</span>
+<span class="nc" id="L52">                R.color.pager_title_background_end)</span>
+        }
+<span class="nc" id="L54">    }</span>
+
+    @OnLifecycleEvent(Lifecycle.Event.ON_START)
+    private fun onStart() {
+<span class="nc" id="L58">        refresh()</span>
+<span class="nc" id="L59">    }</span>
+
+    @OnLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+    private fun onPause() {
+
+<span class="nc" id="L64">        isLoading = false</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">        if (swipeRefreshLayout != null) {</span>
+<span class="nc" id="L66">            swipeRefreshLayout.isRefreshing = false</span>
+        }
+<span class="nc" id="L68">    }</span>
+
+    fun refresh() {
+<span class="nc" id="L71">        page = 1</span>
+<span class="nc" id="L72">        hasMore = true</span>
+<span class="nc" id="L73">        isLoading = false</span>
+
+<span class="nc bnc" id="L75" title="All 2 branches missed.">        if (swipeRefreshLayout != null) {</span>
+<span class="nc" id="L76">            swipeRefreshLayout.isRefreshing = true</span>
+        }
+
+<span class="nc" id="L79">        fetchPage()</span>
+<span class="nc" id="L80">    }</span>
+
+    fun fetchNext() {
+<span class="nc bnc" id="L83" title="All 2 branches missed.">        if (!isLoading) {</span>
+<span class="nc" id="L84">            page++</span>
+<span class="nc" id="L85">            fetchPage()</span>
+        }
+<span class="nc" id="L87">    }</span>
+
+    private fun fetchPage() {
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        if (isLoading) {</span>
+<span class="nc" id="L91">            return</span>
+        }
+
+<span class="nc bnc" id="L94" title="All 2 branches missed.">        if (!dataLoadDisposable.isDisposed) {</span>
+<span class="nc" id="L95">            dataLoadDisposable.dispose()</span>
+        }
+
+<span class="nc" id="L98">        isLoading = true</span>
+
+<span class="nc" id="L100">        dataLoadDisposable = loadPage(page)</span>
+<span class="nc" id="L101">            .map { it.body() }</span>
+<span class="nc" id="L102">            .map { page -&gt;</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">                hasMore = page.next() != null</span>
+<span class="nc" id="L104">                page</span>
+            }
+<span class="nc" id="L106">            .flatMap { page -&gt;</span>
+<span class="nc" id="L107">                Observable.fromIterable&lt;E&gt;(page.items())</span>
+<span class="nc" id="L108">                    .map&lt;Item&lt;*&gt;&gt; { this.createItem(it) }</span>
+<span class="nc" id="L109">                    .toList()</span>
+            }
+<span class="nc" id="L111">            .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L112">            .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L113">            .`as`(AutoDisposeUtils.bindToLifecycle&lt;MutableList&lt;Item&lt;*&gt;&gt;&gt;(lifecycle))</span>
+<span class="nc" id="L114">            .subscribe(</span>
+<span class="nc" id="L115">                { this.onDataLoaded(it) },</span>
+<span class="nc" id="L116">                { this.onDataLoadError(it) }</span>
+            )
+<span class="nc" id="L118">    }</span>
+
+    private fun onDataLoaded(newItems: MutableList&lt;Item&lt;*&gt;&gt;) {
+<span class="nc" id="L121">        isLoading = false</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">        if (swipeRefreshLayout != null) {</span>
+<span class="nc" id="L123">            swipeRefreshLayout.isRefreshing = false</span>
+        }
+
+<span class="nc" id="L126">        val items = onPageLoaded(newItems)</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        if (page == 1) {</span>
+<span class="nc" id="L128">            itemListHandler.update(items)</span>
+        } else {
+<span class="nc" id="L130">            itemListHandler.addItems(items)</span>
+        }
+<span class="nc" id="L132">    }</span>
+
+    private fun onDataLoadError(throwable: Throwable) {
+<span class="nc" id="L135">        isLoading = false</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (swipeRefreshLayout != null) {</span>
+<span class="nc" id="L137">            swipeRefreshLayout.isRefreshing = false</span>
+        }
+
+<span class="nc" id="L140">        showError(throwable)</span>
+<span class="nc" id="L141">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.7.9.201702052155</span>Generated by the Android Gradle plugin 3.6.1</div></body></html>

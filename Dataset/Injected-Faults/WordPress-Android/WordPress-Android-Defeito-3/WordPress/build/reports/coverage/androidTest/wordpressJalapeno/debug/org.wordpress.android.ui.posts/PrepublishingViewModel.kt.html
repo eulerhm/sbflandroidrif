@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PrepublishingViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts</a> &gt; <span class="el_source">PrepublishingViewModel.kt</span></div><h1>PrepublishingViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts
+
+import android.annotation.SuppressLint
+import android.os.Bundle
+import android.os.Parcelable
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.ViewModel
+import kotlinx.parcelize.Parcelize
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.TaxonomyActionBuilder
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.TaxonomyStore.OnTaxonomyChanged
+import org.wordpress.android.ui.posts.PrepublishingHomeItemUiState.ActionType
+import org.wordpress.android.ui.posts.PrepublishingScreen.ADD_CATEGORY
+import org.wordpress.android.ui.posts.PrepublishingScreen.CATEGORIES
+import org.wordpress.android.ui.posts.PrepublishingScreen.HOME
+import org.wordpress.android.ui.posts.PrepublishingScreen.PUBLISH
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.viewmodel.Event
+import java.io.Serializable
+import javax.inject.Inject
+
+const val KEY_SCREEN_STATE = &quot;key_screen_state&quot;
+
+<span class="nc" id="L29">class PrepublishingViewModel @Inject constructor(private val dispatcher: Dispatcher) : ViewModel() {</span>
+    private var isStarted = false
+    private lateinit var site: SiteModel
+
+<span class="nc" id="L33">    private val _navigationTarget = MutableLiveData&lt;Event&lt;PrepublishingNavigationTarget&gt;&gt;()</span>
+<span class="nc" id="L34">    val navigationTarget: LiveData&lt;Event&lt;PrepublishingNavigationTarget&gt;&gt; = _navigationTarget</span>
+
+    private var currentScreen: PrepublishingScreen? = null
+
+<span class="nc" id="L38">    private val _dismissBottomSheet = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L39">    val dismissBottomSheet: LiveData&lt;Event&lt;Unit&gt;&gt; = _dismissBottomSheet</span>
+
+<span class="nc" id="L41">    private val _dismissKeyboard = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L42">    val dismissKeyboard: LiveData&lt;Event&lt;Unit&gt;&gt; = _dismissKeyboard</span>
+
+<span class="nc" id="L44">    private val _triggerOnSubmitButtonClickedListener = MutableLiveData&lt;Event&lt;PublishPost&gt;&gt;()</span>
+<span class="nc" id="L45">    val triggerOnSubmitButtonClickedListener: LiveData&lt;Event&lt;PublishPost&gt;&gt; = _triggerOnSubmitButtonClickedListener</span>
+
+<span class="nc" id="L47">    private val _triggerOnDeviceBackPressed = MutableLiveData&lt;Event&lt;PrepublishingScreen&gt;&gt;()</span>
+<span class="nc" id="L48">    val triggerOnDeviceBackPressed: LiveData&lt;Event&lt;PrepublishingScreen&gt;&gt; = _triggerOnDeviceBackPressed</span>
+
+<span class="nc" id="L50">    init {</span>
+<span class="nc" id="L51">        dispatcher.register(this)</span>
+<span class="nc" id="L52">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L55">        super.onCleared()</span>
+<span class="nc" id="L56">        dispatcher.unregister(this)</span>
+<span class="nc" id="L57">    }</span>
+
+    fun start(
+        site: SiteModel,
+        currentScreenFromSavedState: PrepublishingScreen?
+    ) {
+<span class="nc bnc" id="L63" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc" id="L64">        isStarted = true</span>
+
+<span class="nc" id="L66">        this.site = site</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">        this.currentScreen = currentScreenFromSavedState ?: HOME</span>
+
+<span class="nc bnc" id="L69" title="All 2 branches missed.">        currentScreen?.let { screen -&gt;</span>
+<span class="nc" id="L70">            navigateToScreen(screen)</span>
+<span class="nc" id="L71">        }</span>
+<span class="nc" id="L72">        fetchTags()</span>
+<span class="nc" id="L73">    }</span>
+
+<span class="nc" id="L75">    private fun navigateToScreen(prepublishingScreen: PrepublishingScreen, bundle: Bundle? = null) {</span>
+        // Note: given we know both the HOME, TAGS and ADD_CATEGORY screens have an EditText, we can ask to send the
+        // dismissKeyboard signal only when we're not either in one of these nor navigating towards one of these.
+        // At this point in code we only know where we want to navigate to, but it's ok since landing on any of these
+        // two we'll want the keyboard to stay up if it was already up ;) (i.e. don't dismiss it).
+        // For the case where this is not a story and hence there's no EditText in the HOME screen, we're ok too,
+        // because there wouldn't have been a keyboard up anyway.
+<span class="nc bnc" id="L82" title="All 2 branches missed.">        if (prepublishingScreen == PUBLISH ||</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">                prepublishingScreen == CATEGORIES) {</span>
+<span class="nc" id="L84">            _dismissKeyboard.postValue(Event(Unit))</span>
+        }
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        updateNavigationTarget(PrepublishingNavigationTarget(site, prepublishingScreen, bundle))</span>
+<span class="nc" id="L87">    }</span>
+
+    // Send this back out to the current screen and so it can determine if it needs to save
+    // any data before accepting a backPress - in our case, the only view that needs this today
+    // is the Categories selection &amp; AddCategory
+    fun onDeviceBackPressed() {
+<span class="nc bnc" id="L93" title="All 4 branches missed.">        if (currentScreen == CATEGORIES || currentScreen == ADD_CATEGORY) {</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">            _triggerOnDeviceBackPressed.value = Event(currentScreen as PrepublishingScreen)</span>
+        } else {
+<span class="nc" id="L96">            onBackClicked()</span>
+        }
+<span class="nc" id="L98">    }</span>
+
+<span class="nc" id="L100">    fun onBackClicked(bundle: Bundle? = null) {</span>
+<span class="nc" id="L101">        when {</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">            currentScreen == ADD_CATEGORY -&gt; {</span>
+<span class="nc" id="L103">                currentScreen = CATEGORIES</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">                navigateToScreen(currentScreen as PrepublishingScreen, bundle)</span>
+            }
+<span class="nc bnc" id="L106" title="All 2 branches missed.">            currentScreen != HOME -&gt; {</span>
+<span class="nc" id="L107">                currentScreen = HOME</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">                navigateToScreen(currentScreen as PrepublishingScreen)</span>
+            }
+            else -&gt; {
+<span class="nc" id="L111">                _dismissBottomSheet.postValue(Event(Unit))</span>
+            }
+        }
+<span class="nc" id="L114">    }</span>
+
+    fun onCloseClicked() {
+<span class="nc" id="L117">        _dismissBottomSheet.postValue(Event(Unit))</span>
+<span class="nc" id="L118">    }</span>
+
+    private fun updateNavigationTarget(target: PrepublishingNavigationTarget) {
+<span class="nc" id="L121">        _navigationTarget.postValue(Event(target))</span>
+<span class="nc" id="L122">    }</span>
+
+    fun writeToBundle(outState: Bundle) {
+<span class="nc" id="L125">        outState.putParcelable(KEY_SCREEN_STATE, currentScreen)</span>
+<span class="nc" id="L126">    }</span>
+
+<span class="nc" id="L128">    fun onActionClicked(actionType: ActionType, bundle: Bundle? = null) {</span>
+<span class="nc" id="L129">        val screen = PrepublishingScreen.valueOf(actionType.name)</span>
+<span class="nc" id="L130">        currentScreen = screen</span>
+<span class="nc" id="L131">        navigateToScreen(screen, bundle)</span>
+<span class="nc" id="L132">    }</span>
+
+    fun onSubmitButtonClicked(publishPost: PublishPost) {
+<span class="nc" id="L135">        onCloseClicked()</span>
+<span class="nc" id="L136">        _triggerOnSubmitButtonClickedListener.postValue(Event(publishPost))</span>
+<span class="nc" id="L137">    }</span>
+
+    /**
+     * Fetches the tags so that they will be available when the Tags action is clicked
+     */
+    private fun fetchTags() {
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        dispatcher.dispatch(TaxonomyActionBuilder.newFetchTagsAction(site))</span>
+<span class="nc" id="L144">    }</span>
+
+    @Suppress(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onTaxonomyChanged(event: OnTaxonomyChanged) {
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L150">            AppLog.e(</span>
+<span class="nc" id="L151">                    T.POSTS,</span>
+<span class="nc" id="L152">                    &quot;An error occurred while updating taxonomy with type: &quot; + event.error.type</span>
+            )
+        }
+<span class="nc" id="L155">    }</span>
+}
+
+@Parcelize
+@SuppressLint(&quot;ParcelCreator&quot;)
+enum class PrepublishingScreen : Parcelable {
+<span class="nc" id="L161">    HOME,</span>
+<span class="nc" id="L162">    PUBLISH,</span>
+<span class="nc" id="L163">    TAGS,</span>
+<span class="nc" id="L164">    CATEGORIES,</span>
+<span class="nc" id="L165">    ADD_CATEGORY</span>
+}
+
+<span class="nc" id="L168">data class PrepublishingNavigationTarget(</span>
+<span class="nc" id="L169">    val site: SiteModel,</span>
+<span class="nc" id="L170">    val targetScreen: PrepublishingScreen,</span>
+<span class="nc" id="L171">    val bundle: Bundle? = null</span>
+<span class="nc" id="L172">)</span>
+
+<span class="nc" id="L174">data class PrepublishingAddCategoryRequest(</span>
+<span class="nc" id="L175">    val categoryText: String,</span>
+<span class="nc" id="L176">    val categoryParentId: Long</span>
+) : Serializable
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

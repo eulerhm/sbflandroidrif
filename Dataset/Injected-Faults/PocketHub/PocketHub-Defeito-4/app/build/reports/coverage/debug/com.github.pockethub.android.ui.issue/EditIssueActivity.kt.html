@@ -1,0 +1,481 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EditIssueActivity.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">debugAndroidTest</a> &gt; <a href="index.source.html" class="el_package">com.github.pockethub.android.ui.issue</a> &gt; <span class="el_source">EditIssueActivity.kt</span></div><h1>EditIssueActivity.kt</h1><pre class="source lang-java linenums">/*
+ * Copyright (c) 2015 PocketHub
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.github.pockethub.android.ui.issue
+
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.os.Parcelable
+import android.text.TextUtils
+import android.util.Log
+import android.view.Menu
+import android.view.MenuItem
+import android.view.View
+import android.view.View.GONE
+import android.view.View.VISIBLE
+import android.widget.LinearLayout.LayoutParams
+import androidx.core.content.ContextCompat
+import androidx.core.text.bold
+import androidx.core.text.buildSpannedString
+import com.github.pockethub.android.Intents.Builder
+import com.github.pockethub.android.Intents.EXTRA_ISSUE
+import com.github.pockethub.android.Intents.EXTRA_REPOSITORY_NAME
+import com.github.pockethub.android.Intents.EXTRA_REPOSITORY_OWNER
+import com.github.pockethub.android.Intents.EXTRA_USER
+import com.github.pockethub.android.R
+import com.github.pockethub.android.RequestCodes.ISSUE_ASSIGNEE_UPDATE
+import com.github.pockethub.android.RequestCodes.ISSUE_LABELS_UPDATE
+import com.github.pockethub.android.RequestCodes.ISSUE_MILESTONE_UPDATE
+import com.github.pockethub.android.accounts.AccountUtils
+import com.github.pockethub.android.core.issue.IssueUtils
+import com.github.pockethub.android.rx.AutoDisposeUtils
+import com.github.pockethub.android.rx.RxProgress
+import com.github.pockethub.android.ui.DialogResultListener
+import com.github.pockethub.android.ui.base.BaseActivity
+import com.github.pockethub.android.ui.TextWatcherAdapter
+import com.github.pockethub.android.util.AvatarLoader
+import com.github.pockethub.android.util.ImageBinPoster
+import com.github.pockethub.android.util.InfoUtils
+import com.github.pockethub.android.util.PermissionsUtils
+import com.github.pockethub.android.util.ToastUtils
+import com.meisolsson.githubsdk.core.ServiceGenerator
+import com.meisolsson.githubsdk.model.Issue
+import com.meisolsson.githubsdk.model.Repository
+import com.meisolsson.githubsdk.model.User
+import com.meisolsson.githubsdk.model.request.issue.IssueRequest
+import com.meisolsson.githubsdk.service.issues.IssueService
+import com.meisolsson.githubsdk.service.repositories.RepositoryCollaboratorService
+import io.reactivex.Single
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.schedulers.Schedulers
+import kotlinx.android.synthetic.main.activity_issue_edit.*
+import kotlinx.android.synthetic.main.milestone.*
+import retrofit2.Response
+import java.util.ArrayList
+import javax.inject.Inject
+
+/**
+ * Activity to edit or create an issue
+ */
+<span class="nc" id="L75">class EditIssueActivity : BaseActivity(), DialogResultListener {</span>
+
+    @Inject
+<span class="nc bnc" id="L78" title="All 2 branches missed.">    lateinit var avatars: AvatarLoader</span>
+
+    private var issue: Issue? = null
+
+    private var repository: Repository? = null
+
+    private var saveItem: MenuItem? = null
+
+    private var milestoneDialog: MilestoneDialog? = null
+
+    private var assigneeDialog: AssigneeDialog? = null
+
+    private var labelsDialog: LabelsDialog? = null
+
+<span class="nc" id="L92">    private val titleTextWatcher = object : TextWatcherAdapter() {</span>
+        override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) {
+<span class="nc" id="L94">            updateSaveMenu(s)</span>
+<span class="nc" id="L95">        }</span>
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+<span class="nc" id="L99">        super.onCreate(savedInstanceState)</span>
+<span class="nc" id="L100">        setContentView(R.layout.activity_issue_edit)</span>
+
+<span class="nc" id="L102">        val intent = intent</span>
+
+<span class="nc bnc" id="L104" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L105">            issue = savedInstanceState.getParcelable(EXTRA_ISSUE)</span>
+        }
+<span class="nc bnc" id="L107" title="All 2 branches missed.">        if (issue == null) {</span>
+<span class="nc" id="L108">            issue = intent.getParcelableExtra(EXTRA_ISSUE)</span>
+        }
+<span class="nc bnc" id="L110" title="All 2 branches missed.">        if (issue == null) {</span>
+<span class="nc" id="L111">            issue = Issue.builder().build()</span>
+        }
+
+<span class="nc" id="L114">        repository = InfoUtils.createRepoFromData(</span>
+<span class="nc" id="L115">                intent.getStringExtra(EXTRA_REPOSITORY_OWNER),</span>
+<span class="nc" id="L116">                intent.getStringExtra(EXTRA_REPOSITORY_NAME)</span>
+        )
+
+<span class="nc" id="L119">        checkCollaboratorStatus()</span>
+
+<span class="nc" id="L121">        val actionBar = supportActionBar</span>
+<span class="nc bnc" id="L122" title="All 10 branches missed.">        if (issue!!.number() != null &amp;&amp; issue!!.number()!! &gt; 0) {</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">            if (IssueUtils.isPullRequest(issue)) {</span>
+<span class="nc bnc" id="L124" title="All 6 branches missed.">                actionBar!!.title = getString(R.string.pull_request_title) + issue!!.number()!!</span>
+            } else {
+<span class="nc bnc" id="L126" title="All 6 branches missed.">                actionBar!!.title = getString(R.string.issue_title) + issue!!.number()!!</span>
+<span class="nc" id="L127">            }</span>
+        } else {
+<span class="nc bnc" id="L129" title="All 2 branches missed.">            actionBar!!.setTitle(R.string.new_issue)</span>
+        }
+<span class="nc" id="L131">        actionBar.subtitle = InfoUtils.createRepoId(repository)</span>
+
+<span class="nc" id="L133">        updateSaveMenu()</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        et_issue_title.setText(issue!!.title())</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">        et_issue_body.setText(issue!!.body())</span>
+
+<span class="nc" id="L137">        fab_add_image.setOnClickListener { onAddImageClicked() }</span>
+<span class="nc" id="L138">        et_issue_title.addTextChangedListener(titleTextWatcher)</span>
+<span class="nc" id="L139">    }</span>
+
+    override fun onDestroy() {
+<span class="nc" id="L142">        super.onDestroy()</span>
+<span class="nc" id="L143">        et_issue_title.removeTextChangedListener(titleTextWatcher)</span>
+<span class="nc" id="L144">    }</span>
+
+    override fun onRequestPermissionsResult(
+            requestCode: Int,
+            permissions: Array&lt;String&gt;,
+            grantResults: IntArray
+    ) {
+<span class="nc" id="L151">        super.onRequestPermissionsResult(requestCode, permissions, grantResults)</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">        if (requestCode == READ_PERMISSION_REQUEST) {</span>
+<span class="nc" id="L153">            val result = permissions.indices</span>
+<span class="nc bnc" id="L154" title="All 4 branches missed.">                .none { grantResults[it] != PackageManager.PERMISSION_GRANTED }</span>
+
+<span class="nc bnc" id="L156" title="All 2 branches missed.">            if (result) {</span>
+<span class="nc" id="L157">                startImagePicker()</span>
+            }
+        }
+<span class="nc" id="L160">    }</span>
+
+    private fun startImagePicker() {
+<span class="nc" id="L163">        val photoPickerIntent = Intent(Intent.ACTION_GET_CONTENT)</span>
+<span class="nc" id="L164">        photoPickerIntent.type = &quot;image/*&quot;</span>
+<span class="nc" id="L165">        startActivityForResult(photoPickerIntent, REQUEST_CODE_SELECT_PHOTO)</span>
+<span class="nc" id="L166">    }</span>
+
+    override fun onDialogResult(requestCode: Int, resultCode: Int, arguments: Bundle) {
+<span class="nc bnc" id="L169" title="All 2 branches missed.">        if (Activity.RESULT_OK != resultCode) {</span>
+<span class="nc" id="L170">            return</span>
+        }
+
+<span class="nc bnc" id="L173" title="All 4 branches missed.">        when (requestCode) {</span>
+            ISSUE_MILESTONE_UPDATE -&gt; {
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                issue = issue!!.toBuilder()</span>
+<span class="nc" id="L176">                        .milestone(MilestoneDialogFragment.getSelected(arguments))</span>
+<span class="nc" id="L177">                        .build()</span>
+<span class="nc" id="L178">                updateMilestone()</span>
+            }
+            ISSUE_ASSIGNEE_UPDATE -&gt; {
+<span class="nc" id="L181">                var assignee: User? = AssigneeDialogFragment.getSelected(arguments)</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">                if (assignee == null) {</span>
+<span class="nc" id="L183">                    assignee = User.builder().login(&quot;&quot;).build()</span>
+                }
+<span class="nc bnc" id="L185" title="All 2 branches missed.">                issue = issue!!.toBuilder().assignee(assignee).build()</span>
+<span class="nc" id="L186">                updateAssignee()</span>
+            }
+            ISSUE_LABELS_UPDATE -&gt; {
+<span class="nc bnc" id="L189" title="All 2 branches missed.">                issue = issue!!.toBuilder()</span>
+<span class="nc" id="L190">                        .labels(LabelsDialogFragment.getSelected(arguments))</span>
+<span class="nc" id="L191">                        .build()</span>
+<span class="nc" id="L192">                updateLabels()</span>
+            }
+        }
+<span class="nc" id="L195">    }</span>
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+<span class="nc" id="L198">        super.onActivityResult(requestCode, resultCode, data)</span>
+
+<span class="nc bnc" id="L200" title="All 4 branches missed.">        if (requestCode == REQUEST_CODE_SELECT_PHOTO &amp;&amp; resultCode == Activity.RESULT_OK) {</span>
+<span class="nc bnc" id="L201" title="All 4 branches missed.">            ImageBinPoster.post(this, data?.data!!)</span>
+<span class="nc" id="L202">                    .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L203">                    .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L204">                    .compose(RxProgress.bindToLifecycle(this, R.string.loading))</span>
+<span class="nc" id="L205">                    .`as`(AutoDisposeUtils.bindToLifecycle(this))</span>
+<span class="nc" id="L206">                    .subscribe({ response -&gt;</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">                        if (response.isSuccessful) {</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">                            insertImage(ImageBinPoster.getUrl(response.body()!!.string()))</span>
+                        } else {
+<span class="nc" id="L210">                            showImageError()</span>
+                        }
+<span class="nc" id="L212">                    }, { _ -&gt; showImageError() })</span>
+        }
+<span class="nc" id="L214">    }</span>
+
+    fun onAddImageClicked() {
+<span class="nc" id="L217">        val activity = this@EditIssueActivity</span>
+<span class="nc" id="L218">        val permission = Manifest.permission.READ_EXTERNAL_STORAGE</span>
+
+<span class="nc bnc" id="L220" title="All 2 branches missed.">        if (ContextCompat.checkSelfPermission(activity, permission) !=</span>
+                PackageManager.PERMISSION_GRANTED
+        ) {
+<span class="nc" id="L223">            PermissionsUtils.askForPermission(</span>
+<span class="nc" id="L224">                    activity,</span>
+<span class="nc" id="L225">                    READ_PERMISSION_REQUEST,</span>
+<span class="nc" id="L226">                    permission,</span>
+<span class="nc" id="L227">                    R.string.read_permission_title,</span>
+<span class="nc" id="L228">                    R.string.read_permission_content</span>
+            )
+        } else {
+<span class="nc" id="L231">            startImagePicker()</span>
+        }
+<span class="nc" id="L233">    }</span>
+
+    private fun showImageError() {
+<span class="nc" id="L236">        ToastUtils.show(this, R.string.error_image_upload)</span>
+<span class="nc" id="L237">    }</span>
+
+    private fun insertImage(url: String?) {
+<span class="nc" id="L240">        runOnUiThread { et_issue_body.append(&quot;![]($url)&quot;) }</span>
+<span class="nc" id="L241">    }</span>
+
+    private fun showMainContent() {
+<span class="nc" id="L244">        findViewById&lt;View&gt;(R.id.sv_issue_content).visibility = View.VISIBLE</span>
+<span class="nc" id="L245">        findViewById&lt;View&gt;(R.id.pb_loading).visibility = View.GONE</span>
+<span class="nc" id="L246">    }</span>
+
+    private fun showCollaboratorOptions() {
+<span class="nc" id="L249">        val milestone = findViewById&lt;View&gt;(R.id.ll_milestone)</span>
+<span class="nc" id="L250">        val labels = findViewById&lt;View&gt;(R.id.ll_labels)</span>
+<span class="nc" id="L251">        val assignee = findViewById&lt;View&gt;(R.id.ll_assignee)</span>
+
+<span class="nc" id="L253">        findViewById&lt;View&gt;(R.id.tv_milestone_label).visibility = View.VISIBLE</span>
+<span class="nc" id="L254">        milestone.visibility = View.VISIBLE</span>
+<span class="nc" id="L255">        findViewById&lt;View&gt;(R.id.tv_labels_label).visibility = View.VISIBLE</span>
+<span class="nc" id="L256">        labels.visibility = View.VISIBLE</span>
+<span class="nc" id="L257">        findViewById&lt;View&gt;(R.id.tv_assignee_label).visibility = View.VISIBLE</span>
+<span class="nc" id="L258">        assignee.visibility = View.VISIBLE</span>
+
+<span class="nc" id="L260">        milestone.setOnClickListener { _ -&gt;</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">            if (milestoneDialog == null) {</span>
+<span class="nc" id="L262">                milestoneDialog = MilestoneDialog(this, ISSUE_MILESTONE_UPDATE, repository)</span>
+            }
+<span class="nc bnc" id="L264" title="All 4 branches missed.">            milestoneDialog!!.show(issue!!.milestone())</span>
+<span class="nc" id="L265">        }</span>
+
+<span class="nc" id="L267">        assignee.setOnClickListener { _ -&gt;</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">            if (assigneeDialog == null) {</span>
+<span class="nc" id="L269">                assigneeDialog = AssigneeDialog(this, ISSUE_ASSIGNEE_UPDATE, repository)</span>
+            }
+<span class="nc bnc" id="L271" title="All 4 branches missed.">            assigneeDialog!!.show(issue!!.assignee())</span>
+<span class="nc" id="L272">        }</span>
+
+<span class="nc" id="L274">        labels.setOnClickListener { _ -&gt;</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">            if (labelsDialog == null) {</span>
+<span class="nc" id="L276">                labelsDialog = LabelsDialog(this, ISSUE_LABELS_UPDATE, repository)</span>
+            }
+<span class="nc bnc" id="L278" title="All 4 branches missed.">            labelsDialog!!.show(issue!!.labels())</span>
+<span class="nc" id="L279">        }</span>
+
+<span class="nc" id="L281">        updateAssignee()</span>
+<span class="nc" id="L282">        updateLabels()</span>
+<span class="nc" id="L283">        updateMilestone()</span>
+<span class="nc" id="L284">    }</span>
+
+    private fun updateMilestone() {
+<span class="nc bnc" id="L287" title="All 2 branches missed.">        val milestone = issue!!.milestone()</span>
+<span class="nc bnc" id="L288" title="All 2 branches missed.">        if (milestone != null) {</span>
+<span class="nc" id="L289">            tv_milestone.text = milestone.title()</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">            val closed = milestone.closedIssues()!!.toFloat()</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">            val total = closed + milestone.openIssues()!!</span>
+<span class="nc bnc" id="L292" title="All 2 branches missed.">            if (total &gt; 0) {</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">                (v_closed.layoutParams as LayoutParams).weight = closed / total</span>
+<span class="nc" id="L294">                v_closed.visibility = VISIBLE</span>
+            } else {
+<span class="nc" id="L296">                v_closed.visibility = GONE</span>
+            }
+<span class="nc" id="L298">            ll_milestone_graph.visibility = VISIBLE</span>
+        } else {
+<span class="nc" id="L300">            tv_milestone.setText(R.string.none)</span>
+<span class="nc" id="L301">            ll_milestone_graph.visibility = GONE</span>
+        }
+<span class="nc" id="L303">    }</span>
+
+    private fun updateAssignee() {
+<span class="nc bnc" id="L306" title="All 2 branches missed.">        val assignee = issue!!.assignee()</span>
+<span class="nc bnc" id="L307" title="All 2 branches missed.">        val login = assignee?.login()</span>
+<span class="nc bnc" id="L308" title="All 2 branches missed.">        if (!TextUtils.isEmpty(login)) {</span>
+<span class="nc" id="L309">            tv_assignee_name.text = buildSpannedString {</span>
+<span class="nc" id="L310">                bold {</span>
+<span class="nc" id="L311">                    append(login)</span>
+<span class="nc" id="L312">                }</span>
+<span class="nc" id="L313">            }</span>
+<span class="nc" id="L314">            iv_assignee_avatar.visibility = VISIBLE</span>
+<span class="nc bnc" id="L315" title="All 2 branches missed.">            avatars.bind(iv_assignee_avatar, assignee)</span>
+        } else {
+<span class="nc" id="L317">            iv_assignee_avatar.visibility = GONE</span>
+<span class="nc" id="L318">            tv_assignee_name.setText(R.string.unassigned)</span>
+        }
+<span class="nc" id="L320">    }</span>
+
+    private fun updateLabels() {
+<span class="nc bnc" id="L323" title="All 4 branches missed.">        val labels = issue!!.labels().orEmpty()</span>
+<span class="nc bnc" id="L324" title="All 4 branches missed.">        if (labels.isNotEmpty()) {</span>
+<span class="nc" id="L325">            LabelDrawableSpan.setText(tv_labels, labels)</span>
+        } else {
+<span class="nc" id="L327">            tv_labels.setText(R.string.none)</span>
+        }
+<span class="nc" id="L329">    }</span>
+
+    override fun onSaveInstanceState(outState: Bundle) {
+<span class="nc" id="L332">        super.onSaveInstanceState(outState)</span>
+
+<span class="nc" id="L334">        outState!!.putParcelable(EXTRA_ISSUE, issue)</span>
+<span class="nc" id="L335">    }</span>
+
+    private fun updateSaveMenu(text: CharSequence = et_issue_title.text) {
+<span class="nc bnc" id="L338" title="All 4 branches missed.">        saveItem?.isEnabled = text.isNotEmpty()</span>
+<span class="nc" id="L339">    }</span>
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+<span class="nc" id="L342">        menuInflater.inflate(R.menu.activity_issue_edit, menu)</span>
+<span class="nc" id="L343">        saveItem = menu.findItem(R.id.m_apply)</span>
+<span class="nc" id="L344">        updateSaveMenu()</span>
+<span class="nc" id="L345">        return super.onCreateOptionsMenu(menu)</span>
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+<span class="nc bnc" id="L349" title="All 2 branches missed.">        when (item.itemId) {</span>
+            R.id.m_apply -&gt; {
+<span class="nc" id="L351">                val request = IssueRequest.builder()</span>
+<span class="nc" id="L352">                        .body(et_issue_body.text.toString())</span>
+<span class="nc" id="L353">                        .title(et_issue_title.text.toString())</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">                        .state(issue!!.state())</span>
+
+<span class="nc bnc" id="L356" title="All 4 branches missed.">                if (issue!!.assignee() != null) {</span>
+<span class="nc bnc" id="L357" title="All 6 branches missed.">                    request.assignees(listOf(issue!!.assignee()!!.login()!!))</span>
+                } else {
+<span class="nc" id="L359">                    request.assignees(emptyList())</span>
+                }
+
+<span class="nc bnc" id="L362" title="All 4 branches missed.">                if (issue!!.milestone() != null) {</span>
+<span class="nc bnc" id="L363" title="All 6 branches missed.">                    request.milestone(issue!!.milestone()!!.number()!!)</span>
+                }
+
+<span class="nc bnc" id="L366" title="All 6 branches missed.">                val labels = issue!!.labels().orEmpty().map { it.name()!! }</span>
+<span class="nc" id="L367">                request.labels(labels)</span>
+
+<span class="nc" id="L369">                val service = ServiceGenerator.createService(this, IssueService::class.java)</span>
+<span class="nc" id="L370">                val single: Single&lt;Response&lt;Issue&gt;&gt;</span>
+<span class="nc" id="L371">                val message: Int</span>
+
+<span class="nc bnc" id="L373" title="All 10 branches missed.">                if (issue!!.number() != null &amp;&amp; issue!!.number()!! &gt; 0) {</span>
+<span class="nc" id="L374">                    single = service.editIssue(</span>
+<span class="nc bnc" id="L375" title="All 4 branches missed.">                            repository!!.owner()!!.login(),</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">                            repository!!.name(),</span>
+<span class="nc bnc" id="L377" title="All 4 branches missed.">                            issue!!.number()!!.toLong(),</span>
+<span class="nc" id="L378">                            request.build()</span>
+                    )
+<span class="nc" id="L380">                    message = R.string.updating_issue</span>
+                } else {
+<span class="nc" id="L382">                    single = service.createIssue(</span>
+<span class="nc bnc" id="L383" title="All 4 branches missed.">                            repository!!.owner()!!.login(),</span>
+<span class="nc bnc" id="L384" title="All 2 branches missed.">                            repository!!.name(),</span>
+<span class="nc" id="L385">                            request.build()</span>
+                    )
+<span class="nc" id="L387">                    message = R.string.creating_issue</span>
+                }
+
+<span class="nc" id="L390">                single.subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L391">                        .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L392">                        .compose(RxProgress.bindToLifecycle(this, message))</span>
+<span class="nc" id="L393">                        .`as`(AutoDisposeUtils.bindToLifecycle(this))</span>
+<span class="nc" id="L394">                        .subscribe({ response -&gt;</span>
+<span class="nc" id="L395">                            val intent = Intent()</span>
+<span class="nc" id="L396">                            intent.putExtra(EXTRA_ISSUE, response.body())</span>
+<span class="nc" id="L397">                            setResult(Activity.RESULT_OK, intent)</span>
+<span class="nc" id="L398">                            finish()</span>
+<span class="nc" id="L399">                        }, { e -&gt;</span>
+<span class="nc" id="L400">                            Log.e(TAG, &quot;Exception creating issue&quot;, e)</span>
+<span class="nc" id="L401">                            ToastUtils.show(this, e.message)</span>
+<span class="nc" id="L402">                        })</span>
+<span class="nc" id="L403">                return true</span>
+            }
+<span class="nc" id="L405">            else -&gt; return super.onOptionsItemSelected(item)</span>
+        }
+    }
+
+    private fun checkCollaboratorStatus() {
+<span class="nc" id="L410">        ServiceGenerator.createService(this, RepositoryCollaboratorService::class.java)</span>
+<span class="nc" id="L411">                .isUserCollaborator(</span>
+<span class="nc bnc" id="L412" title="All 4 branches missed.">                        repository!!.owner()!!.login(),</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">                        repository!!.name(),</span>
+<span class="nc" id="L414">                        AccountUtils.getLogin(this)</span>
+                )
+<span class="nc" id="L416">                .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L417">                .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L418">                .`as`(AutoDisposeUtils.bindToLifecycle(this))</span>
+<span class="nc" id="L419">                .subscribe({ response -&gt;</span>
+<span class="nc" id="L420">                    showMainContent()</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">                    if (response.code() == 204) {</span>
+<span class="nc" id="L422">                        showCollaboratorOptions()</span>
+                    }
+<span class="nc" id="L424">                }, { e -&gt;</span>
+<span class="nc" id="L425">                    showMainContent()</span>
+<span class="nc" id="L426">                    Log.e(TAG, &quot;Exception creating issue&quot;, e)</span>
+<span class="nc" id="L427">                    ToastUtils.show(this, e.message)</span>
+<span class="nc" id="L428">                })</span>
+<span class="nc" id="L429">    }</span>
+
+<span class="nc" id="L431">    companion object {</span>
+
+        private const val TAG = &quot;EditIssueActivity&quot;
+
+        private const val REQUEST_CODE_SELECT_PHOTO = 0
+        private const val READ_PERMISSION_REQUEST = 1
+
+        /**
+         * Create intent to create an issue
+         *
+         * @param repository
+         * @return intent
+         */
+        fun createIntent(repository: Repository?): Intent {
+<span class="nc" id="L445">            return createIntent(</span>
+<span class="nc" id="L446">                    null,</span>
+<span class="nc bnc" id="L447" title="All 4 branches missed.">                    repository!!.owner()!!.login(),</span>
+<span class="nc" id="L448">                    repository.name(),</span>
+<span class="nc" id="L449">                    repository.owner()</span>
+            )
+        }
+
+        /**
+         * Create intent to edit an issue
+         *
+         * @param issue
+         * @param repositoryOwner
+         * @param repositoryName
+         * @param user
+         * @return intent
+         */
+        fun createIntent(
+                issue: Issue?,
+                repositoryOwner: String?,
+                repositoryName: String?,
+                user: User?
+        ): Intent {
+<span class="nc" id="L468">            val builder = Builder(&quot;repo.issues.edit.VIEW&quot;)</span>
+<span class="nc bnc" id="L469" title="All 2 branches missed.">            if (user != null) {</span>
+<span class="nc" id="L470">                builder.add(EXTRA_USER, user)</span>
+            }
+<span class="nc" id="L472">            builder.add(EXTRA_REPOSITORY_NAME, repositoryName)</span>
+<span class="nc" id="L473">            builder.add(EXTRA_REPOSITORY_OWNER, repositoryOwner)</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">            if (issue != null) {</span>
+<span class="nc" id="L475">                builder.issue(issue)</span>
+            }
+<span class="nc" id="L477">            return builder.toIntent()</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.7.9.201702052155</span>Generated by the Android Gradle plugin 3.6.1</div></body></html>

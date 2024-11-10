@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderTagActions.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.actions</a> &gt; <span class="el_source">ReaderTagActions.java</span></div><h1>ReaderTagActions.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.actions;
+
+import com.wordpress.rest.RestRequest;
+
+import org.greenrobot.eventbus.EventBus;
+import org.jetbrains.annotations.NotNull;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.datasets.ReaderTagTable;
+import org.wordpress.android.models.ReaderTag;
+import org.wordpress.android.models.ReaderTagList;
+import org.wordpress.android.models.ReaderTagType;
+import org.wordpress.android.ui.reader.ReaderConstants;
+import org.wordpress.android.ui.reader.ReaderEvents;
+import org.wordpress.android.ui.reader.actions.ReaderActions.ActionListener;
+import org.wordpress.android.ui.reader.utils.ReaderUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.JSONUtils;
+import org.wordpress.android.util.VolleyUtils;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class ReaderTagActions {
+<span class="nc" id="L28">    private ReaderTagActions() {</span>
+<span class="nc" id="L29">        throw new AssertionError();</span>
+    }
+
+    public static boolean deleteTag(final ReaderTag tag,
+                                    final ReaderActions.ActionListener actionListener,
+                                    final boolean isLoggedIn) {
+<span class="nc bnc" id="L35" title="All 2 branches missed.">        if (tag == null) {</span>
+<span class="nc" id="L36">            ReaderActions.callActionListener(actionListener, false);</span>
+<span class="nc" id="L37">            return false;</span>
+        }
+
+        boolean result;
+<span class="nc bnc" id="L41" title="All 2 branches missed.">        if (!isLoggedIn) {</span>
+<span class="nc" id="L42">            result = deleteTagsLocallyOnly(actionListener, tag);</span>
+        } else {
+<span class="nc" id="L44">            result = deleteTagsLocallyAndRemotely(actionListener, tag);</span>
+        }
+
+<span class="nc" id="L47">        return result;</span>
+    }
+
+    private static boolean deleteTagsLocallyOnly(ActionListener actionListener, ReaderTag tag) {
+<span class="nc" id="L51">        ReaderTagTable.deleteTag(tag);</span>
+<span class="nc" id="L52">        ReaderActions.callActionListener(actionListener, true);</span>
+<span class="nc" id="L53">        EventBus.getDefault().post(new ReaderEvents.FollowedTagsChanged(true));</span>
+
+<span class="nc" id="L55">        return true;</span>
+    }
+
+    private static boolean deleteTagsLocallyAndRemotely(ActionListener actionListener, ReaderTag tag) {
+<span class="nc" id="L59">        final String tagNameForApi = ReaderUtils.sanitizeWithDashes(tag.getTagSlug());</span>
+<span class="nc" id="L60">        final String path = &quot;read/tags/&quot; + tagNameForApi + &quot;/mine/delete&quot;;</span>
+
+<span class="nc" id="L62">        com.wordpress.rest.RestRequest.Listener listener = jsonObject -&gt; {</span>
+<span class="nc" id="L63">            AppLog.i(T.READER, &quot;delete tag succeeded&quot;);</span>
+<span class="nc" id="L64">            ReaderActions.callActionListener(actionListener, true);</span>
+<span class="nc" id="L65">        };</span>
+
+<span class="nc" id="L67">        RestRequest.ErrorListener errorListener = volleyError -&gt; {</span>
+            // treat it as a success if the error says the user isn't following the deleted tag
+<span class="nc" id="L69">            String error = VolleyUtils.errStringFromVolleyError(volleyError);</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">            if (error.equals(&quot;not_subscribed&quot;)) {</span>
+<span class="nc" id="L71">                AppLog.w(T.READER, &quot;delete tag succeeded with error &quot; + error);</span>
+<span class="nc" id="L72">                ReaderActions.callActionListener(actionListener, true);</span>
+<span class="nc" id="L73">                return;</span>
+            }
+
+<span class="nc" id="L76">            AppLog.w(T.READER, &quot; delete tag failed&quot;);</span>
+<span class="nc" id="L77">            AppLog.e(T.READER, volleyError);</span>
+
+            // add back original tag
+<span class="nc" id="L80">            ReaderTagTable.addOrUpdateTag(tag);</span>
+
+<span class="nc" id="L82">            ReaderActions.callActionListener(actionListener, false);</span>
+<span class="nc" id="L83">        };</span>
+<span class="nc" id="L84">        ReaderTagTable.deleteTag(tag);</span>
+<span class="nc" id="L85">        WordPress.getRestClientUtilsV1_1().post(path, listener, errorListener);</span>
+
+<span class="nc" id="L87">        return true;</span>
+    }
+
+    public static boolean addTag(@NotNull final ReaderTag tag,
+                                 final ReaderActions.ActionListener actionListener,
+                                 final boolean isLoggedIn) {
+<span class="nc" id="L93">        ReaderTagList tags = new ReaderTagList();</span>
+<span class="nc" id="L94">        tags.add(tag);</span>
+<span class="nc" id="L95">        return addTags(tags, actionListener, isLoggedIn);</span>
+    }
+
+    public static boolean addTags(@NotNull final List&lt;ReaderTag&gt; tags,
+                                  final boolean isLoggedIn) {
+<span class="nc" id="L100">        return addTags(tags, null, isLoggedIn);</span>
+    }
+
+    public static boolean addTags(@NotNull final List&lt;ReaderTag&gt; tags,
+                                  final ReaderActions.ActionListener actionListener,
+                                  final boolean isLoggedIn) {
+<span class="nc" id="L106">        ReaderTagList newTags = new ReaderTagList();</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">        for (ReaderTag tag : tags) {</span>
+<span class="nc" id="L108">            final String tagNameForApi = ReaderUtils.sanitizeWithDashes(tag.getTagSlug());</span>
+<span class="nc" id="L109">            String endpoint = &quot;/read/tags/&quot; + tagNameForApi + &quot;/posts&quot;;</span>
+
+<span class="nc" id="L111">            ReaderTag newTag = new ReaderTag(</span>
+<span class="nc" id="L112">                    tag.getTagSlug(),</span>
+<span class="nc" id="L113">                    tag.getTagDisplayName(),</span>
+<span class="nc" id="L114">                    tag.getTagTitle(),</span>
+                    endpoint,
+                    ReaderTagType.FOLLOWED);
+<span class="nc" id="L117">            newTags.add(newTag);</span>
+<span class="nc" id="L118">        }</span>
+        boolean result;
+<span class="nc bnc" id="L120" title="All 2 branches missed.">        if (!isLoggedIn) {</span>
+<span class="nc" id="L121">            result = saveTagsLocallyOnly(actionListener, newTags);</span>
+        } else {
+<span class="nc" id="L123">            result = saveTagsLocallyAndRemotely(actionListener, newTags);</span>
+        }
+
+<span class="nc" id="L126">        return result;</span>
+    }
+
+    private static boolean saveTagsLocallyOnly(ActionListener actionListener, ReaderTagList newTags) {
+<span class="nc" id="L130">        ReaderTagTable.addOrUpdateTags(newTags);</span>
+<span class="nc" id="L131">        ReaderActions.callActionListener(actionListener, true);</span>
+<span class="nc" id="L132">        EventBus.getDefault().post(new ReaderEvents.FollowedTagsChanged(true));</span>
+
+<span class="nc" id="L134">        return true;</span>
+    }
+
+    private static boolean saveTagsLocallyAndRemotely(ActionListener actionListener,
+                                                   ReaderTagList newTags) {
+<span class="nc" id="L139">        ReaderTagList existingFollowedTags = ReaderTagTable.getFollowedTags();</span>
+
+<span class="nc" id="L141">        RestRequest.Listener listener = jsonObject -&gt; {</span>
+<span class="nc" id="L142">            AppLog.i(T.READER, &quot;add tag succeeded&quot;);</span>
+            // the response will contain the list of the user's followed tags
+<span class="nc" id="L144">            ReaderTagList followedTags = parseFollowedTags(jsonObject);</span>
+<span class="nc" id="L145">            ReaderTagTable.replaceFollowedTags(followedTags);</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">            if (actionListener != null) {</span>
+<span class="nc" id="L147">                ReaderActions.callActionListener(actionListener, true);</span>
+            }
+<span class="nc" id="L149">            EventBus.getDefault().post(new ReaderEvents.FollowedTagsChanged(true));</span>
+<span class="nc" id="L150">        };</span>
+
+<span class="nc" id="L152">        RestRequest.ErrorListener errorListener = volleyError -&gt; {</span>
+            // treat is as a success if we're adding a tag and the error says the user is
+            // already following it
+<span class="nc" id="L155">            String error = VolleyUtils.errStringFromVolleyError(volleyError);</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">            if (error.equals(&quot;already_subscribed&quot;)) {</span>
+<span class="nc" id="L157">                AppLog.w(T.READER, &quot;add tag succeeded with error &quot; + error);</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">                if (actionListener != null) {</span>
+<span class="nc" id="L159">                    ReaderActions.callActionListener(actionListener, true);</span>
+                }
+<span class="nc" id="L161">                EventBus.getDefault().post(new ReaderEvents.FollowedTagsChanged(true));</span>
+<span class="nc" id="L162">                return;</span>
+            }
+
+<span class="nc" id="L165">            AppLog.w(T.READER, &quot;add tag failed&quot;);</span>
+<span class="nc" id="L166">            AppLog.e(T.READER, volleyError);</span>
+
+            // revert on failure
+<span class="nc" id="L169">            ReaderTagTable.replaceFollowedTags(existingFollowedTags);</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">            if (actionListener != null) {</span>
+<span class="nc" id="L171">                ReaderActions.callActionListener(actionListener, false);</span>
+            }
+<span class="nc" id="L173">            EventBus.getDefault().post(new ReaderEvents.FollowedTagsChanged(false));</span>
+<span class="nc" id="L174">        };</span>
+
+<span class="nc" id="L176">        ReaderTagTable.addOrUpdateTags(newTags);</span>
+
+<span class="nc" id="L178">        final String path = &quot;read/tags/mine/new&quot;;</span>
+
+<span class="nc" id="L180">        Map&lt;String, String&gt; params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L181">        String newTagSlugs = ReaderUtils.getCommaSeparatedTagSlugs(newTags);</span>
+<span class="nc" id="L182">        params.put(&quot;tags&quot;, newTagSlugs);</span>
+
+<span class="nc" id="L184">        WordPress.getRestClientUtilsV1_2().post(path, params, null, listener, errorListener);</span>
+
+<span class="nc" id="L186">        return true;</span>
+    }
+
+    /*
+     * return the user's followed tags from the response to read/tags/{tag}/mine/new
+     */
+    /*
+        {
+        &quot;added_tag&quot;: &quot;84776&quot;,
+        &quot;subscribed&quot;: true,
+        &quot;tags&quot;: [
+            {
+                &quot;display_name&quot;: &quot;fitness&quot;,
+                &quot;ID&quot;: &quot;5189&quot;,
+                &quot;slug&quot;: &quot;fitness&quot;,
+                &quot;title&quot;: &quot;Fitness&quot;,
+                &quot;URL&quot;: &quot;https://public-api.wordpress.com/rest/v1.1/read/tags/fitness/posts&quot;
+            },
+            ...
+        }
+     */
+    private static ReaderTagList parseFollowedTags(JSONObject jsonObject) {
+<span class="nc bnc" id="L208" title="All 2 branches missed.">        if (jsonObject == null) {</span>
+<span class="nc" id="L209">            return null;</span>
+        }
+
+<span class="nc" id="L212">        JSONArray jsonTags = jsonObject.optJSONArray(ReaderConstants.JSON_TAG_TAGS_ARRAY);</span>
+<span class="nc bnc" id="L213" title="All 4 branches missed.">        if (jsonTags == null || jsonTags.length() == 0) {</span>
+<span class="nc" id="L214">            return null;</span>
+        }
+
+<span class="nc" id="L217">        ReaderTagList tags = new ReaderTagList();</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">        for (int i = 0; i &lt; jsonTags.length(); i++) {</span>
+<span class="nc" id="L219">            JSONObject jsonThisTag = jsonTags.optJSONObject(i);</span>
+<span class="nc" id="L220">            String tagTitle = JSONUtils.getStringDecoded(jsonThisTag, ReaderConstants.JSON_TAG_TITLE);</span>
+<span class="nc" id="L221">            String tagDisplayName = JSONUtils.getStringDecoded(jsonThisTag, ReaderConstants.JSON_TAG_DISPLAY_NAME);</span>
+<span class="nc" id="L222">            String tagSlug = JSONUtils.getStringDecoded(jsonThisTag, ReaderConstants.JSON_TAG_SLUG);</span>
+<span class="nc" id="L223">            String endpoint = JSONUtils.getString(jsonThisTag, ReaderConstants.JSON_TAG_URL);</span>
+<span class="nc" id="L224">            tags.add(new ReaderTag(tagSlug, tagDisplayName, tagTitle, endpoint, ReaderTagType.FOLLOWED));</span>
+        }
+
+<span class="nc" id="L227">        return tags;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

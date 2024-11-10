@@ -1,0 +1,778 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ActivityLogViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.activitylog</a> &gt; <span class="el_source">ActivityLogViewModel.kt</span></div><h1>ActivityLogViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.viewmodel.activitylog
+
+import androidx.annotation.VisibleForTesting
+import androidx.core.util.Pair
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.RemoteId
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.activity.ActivityTypeModel
+import org.wordpress.android.fluxc.store.ActivityLogStore
+import org.wordpress.android.fluxc.store.ActivityLogStore.OnActivityLogFetched
+import org.wordpress.android.ui.activitylog.ActivityLogNavigationEvents
+import org.wordpress.android.ui.activitylog.list.ActivityLogListItem
+import org.wordpress.android.ui.jetpack.JetpackCapabilitiesUseCase
+import org.wordpress.android.ui.jetpack.backup.download.BackupDownloadRequestState
+import org.wordpress.android.ui.jetpack.backup.download.usecases.GetBackupDownloadStatusUseCase
+import org.wordpress.android.ui.jetpack.backup.download.usecases.PostDismissBackupDownloadUseCase
+import org.wordpress.android.ui.jetpack.common.JetpackBackupDownloadActionState.PROGRESS
+import org.wordpress.android.ui.jetpack.restore.RestoreRequestState
+import org.wordpress.android.ui.jetpack.restore.usecases.GetRestoreStatusUseCase
+import org.wordpress.android.ui.stats.refresh.utils.DateUtils
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringResWithParams
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.analytics.ActivityLogTracker
+import org.wordpress.android.util.extensions.toFormattedDateString
+import org.wordpress.android.util.extensions.toFormattedTimeString
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ResourceProvider
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import org.wordpress.android.viewmodel.activitylog.ActivityLogViewModel.FiltersUiState.FiltersHidden
+import org.wordpress.android.viewmodel.activitylog.ActivityLogViewModel.FiltersUiState.FiltersShown
+import java.util.Date
+import javax.inject.Inject
+
+const val ACTIVITY_LOG_REWINDABLE_ONLY_KEY = &quot;activity_log_rewindable_only&quot;
+
+private const val DAY_IN_MILLIS = 1000 * 60 * 60 * 24
+private const val ONE_SECOND_IN_MILLIS = 1000
+private const val TIMEZONE_GMT_0 = &quot;GMT+0&quot;
+
+typealias DateRange = Pair&lt;Long, Long&gt;
+
+/**
+ * It was decided to reuse the 'Activity Log' screen instead of creating a new 'Backup' screen. This was due to the
+ * fact that there will be lots of code that would need to be duplicated for the new 'Backup' screen. On the other
+ * hand, not much more complexity would be introduced if the 'Activity Log' screen is reused (mainly some 'if/else'
+ * code branches here and there).
+ *
+ * However, should more 'Backup' related additions are added to the 'Activity Log' screen, then it should become a
+ * necessity to split those features in separate screens in order not to increase further the complexity of this
+ * screen's architecture.
+ */
+@Suppress(&quot;LargeClass&quot;, &quot;LongParameterList&quot;)
+<span class="nc" id="L64">class ActivityLogViewModel @Inject constructor(</span>
+<span class="nc" id="L65">    private val activityLogStore: ActivityLogStore,</span>
+<span class="nc" id="L66">    private val getRestoreStatusUseCase: GetRestoreStatusUseCase,</span>
+<span class="nc" id="L67">    private val getBackupDownloadStatusUseCase: GetBackupDownloadStatusUseCase,</span>
+<span class="nc" id="L68">    private val postDismissBackupDownloadUseCase: PostDismissBackupDownloadUseCase,</span>
+<span class="nc" id="L69">    private val resourceProvider: ResourceProvider,</span>
+<span class="nc" id="L70">    private val dateUtils: DateUtils,</span>
+<span class="nc" id="L71">    private val activityLogTracker: ActivityLogTracker,</span>
+<span class="nc" id="L72">    private val jetpackCapabilitiesUseCase: JetpackCapabilitiesUseCase</span>
+<span class="nc" id="L73">) : ViewModel() {</span>
+    enum class ActivityLogListStatus {
+<span class="nc" id="L75">        CAN_LOAD_MORE,</span>
+<span class="nc" id="L76">        DONE,</span>
+<span class="nc" id="L77">        ERROR,</span>
+<span class="nc" id="L78">        FETCHING,</span>
+<span class="nc" id="L79">        LOADING_MORE</span>
+    }
+
+    private var isStarted = false
+
+<span class="nc" id="L84">    private val _events = MutableLiveData&lt;List&lt;ActivityLogListItem&gt;&gt;()</span>
+    val events: LiveData&lt;List&lt;ActivityLogListItem&gt;&gt;
+<span class="nc" id="L86">        get() = _events</span>
+
+<span class="nc" id="L88">    private val _eventListStatus = MutableLiveData&lt;ActivityLogListStatus&gt;()</span>
+    val eventListStatus: LiveData&lt;ActivityLogListStatus&gt;
+<span class="nc" id="L90">        get() = _eventListStatus</span>
+
+<span class="nc" id="L92">    private val _filtersUiState = MutableLiveData&lt;FiltersUiState&gt;(FiltersHidden)</span>
+    val filtersUiState: LiveData&lt;FiltersUiState&gt;
+<span class="nc" id="L94">        get() = _filtersUiState</span>
+
+<span class="nc" id="L96">    private val _emptyUiState = MutableLiveData&lt;EmptyUiState&gt;(EmptyUiState.ActivityLog.EmptyFilters)</span>
+<span class="nc" id="L97">    val emptyUiState: LiveData&lt;EmptyUiState&gt; = _emptyUiState</span>
+
+<span class="nc" id="L99">    private val _showActivityTypeFilterDialog = SingleLiveEvent&lt;ShowActivityTypePicker&gt;()</span>
+    val showActivityTypeFilterDialog: LiveData&lt;ShowActivityTypePicker&gt;
+<span class="nc" id="L101">        get() = _showActivityTypeFilterDialog</span>
+
+<span class="nc" id="L103">    private val _showDateRangePicker = SingleLiveEvent&lt;ShowDateRangePicker&gt;()</span>
+    val showDateRangePicker: LiveData&lt;ShowDateRangePicker&gt;
+<span class="nc" id="L105">        get() = _showDateRangePicker</span>
+
+<span class="nc" id="L107">    private val _moveToTop = SingleLiveEvent&lt;Unit&gt;()</span>
+    val moveToTop: SingleLiveEvent&lt;Unit&gt;
+<span class="nc" id="L109">        get() = _moveToTop</span>
+
+<span class="nc" id="L111">    private val _showItemDetail = SingleLiveEvent&lt;ActivityLogListItem&gt;()</span>
+    val showItemDetail: LiveData&lt;ActivityLogListItem&gt;
+<span class="nc" id="L113">        get() = _showItemDetail</span>
+
+<span class="nc" id="L115">    private val _showSnackbarMessage = SingleLiveEvent&lt;String&gt;()</span>
+    val showSnackbarMessage: LiveData&lt;String&gt;
+<span class="nc" id="L117">        get() = _showSnackbarMessage</span>
+
+    private val _navigationEvents =
+<span class="nc" id="L120">            MutableLiveData&lt;Event&lt;ActivityLogNavigationEvents&gt;&gt;()</span>
+    val navigationEvents: LiveData&lt;Event&lt;ActivityLogNavigationEvents&gt;&gt;
+<span class="nc" id="L122">        get() = _navigationEvents</span>
+
+    private val isRestoreProgressItemShown: Boolean
+<span class="nc bnc" id="L125" title="All 8 branches missed.">        get() = events.value?.find {</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">            it is ActivityLogListItem.Progress &amp;&amp;</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">                    it.progressType == ActivityLogListItem.Progress.Type.RESTORE</span>
+<span class="nc" id="L128">        } != null</span>
+
+    private val isBackupDownloadProgressItemShown: Boolean
+<span class="nc bnc" id="L131" title="All 8 branches missed.">        get() = events.value?.find {</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">            it is ActivityLogListItem.Progress &amp;&amp;</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">                    it.progressType == ActivityLogListItem.Progress.Type.BACKUP_DOWNLOAD</span>
+<span class="nc" id="L134">        } != null</span>
+
+    private val isDone: Boolean
+<span class="nc bnc" id="L137" title="All 2 branches missed.">        get() = eventListStatus.value == ActivityLogListStatus.DONE</span>
+
+    private var fetchActivitiesJob: Job? = null
+    private var restoreStatusJob: Job? = null
+    private var backupDownloadStatusJob: Job? = null
+
+    private var currentDateRangeFilter: DateRange? = null
+<span class="nc" id="L144">    private var currentActivityTypeFilter: List&lt;ActivityTypeModel&gt; = listOf()</span>
+
+<span class="nc bnc" id="L146" title="All 2 branches missed.">    lateinit var site: SiteModel</span>
+<span class="nc" id="L147">    var rewindableOnly: Boolean = false</span>
+
+<span class="nc" id="L149">    private var currentRestoreEvent = RestoreEvent(false)</span>
+<span class="nc" id="L150">    private var currentBackupDownloadEvent = BackupDownloadEvent(displayProgress = false, displayNotice = false)</span>
+
+    fun start(site: SiteModel, rewindableOnly: Boolean) {
+<span class="nc bnc" id="L153" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L154">            return</span>
+        }
+<span class="nc" id="L156">        isStarted = true</span>
+
+<span class="nc" id="L158">        this.site = site</span>
+<span class="nc" id="L159">        this.rewindableOnly = rewindableOnly</span>
+
+<span class="nc" id="L161">        reloadEvents(true)</span>
+<span class="nc" id="L162">        requestEventsUpdate(false)</span>
+
+<span class="nc" id="L164">        showFiltersIfSupported()</span>
+<span class="nc" id="L165">    }</span>
+
+    @Suppress(&quot;LongMethod&quot;, &quot;ComplexMethod&quot;)
+    @VisibleForTesting
+<span class="nc" id="L169">    fun reloadEvents(</span>
+<span class="nc" id="L170">        done: Boolean = isDone,</span>
+        restoreEvent: RestoreEvent = currentRestoreEvent,
+        backupDownloadEvent: BackupDownloadEvent = currentBackupDownloadEvent
+    ) {
+<span class="nc" id="L174">        currentRestoreEvent = restoreEvent</span>
+<span class="nc" id="L175">        currentBackupDownloadEvent = backupDownloadEvent</span>
+<span class="nc" id="L176">        val eventList = activityLogStore.getActivityLogForSite(</span>
+<span class="nc" id="L177">                site = site,</span>
+<span class="nc" id="L178">                ascending = false,</span>
+<span class="nc" id="L179">                rewindableOnly = rewindableOnly</span>
+        )
+<span class="nc" id="L181">        val items = mutableListOf&lt;ActivityLogListItem&gt;()</span>
+<span class="nc" id="L182">        var moveToTop = false</span>
+<span class="nc bnc" id="L183" title="All 4 branches missed.">        val withRestoreProgressItem = restoreEvent.displayProgress &amp;&amp; !restoreEvent.isCompleted</span>
+<span class="nc bnc" id="L184" title="All 4 branches missed.">        val withBackupDownloadProgressItem = backupDownloadEvent.displayProgress &amp;&amp; !backupDownloadEvent.isCompleted</span>
+<span class="nc" id="L185">        val withBackupDownloadNoticeItem = backupDownloadEvent.displayNotice</span>
+<span class="nc bnc" id="L186" title="All 4 branches missed.">        if (withRestoreProgressItem || withBackupDownloadProgressItem) {</span>
+<span class="nc" id="L187">            items.add(ActivityLogListItem.Header(resourceProvider.getString(R.string.now)))</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">            moveToTop = eventListStatus.value != ActivityLogListStatus.LOADING_MORE</span>
+        }
+<span class="nc bnc" id="L190" title="All 2 branches missed.">        if (withRestoreProgressItem) {</span>
+<span class="nc" id="L191">            items.add(getRestoreProgressItem(restoreEvent.rewindId, restoreEvent.published))</span>
+        }
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        if (withBackupDownloadProgressItem) {</span>
+<span class="nc" id="L194">            items.add(getBackupDownloadProgressItem(backupDownloadEvent.rewindId, backupDownloadEvent.published))</span>
+        }
+<span class="nc bnc" id="L196" title="All 2 branches missed.">        if (withBackupDownloadNoticeItem) {</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">            getBackupDownloadNoticeItem(backupDownloadEvent)?.let {</span>
+<span class="nc" id="L198">                items.add(it)</span>
+<span class="nc" id="L199">                moveToTop = true</span>
+<span class="nc" id="L200">            }</span>
+        }
+<span class="nc" id="L202">        eventList.forEach { model -&gt;</span>
+<span class="nc" id="L203">            val currentItem = ActivityLogListItem.Event(</span>
+<span class="nc" id="L204">                    model = model,</span>
+<span class="nc bnc" id="L205" title="All 4 branches missed.">                    rewindDisabled = withRestoreProgressItem || withBackupDownloadProgressItem,</span>
+<span class="nc" id="L206">                    isRestoreHidden = restoreEvent.isRestoreHidden</span>
+            )
+<span class="nc bnc" id="L208" title="All 2 branches missed.">            val lastItem = items.lastOrNull() as? ActivityLogListItem.Event</span>
+<span class="nc bnc" id="L209" title="All 4 branches missed.">            if (lastItem == null || lastItem.formattedDate != currentItem.formattedDate) {</span>
+<span class="nc" id="L210">                items.add(ActivityLogListItem.Header(currentItem.formattedDate))</span>
+            }
+<span class="nc" id="L212">            items.add(currentItem)</span>
+<span class="nc" id="L213">        }</span>
+<span class="nc bnc" id="L214" title="All 6 branches missed.">        if (eventList.isNotEmpty() &amp;&amp; !done) {</span>
+<span class="nc" id="L215">            items.add(ActivityLogListItem.Loading)</span>
+        }
+<span class="nc bnc" id="L217" title="All 8 branches missed.">        if (eventList.isNotEmpty() &amp;&amp; site.hasFreePlan &amp;&amp; done) {</span>
+<span class="nc" id="L218">            items.add(ActivityLogListItem.Footer)</span>
+        }
+
+<span class="nc" id="L221">        _events.value = items</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">        if (moveToTop) {</span>
+<span class="nc" id="L223">            _moveToTop.call()</span>
+        }
+<span class="nc bnc" id="L225" title="All 2 branches missed.">        if (restoreEvent.isCompleted) {</span>
+<span class="nc" id="L226">            showRestoreFinishedMessage(restoreEvent.rewindId, restoreEvent.published)</span>
+<span class="nc" id="L227">            currentRestoreEvent = RestoreEvent(false)</span>
+        }
+<span class="nc" id="L229">    }</span>
+
+    private fun getRestoreProgressItem(rewindId: String?, published: Date?): ActivityLogListItem.Progress {
+<span class="nc bnc" id="L232" title="All 6 branches missed.">        val rewindDate = published ?: rewindId?.let { activityLogStore.getActivityLogItemByRewindId(it)?.published }</span>
+<span class="nc bnc" id="L233" title="All 4 branches missed.">        return rewindDate?.let {</span>
+<span class="nc" id="L234">            ActivityLogListItem.Progress(</span>
+<span class="nc" id="L235">                    resourceProvider.getString(R.string.activity_log_currently_restoring_title),</span>
+<span class="nc" id="L236">                    resourceProvider.getString(</span>
+<span class="nc" id="L237">                            R.string.activity_log_currently_restoring_message,</span>
+<span class="nc" id="L238">                            rewindDate.toFormattedDateString(),</span>
+<span class="nc" id="L239">                            rewindDate.toFormattedTimeString()</span>
+                    ),
+<span class="nc" id="L241">                    ActivityLogListItem.Progress.Type.RESTORE</span>
+            )
+<span class="nc" id="L243">        } ?: ActivityLogListItem.Progress(</span>
+<span class="nc" id="L244">                resourceProvider.getString(R.string.activity_log_currently_restoring_title),</span>
+<span class="nc" id="L245">                resourceProvider.getString(R.string.activity_log_currently_restoring_message_no_dates),</span>
+<span class="nc" id="L246">                ActivityLogListItem.Progress.Type.RESTORE</span>
+        )
+    }
+
+    private fun getBackupDownloadProgressItem(rewindId: String?, published: Date?): ActivityLogListItem.Progress {
+<span class="nc bnc" id="L251" title="All 6 branches missed.">        val rewindDate = published ?: rewindId?.let { activityLogStore.getActivityLogItemByRewindId(it)?.published }</span>
+<span class="nc bnc" id="L252" title="All 4 branches missed.">        return rewindDate?.let {</span>
+<span class="nc" id="L253">            ActivityLogListItem.Progress(</span>
+<span class="nc" id="L254">                    resourceProvider.getString(R.string.activity_log_currently_backing_up_title),</span>
+<span class="nc" id="L255">                    resourceProvider.getString(</span>
+<span class="nc" id="L256">                            R.string.activity_log_currently_backing_up_message,</span>
+<span class="nc" id="L257">                            rewindDate.toFormattedDateString(), rewindDate.toFormattedTimeString()</span>
+                    ),
+<span class="nc" id="L259">                    ActivityLogListItem.Progress.Type.BACKUP_DOWNLOAD</span>
+            )
+<span class="nc" id="L261">        } ?: ActivityLogListItem.Progress(</span>
+<span class="nc" id="L262">                resourceProvider.getString(R.string.activity_log_currently_backing_up_title),</span>
+<span class="nc" id="L263">                resourceProvider.getString(R.string.activity_log_currently_backing_up_message_no_dates),</span>
+<span class="nc" id="L264">                ActivityLogListItem.Progress.Type.BACKUP_DOWNLOAD</span>
+        )
+    }
+
+    private fun getBackupDownloadNoticeItem(backupDownloadEvent: BackupDownloadEvent): ActivityLogListItem.Notice? {
+<span class="nc bnc" id="L269" title="All 2 branches missed.">        val rewindDate = backupDownloadEvent.published</span>
+<span class="nc bnc" id="L270" title="All 4 branches missed.">                ?: backupDownloadEvent.rewindId?.let { activityLogStore.getActivityLogItemByRewindId(it)?.published }</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">        return rewindDate?.let {</span>
+<span class="nc" id="L272">            ActivityLogListItem.Notice(</span>
+<span class="nc" id="L273">                    label = resourceProvider.getString(</span>
+<span class="nc" id="L274">                            R.string.activity_log_backup_download_notice_description_with_two_params,</span>
+<span class="nc" id="L275">                            rewindDate.toFormattedDateString(), rewindDate.toFormattedTimeString()</span>
+                    ),
+<span class="nc bnc" id="L277" title="All 2 branches missed.">                    primaryAction = { onDownloadBackupFileClicked(backupDownloadEvent.url as String) },</span>
+<span class="nc bnc" id="L278" title="All 2 branches missed.">                    secondaryAction = { dismissNoticeClicked(backupDownloadEvent.downloadId as Long) }</span>
+            )
+        }
+    }
+
+    private fun showRestoreFinishedMessage(rewindId: String?, published: Date?) {
+<span class="nc bnc" id="L284" title="All 6 branches missed.">        val rewindDate = published ?: rewindId?.let { activityLogStore.getActivityLogItemByRewindId(it)?.published }</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">        if (rewindDate != null) {</span>
+<span class="nc" id="L286">            _showSnackbarMessage.value =</span>
+<span class="nc" id="L287">                    resourceProvider.getString(</span>
+<span class="nc" id="L288">                            R.string.activity_log_rewind_finished_snackbar_message,</span>
+<span class="nc" id="L289">                            rewindDate.toFormattedDateString(),</span>
+<span class="nc" id="L290">                            rewindDate.toFormattedTimeString()</span>
+                    )
+        } else {
+<span class="nc" id="L293">            _showSnackbarMessage.value =</span>
+<span class="nc" id="L294">                    resourceProvider.getString(R.string.activity_log_rewind_finished_snackbar_message_no_dates)</span>
+        }
+<span class="nc" id="L296">    }</span>
+
+    private fun showBackupDownloadFinishedMessage(rewindId: String?) {
+<span class="nc bnc" id="L299" title="All 4 branches missed.">        val rewindDate = rewindId?.let { activityLogStore.getActivityLogItemByRewindId(it)?.published }</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">        if (rewindDate != null) {</span>
+<span class="nc" id="L301">            _showSnackbarMessage.value =</span>
+<span class="nc" id="L302">                    resourceProvider.getString(</span>
+<span class="nc" id="L303">                            R.string.activity_log_backup_finished_snackbar_message,</span>
+<span class="nc" id="L304">                            rewindDate.toFormattedDateString(),</span>
+<span class="nc" id="L305">                            rewindDate.toFormattedTimeString()</span>
+                    )
+        } else {
+<span class="nc" id="L308">            _showSnackbarMessage.value =</span>
+<span class="nc" id="L309">                    resourceProvider.getString(R.string.activity_log_backup_finished_snackbar_message_no_dates)</span>
+        }
+<span class="nc" id="L311">    }</span>
+
+<span class="nc" id="L313">    private fun requestEventsUpdate(</span>
+        loadMore: Boolean,
+        restoreEvent: RestoreEvent = currentRestoreEvent,
+        backupDownloadEvent: BackupDownloadEvent = currentBackupDownloadEvent
+    ) {
+<span class="nc bnc" id="L318" title="All 4 branches missed.">        val isLoadingMore = fetchActivitiesJob != null &amp;&amp; eventListStatus.value == ActivityLogListStatus.LOADING_MORE</span>
+<span class="nc bnc" id="L319" title="All 2 branches missed.">        val canLoadMore = eventListStatus.value == ActivityLogListStatus.CAN_LOAD_MORE</span>
+<span class="nc bnc" id="L320" title="All 6 branches missed.">        if (loadMore &amp;&amp; (isLoadingMore || !canLoadMore)) {</span>
+            // Ignore loadMore request when already loading more items or there are no more items to load
+<span class="nc" id="L322">            return</span>
+        }
+<span class="nc bnc" id="L324" title="All 2 branches missed.">        fetchActivitiesJob?.cancel()</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">        val newStatus = if (loadMore) ActivityLogListStatus.LOADING_MORE else ActivityLogListStatus.FETCHING</span>
+<span class="nc" id="L326">        _eventListStatus.value = newStatus</span>
+<span class="nc" id="L327">        val payload = ActivityLogStore.FetchActivityLogPayload(</span>
+<span class="nc" id="L328">                site,</span>
+<span class="nc" id="L329">                loadMore,</span>
+<span class="nc bnc" id="L330" title="All 4 branches missed.">                currentDateRangeFilter?.first?.let { Date(it) },</span>
+<span class="nc bnc" id="L331" title="All 4 branches missed.">                currentDateRangeFilter?.second?.let { Date(it) },</span>
+<span class="nc" id="L332">                currentActivityTypeFilter.map { it.key }</span>
+        )
+<span class="nc" id="L334">        fetchActivitiesJob = viewModelScope.launch {</span>
+<span class="nc" id="L335">            val result = activityLogStore.fetchActivities(payload)</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">            if (isActive) {</span>
+<span class="nc" id="L337">                onActivityLogFetched(result, loadMore, restoreEvent, backupDownloadEvent)</span>
+<span class="nc" id="L338">                fetchActivitiesJob = null</span>
+            }
+<span class="nc" id="L340">        }</span>
+<span class="nc" id="L341">    }</span>
+
+    private fun onActivityLogFetched(
+        event: OnActivityLogFetched,
+        loadingMore: Boolean,
+        restoreEvent: RestoreEvent,
+        backupDownloadEvent: BackupDownloadEvent
+    ) {
+<span class="nc bnc" id="L349" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L350">            _eventListStatus.value = ActivityLogListStatus.ERROR</span>
+<span class="nc" id="L351">            AppLog.e(AppLog.T.ACTIVITY_LOG, &quot;An error occurred while fetching the Activity log events&quot;)</span>
+<span class="nc" id="L352">            return</span>
+        }
+
+<span class="nc bnc" id="L355" title="All 2 branches missed.">        if (event.rowsAffected &gt; 0) {</span>
+<span class="nc" id="L356">            reloadEvents(</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">                    done = !event.canLoadMore,</span>
+<span class="nc" id="L358">                    restoreEvent = restoreEvent,</span>
+<span class="nc" id="L359">                    backupDownloadEvent = backupDownloadEvent</span>
+            )
+<span class="nc bnc" id="L361" title="All 2 branches missed.">            if (!loadingMore) {</span>
+<span class="nc" id="L362">                moveToTop.call()</span>
+            }
+<span class="nc bnc" id="L364" title="All 2 branches missed.">            if (!restoreEvent.isCompleted) queryRestoreStatus()</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">            if (!backupDownloadEvent.isCompleted) queryBackupDownloadStatus()</span>
+        }
+
+<span class="nc bnc" id="L368" title="All 2 branches missed.">        if (event.canLoadMore) {</span>
+<span class="nc" id="L369">            _eventListStatus.value = ActivityLogListStatus.CAN_LOAD_MORE</span>
+        } else {
+<span class="nc" id="L371">            _eventListStatus.value = ActivityLogListStatus.DONE</span>
+        }
+<span class="nc" id="L373">    }</span>
+
+    private fun showFiltersIfSupported() {
+<span class="nc" id="L376">        when {</span>
+<span class="nc bnc" id="L377" title="All 2 branches missed.">            !site.hasFreePlan -&gt; refreshFiltersUiState()</span>
+            else -&gt; {
+<span class="nc bnc" id="L379" title="All 2 branches missed.">                viewModelScope.launch {</span>
+<span class="nc" id="L380">                    val purchasedProducts = jetpackCapabilitiesUseCase.getCachedJetpackPurchasedProducts(site.siteId)</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">                    if (purchasedProducts.backup) {</span>
+<span class="nc" id="L382">                        refreshFiltersUiState()</span>
+                    }
+<span class="nc" id="L384">                }</span>
+            }
+        }
+<span class="nc" id="L387">    }</span>
+
+    override fun onCleared() {
+<span class="nc bnc" id="L390" title="All 6 branches missed.">        if (currentDateRangeFilter != null || currentActivityTypeFilter.isNotEmpty()) {</span>
+            /**
+             * Clear cache when filters are not empty. Filters are not retained across sessions, therefore the data is
+             * not relevant when the screen is accessed next time.
+             */
+<span class="nc" id="L395">            activityLogStore.clearActivityLogCache(site)</span>
+        }
+<span class="nc" id="L397">        jetpackCapabilitiesUseCase.clear()</span>
+
+<span class="nc" id="L399">        super.onCleared()</span>
+<span class="nc" id="L400">    }</span>
+
+    private fun refreshFiltersUiState() {
+<span class="nc" id="L403">        val (activityTypeLabel, activityTypeLabelContentDescription) = createActivityTypeFilterLabel()</span>
+<span class="nc" id="L404">        val (dateRangeLabel, dateRangeLabelContentDescription) = createDateRangeFilterLabel()</span>
+<span class="nc" id="L405">        _filtersUiState.value = FiltersShown(</span>
+<span class="nc" id="L406">                dateRangeLabel,</span>
+<span class="nc" id="L407">                dateRangeLabelContentDescription,</span>
+<span class="nc" id="L408">                activityTypeLabel,</span>
+<span class="nc" id="L409">                activityTypeLabelContentDescription,</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">                currentDateRangeFilter?.let { ::onClearDateRangeFilterClicked },</span>
+<span class="nc bnc" id="L411" title="All 6 branches missed.">                currentActivityTypeFilter.takeIf { it.isNotEmpty() }?.let { ::onClearActivityTypeFilterClicked }</span>
+        )
+<span class="nc" id="L413">        refreshEmptyUiState()</span>
+<span class="nc" id="L414">    }</span>
+
+    private fun refreshEmptyUiState() {
+<span class="nc bnc" id="L417" title="All 2 branches missed.">        if (rewindableOnly) {</span>
+<span class="nc" id="L418">            refreshBackupEmptyUiState()</span>
+        } else {
+<span class="nc" id="L420">            refreshActivityLogEmptyUiState()</span>
+        }
+<span class="nc" id="L422">    }</span>
+
+    private fun refreshBackupEmptyUiState() {
+<span class="nc bnc" id="L425" title="All 2 branches missed.">        if (currentDateRangeFilter != null) {</span>
+<span class="nc" id="L426">            _emptyUiState.value = EmptyUiState.Backup.ActiveFilters</span>
+        } else {
+<span class="nc" id="L428">            _emptyUiState.value = EmptyUiState.Backup.EmptyFilters</span>
+        }
+<span class="nc" id="L430">    }</span>
+
+    private fun refreshActivityLogEmptyUiState() {
+<span class="nc bnc" id="L433" title="All 6 branches missed.">        if (currentDateRangeFilter != null || currentActivityTypeFilter.isNotEmpty()) {</span>
+<span class="nc" id="L434">            _emptyUiState.value = EmptyUiState.ActivityLog.ActiveFilters</span>
+        } else {
+<span class="nc" id="L436">            _emptyUiState.value = EmptyUiState.ActivityLog.EmptyFilters</span>
+        }
+<span class="nc" id="L438">    }</span>
+
+    private fun createDateRangeFilterLabel(): kotlin.Pair&lt;UiString, UiString&gt; {
+<span class="nc bnc" id="L441" title="All 4 branches missed.">        return currentDateRangeFilter?.let {</span>
+<span class="nc" id="L442">            val label = UiStringText(</span>
+<span class="nc bnc" id="L443" title="All 4 branches missed.">                    dateUtils.formatDateRange(requireNotNull(it.first), requireNotNull(it.second), TIMEZONE_GMT_0)</span>
+            )
+<span class="nc" id="L445">            kotlin.Pair(label, label)</span>
+<span class="nc" id="L446">        } ?: kotlin.Pair(</span>
+<span class="nc" id="L447">                UiStringRes(R.string.activity_log_date_range_filter_label),</span>
+<span class="nc" id="L448">                UiStringRes(R.string.activity_log_date_range_filter_label_content_description)</span>
+        )
+    }
+
+    private fun createActivityTypeFilterLabel(): kotlin.Pair&lt;UiString, UiString&gt; {
+<span class="nc bnc" id="L453" title="All 8 branches missed.">        return currentActivityTypeFilter.takeIf { it.isNotEmpty() }?.let {</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">            if (it.size == 1) {</span>
+<span class="nc" id="L455">                kotlin.Pair(</span>
+<span class="nc" id="L456">                        UiStringText(it[0].name),</span>
+<span class="nc" id="L457">                        UiStringResWithParams(</span>
+<span class="nc" id="L458">                                R.string.activity_log_activity_type_filter_single_item_selected_content_description,</span>
+<span class="nc" id="L459">                                listOf(UiStringText(it[0].name), UiStringText(it[0].count.toString()))</span>
+                        )
+                )
+            } else {
+<span class="nc" id="L463">                kotlin.Pair(</span>
+<span class="nc" id="L464">                        UiStringResWithParams(</span>
+<span class="nc" id="L465">                                R.string.activity_log_activity_type_filter_active_label,</span>
+<span class="nc" id="L466">                                listOf(UiStringText(&quot;${it.size}&quot;))</span>
+                        ),
+<span class="nc" id="L468">                        UiStringResWithParams(</span>
+<span class="nc" id="L469">                                R.string.activity_log_activity_type_filter_multiple_items_selected_content_description,</span>
+<span class="nc" id="L470">                                listOf(UiStringText(&quot;${it.size}&quot;))</span>
+                        )
+                )
+            }
+<span class="nc" id="L474">        } ?: kotlin.Pair(</span>
+<span class="nc" id="L475">                UiStringRes(R.string.activity_log_activity_type_filter_label),</span>
+<span class="nc" id="L476">                UiStringRes(R.string.activity_log_activity_type_filter_no_item_selected_content_description)</span>
+        )
+    }
+
+    fun onScrolledToBottom() {
+<span class="nc" id="L481">        requestEventsUpdate(true)</span>
+<span class="nc" id="L482">    }</span>
+
+    fun onPullToRefresh() {
+<span class="nc" id="L485">        requestEventsUpdate(false)</span>
+<span class="nc" id="L486">    }</span>
+
+    fun onItemClicked(item: ActivityLogListItem) {
+<span class="nc bnc" id="L489" title="All 2 branches missed.">        if (item is ActivityLogListItem.Event) {</span>
+<span class="nc" id="L490">            _showItemDetail.value = item</span>
+        }
+<span class="nc" id="L492">    }</span>
+
+    fun onSecondaryActionClicked(
+        secondaryAction: ActivityLogListItem.SecondaryAction,
+        item: ActivityLogListItem
+    ): Boolean {
+<span class="nc bnc" id="L498" title="All 2 branches missed.">        if (item is ActivityLogListItem.Event) {</span>
+<span class="nc bnc" id="L499" title="All 2 branches missed.">            val navigationEvent = when (secondaryAction) {</span>
+                ActivityLogListItem.SecondaryAction.RESTORE -&gt; {
+<span class="nc" id="L501">                    ActivityLogNavigationEvents.ShowRestore(item)</span>
+                }
+                ActivityLogListItem.SecondaryAction.DOWNLOAD_BACKUP -&gt; {
+<span class="nc" id="L504">                    ActivityLogNavigationEvents.ShowBackupDownload(item)</span>
+                }
+            }
+<span class="nc" id="L507">            _navigationEvents.value = Event(navigationEvent)</span>
+        }
+<span class="nc" id="L509">        return true</span>
+    }
+
+    private fun onDownloadBackupFileClicked(url: String) {
+<span class="nc" id="L513">        activityLogTracker.trackDownloadBackupDownloadButtonClicked(rewindableOnly)</span>
+<span class="nc" id="L514">        _navigationEvents.value = Event(ActivityLogNavigationEvents.DownloadBackupFile(url))</span>
+<span class="nc" id="L515">    }</span>
+    /**
+    Reload events first to remove the notice item, as it shows progress to the user. Then
+    trigger the dismiss (this is an optimistic call). If the dismiss fails it will show
+    again on the next reload.
+    */
+    private fun dismissNoticeClicked(downloadId: Long) {
+<span class="nc" id="L522">        activityLogTracker.trackDownloadBackupDismissButtonClicked(rewindableOnly)</span>
+<span class="nc" id="L523">        reloadEvents(backupDownloadEvent = BackupDownloadEvent(displayNotice = false, displayProgress = false))</span>
+<span class="nc" id="L524">        viewModelScope.launch { postDismissBackupDownloadUseCase.dismissBackupDownload(downloadId, site) }</span>
+<span class="nc" id="L525">    }</span>
+
+    fun dateRangePickerClicked() {
+<span class="nc" id="L528">        activityLogTracker.trackDateRangeFilterButtonClicked(rewindableOnly)</span>
+<span class="nc" id="L529">        _showDateRangePicker.value = ShowDateRangePicker(initialSelection = currentDateRangeFilter)</span>
+<span class="nc" id="L530">    }</span>
+
+    fun onDateRangeSelected(dateRange: DateRange?) {
+<span class="nc bnc" id="L533" title="All 2 branches missed.">        val adjustedDateRange = dateRange?.let {</span>
+            // adjust time of the end of the date range to 23:59:59
+<span class="nc bnc" id="L535" title="All 2 branches missed.">            Pair(dateRange.first, dateRange.second?.let { it + DAY_IN_MILLIS - ONE_SECOND_IN_MILLIS })</span>
+        }
+<span class="nc" id="L537">        activityLogTracker.trackDateRangeFilterSelected(dateRange, rewindableOnly)</span>
+<span class="nc" id="L538">        currentDateRangeFilter = adjustedDateRange</span>
+<span class="nc" id="L539">        refreshFiltersUiState()</span>
+<span class="nc" id="L540">        requestEventsUpdate(false)</span>
+<span class="nc" id="L541">    }</span>
+
+    fun onClearDateRangeFilterClicked() {
+<span class="nc" id="L544">        activityLogTracker.trackDateRangeFilterCleared(rewindableOnly)</span>
+<span class="nc" id="L545">        currentDateRangeFilter = null</span>
+<span class="nc" id="L546">        refreshFiltersUiState()</span>
+<span class="nc" id="L547">        requestEventsUpdate(false)</span>
+<span class="nc" id="L548">    }</span>
+
+    fun onActivityTypeFilterClicked() {
+<span class="nc" id="L551">        activityLogTracker.trackActivityTypeFilterButtonClicked()</span>
+<span class="nc" id="L552">        _showActivityTypeFilterDialog.value = ShowActivityTypePicker(</span>
+<span class="nc" id="L553">                RemoteId(site.siteId),</span>
+<span class="nc" id="L554">                currentActivityTypeFilter.map { it.key },</span>
+<span class="nc" id="L555">                currentDateRangeFilter</span>
+        )
+<span class="nc" id="L557">    }</span>
+
+    fun onActivityTypesSelected(selectedTypes: List&lt;ActivityTypeModel&gt;) {
+<span class="nc" id="L560">        activityLogTracker.trackActivityTypeFilterSelected(selectedTypes)</span>
+<span class="nc" id="L561">        currentActivityTypeFilter = selectedTypes</span>
+<span class="nc" id="L562">        refreshFiltersUiState()</span>
+<span class="nc" id="L563">        requestEventsUpdate(false)</span>
+<span class="nc" id="L564">    }</span>
+
+    fun onClearActivityTypeFilterClicked() {
+<span class="nc" id="L567">        activityLogTracker.trackActivityTypeFilterCleared()</span>
+<span class="nc" id="L568">        currentActivityTypeFilter = listOf()</span>
+<span class="nc" id="L569">        refreshFiltersUiState()</span>
+<span class="nc" id="L570">        requestEventsUpdate(false)</span>
+<span class="nc" id="L571">    }</span>
+
+    fun onQueryRestoreStatus(rewindId: String, restoreId: Long) {
+<span class="nc" id="L574">        queryRestoreStatus(restoreId)</span>
+<span class="nc" id="L575">        showRestoreStartedMessage(rewindId)</span>
+<span class="nc" id="L576">    }</span>
+
+<span class="nc" id="L578">    private fun queryRestoreStatus(restoreId: Long? = null) {</span>
+<span class="nc bnc" id="L579" title="All 2 branches missed.">        restoreStatusJob?.cancel()</span>
+<span class="nc" id="L580">        restoreStatusJob = viewModelScope.launch {</span>
+<span class="nc" id="L581">            getRestoreStatusUseCase.getRestoreStatus(site, restoreId)</span>
+<span class="nc" id="L582">                    .collect { handleRestoreStatus(it) }</span>
+<span class="nc" id="L583">        }</span>
+<span class="nc" id="L584">    }</span>
+
+    private fun handleRestoreStatus(state: RestoreRequestState) {
+<span class="nc" id="L587">        when (state) {</span>
+<span class="nc bnc" id="L588" title="All 2 branches missed.">            is RestoreRequestState.Multisite -&gt; handleRestoreStatusForMultisite()</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">            is RestoreRequestState.Progress -&gt; handleRestoreStatusForProgress(state)</span>
+<span class="nc bnc" id="L590" title="All 2 branches missed.">            is RestoreRequestState.Complete -&gt; handleRestoreStatusForComplete(state)</span>
+<span class="nc" id="L591">            else -&gt; Unit // Do nothing</span>
+        }
+<span class="nc" id="L593">    }</span>
+
+    private fun handleRestoreStatusForMultisite() {
+<span class="nc" id="L596">        reloadEvents(</span>
+<span class="nc" id="L597">                restoreEvent = RestoreEvent(</span>
+<span class="nc" id="L598">                        displayProgress = false,</span>
+<span class="nc" id="L599">                        isRestoreHidden = true</span>
+                )
+        )
+<span class="nc" id="L602">    }</span>
+
+    private fun handleRestoreStatusForProgress(state: RestoreRequestState.Progress) {
+<span class="nc bnc" id="L605" title="All 2 branches missed.">        if (!isRestoreProgressItemShown) {</span>
+<span class="nc" id="L606">            reloadEvents(</span>
+<span class="nc" id="L607">                    restoreEvent = RestoreEvent(</span>
+<span class="nc" id="L608">                            displayProgress = true,</span>
+<span class="nc" id="L609">                            isCompleted = false,</span>
+<span class="nc" id="L610">                            rewindId = state.rewindId,</span>
+<span class="nc" id="L611">                            published = state.published</span>
+                    )
+            )
+        }
+<span class="nc" id="L615">    }</span>
+
+    private fun handleRestoreStatusForComplete(state: RestoreRequestState.Complete) {
+<span class="nc bnc" id="L618" title="All 2 branches missed.">        if (isRestoreProgressItemShown) {</span>
+<span class="nc" id="L619">            requestEventsUpdate(</span>
+<span class="nc" id="L620">                    loadMore = false,</span>
+<span class="nc" id="L621">                    restoreEvent = RestoreEvent(</span>
+<span class="nc" id="L622">                            displayProgress = false,</span>
+<span class="nc" id="L623">                            isCompleted = true,</span>
+<span class="nc" id="L624">                            rewindId = state.rewindId,</span>
+<span class="nc" id="L625">                            published = state.published</span>
+                    )
+            )
+        }
+<span class="nc" id="L629">    }</span>
+
+    private fun showRestoreStartedMessage(rewindId: String) {
+<span class="nc bnc" id="L632" title="All 4 branches missed.">        activityLogStore.getActivityLogItemByRewindId(rewindId)?.published?.let {</span>
+<span class="nc" id="L633">            _showSnackbarMessage.value = resourceProvider.getString(</span>
+<span class="nc" id="L634">                    R.string.activity_log_rewind_started_snackbar_message,</span>
+<span class="nc" id="L635">                    it.toFormattedDateString(),</span>
+<span class="nc" id="L636">                    it.toFormattedTimeString()</span>
+            )
+<span class="nc" id="L638">        }</span>
+<span class="nc" id="L639">    }</span>
+
+    fun onQueryBackupDownloadStatus(rewindId: String, downloadId: Long, actionState: Int) {
+<span class="nc" id="L642">        queryBackupDownloadStatus(downloadId)</span>
+
+<span class="nc bnc" id="L644" title="All 2 branches missed.">        if (actionState == PROGRESS.id) {</span>
+<span class="nc" id="L645">            showBackupDownloadStartedMessage(rewindId)</span>
+        } else {
+<span class="nc" id="L647">            showBackupDownloadFinishedMessage(rewindId)</span>
+        }
+<span class="nc" id="L649">    }</span>
+
+<span class="nc" id="L651">    private fun queryBackupDownloadStatus(downloadId: Long? = null) {</span>
+<span class="nc bnc" id="L652" title="All 2 branches missed.">        backupDownloadStatusJob?.cancel()</span>
+<span class="nc" id="L653">        backupDownloadStatusJob = viewModelScope.launch {</span>
+<span class="nc" id="L654">            getBackupDownloadStatusUseCase.getBackupDownloadStatus(site, downloadId)</span>
+<span class="nc" id="L655">                    .collect { state -&gt; handleBackupDownloadStatus(state) }</span>
+<span class="nc" id="L656">        }</span>
+<span class="nc" id="L657">    }</span>
+
+    private fun handleBackupDownloadStatus(state: BackupDownloadRequestState) {
+<span class="nc" id="L660">        when (state) {</span>
+<span class="nc bnc" id="L661" title="All 2 branches missed.">            is BackupDownloadRequestState.Progress -&gt; handleBackupDownloadStatusForProgress(state)</span>
+<span class="nc bnc" id="L662" title="All 2 branches missed.">            is BackupDownloadRequestState.Complete -&gt; handleBackupDownloadStatusForComplete(state)</span>
+<span class="nc" id="L663">            else -&gt; Unit // Do nothing</span>
+        }
+<span class="nc" id="L665">    }</span>
+
+    private fun handleBackupDownloadStatusForProgress(state: BackupDownloadRequestState.Progress) {
+<span class="nc bnc" id="L668" title="All 2 branches missed.">        if (!isBackupDownloadProgressItemShown) {</span>
+<span class="nc" id="L669">            reloadEvents(</span>
+<span class="nc" id="L670">                    backupDownloadEvent = BackupDownloadEvent(</span>
+<span class="nc" id="L671">                            displayProgress = true,</span>
+<span class="nc" id="L672">                            displayNotice = false,</span>
+<span class="nc" id="L673">                            isCompleted = false,</span>
+<span class="nc" id="L674">                            rewindId = state.rewindId,</span>
+<span class="nc" id="L675">                            published = state.published</span>
+                    )
+            )
+        }
+<span class="nc" id="L679">    }</span>
+
+    private fun handleBackupDownloadStatusForComplete(state: BackupDownloadRequestState.Complete) {
+<span class="nc" id="L682">        val backupDownloadEvent = BackupDownloadEvent(</span>
+<span class="nc" id="L683">                displayProgress = false,</span>
+<span class="nc" id="L684">                displayNotice = state.isValid,</span>
+<span class="nc" id="L685">                isCompleted = true,</span>
+<span class="nc" id="L686">                rewindId = state.rewindId,</span>
+<span class="nc" id="L687">                published = state.published,</span>
+<span class="nc" id="L688">                url = state.url,</span>
+<span class="nc" id="L689">                validUntil = state.validUntil,</span>
+<span class="nc" id="L690">                downloadId = state.downloadId</span>
+        )
+
+<span class="nc bnc" id="L693" title="All 2 branches missed.">        if (isBackupDownloadProgressItemShown) {</span>
+<span class="nc" id="L694">            requestEventsUpdate(loadMore = false, backupDownloadEvent = backupDownloadEvent)</span>
+        } else {
+<span class="nc" id="L696">            reloadEvents(backupDownloadEvent = backupDownloadEvent)</span>
+        }
+<span class="nc" id="L698">    }</span>
+
+    private fun showBackupDownloadStartedMessage(rewindId: String) {
+<span class="nc bnc" id="L701" title="All 4 branches missed.">        activityLogStore.getActivityLogItemByRewindId(rewindId)?.published?.let {</span>
+<span class="nc" id="L702">            _showSnackbarMessage.value = resourceProvider.getString(</span>
+<span class="nc" id="L703">                    R.string.activity_log_backup_started_snackbar_message,</span>
+<span class="nc" id="L704">                    it.toFormattedDateString(),</span>
+<span class="nc" id="L705">                    it.toFormattedTimeString()</span>
+            )
+<span class="nc" id="L707">        }</span>
+<span class="nc" id="L708">    }</span>
+
+<span class="nc" id="L710">    data class ShowDateRangePicker(val initialSelection: DateRange?)</span>
+<span class="nc" id="L711">    data class ShowActivityTypePicker(</span>
+<span class="nc" id="L712">        val siteId: RemoteId,</span>
+<span class="nc" id="L713">        val initialSelection: List&lt;String&gt;,</span>
+<span class="nc" id="L714">        val dateRange: DateRange?</span>
+    )
+
+<span class="nc" id="L717">    data class RestoreEvent(</span>
+<span class="nc" id="L718">        val displayProgress: Boolean,</span>
+<span class="nc" id="L719">        val isRestoreHidden: Boolean = false,</span>
+<span class="nc" id="L720">        val isCompleted: Boolean = false,</span>
+<span class="nc" id="L721">        val rewindId: String? = null,</span>
+<span class="nc" id="L722">        val published: Date? = null</span>
+<span class="nc" id="L723">    )</span>
+
+<span class="nc" id="L725">    data class BackupDownloadEvent(</span>
+<span class="nc" id="L726">        val displayProgress: Boolean,</span>
+<span class="nc" id="L727">        val displayNotice: Boolean,</span>
+<span class="nc" id="L728">        val isCompleted: Boolean = false,</span>
+<span class="nc" id="L729">        val rewindId: String? = null,</span>
+<span class="nc" id="L730">        val published: Date? = null,</span>
+<span class="nc" id="L731">        val downloadId: Long? = null,</span>
+<span class="nc" id="L732">        val url: String? = null,</span>
+<span class="nc" id="L733">        val validUntil: Date? = null</span>
+<span class="nc" id="L734">    )</span>
+
+<span class="nc" id="L736">    sealed class FiltersUiState(val visibility: Boolean) {</span>
+<span class="nc" id="L737">        object FiltersHidden : FiltersUiState(visibility = false)</span>
+
+<span class="nc" id="L739">        data class FiltersShown(</span>
+<span class="nc" id="L740">            val dateRangeLabel: UiString,</span>
+<span class="nc" id="L741">            val dateRangeLabelContentDescription: UiString,</span>
+<span class="nc" id="L742">            val activityTypeLabel: UiString,</span>
+<span class="nc" id="L743">            val activityTypeLabelContentDescription: UiString,</span>
+<span class="nc" id="L744">            val onClearDateRangeFilterClicked: (() -&gt; Unit)?,</span>
+<span class="nc" id="L745">            val onClearActivityTypeFilterClicked: (() -&gt; Unit)?</span>
+<span class="nc" id="L746">        ) : FiltersUiState(visibility = true)</span>
+    }
+
+    sealed class EmptyUiState {
+        abstract val emptyScreenTitle: UiString
+        abstract val emptyScreenSubtitle: UiString
+
+        object ActivityLog {
+<span class="nc" id="L754">            object EmptyFilters : EmptyUiState() {</span>
+<span class="nc" id="L755">                override val emptyScreenTitle = UiStringRes(R.string.activity_log_empty_title)</span>
+<span class="nc" id="L756">                override val emptyScreenSubtitle = UiStringRes(R.string.activity_log_empty_subtitle)</span>
+            }
+
+<span class="nc" id="L759">            object ActiveFilters : EmptyUiState() {</span>
+<span class="nc" id="L760">                override val emptyScreenTitle = UiStringRes(R.string.activity_log_active_filter_empty_title)</span>
+<span class="nc" id="L761">                override val emptyScreenSubtitle = UiStringRes(R.string.activity_log_active_filter_empty_subtitle)</span>
+            }
+        }
+
+        object Backup {
+<span class="nc" id="L766">            object EmptyFilters : EmptyUiState() {</span>
+<span class="nc" id="L767">                override val emptyScreenTitle = UiStringRes(R.string.backup_empty_title)</span>
+<span class="nc" id="L768">                override val emptyScreenSubtitle = UiStringRes(R.string.backup_empty_subtitle)</span>
+            }
+
+<span class="nc" id="L771">            object ActiveFilters : EmptyUiState() {</span>
+<span class="nc" id="L772">                override val emptyScreenTitle = UiStringRes(R.string.backup_active_filter_empty_title)</span>
+<span class="nc" id="L773">                override val emptyScreenSubtitle = UiStringRes(R.string.backup_active_filter_empty_subtitle)</span>
+            }
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

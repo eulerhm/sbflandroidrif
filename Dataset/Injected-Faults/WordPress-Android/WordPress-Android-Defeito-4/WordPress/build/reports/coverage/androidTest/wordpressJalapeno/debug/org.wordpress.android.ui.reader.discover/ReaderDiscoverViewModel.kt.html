@@ -1,0 +1,496 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderDiscoverViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.discover</a> &gt; <span class="el_source">ReaderDiscoverViewModel.kt</span></div><h1>ReaderDiscoverViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.discover
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.Observer
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineDispatcher
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.models.ReaderPost
+import org.wordpress.android.models.ReaderTagType.FOLLOWED
+import org.wordpress.android.models.discover.ReaderDiscoverCard.InterestsYouMayLikeCard
+import org.wordpress.android.models.discover.ReaderDiscoverCard.ReaderPostCard
+import org.wordpress.android.models.discover.ReaderDiscoverCard.ReaderRecommendedBlogsCard
+import org.wordpress.android.models.discover.ReaderDiscoverCard.WelcomeBannerCard
+import org.wordpress.android.models.discover.ReaderDiscoverCards
+import org.wordpress.android.modules.IO_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.reader.ReaderTypes.ReaderPostListType.TAG_FOLLOWED
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderPostUiState
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderRecommendedBlogsCardUiState.ReaderRecommendedBlogUiState
+import org.wordpress.android.ui.reader.discover.ReaderCardUiState.ReaderWelcomeBannerCardUiState
+import org.wordpress.android.ui.reader.discover.ReaderDiscoverViewModel.DiscoverUiState.ContentUiState
+import org.wordpress.android.ui.reader.discover.ReaderDiscoverViewModel.DiscoverUiState.EmptyUiState.RequestFailedUiState
+import org.wordpress.android.ui.reader.discover.ReaderDiscoverViewModel.DiscoverUiState.EmptyUiState.ShowNoFollowedTagsUiState
+import org.wordpress.android.ui.reader.discover.ReaderDiscoverViewModel.DiscoverUiState.EmptyUiState.ShowNoPostsUiState
+import org.wordpress.android.ui.reader.discover.ReaderDiscoverViewModel.DiscoverUiState.LoadingUiState
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowBlogPreview
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowPostsByTag
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowReaderSubs
+import org.wordpress.android.ui.reader.discover.ReaderNavigationEvents.ShowSitePickerForResult
+import org.wordpress.android.ui.reader.reblog.ReblogUseCase
+import org.wordpress.android.ui.reader.repository.ReaderDiscoverCommunication
+import org.wordpress.android.ui.reader.repository.ReaderDiscoverCommunication.Error
+import org.wordpress.android.ui.reader.repository.ReaderDiscoverCommunication.Started
+import org.wordpress.android.ui.reader.repository.ReaderDiscoverCommunication.Success
+import org.wordpress.android.ui.reader.repository.ReaderDiscoverDataProvider
+import org.wordpress.android.ui.reader.repository.usecases.tags.GetFollowedTagsUseCase
+import org.wordpress.android.ui.reader.services.discover.ReaderDiscoverLogic.DiscoverTasks.REQUEST_FIRST_PAGE
+import org.wordpress.android.ui.reader.services.discover.ReaderDiscoverLogic.DiscoverTasks.REQUEST_MORE
+import org.wordpress.android.ui.reader.tracker.ReaderTracker
+import org.wordpress.android.ui.reader.usecases.BookmarkPostState.PreLoadPostContent
+import org.wordpress.android.ui.reader.utils.ReaderUtilsWrapper
+import org.wordpress.android.ui.reader.viewmodels.ReaderViewModel
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.DisplayUtilsWrapper
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+const val INITIATE_LOAD_MORE_OFFSET = 3
+const val PHOTON_WIDTH_QUALITY_RATION = 0.5 // load images in 1/2 screen width to save users' data
+const val FEATURED_IMAGE_HEIGHT_WIDTH_RATION = 0.56 // 9:16
+
+<span class="nc" id="L58">class ReaderDiscoverViewModel @Inject constructor(</span>
+<span class="nc" id="L59">    private val postUiStateBuilder: ReaderPostUiStateBuilder,</span>
+<span class="nc" id="L60">    private val readerPostMoreButtonUiStateBuilder: ReaderPostMoreButtonUiStateBuilder,</span>
+<span class="nc" id="L61">    private val readerPostCardActionsHandler: ReaderPostCardActionsHandler,</span>
+<span class="nc" id="L62">    private val readerDiscoverDataProvider: ReaderDiscoverDataProvider,</span>
+<span class="nc" id="L63">    private val reblogUseCase: ReblogUseCase,</span>
+<span class="nc" id="L64">    private val readerUtilsWrapper: ReaderUtilsWrapper,</span>
+<span class="nc" id="L65">    private val appPrefsWrapper: AppPrefsWrapper,</span>
+<span class="nc" id="L66">    private val readerTracker: ReaderTracker,</span>
+    displayUtilsWrapper: DisplayUtilsWrapper,
+<span class="nc" id="L68">    private val getFollowedTagsUseCase: GetFollowedTagsUseCase,</span>
+<span class="nc" id="L69">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L70">    @Named(IO_THREAD) private val ioDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L71">) : ScopedViewModel(mainDispatcher) {</span>
+    private var isStarted = false
+
+    private lateinit var parentViewModel: ReaderViewModel
+
+<span class="nc" id="L76">    private val _uiState = MediatorLiveData&lt;DiscoverUiState&gt;()</span>
+<span class="nc" id="L77">    val uiState: LiveData&lt;DiscoverUiState&gt; = _uiState</span>
+
+<span class="nc" id="L79">    private val _navigationEvents = MediatorLiveData&lt;Event&lt;ReaderNavigationEvents&gt;&gt;()</span>
+<span class="nc" id="L80">    val navigationEvents: LiveData&lt;Event&lt;ReaderNavigationEvents&gt;&gt; = _navigationEvents</span>
+
+<span class="nc" id="L82">    private val _snackbarEvents = MediatorLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L83">    val snackbarEvents: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _snackbarEvents</span>
+
+<span class="nc" id="L85">    private val _preloadPostEvents = MediatorLiveData&lt;Event&lt;PreLoadPostContent&gt;&gt;()</span>
+<span class="nc" id="L86">    val preloadPostEvents: LiveData&lt;Event&lt;PreLoadPostContent&gt;&gt; = _preloadPostEvents</span>
+
+    /**
+     * Post which is about to be reblogged after the user selects a target site.
+     */
+    private var pendingReblogPost: ReaderPost? = null
+
+    private var swipeToRefreshTriggered = false
+
+    /**
+     * Don't recalculate the size after a device orientation change as it'd result in change of the url -&gt; it wouldn't
+     * use cached images.
+     */
+<span class="nc" id="L99">    private val photonWidth: Int = (displayUtilsWrapper.getDisplayPixelWidth() * PHOTON_WIDTH_QUALITY_RATION).toInt()</span>
+<span class="nc" id="L100">    private val photonHeight: Int = (photonWidth * FEATURED_IMAGE_HEIGHT_WIDTH_RATION).toInt()</span>
+
+<span class="nc" id="L102">    private val communicationChannelObserver = Observer { data: Event&lt;ReaderDiscoverCommunication&gt;? -&gt;</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        data?.let {</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">            data.getContentIfNotHandled()?.let {</span>
+<span class="nc" id="L105">                handleDataProviderEvent(it)</span>
+<span class="nc" id="L106">            }</span>
+<span class="nc" id="L107">        }</span>
+<span class="nc" id="L108">    }</span>
+
+    fun start(parentViewModel: ReaderViewModel) {
+<span class="nc bnc" id="L111" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc" id="L112">        isStarted = true</span>
+<span class="nc" id="L113">        this.parentViewModel = parentViewModel</span>
+<span class="nc" id="L114">        init()</span>
+<span class="nc" id="L115">    }</span>
+
+    private fun init() {
+        // Start with loading state
+<span class="nc" id="L119">        _uiState.value = LoadingUiState</span>
+
+<span class="nc" id="L121">        readerPostCardActionsHandler.initScope(viewModelScope)</span>
+
+        // Get the correct repository
+<span class="nc" id="L124">        readerDiscoverDataProvider.start()</span>
+
+        // Listen to changes to the discover feed
+<span class="nc" id="L127">        _uiState.addSource(readerDiscoverDataProvider.discoverFeed) { posts -&gt;</span>
+<span class="nc" id="L128">            launch {</span>
+<span class="nc" id="L129">                val userTags = getFollowedTagsUseCase.get()</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">                if (userTags.isEmpty()) {</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">                    _uiState.value = ShowNoFollowedTagsUiState { parentViewModel.onShowReaderInterests() }</span>
+                } else {
+<span class="nc bnc" id="L133" title="All 6 branches missed.">                    if (posts != null &amp;&amp; posts.cards.isNotEmpty()) {</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">                        _uiState.value = ContentUiState(</span>
+<span class="nc" id="L135">                                convertCardsToUiStates(posts),</span>
+<span class="nc" id="L136">                                reloadProgressVisibility = false,</span>
+<span class="nc" id="L137">                                loadMoreProgressVisibility = false,</span>
+<span class="nc" id="L138">                                scrollToTop = swipeToRefreshTriggered</span>
+                        )
+<span class="nc" id="L140">                        swipeToRefreshTriggered = false</span>
+                    } else {
+<span class="nc" id="L142">                        _uiState.value = ShowNoPostsUiState {</span>
+<span class="nc" id="L143">                            _navigationEvents.value = Event(ShowReaderSubs)</span>
+<span class="nc" id="L144">                        }</span>
+                    }
+                }
+<span class="nc" id="L147">            }</span>
+<span class="nc" id="L148">        }</span>
+
+        // TODO reader improvements: Consider using Channel/Flow
+<span class="nc" id="L151">        readerDiscoverDataProvider.communicationChannel.observeForever(communicationChannelObserver)</span>
+
+<span class="nc" id="L153">        _navigationEvents.addSource(readerPostCardActionsHandler.navigationEvents) { event -&gt;</span>
+<span class="nc" id="L154">            val target = event.peekContent()</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">            if (target is ShowSitePickerForResult) {</span>
+<span class="nc" id="L156">                pendingReblogPost = target.post</span>
+            }
+<span class="nc" id="L158">            _navigationEvents.value = event</span>
+<span class="nc" id="L159">        }</span>
+
+<span class="nc" id="L161">        _snackbarEvents.addSource(readerPostCardActionsHandler.snackbarEvents) { event -&gt;</span>
+<span class="nc" id="L162">            _snackbarEvents.value = event</span>
+<span class="nc" id="L163">        }</span>
+
+<span class="nc" id="L165">        _preloadPostEvents.addSource(readerPostCardActionsHandler.preloadPostEvents) { event -&gt;</span>
+<span class="nc" id="L166">            _preloadPostEvents.value = event</span>
+<span class="nc" id="L167">        }</span>
+<span class="nc" id="L168">    }</span>
+
+    private suspend fun convertCardsToUiStates(posts: ReaderDiscoverCards): List&lt;ReaderCardUiState&gt; {
+<span class="nc" id="L171">        return posts.cards.map { card -&gt;</span>
+<span class="nc" id="L172">            when (card) {</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">                is WelcomeBannerCard -&gt; ReaderWelcomeBannerCardUiState(</span>
+<span class="nc" id="L174">                        titleRes = R.string.reader_welcome_banner</span>
+                )
+<span class="nc bnc" id="L176" title="All 2 branches missed.">                is ReaderPostCard -&gt; postUiStateBuilder.mapPostToUiState(</span>
+<span class="nc" id="L177">                        source = ReaderTracker.SOURCE_DISCOVER,</span>
+<span class="nc" id="L178">                        post = card.post,</span>
+<span class="nc" id="L179">                        isDiscover = true,</span>
+<span class="nc" id="L180">                        photonWidth = photonWidth,</span>
+<span class="nc" id="L181">                        photonHeight = photonHeight,</span>
+<span class="nc" id="L182">                        onButtonClicked = this@ReaderDiscoverViewModel::onButtonClicked,</span>
+<span class="nc" id="L183">                        onItemClicked = this@ReaderDiscoverViewModel::onPostItemClicked,</span>
+<span class="nc" id="L184">                        onItemRendered = this@ReaderDiscoverViewModel::onItemRendered,</span>
+<span class="nc" id="L185">                        onDiscoverSectionClicked = this@ReaderDiscoverViewModel::onDiscoverClicked,</span>
+<span class="nc" id="L186">                        onMoreButtonClicked = this@ReaderDiscoverViewModel::onMoreButtonClicked,</span>
+<span class="nc" id="L187">                        onMoreDismissed = this@ReaderDiscoverViewModel::onMoreMenuDismissed,</span>
+<span class="nc" id="L188">                        onVideoOverlayClicked = this@ReaderDiscoverViewModel::onVideoOverlayClicked,</span>
+<span class="nc" id="L189">                        onPostHeaderViewClicked = this@ReaderDiscoverViewModel::onPostHeaderClicked,</span>
+<span class="nc" id="L190">                        onTagItemClicked = this@ReaderDiscoverViewModel::onTagItemClicked,</span>
+<span class="nc" id="L191">                        postListType = TAG_FOLLOWED</span>
+                )
+<span class="nc bnc" id="L193" title="All 2 branches missed.">                is InterestsYouMayLikeCard -&gt; {</span>
+<span class="nc" id="L194">                    postUiStateBuilder.mapTagListToReaderInterestUiState(</span>
+<span class="nc" id="L195">                            card.interests,</span>
+<span class="nc" id="L196">                            this@ReaderDiscoverViewModel::onReaderTagClicked</span>
+                    )
+                }
+<span class="nc" id="L199">                is ReaderRecommendedBlogsCard -&gt; {</span>
+<span class="nc" id="L200">                    postUiStateBuilder.mapRecommendedBlogsToReaderRecommendedBlogsCardUiState(</span>
+<span class="nc" id="L201">                            recommendedBlogs = card.blogs,</span>
+<span class="nc" id="L202">                            onItemClicked = this@ReaderDiscoverViewModel::onRecommendedSiteItemClicked,</span>
+<span class="nc" id="L203">                            onFollowClicked = this@ReaderDiscoverViewModel::onFollowSiteClicked</span>
+                    )
+                }
+            }
+        }
+    }
+
+    private fun handleDataProviderEvent(it: ReaderDiscoverCommunication) {
+<span class="nc" id="L211">        when (it) {</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">            is Started -&gt; {</span>
+<span class="nc" id="L213">                handleStartedEvent(it)</span>
+            }
+<span class="nc bnc" id="L215" title="All 2 branches missed.">            is Success -&gt; {</span>
+            } // no op
+<span class="nc bnc" id="L217" title="All 2 branches missed.">            is Error -&gt;</span>
+<span class="nc" id="L218">                handleErrorEvent()</span>
+        }
+<span class="nc" id="L220">    }</span>
+
+    private fun handleStartedEvent(it: ReaderDiscoverCommunication) {
+<span class="nc" id="L223">        uiState.value.let { state -&gt;</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">            if (state is ContentUiState) {</span>
+<span class="nc bnc" id="L225" title="All 3 branches missed.">                when (it.task) {</span>
+                    REQUEST_FIRST_PAGE -&gt; {
+<span class="nc" id="L227">                        _uiState.value = state.copy(reloadProgressVisibility = true)</span>
+                    }
+                    REQUEST_MORE -&gt; {
+<span class="nc" id="L230">                        _uiState.value = state.copy(loadMoreProgressVisibility = true)</span>
+                    }
+                }
+            } else {
+<span class="nc" id="L234">                _uiState.value = LoadingUiState</span>
+            }
+<span class="nc" id="L236">        }</span>
+<span class="nc" id="L237">    }</span>
+
+    private fun handleErrorEvent() {
+<span class="nc bnc" id="L240" title="All 2 branches missed.">        _uiState.value?.let { uiState -&gt;</span>
+<span class="nc" id="L241">            when (uiState) {</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">                is LoadingUiState -&gt; {</span>
+                    // show fullscreen error
+<span class="nc" id="L244">                    _uiState.value = RequestFailedUiState { onRetryButtonClick() }</span>
+                }
+<span class="nc bnc" id="L246" title="All 2 branches missed.">                is ContentUiState -&gt; {</span>
+<span class="nc" id="L247">                    _uiState.value = uiState.copy(</span>
+<span class="nc" id="L248">                            reloadProgressVisibility = false,</span>
+<span class="nc" id="L249">                            loadMoreProgressVisibility = false</span>
+                    )
+                    // show snackbar
+<span class="nc" id="L252">                    _snackbarEvents.postValue(</span>
+<span class="nc" id="L253">                            Event(</span>
+<span class="nc" id="L254">                                    SnackbarMessageHolder(</span>
+<span class="nc" id="L255">                                            UiStringRes(R.string.reader_error_request_failed_title)</span>
+                                    )
+                            )
+                    )
+                }
+            }
+<span class="nc" id="L261">        }</span>
+<span class="nc" id="L262">    }</span>
+
+    private fun onReaderTagClicked(tag: String) {
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        launch(ioDispatcher) {</span>
+<span class="nc" id="L266">            readerTracker.track(AnalyticsTracker.Stat.READER_DISCOVER_TOPIC_TAPPED)</span>
+<span class="nc" id="L267">            val readerTag = readerUtilsWrapper.getTagFromTagName(tag, FOLLOWED)</span>
+<span class="nc" id="L268">            _navigationEvents.postValue(Event(ShowPostsByTag(readerTag)))</span>
+<span class="nc" id="L269">        }</span>
+<span class="nc" id="L270">    }</span>
+
+    private fun onButtonClicked(postId: Long, blogId: Long, type: ReaderPostCardActionType) {
+<span class="nc" id="L273">        launch {</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">            findPost(postId, blogId)?.let {</span>
+<span class="nc" id="L275">                readerPostCardActionsHandler.onAction(</span>
+<span class="nc" id="L276">                        it,</span>
+<span class="nc" id="L277">                        type,</span>
+<span class="nc" id="L278">                        isBookmarkList = false,</span>
+<span class="nc" id="L279">                        source = ReaderTracker.SOURCE_DISCOVER</span>
+                )
+<span class="nc" id="L281">            }</span>
+<span class="nc" id="L282">        }</span>
+<span class="nc" id="L283">    }</span>
+
+    private fun onVideoOverlayClicked(postId: Long, blogId: Long) {
+<span class="nc" id="L286">        launch {</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">            findPost(postId, blogId)?.let {</span>
+<span class="nc" id="L288">                readerPostCardActionsHandler.handleVideoOverlayClicked(it.featuredVideo)</span>
+<span class="nc" id="L289">            }</span>
+<span class="nc" id="L290">        }</span>
+<span class="nc" id="L291">    }</span>
+
+    private fun onPostHeaderClicked(postId: Long, blogId: Long) {
+<span class="nc" id="L294">        launch {</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">            findPost(postId, blogId)?.let {</span>
+<span class="nc" id="L296">                readerPostCardActionsHandler.handleHeaderClicked(</span>
+<span class="nc" id="L297">                        it.blogId,</span>
+<span class="nc" id="L298">                        it.feedId,</span>
+<span class="nc" id="L299">                        it.isFollowedByCurrentUser</span>
+                )
+<span class="nc" id="L301">            }</span>
+<span class="nc" id="L302">        }</span>
+<span class="nc" id="L303">    }</span>
+
+    private fun onTagItemClicked(tagSlug: String) {
+<span class="nc bnc" id="L306" title="All 2 branches missed.">        launch(ioDispatcher) {</span>
+<span class="nc" id="L307">            val readerTag = readerUtilsWrapper.getTagFromTagName(tagSlug, FOLLOWED)</span>
+<span class="nc" id="L308">            _navigationEvents.postValue(Event(ShowPostsByTag(readerTag)))</span>
+<span class="nc" id="L309">        }</span>
+<span class="nc" id="L310">    }</span>
+
+    private fun onPostItemClicked(postId: Long, blogId: Long) {
+<span class="nc" id="L313">        launch {</span>
+<span class="nc bnc" id="L314" title="All 2 branches missed.">            findPost(postId, blogId)?.let {</span>
+<span class="nc" id="L315">                readerPostCardActionsHandler.handleOnItemClicked(</span>
+<span class="nc" id="L316">                        it,</span>
+<span class="nc" id="L317">                        ReaderTracker.SOURCE_DISCOVER</span>
+                )
+<span class="nc" id="L319">            }</span>
+<span class="nc" id="L320">        }</span>
+<span class="nc" id="L321">    }</span>
+
+    private fun onRecommendedSiteItemClicked(blogId: Long, feedId: Long, isFollowed: Boolean) {
+<span class="nc" id="L324">        readerTracker.trackBlog(</span>
+<span class="nc" id="L325">                AnalyticsTracker.Stat.READER_SUGGESTED_SITE_VISITED,</span>
+<span class="nc" id="L326">                blogId,</span>
+<span class="nc" id="L327">                feedId</span>
+        )
+<span class="nc" id="L329">        _navigationEvents.postValue(Event(ShowBlogPreview(blogId, feedId, isFollowed)))</span>
+<span class="nc" id="L330">    }</span>
+
+    private fun onFollowSiteClicked(recommendedBlogUiState: ReaderRecommendedBlogUiState) {
+<span class="nc" id="L333">        launch {</span>
+<span class="nc" id="L334">            readerTracker.trackBlog(</span>
+<span class="nc" id="L335">                    AnalyticsTracker.Stat.READER_SUGGESTED_SITE_TOGGLE_FOLLOW,</span>
+<span class="nc" id="L336">                    recommendedBlogUiState.blogId,</span>
+<span class="nc" id="L337">                    recommendedBlogUiState.feedId,</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">                    !recommendedBlogUiState.isFollowed</span>
+            )
+<span class="nc" id="L340">            readerPostCardActionsHandler.handleFollowRecommendedSiteClicked(</span>
+<span class="nc" id="L341">                    recommendedBlogUiState,</span>
+<span class="nc" id="L342">                    ReaderTracker.SOURCE_DISCOVER</span>
+            )
+<span class="nc" id="L344">        }</span>
+<span class="nc" id="L345">    }</span>
+
+    private fun onItemRendered(itemUiState: ReaderCardUiState) {
+<span class="nc" id="L348">        initiateLoadMoreIfNecessary(itemUiState)</span>
+<span class="nc" id="L349">    }</span>
+
+    private fun findPost(postId: Long, blogId: Long): ReaderPost? {
+<span class="nc bnc" id="L352" title="All 4 branches missed.">        return readerDiscoverDataProvider.discoverFeed.value?.cards?.let {</span>
+<span class="nc" id="L353">            it.filterIsInstance&lt;ReaderPostCard&gt;()</span>
+<span class="nc bnc" id="L354" title="All 10 branches missed.">                    .find { card -&gt; card.post.postId == postId &amp;&amp; card.post.blogId == blogId }</span>
+<span class="nc" id="L355">                    ?.post</span>
+        }
+    }
+
+    private fun initiateLoadMoreIfNecessary(item: ReaderCardUiState) {
+<span class="nc bnc" id="L360" title="All 6 branches missed.">        (uiState.value as? ContentUiState)?.cards?.let {</span>
+<span class="nc" id="L361">            val closeToEndIndex = it.size - INITIATE_LOAD_MORE_OFFSET</span>
+<span class="nc bnc" id="L362" title="All 2 branches missed.">            if (closeToEndIndex &gt; 0) {</span>
+<span class="nc" id="L363">                val isCardCloseToEnd: Boolean = it.getOrNull(closeToEndIndex) == item</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">                if (isCardCloseToEnd) {</span>
+<span class="nc" id="L365">                    readerTracker.track(AnalyticsTracker.Stat.READER_DISCOVER_PAGINATED)</span>
+<span class="nc" id="L366">                    launch(ioDispatcher) { readerDiscoverDataProvider.loadMoreCards() }</span>
+                }
+            }
+<span class="nc" id="L369">        }</span>
+<span class="nc" id="L370">    }</span>
+
+    private fun onDiscoverClicked(postId: Long, blogId: Long) {
+        // TODO malinjir: add on discover clicked listener
+<span class="nc" id="L374">    }</span>
+
+    private fun onMoreButtonClicked(postUiState: ReaderPostUiState) {
+<span class="nc" id="L377">        changeMoreMenuVisibility(postUiState, true)</span>
+<span class="nc" id="L378">    }</span>
+
+    private fun onMoreMenuDismissed(postUiState: ReaderPostUiState) {
+<span class="nc" id="L381">        changeMoreMenuVisibility(postUiState, false)</span>
+<span class="nc" id="L382">    }</span>
+
+    private fun changeMoreMenuVisibility(currentUiState: ReaderPostUiState, show: Boolean) {
+<span class="nc" id="L385">        launch {</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">            findPost(currentUiState.postId, currentUiState.blogId)?.let { post -&gt;</span>
+<span class="nc bnc" id="L387" title="All 2 branches missed.">                val moreMenuItems = if (show) {</span>
+<span class="nc" id="L388">                    readerPostMoreButtonUiStateBuilder.buildMoreMenuItems(</span>
+<span class="nc" id="L389">                            post, this@ReaderDiscoverViewModel::onButtonClicked</span>
+                    )
+                } else {
+<span class="nc" id="L392">                    null</span>
+                }
+
+<span class="nc" id="L395">                replaceUiStateItem(currentUiState, currentUiState.copy(moreMenuItems = moreMenuItems))</span>
+<span class="nc" id="L396">            }</span>
+<span class="nc" id="L397">        }</span>
+<span class="nc" id="L398">    }</span>
+
+    private fun replaceUiStateItem(before: ReaderPostUiState, after: ReaderPostUiState) {
+<span class="nc bnc" id="L401" title="All 4 branches missed.">        (_uiState.value as? ContentUiState)?.let {</span>
+<span class="nc" id="L402">            val updatedList = it.cards.toMutableList()</span>
+<span class="nc" id="L403">            val index = it.cards.indexOf(before)</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">            if (index != -1) {</span>
+<span class="nc" id="L405">                updatedList[index] = after</span>
+<span class="nc" id="L406">                _uiState.value = it.copy(cards = updatedList)</span>
+            }
+<span class="nc" id="L408">        }</span>
+<span class="nc" id="L409">    }</span>
+
+    fun onReblogSiteSelected(siteLocalId: Int) {
+<span class="nc" id="L412">        launch {</span>
+<span class="nc" id="L413">            val state = reblogUseCase.onReblogSiteSelected(siteLocalId, pendingReblogPost)</span>
+<span class="nc" id="L414">            val navigationTarget = reblogUseCase.convertReblogStateToNavigationEvent(state)</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">            if (navigationTarget != null) {</span>
+<span class="nc" id="L416">                _navigationEvents.value = Event(navigationTarget)</span>
+            } else {
+<span class="nc" id="L418">                _snackbarEvents.value = Event(SnackbarMessageHolder(UiStringRes(R.string.reader_reblog_error)))</span>
+            }
+<span class="nc" id="L420">            pendingReblogPost = null</span>
+<span class="nc" id="L421">        }</span>
+<span class="nc" id="L422">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L425">        super.onCleared()</span>
+<span class="nc" id="L426">        readerDiscoverDataProvider.stop()</span>
+<span class="nc" id="L427">        readerPostCardActionsHandler.onCleared()</span>
+<span class="nc" id="L428">        readerDiscoverDataProvider.communicationChannel.removeObserver(communicationChannelObserver)</span>
+
+<span class="nc" id="L430">        appPrefsWrapper.readerDiscoverWelcomeBannerShown = true</span>
+<span class="nc" id="L431">    }</span>
+
+    fun swipeToRefresh() {
+<span class="nc" id="L434">        readerTracker.track(AnalyticsTracker.Stat.READER_PULL_TO_REFRESH)</span>
+<span class="nc" id="L435">        swipeToRefreshTriggered = true</span>
+<span class="nc" id="L436">        launch {</span>
+<span class="nc" id="L437">            readerDiscoverDataProvider.refreshCards()</span>
+<span class="nc" id="L438">        }</span>
+
+<span class="nc" id="L440">        appPrefsWrapper.readerDiscoverWelcomeBannerShown = true</span>
+<span class="nc" id="L441">    }</span>
+
+    fun onRetryButtonClick() {
+<span class="nc" id="L444">        launch {</span>
+<span class="nc" id="L445">            readerDiscoverDataProvider.refreshCards()</span>
+<span class="nc" id="L446">        }</span>
+<span class="nc" id="L447">    }</span>
+
+<span class="nc" id="L449">    sealed class DiscoverUiState(</span>
+<span class="nc" id="L450">        val contentVisiblity: Boolean = false,</span>
+<span class="nc" id="L451">        val fullscreenProgressVisibility: Boolean = false,</span>
+<span class="nc" id="L452">        val swipeToRefreshEnabled: Boolean = false,</span>
+<span class="nc" id="L453">        open val fullscreenEmptyVisibility: Boolean = false,</span>
+<span class="nc" id="L454">        open val scrollToTop: Boolean = false</span>
+    ) {
+<span class="nc" id="L456">        open val reloadProgressVisibility: Boolean = false</span>
+<span class="nc" id="L457">        open val loadMoreProgressVisibility: Boolean = false</span>
+
+<span class="nc" id="L459">        data class ContentUiState(</span>
+<span class="nc" id="L460">            val cards: List&lt;ReaderCardUiState&gt;,</span>
+<span class="nc" id="L461">            override val reloadProgressVisibility: Boolean,</span>
+<span class="nc" id="L462">            override val loadMoreProgressVisibility: Boolean,</span>
+<span class="nc" id="L463">            override val scrollToTop: Boolean</span>
+<span class="nc" id="L464">        ) : DiscoverUiState(contentVisiblity = true, swipeToRefreshEnabled = true)</span>
+
+<span class="nc" id="L466">        object LoadingUiState : DiscoverUiState(fullscreenProgressVisibility = true)</span>
+
+<span class="nc" id="L468">        sealed class EmptyUiState : DiscoverUiState(fullscreenEmptyVisibility = true) {</span>
+            abstract val titleResId: Int
+            abstract val buttonResId: Int
+<span class="nc" id="L471">            open val subTitleRes: Int? = null</span>
+            abstract val action: () -&gt; Unit
+<span class="nc" id="L473">            open val illustrationResId: Int? = null</span>
+
+<span class="nc" id="L475">            data class RequestFailedUiState(override val action: () -&gt; Unit) : EmptyUiState() {</span>
+<span class="nc" id="L476">                override val titleResId = R.string.connection_error</span>
+<span class="nc" id="L477">                override val subTitleRes = R.string.reader_error_request_failed_title</span>
+<span class="nc" id="L478">                override val buttonResId = R.string.retry</span>
+            }
+
+<span class="nc" id="L481">            data class ShowNoFollowedTagsUiState(override val action: () -&gt; Unit) : EmptyUiState() {</span>
+<span class="nc" id="L482">                override val titleResId = R.string.reader_discover_empty_title</span>
+<span class="nc" id="L483">                override val subTitleRes = R.string.reader_discover_empty_subtitle</span>
+<span class="nc" id="L484">                override val buttonResId = R.string.reader_discover_empty_button_text</span>
+            }
+
+<span class="nc" id="L487">            data class ShowNoPostsUiState(override val action: () -&gt; Unit) : EmptyUiState() {</span>
+<span class="nc" id="L488">                override val titleResId = R.string.reader_discover_no_posts_title</span>
+<span class="nc" id="L489">                override val buttonResId = R.string.reader_discover_no_posts_button_text</span>
+<span class="nc" id="L490">                override val subTitleRes = R.string.reader_discover_no_posts_subtitle</span>
+<span class="nc" id="L491">                override val illustrationResId = R.drawable.img_illustration_empty_results_216dp</span>
+            }
+        }
+<span class="nc" id="L494">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

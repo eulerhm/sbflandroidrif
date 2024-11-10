@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DomainSuggestionsViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.domains</a> &gt; <span class="el_source">DomainSuggestionsViewModel.kt</span></div><h1>DomainSuggestionsViewModel.kt</h1><pre class="source lang-java linenums"><span class="nc" id="L1">package org.wordpress.android.ui.domains</span>
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.Transformations
+import kotlinx.coroutines.CoroutineDispatcher
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.DOMAINS_PURCHASE_WEBVIEW_VIEWED
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.DOMAINS_SEARCH_SELECT_DOMAIN_TAPPED
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.SiteActionBuilder
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.products.Product
+import org.wordpress.android.fluxc.store.ProductsStore
+import org.wordpress.android.fluxc.store.SiteStore.OnSuggestedDomains
+import org.wordpress.android.fluxc.store.SiteStore.SuggestDomainsPayload
+import org.wordpress.android.models.networkresource.ListState
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.domains.DomainRegistrationActivity.DomainRegistrationPurpose
+import org.wordpress.android.ui.domains.DomainRegistrationActivity.DomainRegistrationPurpose.CTA_DOMAIN_CREDIT_REDEMPTION
+import org.wordpress.android.ui.domains.DomainRegistrationActivity.DomainRegistrationPurpose.DOMAIN_PURCHASE
+import org.wordpress.android.ui.domains.usecases.CreateCartUseCase
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.util.config.SiteDomainsFeatureConfig
+import org.wordpress.android.util.helpers.Debouncer
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.properties.Delegates
+
+@Suppress(&quot;TooManyFunctions&quot;)
+<span class="nc" id="L39">class DomainSuggestionsViewModel @Inject constructor(</span>
+<span class="nc" id="L40">    private val productsStore: ProductsStore,</span>
+<span class="nc" id="L41">    private val analyticsTracker: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L42">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L43">    private val debouncer: Debouncer,</span>
+<span class="nc" id="L44">    private val siteDomainsFeatureConfig: SiteDomainsFeatureConfig,</span>
+<span class="nc" id="L45">    private val createCartUseCase: CreateCartUseCase,</span>
+<span class="nc" id="L46">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L47">) : ScopedViewModel(bgDispatcher) {</span>
+<span class="nc bnc" id="L48" title="All 2 branches missed.">    lateinit var site: SiteModel</span>
+<span class="nc bnc" id="L49" title="All 2 branches missed.">    lateinit var domainRegistrationPurpose: DomainRegistrationPurpose</span>
+<span class="nc" id="L50">    var products: List&lt;Product&gt;? = null</span>
+
+    private var isStarted = false
+    private var isQueryTrackingCompleted = false
+
+<span class="nc" id="L55">    private val _suggestions = MutableLiveData&lt;ListState&lt;DomainSuggestionItem&gt;&gt;()</span>
+<span class="nc" id="L56">    val suggestionsLiveData: LiveData&lt;ListState&lt;DomainSuggestionItem&gt;&gt; = _suggestions</span>
+
+    private var suggestions: ListState&lt;DomainSuggestionItem&gt;
+<span class="nc" id="L59">            by Delegates.observable(ListState.Init()) { _, _, new -&gt;</span>
+                _suggestions.postValue(new)
+            }
+
+<span class="nc" id="L63">    private val _selectedSuggestion = MutableLiveData&lt;DomainSuggestionItem?&gt;()</span>
+
+<span class="nc bnc" id="L65" title="All 2 branches missed.">    val selectDomainButtonEnabledState = Transformations.map(_selectedSuggestion) { it is DomainSuggestionItem }</span>
+
+<span class="nc" id="L67">    private val _isIntroVisible = MutableLiveData(true)</span>
+<span class="nc" id="L68">    val isIntroVisible: LiveData&lt;Boolean&gt; = _isIntroVisible</span>
+
+<span class="nc" id="L70">    private val _showRedirectMessage = MutableLiveData&lt;String?&gt;()</span>
+<span class="nc" id="L71">    val showRedirectMessage: LiveData&lt;String?&gt; = _showRedirectMessage</span>
+
+<span class="nc" id="L73">    private val _isButtonProgressBarVisible = MutableLiveData(false)</span>
+<span class="nc" id="L74">    val isButtonProgressBarVisible: LiveData&lt;Boolean&gt; = _isButtonProgressBarVisible</span>
+
+<span class="nc" id="L76">    private val _onDomainSelected = MutableLiveData&lt;Event&lt;DomainProductDetails&gt;&gt;()</span>
+<span class="nc" id="L77">    val onDomainSelected: LiveData&lt;Event&lt;DomainProductDetails&gt;&gt; = _onDomainSelected</span>
+
+<span class="nc" id="L79">    private var searchQuery: String by Delegates.observable(&quot;&quot;) { _, oldValue, newValue -&gt;</span>
+        if (newValue != oldValue) {
+            if (isStarted &amp;&amp; !isQueryTrackingCompleted) {
+                isQueryTrackingCompleted = true
+                analyticsTracker.track(Stat.DOMAIN_CREDIT_SUGGESTION_QUERIED)
+            }
+
+            debouncer.debounce(Void::class.java, {
+<span class="nc" id="L87">                fetchSuggestions()</span>
+<span class="nc" id="L88">            }, SEARCH_QUERY_DELAY_MS, TimeUnit.MILLISECONDS)</span>
+        }
+    }
+
+    companion object {
+        private const val SEARCH_QUERY_DELAY_MS = 250L
+        private const val SUGGESTIONS_REQUEST_COUNT = 20
+        private const val BLOG_DOMAIN_TLDS = &quot;blog&quot;
+    }
+
+    // Bind Dispatcher to Lifecycle
+
+<span class="nc" id="L100">    init {</span>
+<span class="nc" id="L101">        dispatcher.register(this)</span>
+<span class="nc" id="L102">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L105">        dispatcher.unregister(this)</span>
+<span class="nc" id="L106">        debouncer.shutdown()</span>
+<span class="nc" id="L107">        createCartUseCase.clear()</span>
+<span class="nc" id="L108">        super.onCleared()</span>
+<span class="nc" id="L109">    }</span>
+
+    fun start(site: SiteModel, domainRegistrationPurpose: DomainRegistrationPurpose) {
+<span class="nc bnc" id="L112" title="All 2 branches missed.">        if (isStarted) {</span>
+<span class="nc" id="L113">            return</span>
+        }
+<span class="nc" id="L115">        this.site = site</span>
+<span class="nc" id="L116">        this.domainRegistrationPurpose = domainRegistrationPurpose</span>
+<span class="nc" id="L117">        fetchProducts() // required for finding domains on sale</span>
+<span class="nc" id="L118">        shouldShowRedirectMessage()</span>
+<span class="nc" id="L119">        isStarted = true</span>
+<span class="nc" id="L120">    }</span>
+
+    private fun initializeDefaultSuggestions() {
+<span class="nc" id="L123">        searchQuery = site.name</span>
+<span class="nc" id="L124">    }</span>
+
+    private fun shouldShowRedirectMessage() {
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        if (this.domainRegistrationPurpose == DOMAIN_PURCHASE) {</span>
+<span class="nc" id="L128">            _showRedirectMessage.value = SiteUtils.getHomeURLOrHostName(site)</span>
+        }
+<span class="nc" id="L130">    }</span>
+
+    // Network Request
+
+    private fun fetchProducts() {
+<span class="nc" id="L135">        launch {</span>
+<span class="nc" id="L136">            val result = productsStore.fetchProducts()</span>
+<span class="nc" id="L137">            when {</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">                result.isError -&gt; {</span>
+<span class="nc" id="L139">                    AppLog.e(T.DOMAIN_REGISTRATION, &quot;An error occurred while fetching site domains&quot;)</span>
+<span class="nc" id="L140">                    initializeDefaultSuggestions()</span>
+                }
+                else -&gt; {
+<span class="nc" id="L143">                    AppLog.d(T.DOMAIN_REGISTRATION, result.products.toString())</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">                    result.products?.let { products = it }</span>
+<span class="nc" id="L145">                    initializeDefaultSuggestions()</span>
+                }
+            }
+<span class="nc" id="L148">        }</span>
+<span class="nc" id="L149">    }</span>
+
+    private fun fetchSuggestions() {
+<span class="nc" id="L152">        suggestions = ListState.Loading(suggestions)</span>
+
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        val suggestDomainsPayload = if (SiteUtils.onBloggerPlan(site)) {</span>
+<span class="nc" id="L155">            SuggestDomainsPayload(searchQuery, SUGGESTIONS_REQUEST_COUNT, BLOG_DOMAIN_TLDS)</span>
+        } else {
+<span class="nc" id="L157">            SuggestDomainsPayload(searchQuery, false, false, true, SUGGESTIONS_REQUEST_COUNT, false)</span>
+        }
+
+<span class="nc" id="L160">        dispatcher.dispatch(SiteActionBuilder.newSuggestDomainsAction(suggestDomainsPayload))</span>
+
+        // Reset the selected suggestion, if list is updated
+<span class="nc" id="L163">        onDomainSuggestionSelected(null)</span>
+<span class="nc" id="L164">    }</span>
+
+    // Network Callback
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onDomainSuggestionsFetched(event: OnSuggestedDomains) {
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        if (searchQuery != event.query) {</span>
+<span class="nc" id="L171">            return</span>
+        }
+<span class="nc bnc" id="L173" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L174">            AppLog.e(</span>
+<span class="nc" id="L175">                    T.DOMAIN_REGISTRATION,</span>
+<span class="nc" id="L176">                    &quot;An error occurred while fetching the domain suggestions with type: &quot; + event.error.type</span>
+            )
+<span class="nc" id="L178">            suggestions = ListState.Error(suggestions, event.error.message)</span>
+<span class="nc" id="L179">            return</span>
+        }
+
+<span class="nc" id="L182">        event.suggestions</span>
+<span class="nc bnc" id="L183" title="All 4 branches missed.">                .filter { !it.is_free }</span>
+<span class="nc" id="L184">                .map {</span>
+<span class="nc bnc" id="L185" title="All 8 branches missed.">                    val product = products?.firstOrNull { product -&gt; product.productId == it.product_id }</span>
+<span class="nc" id="L186">                    DomainSuggestionItem(</span>
+<span class="nc" id="L187">                            domainName = it.domain_name,</span>
+<span class="nc" id="L188">                            cost = it.cost,</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">                            isOnSale = product?.isSaleDomain() ?: false,</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">                            saleCost = product?.saleCostForDisplay().toString(),</span>
+<span class="nc" id="L191">                            isFree = it.is_free,</span>
+<span class="nc" id="L192">                            supportsPrivacy = it.supports_privacy,</span>
+<span class="nc" id="L193">                            productId = it.product_id,</span>
+<span class="nc" id="L194">                            productSlug = it.product_slug,</span>
+<span class="nc" id="L195">                            vendor = it.vendor,</span>
+<span class="nc" id="L196">                            relevance = it.relevance,</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                            isSelected = _selectedSuggestion.value?.domainName == it.domain_name,</span>
+<span class="nc" id="L198">                            isCostVisible = siteDomainsFeatureConfig.isEnabled(),</span>
+<span class="nc bnc" id="L199" title="All 2 branches missed.">                            isFreeWithCredits = domainRegistrationPurpose == CTA_DOMAIN_CREDIT_REDEMPTION,</span>
+<span class="nc" id="L200">                            isEnabled = true</span>
+                    )
+                }
+<span class="nc" id="L203">                .sortedBy { it.relevance }</span>
+<span class="nc" id="L204">                .asReversed()</span>
+<span class="nc" id="L205">                .let {</span>
+<span class="nc" id="L206">                    suggestions = ListState.Success(it)</span>
+<span class="nc" id="L207">                }</span>
+<span class="nc" id="L208">    }</span>
+
+    fun onDomainSuggestionSelected(selectedSuggestion: DomainSuggestionItem?) {
+<span class="nc" id="L211">        _selectedSuggestion.postValue(selectedSuggestion)</span>
+<span class="nc" id="L212">        suggestions = suggestions.transform { list -&gt;</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">            list.map { it.copy(isSelected = selectedSuggestion?.domainName == it.domainName) }</span>
+        }
+<span class="nc" id="L215">    }</span>
+
+    fun onSelectDomainButtonClicked() {
+<span class="nc bnc" id="L218" title="All 2 branches missed.">        val selectedSuggestion = _selectedSuggestion.value ?: throw IllegalStateException(&quot;Selected suggestion is null&quot;)</span>
+<span class="nc" id="L219">        when (domainRegistrationPurpose) {</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">            DOMAIN_PURCHASE -&gt; createCart(selectedSuggestion)</span>
+<span class="nc" id="L221">            else -&gt; selectDomain(selectedSuggestion)</span>
+        }
+
+<span class="nc" id="L224">        analyticsTracker.track(DOMAINS_SEARCH_SELECT_DOMAIN_TAPPED, site)</span>
+<span class="nc" id="L225">    }</span>
+
+    fun updateSearchQuery(query: String) {
+<span class="nc" id="L228">        _isIntroVisible.value = query.isBlank()</span>
+
+<span class="nc bnc" id="L230" title="All 4 branches missed.">        if (query.isNotBlank()) {</span>
+<span class="nc" id="L231">            searchQuery = query</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">        } else if (searchQuery != site.name) {</span>
+            // Only reinitialize the search query, if it has changed.
+<span class="nc" id="L234">            initializeDefaultSuggestions()</span>
+        }
+<span class="nc" id="L236">    }</span>
+
+<span class="nc bnc" id="L238" title="All 6 branches missed.">    internal fun Product.isSaleDomain(): Boolean = this.saleCost?.let { it.compareTo(0.0) &gt; 0 } == true</span>
+
+<span class="nc" id="L240">    internal fun Product.saleCostForDisplay(): String = this.currencyCode + &quot;%.2f&quot;.format(this.saleCost)</span>
+
+<span class="nc" id="L242">    private fun createCart(selectedSuggestion: DomainSuggestionItem) = launch {</span>
+<span class="nc" id="L243">        AppLog.d(T.DOMAIN_REGISTRATION, &quot;Creating cart: $selectedSuggestion&quot;)</span>
+
+<span class="nc" id="L245">        showLoadingButton(true)</span>
+
+<span class="nc" id="L247">        val event = createCartUseCase.execute(</span>
+<span class="nc" id="L248">                site,</span>
+<span class="nc" id="L249">                selectedSuggestion.productId,</span>
+<span class="nc" id="L250">                selectedSuggestion.domainName,</span>
+<span class="nc" id="L251">                selectedSuggestion.supportsPrivacy,</span>
+<span class="nc" id="L252">                false</span>
+        )
+
+<span class="nc" id="L255">        showLoadingButton(false)</span>
+
+<span class="nc bnc" id="L257" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L258">            AppLog.e(T.DOMAIN_REGISTRATION, &quot;Failed cart creation: ${event.error.message}&quot;)</span>
+            // TODO Handle failed cart creation
+        } else {
+<span class="nc" id="L261">            AppLog.d(T.DOMAIN_REGISTRATION, &quot;Successful cart creation: ${event.cartDetails}&quot;)</span>
+<span class="nc" id="L262">            selectDomain(selectedSuggestion)</span>
+        }
+<span class="nc" id="L264">    }</span>
+
+    private fun selectDomain(selectedSuggestion: DomainSuggestionItem) {
+<span class="nc" id="L267">        val domainProductDetails = DomainProductDetails(selectedSuggestion.productId, selectedSuggestion.domainName)</span>
+<span class="nc" id="L268">        _onDomainSelected.postValue(Event(domainProductDetails))</span>
+<span class="nc" id="L269">        analyticsTracker.track(DOMAINS_PURCHASE_WEBVIEW_VIEWED, site)</span>
+<span class="nc" id="L270">    }</span>
+
+    private fun showLoadingButton(isLoading: Boolean) {
+<span class="nc" id="L273">        _isButtonProgressBarVisible.postValue(isLoading)</span>
+<span class="nc" id="L274">        suggestions = suggestions.transform { list -&gt;</span>
+<span class="nc bnc" id="L275" title="All 2 branches missed.">            list.map { it.copy(isEnabled = !isLoading) }</span>
+        }
+<span class="nc" id="L277">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

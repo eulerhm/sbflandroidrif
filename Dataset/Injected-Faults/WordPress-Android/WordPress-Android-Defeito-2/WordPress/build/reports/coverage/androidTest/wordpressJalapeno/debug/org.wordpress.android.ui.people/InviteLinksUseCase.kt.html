@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>InviteLinksUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.people</a> &gt; <span class="el_source">InviteLinksUseCase.kt</span></div><h1>InviteLinksUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.people
+
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.flow
+import org.wordpress.android.R.string
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.ui.people.AnalyticsInviteLinksActionResult.ERROR
+import org.wordpress.android.ui.people.AnalyticsInviteLinksGenericError.NO_NETWORK
+import org.wordpress.android.ui.people.AnalyticsInviteLinksGenericError.USER_NOT_AUTHENTICATED
+import org.wordpress.android.ui.people.InviteLinksApiCallsProvider.InviteLinksCallResult
+import org.wordpress.android.ui.people.InviteLinksApiCallsProvider.InviteLinksCallResult.Failure
+import org.wordpress.android.ui.people.InviteLinksApiCallsProvider.InviteLinksCallResult.Success
+import org.wordpress.android.ui.people.InviteLinksApiCallsProvider.InviteLinksItem
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.InviteLinksData
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.InviteLinksError
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.InviteLinksLoading
+import org.wordpress.android.ui.people.InviteLinksUseCase.InviteLinksState.UserNotAuthenticated
+import org.wordpress.android.ui.people.InviteLinksUseCase.UseCaseScenarioContext.GENERATING_LINKS
+import org.wordpress.android.ui.people.InviteLinksUseCase.UseCaseScenarioContext.INITIALIZING
+import org.wordpress.android.ui.people.InviteLinksUseCase.UseCaseScenarioContext.MANAGING_AVAILABLE_LINKS
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.analytics.AnalyticsUtilsWrapper
+import javax.inject.Inject
+
+<span class="nc" id="L32">class InviteLinksUseCase @Inject constructor(</span>
+<span class="nc" id="L33">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L34">    private val inviteLinksApiCallsProvider: InviteLinksApiCallsProvider,</span>
+<span class="nc" id="L35">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L36">    private val analyticsUtilsWrapper: AnalyticsUtilsWrapper,</span>
+<span class="nc" id="L37">    private val siteStore: SiteStore</span>
+) {
+    suspend fun getInviteLinksStatus(
+        blogId: Long,
+        scenarioContext: UseCaseScenarioContext
+<span class="nc" id="L42">    ): Flow&lt;InviteLinksState&gt; = flow {</span>
+<span class="nc" id="L43">        makeChecksAndApplyStrategy(</span>
+<span class="nc" id="L44">                this,</span>
+<span class="nc" id="L45">                blogId,</span>
+<span class="nc" id="L46">                ::getInvitesStrategy,</span>
+<span class="nc" id="L47">                scenarioContext,</span>
+<span class="nc" id="L48">                Stat.INVITE_LINKS_GET_STATUS</span>
+        )
+<span class="nc" id="L50">    }</span>
+
+<span class="nc" id="L52">    suspend fun generateLinks(blogId: Long): Flow&lt;InviteLinksState&gt; = flow {</span>
+<span class="nc" id="L53">        makeChecksAndApplyStrategy(</span>
+<span class="nc" id="L54">                this,</span>
+<span class="nc" id="L55">                blogId,</span>
+<span class="nc" id="L56">                ::generateInvitesStrategy,</span>
+<span class="nc" id="L57">                GENERATING_LINKS,</span>
+<span class="nc" id="L58">                Stat.INVITE_LINKS_GENERATE</span>
+        )
+<span class="nc" id="L60">    }</span>
+
+<span class="nc" id="L62">    suspend fun disableLinks(blogId: Long): Flow&lt;InviteLinksState&gt; = flow {</span>
+<span class="nc" id="L63">        makeChecksAndApplyStrategy(</span>
+<span class="nc" id="L64">                this,</span>
+<span class="nc" id="L65">                blogId,</span>
+<span class="nc" id="L66">                ::disableInvitesStrategy,</span>
+<span class="nc" id="L67">                MANAGING_AVAILABLE_LINKS,</span>
+<span class="nc" id="L68">                Stat.INVITE_LINKS_DISABLE</span>
+        )
+<span class="nc" id="L70">    }</span>
+
+<span class="nc" id="L72">    private suspend fun makeChecksAndApplyStrategy(</span>
+        flow: FlowCollector&lt;InviteLinksState&gt;,
+        blogId: Long,
+        strategy: suspend (
+            flow: FlowCollector&lt;InviteLinksState&gt;,
+            blogId: Long,
+            scenarioContext: UseCaseScenarioContext
+        ) -&gt; InviteLinksCallResult,
+        scenarioContext: UseCaseScenarioContext,
+        stat: Stat
+    ) {
+<span class="nc" id="L83">        val properties = mutableMapOf&lt;String, Any?&gt;()</span>
+
+<span class="nc bnc" id="L85" title="All 2 branches missed.">        if (!accountStore.hasAccessToken()) {</span>
+<span class="nc" id="L86">            flow.emit(UserNotAuthenticated)</span>
+<span class="nc" id="L87">            properties.addInviteLinksActionResult(ERROR, USER_NOT_AUTHENTICATED.errorMessage)</span>
+        } else {
+<span class="nc" id="L89">            flow.emit(InviteLinksLoading(scenarioContext))</span>
+<span class="nc" id="L90">            delay(PROGRESS_DELAY_MS)</span>
+<span class="nc bnc" id="L91" title="All 2 branches missed.">            if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L92">                flow.emit(InviteLinksError(scenarioContext, UiStringRes(string.error_network_connection)))</span>
+<span class="nc" id="L93">                properties.addInviteLinksActionResult(ERROR, NO_NETWORK.errorMessage)</span>
+            } else {
+<span class="nc" id="L95">                val actionResult = strategy.invoke(flow, blogId, scenarioContext)</span>
+<span class="nc" id="L96">                properties.addInviteLinksActionResult(</span>
+<span class="nc" id="L97">                        actionResult,</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">                        if (actionResult is Failure) actionResult.error else null</span>
+                )
+            }
+        }
+
+<span class="nc" id="L103">        analyticsUtilsWrapper.trackInviteLinksAction(stat, siteStore.getSiteBySiteId(blogId), properties)</span>
+<span class="nc" id="L104">    }</span>
+
+<span class="nc" id="L106">    private suspend fun getInvitesStrategy(</span>
+        flow: FlowCollector&lt;InviteLinksState&gt;,
+        blogId: Long,
+        scenarioContext: UseCaseScenarioContext
+    ): InviteLinksCallResult {
+<span class="nc" id="L111">        val status = inviteLinksApiCallsProvider.getInviteLinksStatus(blogId)</span>
+
+<span class="nc" id="L113">        when (status) {</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">            is Success -&gt; flow.emit(InviteLinksData(scenarioContext, status.links))</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">            is Failure -&gt; flow.emit(InviteLinksError(scenarioContext, UiStringText(status.error)))</span>
+        }
+
+<span class="nc" id="L118">        return status</span>
+    }
+
+<span class="nc" id="L121">    private suspend fun generateInvitesStrategy(</span>
+        flow: FlowCollector&lt;InviteLinksState&gt;,
+        blogId: Long,
+        scenarioContext: UseCaseScenarioContext
+    ): InviteLinksCallResult {
+<span class="nc" id="L126">        var status = inviteLinksApiCallsProvider.generateLinks(blogId)</span>
+
+<span class="nc" id="L128">        when (status) {</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">            is Success -&gt; {</span>
+<span class="nc" id="L130">                status = inviteLinksApiCallsProvider.getInviteLinksStatus(blogId)</span>
+
+<span class="nc" id="L132">                when (status) {</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">                    is Success -&gt; {</span>
+<span class="nc" id="L134">                        flow.emit(InviteLinksData(scenarioContext, status.links))</span>
+                    }
+<span class="nc bnc" id="L136" title="All 2 branches missed.">                    is Failure -&gt; {</span>
+<span class="nc" id="L137">                        flow.emit(InviteLinksError(scenarioContext, UiStringText(status.error)))</span>
+                    }
+                }
+            }
+<span class="nc bnc" id="L141" title="All 2 branches missed.">            is Failure -&gt; flow.emit(InviteLinksError(scenarioContext, UiStringText(status.error)))</span>
+        }
+
+<span class="nc" id="L144">        return status</span>
+    }
+
+<span class="nc" id="L147">    private suspend fun disableInvitesStrategy(</span>
+        flow: FlowCollector&lt;InviteLinksState&gt;,
+        blogId: Long,
+        scenarioContext: UseCaseScenarioContext
+    ): InviteLinksCallResult {
+<span class="nc" id="L152">        val status = inviteLinksApiCallsProvider.disableLinks(blogId)</span>
+
+<span class="nc" id="L154">        when (status) {</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">            is Success -&gt; flow.emit(InviteLinksData(scenarioContext, listOf()))</span>
+<span class="nc bnc" id="L156" title="All 2 branches missed.">            is Failure -&gt; flow.emit(InviteLinksError(scenarioContext, UiStringText(status.error)))</span>
+        }
+
+<span class="nc" id="L159">        return status</span>
+    }
+
+    enum class UseCaseScenarioContext {
+<span class="nc" id="L163">        INITIALIZING,</span>
+<span class="nc" id="L164">        GENERATING_LINKS,</span>
+<span class="nc" id="L165">        MANAGING_AVAILABLE_LINKS</span>
+    }
+
+<span class="nc" id="L168">    sealed class InviteLinksState(open val scenarioContext: UseCaseScenarioContext = INITIALIZING) {</span>
+<span class="nc" id="L169">        object InviteLinksNotAllowed : InviteLinksState(INITIALIZING)</span>
+
+<span class="nc" id="L171">        object UserNotAuthenticated : InviteLinksState(INITIALIZING)</span>
+
+<span class="nc" id="L173">        data class InviteLinksLoading(override val scenarioContext: UseCaseScenarioContext) : InviteLinksState()</span>
+
+<span class="nc" id="L175">        data class InviteLinksData(</span>
+<span class="nc" id="L176">            override val scenarioContext: UseCaseScenarioContext,</span>
+<span class="nc" id="L177">            val links: List&lt;InviteLinksItem&gt;</span>
+<span class="nc" id="L178">        ) : InviteLinksState()</span>
+
+<span class="nc" id="L180">        data class InviteLinksUserChangedRole(</span>
+<span class="nc" id="L181">            val selectedRole: InviteLinksItem</span>
+<span class="nc" id="L182">        ) : InviteLinksState(MANAGING_AVAILABLE_LINKS)</span>
+
+<span class="nc" id="L184">        data class InviteLinksError(</span>
+<span class="nc" id="L185">            override val scenarioContext: UseCaseScenarioContext,</span>
+<span class="nc" id="L186">            val error: UiString</span>
+<span class="nc" id="L187">        ) : InviteLinksState()</span>
+<span class="nc" id="L188">    }</span>
+
+    companion object {
+        // Pretty arbitrary amount to allow the progress bar to appear to the user
+        private const val PROGRESS_DELAY_MS = 600L
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

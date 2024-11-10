@@ -1,0 +1,486 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderPostActions.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.actions</a> &gt; <span class="el_source">ReaderPostActions.java</span></div><h1>ReaderPostActions.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.actions;
+
+import android.os.Handler;
+import android.text.TextUtils;
+
+import androidx.annotation.NonNull;
+
+import com.android.volley.AuthFailureError;
+import com.android.volley.Request;
+import com.android.volley.Response;
+import com.android.volley.VolleyError;
+import com.android.volley.toolbox.StringRequest;
+import com.wordpress.rest.RestRequest;
+
+import org.greenrobot.eventbus.EventBus;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.wordpress.android.BuildConfig;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.datasets.ReaderLikeTable;
+import org.wordpress.android.datasets.ReaderPostTable;
+import org.wordpress.android.datasets.ReaderTagTable;
+import org.wordpress.android.datasets.ReaderUserTable;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.models.ReaderPost;
+import org.wordpress.android.models.ReaderPostList;
+import org.wordpress.android.models.ReaderTag;
+import org.wordpress.android.models.ReaderTagList;
+import org.wordpress.android.models.ReaderUserIdList;
+import org.wordpress.android.models.ReaderUserList;
+import org.wordpress.android.networking.RestClientUtils;
+import org.wordpress.android.ui.reader.ReaderEvents;
+import org.wordpress.android.ui.reader.actions.ReaderActions.ActionListener;
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult;
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResultListener;
+import org.wordpress.android.ui.reader.models.ReaderSimplePost;
+import org.wordpress.android.ui.reader.models.ReaderSimplePostList;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.DateTimeUtils;
+import org.wordpress.android.util.JSONUtils;
+import org.wordpress.android.util.UrlUtils;
+import org.wordpress.android.util.VolleyUtils;
+
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+
+public class ReaderPostActions {
+    private static final String TRACKING_REFERRER = &quot;https://wordpress.com/&quot;;
+<span class="nc" id="L53">    private static final Random RANDOM = new Random();</span>
+
+    private static final int NUM_RELATED_POSTS_TO_REQUEST = 2;
+
+<span class="nc" id="L57">    private ReaderPostActions() {</span>
+<span class="nc" id="L58">        throw new AssertionError();</span>
+    }
+
+    /**
+     * like/unlike the passed post
+     */
+    public static boolean performLikeAction(final ReaderPost post,
+                                            final boolean isAskingToLike,
+                                            final long wpComUserId) {
+        // do nothing if post's like state is same as passed
+<span class="nc" id="L68">        boolean updateLocalDb = performLikeActionLocal(post, isAskingToLike, wpComUserId);</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">        if (!updateLocalDb) return false;</span>
+
+<span class="nc" id="L71">        performLikeActionRemote(post, isAskingToLike, wpComUserId, null);</span>
+
+<span class="nc" id="L73">        return true;</span>
+    }
+
+    public static boolean performLikeActionLocal(final ReaderPost post,
+                                                 final boolean isAskingToLike,
+                                                 final long wpComUserId) {
+        // do nothing if post's like state is same as passed
+<span class="nc" id="L80">        boolean isCurrentlyLiked = ReaderPostTable.isPostLikedByCurrentUser(post);</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">        if (isCurrentlyLiked == isAskingToLike) {</span>
+<span class="nc" id="L82">            AppLog.w(T.READER, &quot;post like unchanged&quot;);</span>
+<span class="nc" id="L83">            return false;</span>
+        }
+
+        // update like status and like count in local db
+<span class="nc" id="L87">        int numCurrentLikes = ReaderPostTable.getNumLikesForPost(post.blogId, post.postId);</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">        int newNumLikes = (isAskingToLike ? numCurrentLikes + 1 : numCurrentLikes - 1);</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">        if (newNumLikes &lt; 0) {</span>
+<span class="nc" id="L90">            newNumLikes = 0;</span>
+        }
+<span class="nc" id="L92">        ReaderPostTable.setLikesForPost(post, newNumLikes, isAskingToLike);</span>
+<span class="nc" id="L93">        ReaderLikeTable.setCurrentUserLikesPost(post, isAskingToLike, wpComUserId);</span>
+<span class="nc" id="L94">        return true;</span>
+    }
+
+    public static void performLikeActionRemote(final ReaderPost post,
+                                               final boolean isAskingToLike,
+                                               final long wpComUserId,
+                                               final ActionListener actionListener) {
+<span class="nc bnc" id="L101" title="All 2 branches missed.">        final String actionName = isAskingToLike ? &quot;like&quot; : &quot;unlike&quot;;</span>
+<span class="nc" id="L102">        String path = &quot;sites/&quot; + post.blogId + &quot;/posts/&quot; + post.postId + &quot;/likes/&quot;;</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        if (isAskingToLike) {</span>
+<span class="nc" id="L104">            path += &quot;new&quot;;</span>
+        } else {
+<span class="nc" id="L106">            path += &quot;mine/delete&quot;;</span>
+        }
+
+<span class="nc" id="L109">        com.wordpress.rest.RestRequest.Listener listener = new RestRequest.Listener() {</span>
+            @Override
+            public void onResponse(JSONObject jsonObject) {
+<span class="nc" id="L112">                AppLog.d(T.READER, String.format(&quot;post %s succeeded&quot;, actionName));</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">                if (actionListener != null) {</span>
+<span class="nc" id="L114">                    ReaderActions.callActionListener(actionListener, true);</span>
+                }
+<span class="nc" id="L116">            }</span>
+        };
+
+<span class="nc" id="L119">        RestRequest.ErrorListener errorListener = new RestRequest.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError volleyError) {
+<span class="nc" id="L122">                String error = VolleyUtils.errStringFromVolleyError(volleyError);</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">                if (TextUtils.isEmpty(error)) {</span>
+<span class="nc" id="L124">                    AppLog.w(T.READER, String.format(&quot;post %s failed&quot;, actionName));</span>
+                } else {
+<span class="nc" id="L126">                    AppLog.w(T.READER, String.format(&quot;post %s failed (%s)&quot;, actionName, error));</span>
+                }
+<span class="nc" id="L128">                AppLog.e(T.READER, volleyError);</span>
+<span class="nc" id="L129">                ReaderPostTable.setLikesForPost(post, post.numLikes, post.isLikedByCurrentUser);</span>
+<span class="nc" id="L130">                ReaderLikeTable.setCurrentUserLikesPost(post, post.isLikedByCurrentUser, wpComUserId);</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">                if (actionListener != null) {</span>
+<span class="nc" id="L132">                    ReaderActions.callActionListener(actionListener, false);</span>
+                }
+<span class="nc" id="L134">            }</span>
+        };
+
+<span class="nc" id="L137">        WordPress.getRestClientUtilsV1_1().post(path, listener, errorListener);</span>
+<span class="nc" id="L138">    }</span>
+
+    /*
+     * get the latest version of this post - note that the post is only considered changed if the
+     * like/comment count has changed, or if the current user's like/follow status has changed
+     */
+    public static void updatePost(final ReaderPost localPost,
+                                  final UpdateResultListener resultListener) {
+<span class="nc" id="L146">        String path = &quot;read/sites/&quot; + localPost.blogId + &quot;/posts/&quot; + localPost.postId + &quot;/?meta=site,likes&quot;;</span>
+
+<span class="nc" id="L148">        com.wordpress.rest.RestRequest.Listener listener = new RestRequest.Listener() {</span>
+            @Override
+            public void onResponse(JSONObject jsonObject) {
+<span class="nc" id="L151">                handleUpdatePostResponse(localPost, jsonObject, resultListener);</span>
+<span class="nc" id="L152">            }</span>
+        };
+<span class="nc" id="L154">        RestRequest.ErrorListener errorListener = new RestRequest.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError volleyError) {
+<span class="nc" id="L157">                AppLog.e(T.READER, volleyError);</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">                if (resultListener != null) {</span>
+<span class="nc" id="L159">                    resultListener.onUpdateResult(UpdateResult.FAILED);</span>
+                }
+<span class="nc" id="L161">            }</span>
+        };
+<span class="nc" id="L163">        AppLog.d(T.READER, &quot;updating post&quot;);</span>
+<span class="nc" id="L164">        WordPress.getRestClientUtilsV1_2().get(path, null, null, listener, errorListener);</span>
+<span class="nc" id="L165">    }</span>
+
+    private static void handleUpdatePostResponse(final ReaderPost localPost,
+                                                 final JSONObject jsonObject,
+                                                 final UpdateResultListener resultListener) {
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        if (jsonObject == null) {</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">            if (resultListener != null) {</span>
+<span class="nc" id="L172">                resultListener.onUpdateResult(UpdateResult.FAILED);</span>
+            }
+<span class="nc" id="L174">            return;</span>
+        }
+
+<span class="nc" id="L177">        final Handler handler = new Handler();</span>
+
+<span class="nc" id="L179">        new Thread() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L182">                ReaderPost serverPost = ReaderPost.fromJson(jsonObject);</span>
+
+                // TODO: this temporary fix was added 25-Apr-2016 as a workaround for the fact that
+                // the read/sites/{blogId}/posts/{postId} endpoint doesn't contain the feedId or
+                // feedItemId of the post. because of this, we need to copy them from the local post
+                // before calling isSamePost (since the difference in those IDs causes it to return false)
+<span class="nc bnc" id="L188" title="All 4 branches missed.">                if (serverPost.feedId == 0 &amp;&amp; localPost.feedId != 0) {</span>
+<span class="nc" id="L189">                    serverPost.feedId = localPost.feedId;</span>
+                }
+
+<span class="nc bnc" id="L192" title="All 4 branches missed.">                if (serverPost.feedItemId == 0 &amp;&amp; localPost.feedItemId != 0) {</span>
+<span class="nc" id="L193">                    serverPost.feedItemId = localPost.feedItemId;</span>
+                }
+
+<span class="nc bnc" id="L196" title="All 2 branches missed.">                boolean hasChanges = !serverPost.isSamePost(localPost);</span>
+
+<span class="nc bnc" id="L198" title="All 2 branches missed.">                if (hasChanges) {</span>
+<span class="nc" id="L199">                    AppLog.d(T.READER, &quot;post updated&quot;);</span>
+                    // copy changes over to the local post - this is done instead of simply overwriting
+                    // the local post with the server post because the server post was retrieved using
+                    // the read/sites/$siteId/posts/$postId endpoint which is missing some information
+                    // https://github.com/wordpress-mobile/WordPress-Android/issues/3164
+<span class="nc" id="L204">                    localPost.numReplies = serverPost.numReplies;</span>
+<span class="nc" id="L205">                    localPost.numLikes = serverPost.numLikes;</span>
+<span class="nc" id="L206">                    localPost.isFollowedByCurrentUser = serverPost.isFollowedByCurrentUser;</span>
+<span class="nc" id="L207">                    localPost.isLikedByCurrentUser = serverPost.isLikedByCurrentUser;</span>
+<span class="nc" id="L208">                    localPost.isCommentsOpen = serverPost.isCommentsOpen;</span>
+<span class="nc" id="L209">                    localPost.useExcerpt = serverPost.useExcerpt;</span>
+<span class="nc" id="L210">                    localPost.setTitle(serverPost.getTitle());</span>
+<span class="nc" id="L211">                    localPost.setText(serverPost.getText());</span>
+<span class="nc" id="L212">                    localPost.setExcerpt(serverPost.getExcerpt());</span>
+<span class="nc" id="L213">                    ReaderPostTable.updatePost(localPost);</span>
+                }
+
+                // always update liking users regardless of whether changes were detected - this
+                // ensures that the liking avatars are immediately available to post detail
+<span class="nc bnc" id="L218" title="All 2 branches missed.">                if (handlePostLikes(serverPost, jsonObject)) {</span>
+<span class="nc" id="L219">                    hasChanges = true;</span>
+                }
+
+<span class="nc bnc" id="L222" title="All 2 branches missed.">                if (resultListener != null) {</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                    final UpdateResult result = (hasChanges ? UpdateResult.CHANGED : UpdateResult.UNCHANGED);</span>
+<span class="nc" id="L224">                    handler.post(new Runnable() {</span>
+                        public void run() {
+<span class="nc" id="L226">                            resultListener.onUpdateResult(result);</span>
+<span class="nc" id="L227">                        }</span>
+                    });
+                }
+<span class="nc" id="L230">            }</span>
+<span class="nc" id="L231">        }.start();</span>
+<span class="nc" id="L232">    }</span>
+
+    /*
+     * updates local liking users based on the &quot;likes&quot; meta section of the post's json - requires
+     * using the /sites/ endpoint with ?meta=likes - returns true if likes have changed
+     */
+    private static boolean handlePostLikes(final ReaderPost post, JSONObject jsonPost) {
+<span class="nc bnc" id="L239" title="All 4 branches missed.">        if (post == null || jsonPost == null) {</span>
+<span class="nc" id="L240">            return false;</span>
+        }
+
+<span class="nc" id="L243">        JSONObject jsonLikes = JSONUtils.getJSONChild(jsonPost, &quot;meta/data/likes&quot;);</span>
+<span class="nc bnc" id="L244" title="All 2 branches missed.">        if (jsonLikes == null) {</span>
+<span class="nc" id="L245">            return false;</span>
+        }
+
+<span class="nc" id="L248">        ReaderUserList likingUsers = ReaderUserList.fromJsonLikes(jsonLikes);</span>
+<span class="nc" id="L249">        ReaderUserIdList likingUserIds = likingUsers.getUserIds();</span>
+
+<span class="nc" id="L251">        ReaderUserIdList existingIds = ReaderLikeTable.getLikesForPost(post);</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">        if (likingUserIds.isSameList(existingIds)) {</span>
+<span class="nc" id="L253">            return false;</span>
+        }
+
+<span class="nc" id="L256">        ReaderUserTable.addOrUpdateUsers(likingUsers);</span>
+<span class="nc" id="L257">        ReaderLikeTable.setLikesForPost(post, likingUserIds);</span>
+<span class="nc" id="L258">        return true;</span>
+    }
+
+    /**
+     * similar to updatePost, but used when post doesn't already exist in local db
+     **/
+    public static void requestBlogPost(final long blogId,
+                                       final long postId,
+                                       final ReaderActions.OnRequestListener requestListener) {
+<span class="nc" id="L267">        String path = &quot;read/sites/&quot; + blogId + &quot;/posts/&quot; + postId + &quot;/?meta=site,likes&quot;;</span>
+<span class="nc" id="L268">        requestPost(WordPress.getRestClientUtilsV1_1(), path, requestListener);</span>
+<span class="nc" id="L269">    }</span>
+
+    /**
+     * similar to updatePost, but used when post doesn't already exist in local db
+     **/
+    public static void requestFeedPost(final long feedId, final long feedItemId,
+                                       final ReaderActions.OnRequestListener&lt;String&gt; requestListener) {
+<span class="nc" id="L276">        String path = &quot;read/feed/&quot; + feedId + &quot;/posts/&quot; + feedItemId + &quot;/?meta=site,likes&quot;;</span>
+<span class="nc" id="L277">        requestPost(WordPress.getRestClientUtilsV1_3(), path, requestListener);</span>
+<span class="nc" id="L278">    }</span>
+
+    /**
+     * similar to updatePost, but used when post doesn't already exist in local db
+     **/
+    public static void requestBlogPost(final String blogSlug,
+                                       final String postSlug,
+                                       final ReaderActions.OnRequestListener&lt;String&gt; requestListener) {
+<span class="nc" id="L286">        String path = &quot;sites/&quot; + blogSlug + &quot;/posts/slug:&quot; + postSlug + &quot;/?meta=site,likes&quot;;</span>
+<span class="nc" id="L287">        requestPost(WordPress.getRestClientUtilsV1_1(), path, requestListener);</span>
+<span class="nc" id="L288">    }</span>
+
+    private static void requestPost(RestClientUtils restClientUtils, String path, final ReaderActions
+            .OnRequestListener&lt;String&gt; requestListener) {
+<span class="nc" id="L292">        com.wordpress.rest.RestRequest.Listener listener = new RestRequest.Listener() {</span>
+            @Override
+            public void onResponse(JSONObject jsonObject) {
+<span class="nc" id="L295">                ReaderPost post = ReaderPost.fromJson(jsonObject);</span>
+<span class="nc" id="L296">                ReaderPostTable.addPost(post);</span>
+<span class="nc" id="L297">                handlePostLikes(post, jsonObject);</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">                if (requestListener != null) {</span>
+<span class="nc" id="L299">                    requestListener.onSuccess(post.getBlogUrl());</span>
+                }
+<span class="nc" id="L301">            }</span>
+        };
+<span class="nc" id="L303">        RestRequest.ErrorListener errorListener = new RestRequest.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError volleyError) {
+<span class="nc" id="L306">                AppLog.e(T.READER, volleyError);</span>
+<span class="nc bnc" id="L307" title="All 2 branches missed.">                if (requestListener != null) {</span>
+<span class="nc" id="L308">                    int statusCode = 0;</span>
+                    // first try to get the error code from the JSON response, example:
+                    // {&quot;code&quot;:403,&quot;headers&quot;:[{&quot;name&quot;:&quot;Content-Type&quot;,&quot;value&quot;:&quot;application\/json&quot;}],
+                    // &quot;body&quot;:{&quot;error&quot;:&quot;unauthorized&quot;,&quot;message&quot;:&quot;User cannot access this private blog.&quot;}}
+<span class="nc" id="L312">                    JSONObject jsonObject = VolleyUtils.volleyErrorToJSON(volleyError);</span>
+<span class="nc bnc" id="L313" title="All 4 branches missed.">                    if (jsonObject != null &amp;&amp; jsonObject.has(&quot;code&quot;)) {</span>
+<span class="nc" id="L314">                        statusCode = jsonObject.optInt(&quot;code&quot;);</span>
+                    }
+<span class="nc bnc" id="L316" title="All 2 branches missed.">                    if (statusCode == 0) {</span>
+<span class="nc" id="L317">                        statusCode = VolleyUtils.statusCodeFromVolleyError(volleyError);</span>
+                    }
+<span class="nc" id="L319">                    requestListener.onFailure(statusCode);</span>
+                }
+<span class="nc" id="L321">            }</span>
+        };
+
+<span class="nc" id="L324">        AppLog.d(T.READER, &quot;requesting post&quot;);</span>
+<span class="nc" id="L325">        restClientUtils.get(path, null, null, listener, errorListener);</span>
+<span class="nc" id="L326">    }</span>
+
+    private static String getTrackingPixelForPost(@NonNull ReaderPost post) {
+<span class="nc" id="L329">        return &quot;https://pixel.wp.com/g.gif?v=wpcom&amp;reader=1&quot;</span>
+               + &quot;&amp;blog=&quot; + post.blogId
+               + &quot;&amp;post=&quot; + post.postId
+<span class="nc" id="L332">               + &quot;&amp;host=&quot; + UrlUtils.urlEncode(UrlUtils.getHost(post.getBlogUrl()))</span>
+<span class="nc" id="L333">               + &quot;&amp;ref=&quot; + UrlUtils.urlEncode(TRACKING_REFERRER)</span>
+<span class="nc" id="L334">               + &quot;&amp;t=&quot; + RANDOM.nextInt();</span>
+    }
+
+    public static void bumpPageViewForPost(SiteStore siteStore, long blogId, long postId) {
+<span class="nc" id="L338">        bumpPageViewForPost(siteStore, ReaderPostTable.getBlogPost(blogId, postId, true));</span>
+<span class="nc" id="L339">    }</span>
+
+    public static void bumpPageViewForPost(SiteStore siteStore, ReaderPost post) {
+<span class="nc bnc" id="L342" title="All 2 branches missed.">        if (post == null) {</span>
+<span class="nc" id="L343">            return;</span>
+        }
+
+        // don't bump stats for posts in sites the current user is an admin of, unless
+        // this is a private post since we count views for private posts from owner or member
+<span class="nc" id="L348">        SiteModel site = siteStore.getSiteBySiteId(post.blogId);</span>
+        // site will be null here if the user is not the owner or a member of the site
+<span class="nc bnc" id="L350" title="All 4 branches missed.">        if (site != null &amp;&amp; !post.isPrivate) {</span>
+<span class="nc" id="L351">            AppLog.d(T.READER, &quot;skipped bump page view - user is admin&quot;);</span>
+<span class="nc" id="L352">            return;</span>
+        }
+
+<span class="nc" id="L355">        Response.Listener&lt;String&gt; listener = new Response.Listener&lt;String&gt;() {</span>
+            @Override
+            public void onResponse(String response) {
+<span class="nc" id="L358">                AppLog.d(T.READER, &quot;bump page view succeeded&quot;);</span>
+<span class="nc" id="L359">            }</span>
+        };
+<span class="nc" id="L361">        Response.ErrorListener errorListener = new Response.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError volleyError) {
+<span class="nc" id="L364">                AppLog.e(T.READER, volleyError);</span>
+<span class="nc" id="L365">                AppLog.w(T.READER, &quot;bump page view failed&quot;);</span>
+<span class="nc" id="L366">            }</span>
+        };
+
+<span class="nc" id="L369">        Request request = new StringRequest(</span>
+                Request.Method.GET,
+<span class="nc" id="L371">                getTrackingPixelForPost(post),</span>
+                listener,
+<span class="nc" id="L373">                errorListener) {</span>
+            @Override
+            public Map&lt;String, String&gt; getHeaders() throws AuthFailureError {
+                // call will fail without correct refer(r) er
+<span class="nc" id="L377">                Map&lt;String, String&gt; headers = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L378">                headers.put(&quot;Referer&quot;, TRACKING_REFERRER);</span>
+<span class="nc" id="L379">                return headers;</span>
+            }
+        };
+
+<span class="nc" id="L383">        WordPress.requestQueue.add(request);</span>
+<span class="nc" id="L384">    }</span>
+
+    /*
+     * request posts related to the passed one, endpoint returns a combined list of related posts
+     * posts from across wp.com and related posts from the same site as the passed post
+     */
+    public static void requestRelatedPosts(final ReaderPost sourcePost) {
+<span class="nc bnc" id="L391" title="All 2 branches missed.">        if (sourcePost == null) {</span>
+<span class="nc" id="L392">            return;</span>
+        }
+
+<span class="nc" id="L395">        RestRequest.Listener listener = new RestRequest.Listener() {</span>
+            @Override
+            public void onResponse(JSONObject jsonObject) {
+<span class="nc" id="L398">                handleRelatedPostsResponse(sourcePost, jsonObject);</span>
+<span class="nc" id="L399">            }</span>
+        };
+<span class="nc" id="L401">        RestRequest.ErrorListener errorListener = new RestRequest.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError volleyError) {
+<span class="nc" id="L404">                AppLog.w(T.READER, &quot;updateRelatedPosts failed&quot;);</span>
+<span class="nc" id="L405">                AppLog.e(T.READER, volleyError);</span>
+<span class="nc" id="L406">                EventBus.getDefault().post(new ReaderEvents.RelatedPostsUpdated(</span>
+                        sourcePost,
+                        new ReaderSimplePostList(),
+                        new ReaderSimplePostList(),
+                        false
+                    )
+                );
+<span class="nc" id="L413">            }</span>
+        };
+
+<span class="nc" id="L416">        String path = &quot;/read/site/&quot; + sourcePost.blogId</span>
+                      + &quot;/post/&quot; + sourcePost.postId
+                      + &quot;/related&quot;
+                      + &quot;?size_local=&quot; + NUM_RELATED_POSTS_TO_REQUEST
+                      + &quot;&amp;size_global=&quot; + NUM_RELATED_POSTS_TO_REQUEST
+                      + &quot;&amp;fields=&quot; + ReaderSimplePost.SIMPLE_POST_FIELDS;
+<span class="nc" id="L422">        WordPress.getRestClientUtilsV1_2().get(path, null, null, listener, errorListener);</span>
+<span class="nc" id="L423">    }</span>
+
+    private static void handleRelatedPostsResponse(final ReaderPost sourcePost,
+                                                   final JSONObject jsonObject) {
+<span class="nc bnc" id="L427" title="All 2 branches missed.">        if (jsonObject == null) {</span>
+<span class="nc" id="L428">            return;</span>
+        }
+
+<span class="nc" id="L431">        new Thread() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L434">                JSONArray jsonPosts = jsonObject.optJSONArray(&quot;posts&quot;);</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">                if (jsonPosts != null) {</span>
+<span class="nc" id="L436">                    ReaderSimplePostList allRelatedPosts = ReaderSimplePostList.fromJsonPosts(jsonPosts);</span>
+                    // split into posts from the passed site (local) and from across wp.com (global)
+<span class="nc" id="L438">                    ReaderSimplePostList localRelatedPosts = new ReaderSimplePostList();</span>
+<span class="nc" id="L439">                    ReaderSimplePostList globalRelatedPosts = new ReaderSimplePostList();</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">                    for (ReaderSimplePost relatedPost : allRelatedPosts) {</span>
+<span class="nc bnc" id="L441" title="All 2 branches missed.">                        if (relatedPost.getSiteId() == sourcePost.blogId) {</span>
+<span class="nc" id="L442">                            localRelatedPosts.add(relatedPost);</span>
+                        } else {
+<span class="nc" id="L444">                            globalRelatedPosts.add(relatedPost);</span>
+                        }
+<span class="nc" id="L446">                    }</span>
+<span class="nc" id="L447">                    EventBus.getDefault().post(new ReaderEvents.RelatedPostsUpdated(sourcePost, localRelatedPosts,</span>
+                                                                                    globalRelatedPosts, true));
+                }
+<span class="nc" id="L450">            }</span>
+<span class="nc" id="L451">        }.start();</span>
+<span class="nc" id="L452">    }</span>
+
+    public static void addToBookmarked(@NonNull final ReaderPost post) {
+<span class="nc bnc" id="L455" title="All 2 branches missed.">        if (!post.isBookmarked) {</span>
+<span class="nc" id="L456">            ReaderPostList readerPosts = new ReaderPostList();</span>
+<span class="nc" id="L457">            readerPosts.add(post);</span>
+<span class="nc" id="L458">            ReaderTagList bookmarkTags = ReaderTagTable.getBookmarkTags();</span>
+
+<span class="nc bnc" id="L460" title="All 2 branches missed.">            for (ReaderTag tag : bookmarkTags) {</span>
+<span class="nc" id="L461">                post.setDateTagged(DateTimeUtils.iso8601UTCFromDate(new Date()));</span>
+<span class="nc" id="L462">                ReaderPostTable.addOrUpdatePosts(tag, readerPosts);</span>
+<span class="nc" id="L463">            }</span>
+<span class="nc" id="L464">            ReaderPostTable.setBookmarkFlag(post.blogId, post.postId, true);</span>
+<span class="nc" id="L465">        } else {</span>
+<span class="nc" id="L466">            String msg = &quot;addToBookmarked called on an already bookmarked post.&quot;;</span>
+<span class="nc" id="L467">            AppLog.w(T.READER, msg);</span>
+<span class="nc bnc" id="L468" title="All 2 branches missed.">            if (BuildConfig.DEBUG) {</span>
+<span class="nc" id="L469">                throw new RuntimeException(msg);</span>
+            }
+        }
+<span class="nc" id="L472">    }</span>
+
+    public static void removeFromBookmarked(@NonNull final ReaderPost post) {
+<span class="nc bnc" id="L475" title="All 2 branches missed.">        if (post.isBookmarked) {</span>
+<span class="nc" id="L476">            ReaderPostTable.setBookmarkFlag(post.blogId, post.postId, false);</span>
+        } else {
+<span class="nc" id="L478">            String msg = &quot;removeFromBookmarked called on a post which wasn't bookmarked.&quot;;</span>
+<span class="nc" id="L479">            AppLog.w(T.READER, msg);</span>
+<span class="nc bnc" id="L480" title="All 2 branches missed.">            if (BuildConfig.DEBUG) {</span>
+<span class="nc" id="L481">                throw new RuntimeException(msg);</span>
+            }
+        }
+<span class="nc" id="L484">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

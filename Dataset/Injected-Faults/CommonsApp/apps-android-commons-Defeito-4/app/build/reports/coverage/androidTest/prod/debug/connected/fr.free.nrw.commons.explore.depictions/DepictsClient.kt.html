@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DepictsClient.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.explore.depictions</a> &gt; <span class="el_source">DepictsClient.kt</span></div><h1>DepictsClient.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.explore.depictions
+
+import android.annotation.SuppressLint
+import fr.free.nrw.commons.mwapi.Binding
+import fr.free.nrw.commons.mwapi.SparqlResponse
+import fr.free.nrw.commons.upload.depicts.DepictsInterface
+import fr.free.nrw.commons.upload.structure.depictions.DepictedItem
+import fr.free.nrw.commons.upload.structure.depictions.get
+import fr.free.nrw.commons.wikidata.WikidataProperties
+import fr.free.nrw.commons.wikidata.model.DepictSearchItem
+import io.reactivex.Single
+import org.wikipedia.wikidata.DataValue
+import org.wikipedia.wikidata.Entities
+import org.wikipedia.wikidata.Statement_partial
+import java.util.*
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Depicts Client to handle custom calls to Commons Wikibase APIs
+ */
+<span class="nc" id="L22">@Singleton</span>
+<span class="nc" id="L23">class DepictsClient @Inject constructor(private val depictsInterface: DepictsInterface) {</span>
+
+    /**
+     * Search for depictions using the search item
+     * @return list of depicted items
+     */
+    fun searchForDepictions(query: String?, limit: Int, offset: Int): Single&lt;List&lt;DepictedItem&gt;&gt; {
+<span class="nc" id="L30">        val language = Locale.getDefault().language</span>
+<span class="nc" id="L31">        return depictsInterface.searchForDepicts(query, &quot;$limit&quot;, language, language, &quot;$offset&quot;)</span>
+<span class="nc" id="L32">            .map { it.search.joinToString(&quot;|&quot;, transform = DepictSearchItem::id) }</span>
+<span class="nc" id="L33">            .mapToDepictions()</span>
+    }
+
+    fun getEntities(ids: String): Single&lt;Entities&gt; {
+<span class="nc" id="L37">        return depictsInterface.getEntities(ids)</span>
+    }
+
+    fun toDepictions(sparqlResponse: Single&lt;SparqlResponse&gt;): Single&lt;List&lt;DepictedItem&gt;&gt; {
+<span class="nc" id="L41">        return sparqlResponse.map {</span>
+<span class="nc" id="L42">            it.results.bindings.joinToString(&quot;|&quot;, transform = Binding::id)</span>
+<span class="nc" id="L43">        }.mapToDepictions()</span>
+    }
+
+    /**
+     * Fetches Entities from ids ex. &quot;Q1233|Q546&quot; and converts them into DepictedItem
+     */
+    @SuppressLint(&quot;CheckResult&quot;)
+    private fun Single&lt;String&gt;.mapToDepictions() =
+<span class="nc" id="L51">        flatMap(::getEntities)</span>
+<span class="nc" id="L52">        .map { entities -&gt;</span>
+<span class="nc" id="L53">            entities.entities().values.map { entity -&gt;</span>
+<span class="nc" id="L54">                mapToDepictItem(entity)</span>
+            }
+<span class="nc" id="L56">        }</span>
+
+    /**
+     * Convert different entities into DepictedItem
+     */
+    private fun mapToDepictItem(entity: Entities.Entity): DepictedItem {
+<span class="nc bnc" id="L62" title="All 2 branches missed.">        return if (entity.descriptions().byLanguageOrFirstOrEmpty() == &quot;&quot;) {</span>
+<span class="nc" id="L63">            val instanceOfIDs = entity[WikidataProperties.INSTANCE_OF]</span>
+<span class="nc" id="L64">                .toIds()</span>
+<span class="nc bnc" id="L65" title="All 4 branches missed.">            if (instanceOfIDs.isNotEmpty()) {</span>
+<span class="nc" id="L66">                val entities: Entities = getEntities(instanceOfIDs[0]).blockingGet()</span>
+<span class="nc" id="L67">                val nameAsDescription = entities.entities().values.first().labels()</span>
+<span class="nc" id="L68">                    .byLanguageOrFirstOrEmpty()</span>
+<span class="nc" id="L69">                DepictedItem(</span>
+<span class="nc" id="L70">                    entity,</span>
+<span class="nc" id="L71">                    entity.labels().byLanguageOrFirstOrEmpty(),</span>
+<span class="nc" id="L72">                    nameAsDescription</span>
+                )
+            } else {
+<span class="nc" id="L75">                DepictedItem(</span>
+<span class="nc" id="L76">                    entity,</span>
+<span class="nc" id="L77">                    entity.labels().byLanguageOrFirstOrEmpty(),</span>
+<span class="nc" id="L78">                    &quot;&quot;</span>
+                )
+            }
+        } else {
+<span class="nc" id="L82">            DepictedItem(</span>
+<span class="nc" id="L83">                entity,</span>
+<span class="nc" id="L84">                entity.labels().byLanguageOrFirstOrEmpty(),</span>
+<span class="nc" id="L85">                entity.descriptions().byLanguageOrFirstOrEmpty()</span>
+            )
+        }
+    }
+
+    /**
+     * Tries to get Entities.Label by default language from the map.
+     * If that returns null, Tries to retrieve first element from the map.
+     * If that still returns null, function returns &quot;&quot;.
+     */
+    private fun Map&lt;String, Entities.Label&gt;.byLanguageOrFirstOrEmpty() =
+<span class="nc bnc" id="L96" title="All 2 branches missed.">        let {</span>
+<span class="nc bnc" id="L97" title="All 4 branches missed.">            it[Locale.getDefault().language] ?: it.values.firstOrNull() }?.value() ?: &quot;&quot;</span>
+
+    /**
+     * returns list of id ex. &quot;Q2323&quot; from Statement_partial
+     */
+    private fun List&lt;Statement_partial&gt;?.toIds(): List&lt;String&gt; {
+<span class="nc bnc" id="L103" title="All 2 branches missed.">        return this?.map { it.mainSnak.dataValue }</span>
+<span class="nc" id="L104">            ?.filterIsInstance&lt;DataValue.EntityId&gt;()</span>
+<span class="nc" id="L105">            ?.map { it.value.id }</span>
+<span class="nc" id="L106">            ?: emptyList()</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

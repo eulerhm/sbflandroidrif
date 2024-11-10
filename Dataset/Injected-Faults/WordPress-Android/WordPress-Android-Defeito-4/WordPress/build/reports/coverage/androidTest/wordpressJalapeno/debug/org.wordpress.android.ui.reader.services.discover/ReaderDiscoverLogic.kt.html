@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderDiscoverLogic.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.services.discover</a> &gt; <span class="el_source">ReaderDiscoverLogic.kt</span></div><h1>ReaderDiscoverLogic.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.services.discover
+
+import android.app.job.JobParameters
+import com.wordpress.rest.RestRequest.ErrorListener
+import com.wordpress.rest.RestRequest.Listener
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import org.greenrobot.eventbus.EventBus
+import org.json.JSONArray
+import org.json.JSONObject
+import org.wordpress.android.WordPress
+import org.wordpress.android.datasets.ReaderBlogTable
+import org.wordpress.android.datasets.ReaderBlogTableWrapper
+import org.wordpress.android.datasets.ReaderDiscoverCardsTable
+import org.wordpress.android.datasets.ReaderPostTable
+import org.wordpress.android.datasets.wrappers.ReaderTagTableWrapper
+import org.wordpress.android.models.ReaderBlog
+import org.wordpress.android.models.ReaderPost
+import org.wordpress.android.models.ReaderPostList
+import org.wordpress.android.models.ReaderTag
+import org.wordpress.android.models.discover.ReaderDiscoverCard
+import org.wordpress.android.models.discover.ReaderDiscoverCard.InterestsYouMayLikeCard
+import org.wordpress.android.models.discover.ReaderDiscoverCard.ReaderPostCard
+import org.wordpress.android.models.discover.ReaderDiscoverCard.ReaderRecommendedBlogsCard
+import org.wordpress.android.modules.AppComponent
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.reader.ReaderConstants.JSON_CARDS
+import org.wordpress.android.ui.reader.ReaderConstants.JSON_CARD_DATA
+import org.wordpress.android.ui.reader.ReaderConstants.JSON_CARD_INTERESTS_YOU_MAY_LIKE
+import org.wordpress.android.ui.reader.ReaderConstants.JSON_CARD_POST
+import org.wordpress.android.ui.reader.ReaderConstants.JSON_CARD_RECOMMENDED_BLOGS
+import org.wordpress.android.ui.reader.ReaderConstants.JSON_CARD_TYPE
+import org.wordpress.android.ui.reader.ReaderConstants.POST_ID
+import org.wordpress.android.ui.reader.ReaderConstants.POST_PSEUDO_ID
+import org.wordpress.android.ui.reader.ReaderConstants.POST_SITE_ID
+import org.wordpress.android.ui.reader.ReaderConstants.RECOMMENDED_BLOG_ID
+import org.wordpress.android.ui.reader.ReaderConstants.RECOMMENDED_FEED_ID
+import org.wordpress.android.ui.reader.ReaderEvents.FetchDiscoverCardsEnded
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.FAILED
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.HAS_NEW
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResult.UNCHANGED
+import org.wordpress.android.ui.reader.actions.ReaderActions.UpdateResultListener
+import org.wordpress.android.ui.reader.repository.usecases.GetDiscoverCardsUseCase
+import org.wordpress.android.ui.reader.repository.usecases.ParseDiscoverCardsJsonUseCase
+import org.wordpress.android.ui.reader.repository.usecases.tags.GetFollowedTagsUseCase
+import org.wordpress.android.ui.reader.services.ServiceCompletionListener
+import org.wordpress.android.ui.reader.services.discover.ReaderDiscoverLogic.DiscoverTasks.REQUEST_FIRST_PAGE
+import org.wordpress.android.ui.reader.services.discover.ReaderDiscoverLogic.DiscoverTasks.REQUEST_MORE
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T.READER
+import java.util.HashMap
+import javax.inject.Inject
+
+/**
+ * This class contains logic related to fetching data for the discover tab in the Reader.
+ */
+<span class="nc" id="L57">class ReaderDiscoverLogic(</span>
+<span class="nc" id="L58">    private val completionListener: ServiceCompletionListener,</span>
+<span class="nc" id="L59">    private val coroutineScope: CoroutineScope,</span>
+    appComponent: AppComponent
+) {
+<span class="nc" id="L62">    init {</span>
+<span class="nc" id="L63">        appComponent.inject(this)</span>
+<span class="nc" id="L64">    }</span>
+
+<span class="nc bnc" id="L66" title="All 2 branches missed.">    @Inject lateinit var parseDiscoverCardsJsonUseCase: ParseDiscoverCardsJsonUseCase</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">    @Inject lateinit var appPrefsWrapper: AppPrefsWrapper</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">    @Inject lateinit var readerTagTableWrapper: ReaderTagTableWrapper</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">    @Inject lateinit var getFollowedTagsUseCase: GetFollowedTagsUseCase</span>
+<span class="nc bnc" id="L70" title="All 2 branches missed.">    @Inject lateinit var readerBlogTableWrapper: ReaderBlogTableWrapper</span>
+<span class="nc bnc" id="L71" title="All 2 branches missed.">    @Inject lateinit var getDiscoverCardsUseCase: GetDiscoverCardsUseCase</span>
+
+    enum class DiscoverTasks {
+<span class="nc" id="L74">        REQUEST_MORE, REQUEST_FIRST_PAGE</span>
+    }
+
+    private var listenerCompanion: JobParameters? = null
+
+    fun performTasks(task: DiscoverTasks, companion: JobParameters?) {
+<span class="nc" id="L80">        listenerCompanion = companion</span>
+<span class="nc" id="L81">        requestDataForDiscover(task, UpdateResultListener {</span>
+<span class="nc" id="L82">            EventBus.getDefault().post(FetchDiscoverCardsEnded(task, it))</span>
+<span class="nc" id="L83">            completionListener.onCompleted(listenerCompanion)</span>
+<span class="nc" id="L84">        })</span>
+<span class="nc" id="L85">    }</span>
+
+    private fun requestDataForDiscover(taskType: DiscoverTasks, resultListener: UpdateResultListener) {
+<span class="nc" id="L88">        coroutineScope.launch {</span>
+<span class="nc" id="L89">            val params = HashMap&lt;String, String&gt;()</span>
+<span class="nc" id="L90">            params[&quot;tags&quot;] = getFollowedTagsUseCase.get().joinToString { it.tagSlug }</span>
+
+<span class="nc bnc" id="L92" title="All 3 branches missed.">            when (taskType) {</span>
+                REQUEST_FIRST_PAGE -&gt; {
+<span class="nc" id="L94">                    appPrefsWrapper.readerCardsPageHandle = null</span>
+                    /* &quot;refresh&quot; parameter is used to tell the server to return a different set of data so we don't
+                    present a static content to the user. We need to include it only for the first page (when
+                    page_handle is empty). The server will take care of including the &quot;refresh&quot; parameter within the
+                    page_handle so the user will stay on the same shard while they’re paging through the cards. */
+<span class="nc" id="L99">                    params[&quot;refresh&quot;] = appPrefsWrapper.getReaderCardsRefreshCounter().toString()</span>
+<span class="nc" id="L100">                    appPrefsWrapper.incrementReaderCardsRefreshCounter()</span>
+                }
+                REQUEST_MORE -&gt; {
+<span class="nc" id="L103">                    val pageHandle = appPrefsWrapper.readerCardsPageHandle</span>
+<span class="nc bnc" id="L104" title="All 8 branches missed.">                    if (pageHandle?.isNotEmpty() == true) {</span>
+<span class="nc" id="L105">                        params[&quot;page_handle&quot;] = pageHandle</span>
+                    } else {
+                        // there are no more pages to load
+<span class="nc" id="L108">                        resultListener.onUpdateResult(UNCHANGED)</span>
+<span class="nc" id="L109">                        return@launch</span>
+                    }
+                }
+            }
+
+<span class="nc" id="L114">            val listener = Listener { jsonObject -&gt;</span>
+<span class="nc" id="L115">                coroutineScope.launch {</span>
+<span class="nc" id="L116">                    handleRequestDiscoverDataResponse(taskType, jsonObject, resultListener)</span>
+<span class="nc" id="L117">                }</span>
+<span class="nc" id="L118">            }</span>
+<span class="nc" id="L119">            val errorListener = ErrorListener { volleyError -&gt;</span>
+<span class="nc" id="L120">                AppLog.e(READER, volleyError)</span>
+<span class="nc" id="L121">                resultListener.onUpdateResult(FAILED)</span>
+<span class="nc" id="L122">            }</span>
+<span class="nc" id="L123">            WordPress.getRestClientUtilsV2()[&quot;read/tags/cards&quot;, params, null, listener, errorListener]</span>
+<span class="nc" id="L124">        }</span>
+<span class="nc" id="L125">    }</span>
+
+    private suspend fun handleRequestDiscoverDataResponse(
+        taskType: DiscoverTasks,
+        json: JSONObject?,
+        resultListener: UpdateResultListener
+    ) {
+<span class="nc bnc" id="L132" title="All 2 branches missed.">        if (json == null) {</span>
+<span class="nc" id="L133">            resultListener.onUpdateResult(FAILED)</span>
+<span class="nc" id="L134">            return</span>
+        }
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (taskType == REQUEST_FIRST_PAGE) {</span>
+<span class="nc" id="L137">            clearCache()</span>
+        }
+<span class="nc" id="L139">        val fullCardsJson = json.optJSONArray(JSON_CARDS)</span>
+
+        // Parse the json into cards model objects
+<span class="nc" id="L142">        val cards = parseCards(fullCardsJson)</span>
+<span class="nc" id="L143">        insertPostsIntoDb(cards.filterIsInstance&lt;ReaderPostCard&gt;().map { it.post })</span>
+<span class="nc" id="L144">        insertBlogsIntoDb(cards.filterIsInstance&lt;ReaderRecommendedBlogsCard&gt;().map { it.blogs }.flatten())</span>
+
+        // Simplify the json. The simplified version is used in the upper layers to load the data from the db.
+<span class="nc" id="L147">        val simplifiedCardsJson = createSimplifiedJson(fullCardsJson)</span>
+<span class="nc" id="L148">        insertCardsJsonIntoDb(simplifiedCardsJson)</span>
+
+<span class="nc" id="L150">        val nextPageHandle = parseDiscoverCardsJsonUseCase.parseNextPageHandle(json)</span>
+<span class="nc" id="L151">        appPrefsWrapper.readerCardsPageHandle = nextPageHandle</span>
+
+<span class="nc bnc" id="L153" title="All 2 branches missed.">        if (cards.isEmpty()) {</span>
+<span class="nc" id="L154">            readerTagTableWrapper.clearTagLastUpdated(ReaderTag.createDiscoverPostCardsTag())</span>
+        } else {
+<span class="nc" id="L156">            readerTagTableWrapper.setTagLastUpdated(ReaderTag.createDiscoverPostCardsTag())</span>
+        }
+
+<span class="nc" id="L159">        resultListener.onUpdateResult(HAS_NEW)</span>
+<span class="nc" id="L160">    }</span>
+
+    private fun parseCards(cardsJsonArray: JSONArray): ArrayList&lt;ReaderDiscoverCard&gt; {
+<span class="nc" id="L163">        val cards: ArrayList&lt;ReaderDiscoverCard&gt; = arrayListOf()</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">        for (i in 0 until cardsJsonArray.length()) {</span>
+<span class="nc" id="L165">            val cardJson = cardsJsonArray.getJSONObject(i)</span>
+<span class="nc bnc" id="L166" title="All 6 branches missed.">            when (cardJson.getString(JSON_CARD_TYPE)) {</span>
+                JSON_CARD_INTERESTS_YOU_MAY_LIKE -&gt; {
+<span class="nc" id="L168">                    val interests = parseDiscoverCardsJsonUseCase.parseInterestCard(cardJson)</span>
+<span class="nc" id="L169">                    cards.add(InterestsYouMayLikeCard(interests))</span>
+                }
+                JSON_CARD_POST -&gt; {
+<span class="nc" id="L172">                    val post = parseDiscoverCardsJsonUseCase.parsePostCard(cardJson)</span>
+<span class="nc" id="L173">                    cards.add(ReaderPostCard(post))</span>
+                }
+                JSON_CARD_RECOMMENDED_BLOGS -&gt; {
+<span class="nc bnc" id="L176" title="All 2 branches missed.">                    cardJson?.let {</span>
+<span class="nc" id="L177">                        val recommendedBlogs = parseDiscoverCardsJsonUseCase.parseRecommendedBlogsCard(it)</span>
+<span class="nc" id="L178">                        cards.add(ReaderRecommendedBlogsCard(recommendedBlogs))</span>
+                    }
+                }
+            }
+        }
+<span class="nc" id="L183">        return cards</span>
+    }
+
+    private fun insertPostsIntoDb(posts: List&lt;ReaderPost&gt;) {
+<span class="nc" id="L187">        val postList = ReaderPostList()</span>
+<span class="nc" id="L188">        postList.addAll(posts)</span>
+<span class="nc" id="L189">        ReaderPostTable.addOrUpdatePosts(ReaderTag.createDiscoverPostCardsTag(), postList)</span>
+<span class="nc" id="L190">    }</span>
+
+    private fun insertBlogsIntoDb(blogs: List&lt;ReaderBlog&gt;) {
+<span class="nc" id="L193">        blogs.forEach { blog -&gt;</span>
+<span class="nc" id="L194">            ReaderBlogTable.addOrUpdateBlog(blog)</span>
+<span class="nc" id="L195">        }</span>
+<span class="nc" id="L196">    }</span>
+
+    /**
+     * This method creates a simplified version of the provided json.
+     *
+     * It for example copies only ids from post object as we don't need to store the gigantic post in the json
+     * as it's already stored in the db.
+     */
+    private fun createSimplifiedJson(cardsJsonArray: JSONArray): JSONArray {
+<span class="nc" id="L205">        var index = 0</span>
+<span class="nc" id="L206">        val simplifiedJson = JSONArray()</span>
+<span class="nc bnc" id="L207" title="All 2 branches missed.">        for (i in 0 until cardsJsonArray.length()) {</span>
+<span class="nc" id="L208">            val cardJson = cardsJsonArray.getJSONObject(i)</span>
+<span class="nc bnc" id="L209" title="All 6 branches missed.">            when (cardJson.getString(JSON_CARD_TYPE)) {</span>
+                JSON_CARD_RECOMMENDED_BLOGS -&gt; {
+<span class="nc" id="L211">                    val recommendedBlogsCardJson = cardJson.optJSONArray(JSON_CARD_DATA)</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">                    if (recommendedBlogsCardJson.length() &gt; 0) {</span>
+<span class="nc" id="L213">                        simplifiedJson.put(index++, createSimplifiedRecommendedBlogsCardJson(cardJson))</span>
+                    }
+                }
+                JSON_CARD_INTERESTS_YOU_MAY_LIKE -&gt; {
+<span class="nc" id="L217">                    simplifiedJson.put(index++, cardJson)</span>
+                }
+                JSON_CARD_POST -&gt; {
+<span class="nc" id="L220">                    simplifiedJson.put(index++, createSimplifiedPostJson(cardJson))</span>
+                }
+            }
+        }
+<span class="nc" id="L224">        return simplifiedJson</span>
+    }
+
+    /**
+     * Create a simplified copy of the json - keeps only postId, siteId and pseudoId.
+     */
+    private fun createSimplifiedPostJson(originalCardJson: JSONObject): JSONObject {
+<span class="nc" id="L231">        val originalPostData = originalCardJson.getJSONObject(JSON_CARD_DATA)</span>
+
+<span class="nc" id="L233">        val simplifiedPostData = JSONObject()</span>
+        // copy only fields which uniquely identify this post
+<span class="nc" id="L235">        simplifiedPostData.put(POST_ID, originalPostData.get(POST_ID))</span>
+<span class="nc" id="L236">        simplifiedPostData.put(POST_SITE_ID, originalPostData.get(POST_SITE_ID))</span>
+<span class="nc" id="L237">        simplifiedPostData.put(POST_PSEUDO_ID, originalPostData.get(POST_PSEUDO_ID))</span>
+
+<span class="nc" id="L239">        val simplifiedCardJson = JSONObject()</span>
+<span class="nc" id="L240">        simplifiedCardJson.put(JSON_CARD_TYPE, originalCardJson.getString(JSON_CARD_TYPE))</span>
+<span class="nc" id="L241">        simplifiedCardJson.put(JSON_CARD_DATA, simplifiedPostData)</span>
+<span class="nc" id="L242">        return simplifiedCardJson</span>
+    }
+
+    private fun createSimplifiedRecommendedBlogsCardJson(originalCardJson: JSONObject): JSONObject {
+<span class="nc" id="L246">        return JSONObject().apply {</span>
+<span class="nc" id="L247">            JSONArray().apply {</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">                originalCardJson.optJSONArray(JSON_CARD_DATA)?.let { jsonRecommendedBlogs -&gt;</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                    for (i in 0 until jsonRecommendedBlogs.length()) {</span>
+<span class="nc" id="L250">                        JSONObject().apply {</span>
+<span class="nc" id="L251">                            val jsonRecommendedBlog = jsonRecommendedBlogs.getJSONObject(i)</span>
+<span class="nc" id="L252">                            put(RECOMMENDED_BLOG_ID, jsonRecommendedBlog.optLong(RECOMMENDED_BLOG_ID))</span>
+<span class="nc" id="L253">                            put(RECOMMENDED_FEED_ID, jsonRecommendedBlog.optLong(RECOMMENDED_FEED_ID))</span>
+<span class="nc" id="L254">                        }.let {</span>
+<span class="nc" id="L255">                            put(it)</span>
+                        }
+                    }
+<span class="nc" id="L258">                }</span>
+<span class="nc" id="L259">            }.let { simplifiedRecommendedBlogsJson -&gt;</span>
+<span class="nc" id="L260">                put(JSON_CARD_TYPE, originalCardJson.getString(JSON_CARD_TYPE))</span>
+<span class="nc" id="L261">                put(JSON_CARD_DATA, simplifiedRecommendedBlogsJson)</span>
+<span class="nc" id="L262">            }</span>
+<span class="nc" id="L263">        }</span>
+    }
+
+    private fun insertCardsJsonIntoDb(simplifiedCardsJson: JSONArray) {
+<span class="nc" id="L267">        ReaderDiscoverCardsTable.addCardsPage(simplifiedCardsJson.toString())</span>
+<span class="nc" id="L268">    }</span>
+
+<span class="nc" id="L270">    private suspend fun clearCache() {</span>
+<span class="nc" id="L271">        val blogIds = getRecommendedBlogsToBeDeleted().map { it.blogId }</span>
+<span class="nc" id="L272">        ReaderBlogTable.deleteBlogsWithIds(blogIds)</span>
+
+<span class="nc" id="L274">        ReaderDiscoverCardsTable.clear()</span>
+<span class="nc" id="L275">        ReaderPostTable.deletePostsWithTag(ReaderTag.createDiscoverPostCardsTag())</span>
+<span class="nc" id="L276">    }</span>
+
+<span class="nc" id="L278">    private suspend fun getRecommendedBlogsToBeDeleted(): List&lt;ReaderBlog&gt; {</span>
+<span class="nc" id="L279">        val discoverCards = getDiscoverCardsUseCase.get()</span>
+
+<span class="nc" id="L281">        val blogsToBeDeleted = ArrayList&lt;ReaderBlog&gt;()</span>
+<span class="nc" id="L282">        discoverCards.cards.filterIsInstance&lt;ReaderRecommendedBlogsCard&gt;().forEach {</span>
+<span class="nc" id="L283">            it.blogs.forEach { blog -&gt;</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">                if (!blog.isFollowing) {</span>
+<span class="nc" id="L285">                    blogsToBeDeleted.add(blog)</span>
+                }
+<span class="nc" id="L287">            }</span>
+<span class="nc" id="L288">        }</span>
+
+<span class="nc" id="L290">        return blogsToBeDeleted</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

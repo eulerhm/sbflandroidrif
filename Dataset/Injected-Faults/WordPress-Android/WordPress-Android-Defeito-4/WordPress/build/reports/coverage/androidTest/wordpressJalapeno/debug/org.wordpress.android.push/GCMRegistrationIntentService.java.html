@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GCMRegistrationIntentService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.push</a> &gt; <span class="el_source">GCMRegistrationIntentService.java</span></div><h1>GCMRegistrationIntentService.java</h1><pre class="source lang-java linenums">package org.wordpress.android.push;
+
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.preference.PreferenceManager;
+import android.text.TextUtils;
+
+import androidx.annotation.NonNull;
+import androidx.core.app.JobIntentService;
+
+import com.google.firebase.messaging.FirebaseMessaging;
+
+import org.wordpress.android.WordPress;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.support.ZendeskHelper;
+import org.wordpress.android.ui.notifications.utils.NotificationsUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+
+import java.util.UUID;
+
+import javax.inject.Inject;
+
+import static org.wordpress.android.JobServiceId.JOB_GCM_REG_SERVICE_ID;
+
+<span class="nc" id="L27">public class GCMRegistrationIntentService extends JobIntentService {</span>
+    @Inject AccountStore mAccountStore;
+    @Inject ZendeskHelper mZendeskHelper;
+
+    @Override
+    public void onCreate() {
+<span class="nc" id="L33">        super.onCreate();</span>
+<span class="nc" id="L34">        ((WordPress) getApplication()).component().inject(this);</span>
+<span class="nc" id="L35">    }</span>
+
+    public static void enqueueWork(Context context, Intent work) {
+<span class="nc" id="L38">        enqueueWork(context, GCMRegistrationIntentService.class, JOB_GCM_REG_SERVICE_ID, work);</span>
+<span class="nc" id="L39">    }</span>
+
+    @Override
+    protected void onHandleWork(@NonNull Intent intent) {
+        try {
+            FirebaseMessaging
+<span class="nc" id="L45">                    .getInstance()</span>
+<span class="nc" id="L46">                    .getToken()</span>
+<span class="nc" id="L47">                    .addOnCompleteListener(task -&gt; {</span>
+<span class="nc bnc" id="L48" title="All 2 branches missed.">                                if (!task.isSuccessful()) {</span>
+<span class="nc" id="L49">                                    AppLog.e(T.NOTIFS, &quot;Fetching FCM registration token failed: &quot;, task.getException());</span>
+<span class="nc" id="L50">                                    return;</span>
+                                }
+<span class="nc" id="L52">                                String token = task.getResult();</span>
+<span class="nc" id="L53">                                sendRegistrationToken(token);</span>
+<span class="nc" id="L54">                            }</span>
+                    );
+<span class="nc" id="L56">        } catch (Exception e) {</span>
+            // SecurityException can happen on some devices without Google services (these devices probably strip
+            // the AndroidManifest.xml and remove unsupported permissions).
+<span class="nc" id="L59">            AppLog.e(T.NOTIFS, &quot;Google Play Services unavailable: &quot;, e);</span>
+<span class="nc" id="L60">        }</span>
+<span class="nc" id="L61">    }</span>
+
+    @Override
+    public boolean onStopCurrentWork() {
+        // if this job is stopped, we really need this to be re-scheduled and re-register the token with
+        // our servers in order to keep receiving notifications, so let's just return `true`.
+<span class="nc" id="L67">        return true;</span>
+    }
+
+    public void sendRegistrationToken(String gcmToken) {
+<span class="nc bnc" id="L71" title="All 2 branches missed.">        if (!TextUtils.isEmpty(gcmToken)) {</span>
+<span class="nc" id="L72">            AppLog.i(T.NOTIFS, &quot;Sending GCM token to our remote services: &quot; + gcmToken);</span>
+            // Register to WordPress.com notifications
+<span class="nc bnc" id="L74" title="All 2 branches missed.">            if (mAccountStore.hasAccessToken()) {</span>
+<span class="nc" id="L75">                SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);</span>
+                // Get or create UUID for WP.com notes api
+<span class="nc" id="L77">                String uuid = preferences.getString(NotificationsUtils.WPCOM_PUSH_DEVICE_UUID, null);</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">                if (uuid == null) {</span>
+<span class="nc" id="L79">                    uuid = UUID.randomUUID().toString();</span>
+<span class="nc" id="L80">                    preferences.edit().putString(NotificationsUtils.WPCOM_PUSH_DEVICE_UUID, uuid).apply();</span>
+                }
+<span class="nc" id="L82">                preferences.edit().putString(NotificationsUtils.WPCOM_PUSH_DEVICE_TOKEN, gcmToken).apply();</span>
+<span class="nc" id="L83">                NotificationsUtils.registerDeviceForPushNotifications(this, gcmToken);</span>
+            }
+
+<span class="nc" id="L86">            mZendeskHelper.enablePushNotifications();</span>
+        } else {
+<span class="nc" id="L88">            AppLog.w(T.NOTIFS, &quot;Empty GCM token, can't register the id on remote services&quot;);</span>
+<span class="nc" id="L89">            PreferenceManager.getDefaultSharedPreferences(this).edit()</span>
+<span class="nc" id="L90">                             .remove(NotificationsUtils.WPCOM_PUSH_DEVICE_TOKEN).apply();</span>
+        }
+<span class="nc" id="L92">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

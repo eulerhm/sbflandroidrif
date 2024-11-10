@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostConflictResolver.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts</a> &gt; <span class="el_source">PostConflictResolver.kt</span></div><h1>PostConflictResolver.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts
+
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.PostActionBuilder
+import org.wordpress.android.fluxc.model.PostModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.PostStore.RemotePostPayload
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.ToastUtils.Duration
+import org.wordpress.android.viewmodel.helpers.ToastMessageHolder
+
+/**
+ * This is a temporary class to make the PostListViewModel more manageable. Please feel free to refactor it any way
+ * you see fit.
+ */
+<span class="nc" id="L18">class PostConflictResolver(</span>
+<span class="nc" id="L19">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L20">    private val site: SiteModel,</span>
+<span class="nc" id="L21">    private val getPostByLocalPostId: (Int) -&gt; PostModel?,</span>
+<span class="nc" id="L22">    private val invalidateList: () -&gt; Unit,</span>
+<span class="nc" id="L23">    private val checkNetworkConnection: () -&gt; Boolean,</span>
+<span class="nc" id="L24">    private val showSnackbar: (SnackbarMessageHolder) -&gt; Unit,</span>
+<span class="nc" id="L25">    private val showToast: (ToastMessageHolder) -&gt; Unit</span>
+) {
+    private var originalPostCopyForConflictUndo: PostModel? = null
+    private var localPostIdForFetchingRemoteVersionOfConflictedPost: Int? = null
+
+    fun updateConflictedPostWithRemoteVersion(localPostId: Int) {
+        // We need network connection to load a remote post
+<span class="nc bnc" id="L32" title="All 2 branches missed.">        if (!checkNetworkConnection()) {</span>
+<span class="nc" id="L33">            return</span>
+        }
+
+<span class="nc" id="L36">        val post = getPostByLocalPostId.invoke(localPostId)</span>
+<span class="nc bnc" id="L37" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L38">            originalPostCopyForConflictUndo = post.clone()</span>
+<span class="nc" id="L39">            dispatcher.dispatch(PostActionBuilder.newFetchPostAction(RemotePostPayload(post, site)))</span>
+<span class="nc" id="L40">            showToast.invoke(ToastMessageHolder(R.string.toast_conflict_updating_post, Duration.SHORT))</span>
+        }
+<span class="nc" id="L42">    }</span>
+
+    fun updateConflictedPostWithLocalVersion(localPostId: Int) {
+        // We need network connection to push local version to remote
+<span class="nc bnc" id="L46" title="All 2 branches missed.">        if (!checkNetworkConnection()) {</span>
+<span class="nc" id="L47">            return</span>
+        }
+
+        // Keep a reference to which post is being updated with the local version so we can avoid showing the conflicted
+        // label during the undo snackBar.
+<span class="nc" id="L52">        localPostIdForFetchingRemoteVersionOfConflictedPost = localPostId</span>
+<span class="nc" id="L53">        invalidateList.invoke()</span>
+
+<span class="nc bnc" id="L55" title="All 2 branches missed.">        val post = getPostByLocalPostId.invoke(localPostId) ?: return</span>
+
+        // and now show a snackBar, acting as if the Post was pushed, but effectively push it after the snackbar is gone
+<span class="nc" id="L58">        var isUndoed = false</span>
+<span class="nc" id="L59">        val undoAction = {</span>
+<span class="nc" id="L60">            isUndoed = true</span>
+
+            // Remove the reference for the post being updated and re-show the conflicted label on undo
+<span class="nc" id="L63">            localPostIdForFetchingRemoteVersionOfConflictedPost = null</span>
+<span class="nc" id="L64">            invalidateList.invoke()</span>
+<span class="nc" id="L65">        }</span>
+
+<span class="nc" id="L67">        val onDismissAction = { _: Int -&gt;</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">            if (!isUndoed) {</span>
+<span class="nc" id="L69">                localPostIdForFetchingRemoteVersionOfConflictedPost = null</span>
+<span class="nc" id="L70">                PostUtils.trackSavePostAnalytics(post, site)</span>
+<span class="nc" id="L71">                dispatcher.dispatch(PostActionBuilder.newPushPostAction(RemotePostPayload(post, site)))</span>
+            }
+<span class="nc" id="L73">        }</span>
+<span class="nc" id="L74">        val snackBarHolder = SnackbarMessageHolder(</span>
+<span class="nc" id="L75">                UiStringRes(R.string.snackbar_conflict_web_version_discarded),</span>
+<span class="nc" id="L76">                UiStringRes(R.string.snackbar_conflict_undo),</span>
+<span class="nc" id="L77">                undoAction,</span>
+<span class="nc" id="L78">                onDismissAction</span>
+        )
+<span class="nc" id="L80">        showSnackbar.invoke(snackBarHolder)</span>
+<span class="nc" id="L81">    }</span>
+
+    fun doesPostHaveUnhandledConflict(post: PostModel): Boolean {
+        // If we are fetching the remote version of a conflicted post, it means it's already being handled
+<span class="nc bnc" id="L85" title="All 2 branches missed.">        val isFetchingConflictedPost = localPostIdForFetchingRemoteVersionOfConflictedPost != null &amp;&amp;</span>
+<span class="nc bnc" id="L86" title="All 4 branches missed.">                localPostIdForFetchingRemoteVersionOfConflictedPost == post.id</span>
+<span class="nc bnc" id="L87" title="All 4 branches missed.">        return !isFetchingConflictedPost &amp;&amp; PostUtils.isPostInConflictWithRemote(post)</span>
+    }
+
+    fun hasUnhandledAutoSave(post: PostModel): Boolean {
+<span class="nc" id="L91">        return PostUtils.hasAutoSave(post)</span>
+    }
+
+    fun onPostSuccessfullyUpdated() {
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        originalPostCopyForConflictUndo?.id?.let {</span>
+<span class="nc" id="L96">            val updatedPost = getPostByLocalPostId.invoke(it)</span>
+            // Conflicted post has been successfully updated with its remote version
+<span class="nc bnc" id="L98" title="All 2 branches missed.">            if (!PostUtils.isPostInConflictWithRemote(updatedPost)) {</span>
+<span class="nc" id="L99">                conflictedPostUpdatedWithRemoteVersion()</span>
+            }
+<span class="nc" id="L101">        }</span>
+<span class="nc" id="L102">    }</span>
+
+    private fun conflictedPostUpdatedWithRemoteVersion() {
+<span class="nc" id="L105">        val undoAction = {</span>
+            // here replace the post with whatever we had before, again
+<span class="nc bnc" id="L107" title="All 2 branches missed.">            if (originalPostCopyForConflictUndo != null) {</span>
+<span class="nc" id="L108">                dispatcher.dispatch(PostActionBuilder.newUpdatePostAction(originalPostCopyForConflictUndo))</span>
+            }
+<span class="nc" id="L110">        }</span>
+<span class="nc" id="L111">        val onDismissAction = { _: Int -&gt;</span>
+<span class="nc" id="L112">            originalPostCopyForConflictUndo = null</span>
+<span class="nc" id="L113">        }</span>
+<span class="nc" id="L114">        val snackBarHolder = SnackbarMessageHolder(</span>
+<span class="nc" id="L115">                UiStringRes(R.string.snackbar_conflict_local_version_discarded),</span>
+<span class="nc" id="L116">                UiStringRes(R.string.snackbar_conflict_undo),</span>
+<span class="nc" id="L117">                undoAction,</span>
+<span class="nc" id="L118">                onDismissAction</span>
+        )
+<span class="nc" id="L120">        showSnackbar.invoke(snackBarHolder)</span>
+<span class="nc" id="L121">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

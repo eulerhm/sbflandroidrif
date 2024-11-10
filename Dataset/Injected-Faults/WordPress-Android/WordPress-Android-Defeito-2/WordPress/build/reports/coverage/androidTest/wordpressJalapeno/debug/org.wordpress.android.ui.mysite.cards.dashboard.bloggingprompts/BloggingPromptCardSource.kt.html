@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>BloggingPromptCardSource.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.mysite.cards.dashboard.bloggingprompts</a> &gt; <span class="el_source">BloggingPromptCardSource.kt</span></div><h1>BloggingPromptCardSource.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.mysite.cards.dashboard.bloggingprompts
+
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.BloggingRemindersStore
+import org.wordpress.android.fluxc.store.bloggingprompts.BloggingPromptsStore
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.mysite.MySiteSource.MySiteRefreshSource
+import org.wordpress.android.ui.mysite.MySiteUiState.PartialState.BloggingPromptUpdate
+import org.wordpress.android.ui.mysite.SelectedSiteRepository
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.util.config.BloggingPromptsFeatureConfig
+import java.time.LocalDate
+import java.time.ZoneId
+import java.util.Date
+import javax.inject.Inject
+import javax.inject.Named
+
+const val REFRESH_DELAY = 500L
+
+<span class="nc" id="L30">class BloggingPromptCardSource @Inject constructor(</span>
+<span class="nc" id="L31">    private val selectedSiteRepository: SelectedSiteRepository,</span>
+<span class="nc" id="L32">    private val promptsStore: BloggingPromptsStore,</span>
+<span class="nc" id="L33">    private val bloggingPromptsFeatureConfig: BloggingPromptsFeatureConfig,</span>
+<span class="nc" id="L34">    private val appPrefsWrapper: AppPrefsWrapper,</span>
+<span class="nc" id="L35">    private val bloggingRemindersStore: BloggingRemindersStore,</span>
+<span class="nc" id="L36">    @param:Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+) : MySiteRefreshSource&lt;BloggingPromptUpdate&gt; {
+<span class="nc" id="L38">    override val refresh = MutableLiveData(false)</span>
+<span class="nc" id="L39">    val singleRefresh = MutableLiveData(false)</span>
+
+    companion object {
+        private const val NUM_PROMPTS_TO_REQUEST = 20
+    }
+
+    override fun build(coroutineScope: CoroutineScope, siteLocalId: Int): LiveData&lt;BloggingPromptUpdate&gt; {
+<span class="nc" id="L46">        val result = MediatorLiveData&lt;BloggingPromptUpdate&gt;()</span>
+<span class="nc" id="L47">        result.getData(coroutineScope, siteLocalId)</span>
+<span class="nc" id="L48">        result.addSource(refresh) { result.refreshData(coroutineScope, siteLocalId, refresh.value) }</span>
+<span class="nc" id="L49">        result.addSource(singleRefresh) { result.refreshData(coroutineScope, siteLocalId, singleRefresh.value, true) }</span>
+<span class="nc" id="L50">        refresh()</span>
+<span class="nc" id="L51">        return result</span>
+    }
+
+    fun refreshTodayPrompt() {
+<span class="nc bnc" id="L55" title="All 2 branches missed.">        if (isRefreshing() == false) {</span>
+<span class="nc" id="L56">            singleRefresh.postValue(true)</span>
+        }
+<span class="nc" id="L58">    }</span>
+
+    private fun MediatorLiveData&lt;BloggingPromptUpdate&gt;.getData(
+        coroutineScope: CoroutineScope,
+        siteLocalId: Int
+    ) {
+<span class="nc" id="L64">        val selectedSite = selectedSiteRepository.getSelectedSite()</span>
+<span class="nc bnc" id="L65" title="All 6 branches missed.">        if (selectedSite != null &amp;&amp; selectedSite.id == siteLocalId &amp;&amp; bloggingPromptsFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L66">            coroutineScope.launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">                if (isPrompAvailable()) {</span>
+<span class="nc" id="L68">                    promptsStore.getPrompts(selectedSite)</span>
+<span class="nc" id="L69">                            .map { it.model?.filter { prompt -&gt; isSameDay(prompt.date, Date()) } }</span>
+<span class="nc" id="L70">                            .collect { result -&gt;</span>
+                                postValue(BloggingPromptUpdate(result?.firstOrNull()))
+                            }
+                } else {
+<span class="nc" id="L74">                    postEmptyState()</span>
+                }
+<span class="nc" id="L76">            }</span>
+        } else {
+<span class="nc" id="L78">            postErrorState()</span>
+        }
+<span class="nc" id="L80">    }</span>
+
+<span class="nc" id="L82">    private fun MediatorLiveData&lt;BloggingPromptUpdate&gt;.refreshData(</span>
+        coroutineScope: CoroutineScope,
+        siteLocalId: Int,
+<span class="nc" id="L85">        isRefresh: Boolean? = null,</span>
+<span class="nc" id="L86">        isSinglePromptRefresh: Boolean = false</span>
+    ) {
+<span class="nc" id="L88">        when (isRefresh) {</span>
+<span class="nc bnc" id="L89" title="All 4 branches missed.">            null, true -&gt; refreshData(coroutineScope, siteLocalId, isSinglePromptRefresh)</span>
+<span class="nc" id="L90">            else -&gt; Unit // Do nothing</span>
+        }
+<span class="nc" id="L92">    }</span>
+
+<span class="nc" id="L94">    private fun MediatorLiveData&lt;BloggingPromptUpdate&gt;.refreshData(</span>
+        coroutineScope: CoroutineScope,
+        siteLocalId: Int,
+<span class="nc" id="L97">        isSinglePromptRefresh: Boolean = false</span>
+    ) {
+<span class="nc" id="L99">        val selectedSite = selectedSiteRepository.getSelectedSite()</span>
+<span class="nc bnc" id="L100" title="All 4 branches missed.">        if (selectedSite != null &amp;&amp; selectedSite.id == siteLocalId) {</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">            if (bloggingPromptsFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L102">                coroutineScope.launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L103" title="All 2 branches missed.">                    if (isPrompAvailable()) {</span>
+<span class="nc" id="L104">                        fetchPromptsAndPostErrorIfAvailable(coroutineScope, selectedSite, isSinglePromptRefresh)</span>
+                    } else {
+<span class="nc" id="L106">                        postEmptyState()</span>
+                    }
+<span class="nc" id="L108">                }</span>
+            } else {
+<span class="nc" id="L110">                onRefreshedMainThread()</span>
+            }
+        } else {
+<span class="nc" id="L113">            postErrorState()</span>
+        }
+<span class="nc" id="L115">    }</span>
+
+<span class="nc" id="L117">    private fun MediatorLiveData&lt;BloggingPromptUpdate&gt;.fetchPromptsAndPostErrorIfAvailable(</span>
+        coroutineScope: CoroutineScope,
+        selectedSite: SiteModel,
+<span class="nc" id="L120">        isSinglePromptRefresh: Boolean = false</span>
+    ) {
+<span class="nc" id="L122">        coroutineScope.launch(bgDispatcher) {</span>
+<span class="nc" id="L123">            delay(REFRESH_DELAY)</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">            val numOfPromptsToFetch = if (isSinglePromptRefresh) 1 else NUM_PROMPTS_TO_REQUEST</span>
+<span class="nc" id="L125">            val result = promptsStore.fetchPrompts(selectedSite, numOfPromptsToFetch, Date())</span>
+<span class="nc" id="L126">            val error = result.error</span>
+<span class="nc" id="L127">            when {</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">                error != null -&gt; {</span>
+<span class="nc" id="L129">                    postErrorState()</span>
+                }
+<span class="nc" id="L131">                else -&gt; onRefreshedBackgroundThread()</span>
+            }
+<span class="nc" id="L133">        }</span>
+<span class="nc" id="L134">    }</span>
+
+    // we don't have any special error handling at this point - just show the last available prompt
+    private fun MediatorLiveData&lt;BloggingPromptUpdate&gt;.postErrorState() {
+<span class="nc bnc" id="L138" title="All 2 branches missed.">        val lastPrompt = this.value?.promptModel</span>
+<span class="nc" id="L139">        postState(BloggingPromptUpdate(lastPrompt))</span>
+<span class="nc" id="L140">    }</span>
+
+    private fun MediatorLiveData&lt;BloggingPromptUpdate&gt;.postEmptyState() {
+<span class="nc" id="L143">        postState(BloggingPromptUpdate(null))</span>
+<span class="nc" id="L144">    }</span>
+
+    private suspend fun isPrompAvailable(): Boolean {
+<span class="nc bnc" id="L147" title="All 2 branches missed.">        val selectedSite = selectedSiteRepository.getSelectedSite() ?: return false</span>
+<span class="nc" id="L148">        val isPotentialBloggingSite = selectedSite.isPotentialBloggingSite</span>
+<span class="nc" id="L149">        val isPromptReminderOptedIn = bloggingRemindersStore.bloggingRemindersModel(selectedSite.localId().value)</span>
+<span class="nc bnc" id="L150" title="All 4 branches missed.">                .firstOrNull()?.isPromptIncluded == true</span>
+<span class="nc" id="L151">        val promptSkippedDate = appPrefsWrapper.getSkippedPromptDay(selectedSite.localId().value)</span>
+
+<span class="nc bnc" id="L153" title="All 4 branches missed.">        val isPromptSkippedForToday = promptSkippedDate != null &amp;&amp; isSameDay(promptSkippedDate, Date())</span>
+
+<span class="nc bnc" id="L155" title="All 2 branches missed.">        return !isPromptSkippedForToday &amp;&amp;</span>
+<span class="nc bnc" id="L156" title="All 6 branches missed.">                (isPromptReminderOptedIn || (!isPromptReminderOptedIn &amp;&amp; isPotentialBloggingSite))</span>
+    }
+
+    private fun isSameDay(date1: Date, date2: Date): Boolean {
+<span class="nc" id="L160">        val localDate1: LocalDate = date1.toInstant()</span>
+<span class="nc" id="L161">                .atZone(ZoneId.systemDefault())</span>
+<span class="nc" id="L162">                .toLocalDate()</span>
+<span class="nc" id="L163">        val localDate2: LocalDate = date2.toInstant()</span>
+<span class="nc" id="L164">                .atZone(ZoneId.systemDefault())</span>
+<span class="nc" id="L165">                .toLocalDate()</span>
+<span class="nc" id="L166">        return localDate1.isEqual(localDate2)</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

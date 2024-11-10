@@ -1,0 +1,344 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReaderUpdateLogic.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.reader.services.update</a> &gt; <span class="el_source">ReaderUpdateLogic.java</span></div><h1>ReaderUpdateLogic.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.reader.services.update;
+
+import android.content.Context;
+
+import com.android.volley.VolleyError;
+import com.wordpress.rest.RestRequest;
+
+import org.greenrobot.eventbus.EventBus;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.datasets.ReaderBlogTable;
+import org.wordpress.android.datasets.ReaderPostTable;
+import org.wordpress.android.datasets.ReaderTagTable;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.models.ReaderBlogList;
+import org.wordpress.android.models.ReaderTag;
+import org.wordpress.android.models.ReaderTagList;
+import org.wordpress.android.models.ReaderTagType;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.ui.reader.ReaderConstants;
+import org.wordpress.android.ui.reader.ReaderEvents;
+import org.wordpress.android.ui.reader.ReaderEvents.InterestTagsFetchEnded;
+import org.wordpress.android.ui.reader.services.ServiceCompletionListener;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.JSONUtils;
+import org.wordpress.android.util.LocaleManager;
+
+import java.util.Date;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.Iterator;
+
+import javax.inject.Inject;
+
+public class ReaderUpdateLogic {
+    /***
+     * This class holds the business logic for Reader Updates, serving both ReaderUpdateService (&lt;API26)
+     * and ReaderUpdateJobService (API26+).
+     * Updates followedtags and blogs for the Reader, relies
+     * on EventBus to notify of changes
+     */
+
+<span class="nc" id="L45">    public enum UpdateTask {</span>
+<span class="nc" id="L46">        TAGS,</span>
+<span class="nc" id="L47">        INTEREST_TAGS,</span>
+<span class="nc" id="L48">        FOLLOWED_BLOGS</span>
+    }
+    private static final String INTERESTS = &quot;interests&quot;;
+    private EnumSet&lt;UpdateTask&gt; mCurrentTasks;
+    private ServiceCompletionListener mCompletionListener;
+    private Object mListenerCompanion;
+    private String mLanguage;
+    private Context mContext;
+
+    @Inject AccountStore mAccountStore;
+    @Inject TagUpdateClientUtilsProvider mClientUtilsProvider;
+
+<span class="nc" id="L60">    public ReaderUpdateLogic(Context context, WordPress app, ServiceCompletionListener listener) {</span>
+<span class="nc" id="L61">        mCompletionListener = listener;</span>
+<span class="nc" id="L62">        app.component().inject(this);</span>
+<span class="nc" id="L63">        mLanguage = LocaleManager.getLanguage(app);</span>
+<span class="nc" id="L64">        mContext = context;</span>
+<span class="nc" id="L65">    }</span>
+
+    public void performTasks(EnumSet&lt;UpdateTask&gt; tasks, Object companion) {
+<span class="nc" id="L68">        mCurrentTasks = EnumSet.copyOf(tasks);</span>
+<span class="nc" id="L69">        mListenerCompanion = companion;</span>
+
+        // perform in priority order - we want to update tags first since without them
+        // the Reader can't show anything
+<span class="nc bnc" id="L73" title="All 2 branches missed.">        if (tasks.contains(UpdateTask.TAGS)) {</span>
+<span class="nc" id="L74">            updateTags();</span>
+        }
+<span class="nc bnc" id="L76" title="All 2 branches missed.">        if (tasks.contains(UpdateTask.INTEREST_TAGS)) {</span>
+<span class="nc" id="L77">            fetchInterestTags();</span>
+        }
+<span class="nc bnc" id="L79" title="All 2 branches missed.">        if (tasks.contains(UpdateTask.FOLLOWED_BLOGS)) {</span>
+<span class="nc" id="L80">            updateFollowedBlogs();</span>
+        }
+<span class="nc" id="L82">    }</span>
+
+    private void taskCompleted(UpdateTask task) {
+<span class="nc" id="L85">        mCurrentTasks.remove(task);</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        if (mCurrentTasks.isEmpty()) {</span>
+<span class="nc" id="L87">            allTasksCompleted();</span>
+        }
+<span class="nc" id="L89">    }</span>
+
+    private void allTasksCompleted() {
+<span class="nc" id="L92">        AppLog.i(AppLog.T.READER, &quot;reader service &gt; all tasks completed&quot;);</span>
+<span class="nc" id="L93">        mCompletionListener.onCompleted(mListenerCompanion);</span>
+<span class="nc" id="L94">    }</span>
+
+    /***
+     * update the tags the user is followed - also handles recommended (popular) tags since
+     * they're included in the response
+     */
+    private void updateTags() {
+<span class="nc" id="L101">        com.wordpress.rest.RestRequest.Listener listener = new RestRequest.Listener() {</span>
+            @Override
+            public void onResponse(JSONObject jsonObject) {
+<span class="nc" id="L104">                handleUpdateTagsResponse(jsonObject);</span>
+<span class="nc" id="L105">            }</span>
+        };
+
+<span class="nc" id="L108">        RestRequest.ErrorListener errorListener = new RestRequest.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError volleyError) {
+<span class="nc" id="L111">                AppLog.e(AppLog.T.READER, volleyError);</span>
+<span class="nc" id="L112">                taskCompleted(UpdateTask.TAGS);</span>
+<span class="nc" id="L113">            }</span>
+        };
+<span class="nc" id="L115">        AppLog.d(AppLog.T.READER, &quot;reader service &gt; updating tags&quot;);</span>
+<span class="nc" id="L116">        HashMap&lt;String, String&gt; params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L117">        params.put(&quot;locale&quot;, mLanguage);</span>
+<span class="nc" id="L118">        mClientUtilsProvider.getRestClientForTagUpdate()</span>
+<span class="nc" id="L119">                            .get(&quot;read/menu&quot;, params, null, listener, errorListener);</span>
+<span class="nc" id="L120">    }</span>
+
+    private boolean displayNameUpdateWasNeeded(ReaderTagList serverTopics) {
+<span class="nc" id="L123">        boolean updateDone = false;</span>
+
+<span class="nc bnc" id="L125" title="All 2 branches missed.">        for (ReaderTag tag : serverTopics) {</span>
+<span class="nc" id="L126">            String tagNameBefore = tag.getTagDisplayName();</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">            if (tag.isFollowedSites()) {</span>
+<span class="nc" id="L128">                tag.setTagDisplayName(mContext.getString(R.string.reader_following_display_name));</span>
+<span class="nc bnc" id="L129" title="All 2 branches missed.">                if (!tagNameBefore.equals(tag.getTagDisplayName())) updateDone = true;</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">            } else if (tag.isDiscover()) {</span>
+<span class="nc" id="L131">                tag.setTagDisplayName(mContext.getString(R.string.reader_discover_display_name));</span>
+<span class="nc bnc" id="L132" title="All 2 branches missed.">                if (!tagNameBefore.equals(tag.getTagDisplayName())) updateDone = true;</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">            } else if (tag.isPostsILike()) {</span>
+<span class="nc" id="L134">                tag.setTagDisplayName(mContext.getString(R.string.reader_my_likes_display_name));</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">                if (!tagNameBefore.equals(tag.getTagDisplayName())) updateDone = true;</span>
+            }
+<span class="nc" id="L137">        }</span>
+
+<span class="nc" id="L139">        return updateDone;</span>
+    }
+
+    private void handleUpdateTagsResponse(final JSONObject jsonObject) {
+<span class="nc" id="L143">        new Thread() {</span>
+            @Override
+            public void run() {
+                // get server topics, both default &amp; followed - but use &quot;recommended&quot; for logged-out
+                // reader since user won't have any followed tags
+<span class="nc" id="L148">                ReaderTagList serverTopics = new ReaderTagList();</span>
+<span class="nc" id="L149">                serverTopics.addAll(parseTags(jsonObject, &quot;default&quot;, ReaderTagType.DEFAULT));</span>
+
+<span class="nc" id="L151">                boolean displayNameUpdateWasNeeded = displayNameUpdateWasNeeded(serverTopics);</span>
+
+<span class="nc" id="L153">                serverTopics.addAll(parseTags(jsonObject, &quot;subscribed&quot;, ReaderTagType.FOLLOWED));</span>
+
+                // manually insert Bookmark tag, as server doesn't support bookmarking yet
+                // and check if we are going to change it to trigger UI update in case of downgrade
+<span class="nc" id="L157">                serverTopics.add(</span>
+                        new ReaderTag(
+                                &quot;&quot;,
+<span class="nc" id="L160">                                mContext.getString(R.string.reader_save_for_later_display_name),</span>
+<span class="nc" id="L161">                                mContext.getString(R.string.reader_save_for_later_title),</span>
+                                &quot;&quot;,
+                                ReaderTagType.BOOKMARKED
+                        )
+                );
+
+                // manually insert DISCOVER_POST_CARDS tag which is used to store posts for the discover tab
+<span class="nc" id="L168">                serverTopics.add(ReaderTag.createDiscoverPostCardsTag());</span>
+
+                // parse topics from the response, detect whether they're different from local
+<span class="nc" id="L171">                ReaderTagList localTopics = new ReaderTagList();</span>
+<span class="nc" id="L172">                localTopics.addAll(ReaderTagTable.getDefaultTags());</span>
+<span class="nc" id="L173">                localTopics.addAll(ReaderTagTable.getFollowedTags());</span>
+<span class="nc" id="L174">                localTopics.addAll(ReaderTagTable.getBookmarkTags());</span>
+<span class="nc" id="L175">                localTopics.addAll(ReaderTagTable.getCustomListTags());</span>
+
+<span class="nc" id="L177">                if (</span>
+<span class="nc bnc" id="L178" title="All 4 branches missed.">                        !localTopics.isSameList(serverTopics)</span>
+                        || displayNameUpdateWasNeeded
+                ) {
+<span class="nc" id="L181">                    AppLog.d(AppLog.T.READER, &quot;reader service &gt; followed topics changed &quot;</span>
+                                              + &quot;updatedDisplayNames [&quot; + displayNameUpdateWasNeeded + &quot;]&quot;);
+
+<span class="nc bnc" id="L184" title="All 2 branches missed.">                    if (!mAccountStore.hasAccessToken()) {</span>
+                        // Do not delete locally saved tags for logged out user
+<span class="nc" id="L186">                        ReaderTagTable.addOrUpdateTags(serverTopics);</span>
+                    } else {
+                        // if any local topics have been removed from the server, make sure to delete
+                        // them locally
+<span class="nc" id="L190">                        ReaderTagTable.deleteTags(localTopics.getDeletions(serverTopics));</span>
+                        // now replace local topics with the server topics
+<span class="nc" id="L192">                        ReaderTagTable.replaceTags(serverTopics);</span>
+                    }
+                    // broadcast the fact that there are changes
+<span class="nc" id="L195">                    EventBus.getDefault().post(new ReaderEvents.FollowedTagsChanged(true));</span>
+                }
+<span class="nc" id="L197">                AppPrefs.setReaderTagsUpdatedTimestamp(new Date().getTime());</span>
+
+<span class="nc" id="L199">                taskCompleted(UpdateTask.TAGS);</span>
+<span class="nc" id="L200">            }</span>
+<span class="nc" id="L201">        }.start();</span>
+<span class="nc" id="L202">    }</span>
+
+    /*
+     * parse a specific topic section from the topic response
+     */
+    private static ReaderTagList parseTags(JSONObject jsonObject, String name, ReaderTagType tagType) {
+<span class="nc" id="L208">        ReaderTagList topics = new ReaderTagList();</span>
+
+<span class="nc bnc" id="L210" title="All 2 branches missed.">        if (jsonObject == null) {</span>
+<span class="nc" id="L211">            return topics;</span>
+        }
+
+<span class="nc" id="L214">        JSONObject jsonTopics = jsonObject.optJSONObject(name);</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">        if (jsonTopics == null) {</span>
+<span class="nc" id="L216">            return topics;</span>
+        }
+
+<span class="nc" id="L219">        Iterator&lt;String&gt; it = jsonTopics.keys();</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">        while (it.hasNext()) {</span>
+<span class="nc" id="L221">            String internalName = it.next();</span>
+<span class="nc" id="L222">            JSONObject jsonTopic = jsonTopics.optJSONObject(internalName);</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">            if (jsonTopic != null) {</span>
+<span class="nc" id="L224">                String tagTitle = JSONUtils.getStringDecoded(jsonTopic, ReaderConstants.JSON_TAG_TITLE);</span>
+<span class="nc" id="L225">                String tagDisplayName = JSONUtils.getStringDecoded(jsonTopic, ReaderConstants.JSON_TAG_DISPLAY_NAME);</span>
+<span class="nc" id="L226">                String tagSlug = JSONUtils.getStringDecoded(jsonTopic, ReaderConstants.JSON_TAG_SLUG);</span>
+<span class="nc" id="L227">                String endpoint = JSONUtils.getString(jsonTopic, ReaderConstants.JSON_TAG_URL);</span>
+
+                // if the endpoint contains `read/list` then this is a custom list - these are
+                // included in the response as default tags
+<span class="nc bnc" id="L231" title="All 4 branches missed.">                if (tagType == ReaderTagType.DEFAULT &amp;&amp; endpoint.contains(&quot;/read/list/&quot;)) {</span>
+<span class="nc" id="L232">                    topics.add(new ReaderTag(tagSlug, tagDisplayName, tagTitle, endpoint, ReaderTagType.CUSTOM_LIST));</span>
+                } else {
+<span class="nc" id="L234">                    topics.add(new ReaderTag(tagSlug, tagDisplayName, tagTitle, endpoint, tagType));</span>
+                }
+            }
+<span class="nc" id="L237">        }</span>
+
+<span class="nc" id="L239">        return topics;</span>
+    }
+
+    private static ReaderTagList parseInterestTags(JSONObject jsonObject) {
+<span class="nc" id="L243">        ReaderTagList interestTags = new ReaderTagList();</span>
+
+<span class="nc bnc" id="L245" title="All 2 branches missed.">        if (jsonObject == null) {</span>
+<span class="nc" id="L246">            return interestTags;</span>
+        }
+
+<span class="nc" id="L249">        JSONArray jsonInterests = jsonObject.optJSONArray(INTERESTS);</span>
+
+<span class="nc bnc" id="L251" title="All 2 branches missed.">        if (jsonInterests == null) {</span>
+<span class="nc" id="L252">            return interestTags;</span>
+        }
+
+<span class="nc bnc" id="L255" title="All 2 branches missed.">        for (int i = 0; i &lt; jsonInterests.length(); i++) {</span>
+<span class="nc" id="L256">            JSONObject jsonInterest = jsonInterests.optJSONObject(i);</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">            if (jsonInterest != null) {</span>
+<span class="nc" id="L258">                String tagTitle = JSONUtils.getStringDecoded(jsonInterest, ReaderConstants.JSON_TAG_TITLE);</span>
+<span class="nc" id="L259">                String tagSlug = JSONUtils.getStringDecoded(jsonInterest, ReaderConstants.JSON_TAG_SLUG);</span>
+<span class="nc" id="L260">                interestTags.add(new ReaderTag(tagSlug, tagTitle, tagTitle, &quot;&quot;, ReaderTagType.INTERESTS));</span>
+            }
+        }
+
+<span class="nc" id="L264">        return interestTags;</span>
+    }
+
+    private void fetchInterestTags() {
+<span class="nc" id="L268">        RestRequest.Listener listener = this::handleInterestTagsResponse;</span>
+<span class="nc" id="L269">        RestRequest.ErrorListener errorListener = volleyError -&gt; {</span>
+<span class="nc" id="L270">            AppLog.e(AppLog.T.READER, volleyError);</span>
+<span class="nc" id="L271">            EventBus.getDefault().post(new InterestTagsFetchEnded(new ReaderTagList(), false));</span>
+<span class="nc" id="L272">            taskCompleted(UpdateTask.INTEREST_TAGS);</span>
+<span class="nc" id="L273">        };</span>
+
+<span class="nc" id="L275">        AppLog.d(AppLog.T.READER, &quot;reader service &gt; fetching interest tags&quot;);</span>
+
+<span class="nc" id="L277">        HashMap&lt;String, String&gt; params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L278">        params.put(&quot;_locale&quot;, mLanguage);</span>
+<span class="nc" id="L279">        mClientUtilsProvider.getRestClientForInterestTags()</span>
+<span class="nc" id="L280">                            .get(&quot;read/interests&quot;, params, null, listener, errorListener);</span>
+<span class="nc" id="L281">    }</span>
+
+    private void handleInterestTagsResponse(final JSONObject jsonObject) {
+<span class="nc" id="L284">        new Thread() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L287">                ReaderTagList interestTags = new ReaderTagList();</span>
+<span class="nc" id="L288">                interestTags.addAll(parseInterestTags(jsonObject));</span>
+<span class="nc" id="L289">                EventBus.getDefault().post(new InterestTagsFetchEnded(interestTags, true));</span>
+<span class="nc" id="L290">                taskCompleted(UpdateTask.INTEREST_TAGS);</span>
+<span class="nc" id="L291">            }</span>
+<span class="nc" id="L292">        }.start();</span>
+<span class="nc" id="L293">    }</span>
+
+    /***
+     * request the list of blogs the current user is following
+     */
+    private void updateFollowedBlogs() {
+<span class="nc" id="L299">        RestRequest.Listener listener = new RestRequest.Listener() {</span>
+            @Override
+            public void onResponse(JSONObject jsonObject) {
+<span class="nc" id="L302">                handleFollowedBlogsResponse(jsonObject);</span>
+<span class="nc" id="L303">            }</span>
+        };
+<span class="nc" id="L305">        RestRequest.ErrorListener errorListener = new RestRequest.ErrorListener() {</span>
+            @Override
+            public void onErrorResponse(VolleyError volleyError) {
+<span class="nc" id="L308">                AppLog.e(AppLog.T.READER, volleyError);</span>
+<span class="nc" id="L309">                taskCompleted(UpdateTask.FOLLOWED_BLOGS);</span>
+<span class="nc" id="L310">            }</span>
+        };
+
+<span class="nc" id="L313">        AppLog.d(AppLog.T.READER, &quot;reader service &gt; updating followed blogs&quot;);</span>
+        // request using ?meta=site,feed to get extra info
+<span class="nc" id="L315">        WordPress.getRestClientUtilsV1_2().get(&quot;read/following/mine?meta=site%2Cfeed&quot;, listener, errorListener);</span>
+<span class="nc" id="L316">    }</span>
+
+    private void handleFollowedBlogsResponse(final JSONObject jsonObject) {
+<span class="nc" id="L319">        new Thread() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L322">                ReaderBlogList serverBlogs = ReaderBlogList.fromJson(jsonObject);</span>
+<span class="nc" id="L323">                ReaderBlogList localBlogs = ReaderBlogTable.getFollowedBlogs();</span>
+
+<span class="nc bnc" id="L325" title="All 2 branches missed.">                if (!localBlogs.isSameList(serverBlogs)) {</span>
+                    // always update the list of followed blogs if there are *any* changes between
+                    // server and local (including subscription count, description, etc.)
+<span class="nc" id="L328">                    ReaderBlogTable.setFollowedBlogs(serverBlogs);</span>
+                    // ...but only update the follow status and alert that followed blogs have
+                    // changed if the server list doesn't have the same blogs as the local list
+                    // (ie: a blog has been followed/unfollowed since local was last updated)
+<span class="nc bnc" id="L332" title="All 2 branches missed.">                    if (!localBlogs.hasSameBlogs(serverBlogs)) {</span>
+<span class="nc" id="L333">                        ReaderPostTable.updateFollowedStatus();</span>
+<span class="nc" id="L334">                        AppLog.i(AppLog.T.READER, &quot;reader blogs service &gt; followed blogs changed&quot;);</span>
+<span class="nc" id="L335">                        EventBus.getDefault().post(new ReaderEvents.FollowedBlogsChanged());</span>
+                    }
+                }
+
+<span class="nc" id="L339">                taskCompleted(UpdateTask.FOLLOWED_BLOGS);</span>
+<span class="nc" id="L340">            }</span>
+<span class="nc" id="L341">        }.start();</span>
+<span class="nc" id="L342">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

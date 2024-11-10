@@ -1,0 +1,701 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>NotificationsProcessingService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.push</a> &gt; <span class="el_source">NotificationsProcessingService.java</span></div><h1>NotificationsProcessingService.java</h1><pre class="source lang-java linenums">package org.wordpress.android.push;
+
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.IBinder;
+import android.text.TextUtils;
+
+import androidx.core.app.NotificationManagerCompat;
+import androidx.core.app.RemoteInput;
+
+import com.android.volley.VolleyError;
+import com.wordpress.rest.RestRequest;
+
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.fluxc.action.CommentAction;
+import org.wordpress.android.fluxc.generated.CommentActionBuilder;
+import org.wordpress.android.fluxc.model.CommentModel;
+import org.wordpress.android.fluxc.model.CommentStatus;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.CommentStore.OnCommentChanged;
+import org.wordpress.android.fluxc.store.CommentStore.RemoteCommentPayload;
+import org.wordpress.android.fluxc.store.CommentStore.RemoteCreateCommentPayload;
+import org.wordpress.android.fluxc.store.CommentStore.RemoteLikeCommentPayload;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.models.Note;
+import org.wordpress.android.ui.comments.unified.CommentsStoreAdapter;
+import org.wordpress.android.ui.notifications.SystemNotificationsTracker;
+import org.wordpress.android.ui.notifications.receivers.NotificationsPendingDraftsReceiver;
+import org.wordpress.android.ui.notifications.utils.NotificationsActions;
+import org.wordpress.android.ui.notifications.utils.NotificationsUtils;
+import org.wordpress.android.ui.notifications.utils.PendingDraftsNotificationsUtils;
+import org.wordpress.android.ui.quickstart.QuickStartTracker;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.LocaleManager;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils.AnalyticsCommentActionSource;
+import org.wordpress.android.util.analytics.AnalyticsUtils.QuickActionTrackPropertyValue;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+
+import javax.inject.Inject;
+
+import static org.wordpress.android.push.NotificationPushIds.GROUP_NOTIFICATION_ID;
+import static org.wordpress.android.push.NotificationPushIds.QUICK_START_REMINDER_NOTIFICATION_ID;
+
+/**
+ * service which makes it possible to process Notifications quick actions in the background,
+ * such as:
+ * - like
+ * - reply-to-comment
+ * - approve
+ * - 2fa approve &amp; ignore
+ * - pending draft notification ignore &amp; dismissal
+ */
+
+<span class="nc" id="L71">public class NotificationsProcessingService extends Service {</span>
+    public static final String ARG_ACTION_TYPE = &quot;action_type&quot;;
+    public static final String ARG_ACTION_LIKE = &quot;action_like&quot;;
+    public static final String ARG_ACTION_REPLY = &quot;action_reply&quot;;
+    public static final String ARG_ACTION_APPROVE = &quot;action_approve&quot;;
+    public static final String ARG_ACTION_AUTH_APPROVE = &quot;action_auth_aprove&quot;;
+    public static final String ARG_ACTION_AUTH_IGNORE = &quot;action_auth_ignore&quot;;
+    public static final String ARG_ACTION_DRAFT_PENDING_DISMISS = &quot;action_draft_pending_dismiss&quot;;
+    public static final String ARG_ACTION_DRAFT_PENDING_IGNORE = &quot;action_draft_pending_ignore&quot;;
+    public static final String ARG_ACTION_REPLY_TEXT = &quot;action_reply_text&quot;;
+    public static final String ARG_ACTION_NOTIFICATION_DISMISS = &quot;action_dismiss&quot;;
+    public static final String ARG_NOTE_ID = &quot;note_id&quot;;
+    public static final String ARG_PUSH_ID = &quot;notificationId&quot;;
+    public static final String ARG_NOTIFICATION_TYPE = &quot;notificationType&quot;;
+
+    // bundle and push ID, as they are held in the system dashboard
+    public static final String ARG_NOTE_BUNDLE = &quot;note_bundle&quot;;
+
+    private QuickActionProcessor mQuickActionProcessor;
+<span class="nc" id="L90">    private List&lt;Long&gt; mActionedCommentsRemoteIds = new ArrayList&lt;&gt;();</span>
+
+    @Inject CommentsStoreAdapter mCommentsStoreAdapter;
+    @Inject SiteStore mSiteStore;
+    @Inject SystemNotificationsTracker mSystemNotificationsTracker;
+    @Inject GCMMessageHandler mGCMMessageHandler;
+    @Inject QuickStartTracker mQuickStartTracker;
+
+    /*
+    * Use this if you want the service to handle a background note Like.
+    * */
+    public static void startServiceForLike(Context context, String noteId) {
+<span class="nc" id="L102">        Intent intent = new Intent(context, NotificationsProcessingService.class);</span>
+<span class="nc" id="L103">        intent.putExtra(ARG_ACTION_TYPE, ARG_ACTION_LIKE);</span>
+<span class="nc" id="L104">        intent.putExtra(ARG_NOTE_ID, noteId);</span>
+<span class="nc" id="L105">        context.startService(intent);</span>
+<span class="nc" id="L106">    }</span>
+
+    /*
+    * Use this if you want the service to handle a background note Approve.
+    * */
+    public static void startServiceForApprove(Context context, String noteId) {
+<span class="nc" id="L112">        Intent intent = new Intent(context, NotificationsProcessingService.class);</span>
+<span class="nc" id="L113">        intent.putExtra(ARG_ACTION_TYPE, ARG_ACTION_APPROVE);</span>
+<span class="nc" id="L114">        intent.putExtra(ARG_NOTE_ID, noteId);</span>
+<span class="nc" id="L115">        context.startService(intent);</span>
+<span class="nc" id="L116">    }</span>
+
+    /*
+    * Use this if you want the service to handle a background note reply.
+    * */
+    public static void startServiceForReply(Context context, String noteId, String replyToComment) {
+<span class="nc" id="L122">        Intent intent = new Intent(context, NotificationsProcessingService.class);</span>
+<span class="nc" id="L123">        intent.putExtra(ARG_ACTION_TYPE, ARG_ACTION_REPLY);</span>
+<span class="nc" id="L124">        intent.putExtra(ARG_NOTE_ID, noteId);</span>
+<span class="nc" id="L125">        intent.putExtra(ARG_ACTION_REPLY_TEXT, replyToComment);</span>
+<span class="nc" id="L126">        context.startService(intent);</span>
+<span class="nc" id="L127">    }</span>
+
+    public static PendingIntent getPendingIntentForNotificationDismiss(Context context, int pushId,
+                                                                       NotificationType notificationType) {
+<span class="nc" id="L131">        Intent intent = new Intent(context, NotificationsProcessingService.class);</span>
+<span class="nc" id="L132">        intent.putExtra(ARG_ACTION_TYPE, ARG_ACTION_NOTIFICATION_DISMISS);</span>
+<span class="nc" id="L133">        intent.putExtra(ARG_PUSH_ID, pushId);</span>
+<span class="nc" id="L134">        intent.putExtra(ARG_NOTIFICATION_TYPE, notificationType);</span>
+<span class="nc" id="L135">        intent.addCategory(ARG_ACTION_NOTIFICATION_DISMISS);</span>
+
+<span class="nc" id="L137">        return PendingIntent</span>
+<span class="nc" id="L138">                .getService(context, pushId, intent, PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);</span>
+    }
+
+    public static void stopService(Context context) {
+<span class="nc bnc" id="L142" title="All 2 branches missed.">        if (context == null) {</span>
+<span class="nc" id="L143">            return;</span>
+        }
+
+<span class="nc" id="L146">        Intent intent = new Intent(context, NotificationsProcessingService.class);</span>
+<span class="nc" id="L147">        context.stopService(intent);</span>
+<span class="nc" id="L148">    }</span>
+
+    @Override
+    public IBinder onBind(Intent intent) {
+<span class="nc" id="L152">        return null;</span>
+    }
+
+    @Override
+    public void onCreate() {
+<span class="nc" id="L157">        super.onCreate();</span>
+<span class="nc" id="L158">        ((WordPress) getApplication()).component().inject(this);</span>
+<span class="nc" id="L159">        mCommentsStoreAdapter.register(this);</span>
+<span class="nc" id="L160">        AppLog.i(AppLog.T.NOTIFS, &quot;notifications action processing service &gt; created&quot;);</span>
+<span class="nc" id="L161">    }</span>
+
+    @Override
+    public void onDestroy() {
+<span class="nc" id="L165">        AppLog.i(AppLog.T.NOTIFS, &quot;notifications action processing service &gt; destroyed&quot;);</span>
+<span class="nc" id="L166">        mCommentsStoreAdapter.unregister(this);</span>
+<span class="nc" id="L167">        super.onDestroy();</span>
+<span class="nc" id="L168">    }</span>
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        // Offload to a separate thread.
+
+<span class="nc" id="L174">        mQuickActionProcessor =</span>
+                new QuickActionProcessor(this, mSystemNotificationsTracker, mGCMMessageHandler, intent, startId);
+<span class="nc" id="L176">        new Thread(() -&gt; mQuickActionProcessor.process()).start();</span>
+
+<span class="nc" id="L178">        return START_NOT_STICKY;</span>
+    }
+
+    private class QuickActionProcessor {
+        private SystemNotificationsTracker mSystemNotificationsTracker;
+        private GCMMessageHandler mGCMMessageHandler;
+        private String mNoteId;
+        private String mReplyText;
+        private String mActionType;
+        private NotificationType mNotificationType;
+        private int mPushId;
+        private Note mNote;
+        private final int mTaskId;
+        private final Context mContext;
+        private final Intent mIntent;
+
+        QuickActionProcessor(Context ctx, SystemNotificationsTracker notificationsTracker,
+<span class="nc" id="L195">                             GCMMessageHandler gcmMessageHandler, Intent intent, int taskId) {</span>
+<span class="nc" id="L196">            mContext = ctx;</span>
+<span class="nc" id="L197">            mSystemNotificationsTracker = notificationsTracker;</span>
+<span class="nc" id="L198">            mIntent = intent;</span>
+<span class="nc" id="L199">            mTaskId = taskId;</span>
+<span class="nc" id="L200">            this.mGCMMessageHandler = gcmMessageHandler;</span>
+<span class="nc" id="L201">        }</span>
+
+        public void process() {
+<span class="nc" id="L204">            getDataFromIntent();</span>
+
+            // now handle each action
+<span class="nc bnc" id="L207" title="All 2 branches missed.">            if (mActionType != null) {</span>
+                // check special cases for authorization push
+<span class="nc bnc" id="L209" title="All 2 branches missed.">                if (mActionType.equals(ARG_ACTION_AUTH_IGNORE)) {</span>
+                    // dismiss notifs
+<span class="nc" id="L211">                    NativeNotificationsUtils.dismissNotification(</span>
+                            NotificationPushIds.ACTIONS_RESULT_NOTIFICATION_ID, mContext);
+<span class="nc" id="L213">                    NativeNotificationsUtils.dismissNotification(</span>
+                            NotificationPushIds.AUTH_PUSH_NOTIFICATION_ID, mContext);
+<span class="nc" id="L215">                    NativeNotificationsUtils.dismissNotification(</span>
+                            NotificationPushIds.ACTIONS_PROGRESS_NOTIFICATION_ID, mContext);
+<span class="nc" id="L217">                    mGCMMessageHandler.removeNotification(NotificationPushIds.AUTH_PUSH_NOTIFICATION_ID);</span>
+
+<span class="nc" id="L219">                    AnalyticsTracker.track(AnalyticsTracker.Stat.PUSH_AUTHENTICATION_IGNORED);</span>
+<span class="nc" id="L220">                    return;</span>
+                }
+
+                // check notification dismissed pending intent
+<span class="nc bnc" id="L224" title="All 2 branches missed.">                if (mActionType.equals(ARG_ACTION_NOTIFICATION_DISMISS)) {</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">                    if (mNotificationType != null) {</span>
+<span class="nc" id="L226">                        mSystemNotificationsTracker.trackDismissedNotification(mNotificationType);</span>
+                    }
+<span class="nc" id="L228">                    int notificationId = mIntent.getIntExtra(ARG_PUSH_ID, 0);</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">                    if (notificationId == GROUP_NOTIFICATION_ID) {</span>
+<span class="nc" id="L230">                        mGCMMessageHandler.clearNotifications();</span>
+<span class="nc bnc" id="L231" title="All 2 branches missed.">                    } else if (notificationId == QUICK_START_REMINDER_NOTIFICATION_ID) {</span>
+<span class="nc" id="L232">                        mQuickStartTracker.track(Stat.QUICK_START_NOTIFICATION_DISMISSED);</span>
+                    } else {
+<span class="nc" id="L234">                        mGCMMessageHandler.removeNotification(notificationId);</span>
+                        // Dismiss the grouped notification if a user dismisses all notifications from a wear device
+<span class="nc bnc" id="L236" title="All 2 branches missed.">                        if (!mGCMMessageHandler.hasNotifications()) {</span>
+<span class="nc" id="L237">                            NotificationManagerCompat notificationManager = NotificationManagerCompat.from(mContext);</span>
+<span class="nc" id="L238">                            notificationManager.cancel(GROUP_NOTIFICATION_ID);</span>
+                        }
+                    }
+<span class="nc" id="L241">                    return;</span>
+                }
+
+                // check special cases for pending draft notifications - ignore
+<span class="nc bnc" id="L245" title="All 2 branches missed.">                if (mActionType.equals(ARG_ACTION_DRAFT_PENDING_IGNORE)) {</span>
+                    // dismiss notif
+<span class="nc" id="L247">                    int postId = mIntent.getIntExtra(NotificationsPendingDraftsReceiver.POST_ID_EXTRA, 0);</span>
+<span class="nc bnc" id="L248" title="All 2 branches missed.">                    if (postId != 0) {</span>
+<span class="nc" id="L249">                        NativeNotificationsUtils.dismissNotification(</span>
+<span class="nc" id="L250">                                PendingDraftsNotificationsUtils.makePendingDraftNotificationId(postId),</span>
+                                mContext
+                        );
+                    }
+<span class="nc" id="L254">                    AnalyticsTracker.track(AnalyticsTracker.Stat.NOTIFICATION_PENDING_DRAFTS_IGNORED);</span>
+<span class="nc" id="L255">                    return;</span>
+                }
+
+                // check special cases for pending draft notifications - dismiss
+<span class="nc bnc" id="L259" title="All 2 branches missed.">                if (mActionType.equals(ARG_ACTION_DRAFT_PENDING_DISMISS)) {</span>
+<span class="nc" id="L260">                    AnalyticsTracker.track(AnalyticsTracker.Stat.NOTIFICATION_PENDING_DRAFTS_DISMISSED);</span>
+<span class="nc" id="L261">                    return;</span>
+                }
+
+<span class="nc bnc" id="L264" title="All 2 branches missed.">                if (mActionType.equals(ARG_ACTION_REPLY)) {</span>
+                    // we don't need showing the infinite progress bar in case of REPLY on Android N,
+                    // because we've got inline-reply there with its own spinner to show progress
+                    // no op
+                } else {
+<span class="nc" id="L269">                    NativeNotificationsUtils</span>
+<span class="nc" id="L270">                            .showIntermediateMessageToUser(getProcessingTitleForAction(mActionType), mContext,</span>
+                                    mNotificationType);
+                }
+
+                // if we still don't have a Note, go get it from the REST API
+<span class="nc bnc" id="L275" title="All 2 branches missed.">                if (mNote == null) {</span>
+<span class="nc" id="L276">                    RestRequest.Listener listener =</span>
+<span class="nc" id="L277">                            new RestRequest.Listener() {</span>
+                                @Override
+                                public void onResponse(JSONObject response) {
+<span class="nc bnc" id="L280" title="All 4 branches missed.">                                    if (response != null &amp;&amp; !response.optBoolean(&quot;success&quot;)) {</span>
+                                        // build the Note object here
+<span class="nc" id="L282">                                        buildNoteFromJSONObject(response);</span>
+<span class="nc" id="L283">                                        performRequestedAction();</span>
+                                    }
+<span class="nc" id="L285">                                }</span>
+                            };
+
+<span class="nc" id="L288">                    RestRequest.ErrorListener errorListener =</span>
+<span class="nc" id="L289">                            new RestRequest.ErrorListener() {</span>
+                                @Override
+                                public void onErrorResponse(VolleyError error) {
+<span class="nc" id="L292">                                    requestFailed(mActionType);</span>
+<span class="nc" id="L293">                                }</span>
+                            };
+
+<span class="nc" id="L296">                    getNoteFromNoteId(mNoteId, listener, errorListener);</span>
+<span class="nc" id="L297">                } else {</span>
+                    // we have a Note! just go ahead and perform the requested action
+<span class="nc" id="L299">                    performRequestedAction();</span>
+                }
+            } else {
+<span class="nc" id="L302">                requestFailed(null);</span>
+            }
+<span class="nc" id="L304">        }</span>
+
+        private void getNoteFromBundleIfExists() {
+<span class="nc bnc" id="L307" title="All 2 branches missed.">            if (mIntent.hasExtra(ARG_NOTE_BUNDLE)) {</span>
+<span class="nc" id="L308">                Bundle payload = mIntent.getBundleExtra(ARG_NOTE_BUNDLE);</span>
+<span class="nc" id="L309">                mNote = NotificationsUtils.buildNoteObjectFromBundle(payload);</span>
+            }
+<span class="nc" id="L311">        }</span>
+
+        private void getDataFromIntent() {
+<span class="nc bnc" id="L314" title="All 2 branches missed.">            if (mIntent == null) {</span>
+<span class="nc" id="L315">                return;</span>
+            }
+            // get all needed data from intent
+<span class="nc" id="L318">            mNoteId = mIntent.getStringExtra(ARG_NOTE_ID);</span>
+<span class="nc" id="L319">            mActionType = mIntent.getStringExtra(ARG_ACTION_TYPE);</span>
+            // default value for push notification ID is likely GROUP_NOTIFICATION_ID for the only
+            // notif in active notifs map (there is only one notif if quick actions are available)
+<span class="nc" id="L322">            mPushId = GROUP_NOTIFICATION_ID;</span>
+<span class="nc bnc" id="L323" title="All 2 branches missed.">            if (mIntent.hasExtra(ARG_ACTION_REPLY_TEXT)) {</span>
+<span class="nc" id="L324">                mReplyText = mIntent.getStringExtra(ARG_ACTION_REPLY_TEXT);</span>
+            }
+<span class="nc bnc" id="L326" title="All 2 branches missed.">            if (mIntent.hasExtra(ARG_NOTIFICATION_TYPE)) {</span>
+<span class="nc" id="L327">                mNotificationType = (NotificationType) mIntent.getSerializableExtra(ARG_NOTIFICATION_TYPE);</span>
+            }
+
+<span class="nc bnc" id="L330" title="All 2 branches missed.">            if (TextUtils.isEmpty(mReplyText)) {</span>
+                // if voice reply is enabled in a wearable, it will come through the remoteInput
+                // extra EXTRA_VOICE_OR_INLINE_REPLY
+                // same thing with direct-reply in Android 7
+<span class="nc" id="L334">                Bundle remoteInput = RemoteInput.getResultsFromIntent(mIntent);</span>
+<span class="nc bnc" id="L335" title="All 2 branches missed.">                if (remoteInput != null) {</span>
+<span class="nc" id="L336">                    obtainReplyTextFromRemoteInputBundle(remoteInput);</span>
+                }
+            }
+
+            // we probably have the note in the PN payload and such it's passed in the intent extras
+            // bundle. If we have it, no need to go fetch it through REST API.
+<span class="nc" id="L342">            getNoteFromBundleIfExists();</span>
+<span class="nc" id="L343">        }</span>
+
+        private String getProcessingTitleForAction(String actionType) {
+<span class="nc bnc" id="L346" title="All 2 branches missed.">            if (actionType != null) {</span>
+<span class="nc bnc" id="L347" title="All 4 branches missed.">                switch (actionType) {</span>
+                    case ARG_ACTION_LIKE:
+<span class="nc" id="L349">                        return getString(R.string.comment_q_action_liking);</span>
+                    case ARG_ACTION_APPROVE:
+<span class="nc" id="L351">                        return getString(R.string.comment_q_action_approving);</span>
+                    case ARG_ACTION_REPLY:
+<span class="nc" id="L353">                        return getString(R.string.comment_q_action_replying);</span>
+                    default:
+                        // default, generic &quot;processing&quot;
+<span class="nc" id="L356">                        return getString(R.string.comment_q_action_processing);</span>
+                }
+            } else {
+                // default, generic &quot;processing&quot;
+<span class="nc" id="L360">                return getString(R.string.comment_q_action_processing);</span>
+            }
+        }
+
+        private void obtainReplyTextFromRemoteInputBundle(Bundle bundle) {
+<span class="nc" id="L365">            CharSequence replyText = bundle.getCharSequence(GCMMessageService.EXTRA_VOICE_OR_INLINE_REPLY);</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">            if (replyText != null) {</span>
+<span class="nc" id="L367">                mReplyText = replyText.toString();</span>
+            }
+<span class="nc" id="L369">        }</span>
+
+        private void buildNoteFromJSONObject(JSONObject jsonObject) {
+            try {
+<span class="nc bnc" id="L373" title="All 2 branches missed.">                if (jsonObject.has(&quot;notes&quot;)) {</span>
+<span class="nc" id="L374">                    JSONArray jsonArray = jsonObject.getJSONArray(&quot;notes&quot;);</span>
+<span class="nc bnc" id="L375" title="All 4 branches missed.">                    if (jsonArray != null &amp;&amp; jsonArray.length() == 1) {</span>
+<span class="nc" id="L376">                        jsonObject = jsonArray.getJSONObject(0);</span>
+                    }
+                }
+<span class="nc" id="L379">                mNote = new Note(mNoteId, jsonObject);</span>
+<span class="nc" id="L380">            } catch (JSONException e) {</span>
+<span class="nc" id="L381">                AppLog.e(AppLog.T.NOTIFS, e.getMessage());</span>
+<span class="nc" id="L382">            }</span>
+<span class="nc" id="L383">        }</span>
+
+        private void performRequestedAction() {
+            /*********************************************************/
+            /* possible actions are Comment REPLY, APPROVE, and LIKE */
+            /*********************************************************/
+<span class="nc bnc" id="L389" title="All 2 branches missed.">            if (mNote != null) {</span>
+<span class="nc bnc" id="L390" title="All 2 branches missed.">                if (mActionType != null) {</span>
+<span class="nc bnc" id="L391" title="All 4 branches missed.">                    switch (mActionType) {</span>
+                        case ARG_ACTION_LIKE:
+<span class="nc" id="L393">                            likeComment();</span>
+<span class="nc" id="L394">                            break;</span>
+                        case ARG_ACTION_APPROVE:
+<span class="nc" id="L396">                            approveComment();</span>
+<span class="nc" id="L397">                            break;</span>
+                        case ARG_ACTION_REPLY:
+<span class="nc" id="L399">                            replyToComment();</span>
+<span class="nc" id="L400">                            break;</span>
+                        default:
+                            // no op
+<span class="nc" id="L403">                            requestFailed(null);</span>
+<span class="nc" id="L404">                            break;</span>
+                    }
+                } else {
+                    // add other actions here
+                    // no op
+<span class="nc" id="L409">                    requestFailed(null);</span>
+                }
+            } else {
+<span class="nc" id="L412">                requestFailed(null);</span>
+            }
+<span class="nc" id="L414">        }</span>
+
+        /*
+         * called when action has been completed successfully
+         */
+        private void requestCompleted(String actionType) {
+<span class="nc" id="L420">            String successMessage = null;</span>
+<span class="nc bnc" id="L421" title="All 2 branches missed.">            if (actionType != null) {</span>
+<span class="nc bnc" id="L422" title="All 2 branches missed.">                if (actionType.equals(ARG_ACTION_LIKE)) {</span>
+<span class="nc" id="L423">                    successMessage = getString(R.string.comment_liked);</span>
+<span class="nc bnc" id="L424" title="All 2 branches missed.">                } else if (actionType.equals(ARG_ACTION_APPROVE)) {</span>
+<span class="nc" id="L425">                    successMessage = getString(R.string.comment_moderated_approved);</span>
+<span class="nc bnc" id="L426" title="All 2 branches missed.">                } else if (actionType.equals(ARG_ACTION_REPLY)) {</span>
+<span class="nc" id="L427">                    successMessage = getString(R.string.note_reply_successful);</span>
+                }
+            } else {
+                // show generic success message here
+<span class="nc" id="L431">                successMessage = getString(R.string.comment_q_action_done_generic);</span>
+            }
+
+<span class="nc" id="L434">            NotificationsActions.markNoteAsRead(mNote);</span>
+
+            // dismiss any other pending result notification
+<span class="nc" id="L437">            NativeNotificationsUtils.dismissNotification(</span>
+                    NotificationPushIds.ACTIONS_RESULT_NOTIFICATION_ID, mContext);
+            // update notification indicating the operation succeeded
+<span class="nc" id="L440">            NativeNotificationsUtils.showFinalMessageToUser(successMessage,</span>
+                    NotificationPushIds.ACTIONS_PROGRESS_NOTIFICATION_ID,
+                    mContext,
+                    NotificationType.ACTIONS_PROGRESS);
+            // remove the original notification from the system bar
+<span class="nc" id="L445">            mGCMMessageHandler.removeNotificationWithNoteIdFromSystemBar(mContext, mNoteId);</span>
+
+            // after 3 seconds, dismiss the notification that indicated success
+<span class="nc" id="L448">            Handler handler = new Handler(getMainLooper());</span>
+<span class="nc" id="L449">            handler.postDelayed(new Runnable() {</span>
+                public void run() {
+<span class="nc" id="L451">                    NativeNotificationsUtils.dismissNotification(</span>
+<span class="nc" id="L452">                            NotificationPushIds.ACTIONS_PROGRESS_NOTIFICATION_ID, mContext);</span>
+<span class="nc" id="L453">                }</span>
+            }, 3000); // show the success message for 3 seconds, then dismiss
+
+<span class="nc" id="L456">            stopSelf(mTaskId);</span>
+<span class="nc" id="L457">        }</span>
+
+        /*
+         * called when action failed
+         */
+        private void requestFailed(String actionType) {
+<span class="nc" id="L463">            String errorMessage = null;</span>
+<span class="nc bnc" id="L464" title="All 2 branches missed.">            if (actionType != null) {</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">                if (actionType.equals(ARG_ACTION_LIKE)) {</span>
+<span class="nc" id="L466">                    errorMessage = getString(R.string.error_notif_q_action_like);</span>
+<span class="nc bnc" id="L467" title="All 2 branches missed.">                } else if (actionType.equals(ARG_ACTION_APPROVE)) {</span>
+<span class="nc" id="L468">                    errorMessage = getString(R.string.error_notif_q_action_approve);</span>
+<span class="nc bnc" id="L469" title="All 2 branches missed.">                } else if (actionType.equals(ARG_ACTION_REPLY)) {</span>
+<span class="nc" id="L470">                    errorMessage = getString(R.string.error_notif_q_action_reply);</span>
+                }
+            } else {
+                // show generic error here
+<span class="nc" id="L474">                errorMessage = getString(R.string.error_generic);</span>
+            }
+<span class="nc" id="L476">            resetOriginalNotification();</span>
+<span class="nc" id="L477">            NativeNotificationsUtils.dismissNotification(</span>
+                    NotificationPushIds.ACTIONS_PROGRESS_NOTIFICATION_ID, mContext);
+<span class="nc" id="L479">            NativeNotificationsUtils</span>
+<span class="nc" id="L480">                    .showFinalMessageToUser(errorMessage, NotificationPushIds.ACTIONS_RESULT_NOTIFICATION_ID, mContext,</span>
+                            NotificationType.ACTIONS_RESULT);
+
+            // after 3 seconds, dismiss the error message notification
+<span class="nc" id="L484">            Handler handler = new Handler(getMainLooper());</span>
+<span class="nc" id="L485">            handler.postDelayed(new Runnable() {</span>
+                public void run() {
+                    // remove the error notification from the system bar
+<span class="nc" id="L488">                    NativeNotificationsUtils.dismissNotification(</span>
+<span class="nc" id="L489">                            NotificationPushIds.ACTIONS_RESULT_NOTIFICATION_ID, mContext);</span>
+<span class="nc" id="L490">                }</span>
+            }, 3000); // show the success message for 3 seconds, then dismiss
+
+<span class="nc" id="L493">            stopSelf(mTaskId);</span>
+<span class="nc" id="L494">        }</span>
+
+        private void requestFailedWithMessage(String errorMessage, boolean autoDismiss) {
+<span class="nc bnc" id="L497" title="All 2 branches missed.">            if (errorMessage == null) {</span>
+                // show generic error here
+<span class="nc" id="L499">                errorMessage = getString(R.string.error_generic);</span>
+            }
+<span class="nc" id="L501">            resetOriginalNotification();</span>
+<span class="nc" id="L502">            NativeNotificationsUtils</span>
+<span class="nc" id="L503">                    .showFinalMessageToUser(errorMessage, NotificationPushIds.ACTIONS_RESULT_NOTIFICATION_ID, mContext,</span>
+                            NotificationType.ACTIONS_RESULT);
+
+<span class="nc bnc" id="L506" title="All 2 branches missed.">            if (autoDismiss) {</span>
+                // after 3 seconds, dismiss the error message notification
+<span class="nc" id="L508">                Handler handler = new Handler(getMainLooper());</span>
+<span class="nc" id="L509">                handler.postDelayed(new Runnable() {</span>
+                    public void run() {
+                        // remove the error notification from the system bar
+<span class="nc" id="L512">                        NativeNotificationsUtils.dismissNotification(</span>
+<span class="nc" id="L513">                                NotificationPushIds.ACTIONS_RESULT_NOTIFICATION_ID, mContext);</span>
+<span class="nc" id="L514">                    }</span>
+                }, 3000); // show the success message for 3 seconds, then dismiss
+            }
+
+<span class="nc" id="L518">            stopSelf(mTaskId);</span>
+<span class="nc" id="L519">        }</span>
+
+        private void keepRemoteCommentIdForPostProcessing(long remoteCommendId) {
+<span class="nc bnc" id="L522" title="All 2 branches missed.">            if (!mActionedCommentsRemoteIds.contains(remoteCommendId)) {</span>
+<span class="nc" id="L523">                mActionedCommentsRemoteIds.add(remoteCommendId);</span>
+            }
+<span class="nc" id="L525">        }</span>
+
+        private void getNoteFromNoteId(String noteId, RestRequest.Listener listener,
+                                       RestRequest.ErrorListener errorListener) {
+<span class="nc bnc" id="L529" title="All 2 branches missed.">            if (noteId == null) {</span>
+<span class="nc" id="L530">                return;</span>
+            }
+
+<span class="nc" id="L533">            HashMap&lt;String, String&gt; params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L534">            params.put(&quot;locale&quot;, LocaleManager.getLanguage(mContext));</span>
+<span class="nc" id="L535">            WordPress.getRestClientUtils().getNotification(params, noteId, listener, errorListener);</span>
+<span class="nc" id="L536">        }</span>
+
+        // Like or unlike a comment via the REST API
+        private void likeComment() {
+<span class="nc bnc" id="L540" title="All 2 branches missed.">            if (mNote == null) {</span>
+<span class="nc" id="L541">                requestFailed(ARG_ACTION_LIKE);</span>
+<span class="nc" id="L542">                return;</span>
+            }
+
+<span class="nc" id="L545">            SiteModel site = mSiteStore.getSiteBySiteId(mNote.getSiteId());</span>
+
+            // Bump analytics
+            // TODO klymyam remove legacy comment tracking after new comments are shipped and new funnels are made
+<span class="nc" id="L549">            AnalyticsUtils.trackWithBlogPostDetails(</span>
+<span class="nc" id="L550">                    AnalyticsTracker.Stat.NOTIFICATION_QUICK_ACTIONS_LIKED, mNote.getSiteId(), mNote.getPostId());</span>
+<span class="nc" id="L551">            AnalyticsUtils.trackCommentActionWithSiteDetails(Stat.COMMENT_QUICK_ACTION_LIKED,</span>
+                    AnalyticsCommentActionSource.NOTIFICATIONS, site);
+<span class="nc" id="L553">            AnalyticsUtils.trackQuickActionTouched(</span>
+                    QuickActionTrackPropertyValue.LIKE,
+                    site,
+<span class="nc" id="L556">                    mNote.buildComment());</span>
+
+<span class="nc bnc" id="L558" title="All 2 branches missed.">            if (site != null) {</span>
+<span class="nc" id="L559">                mCommentsStoreAdapter.dispatch(CommentActionBuilder.newLikeCommentAction(</span>
+<span class="nc" id="L560">                        new RemoteLikeCommentPayload(site, mNote.getCommentId(), true)));</span>
+            } else {
+<span class="nc" id="L562">                requestFailed(ARG_ACTION_LIKE);</span>
+<span class="nc" id="L563">                AppLog.e(T.NOTIFS, &quot;Site with id: &quot; + mNote.getSiteId() + &quot; doesn't exist in the Site store&quot;);</span>
+            }
+<span class="nc" id="L565">        }</span>
+
+        private void approveComment() {
+<span class="nc bnc" id="L568" title="All 2 branches missed.">            if (mNote == null) {</span>
+<span class="nc" id="L569">                requestFailed(ARG_ACTION_APPROVE);</span>
+<span class="nc" id="L570">                return;</span>
+            }
+
+<span class="nc" id="L573">            SiteModel site = mSiteStore.getSiteBySiteId(mNote.getSiteId());</span>
+
+            // Bump analytics
+            // TODO klymyam remove legacy comment tracking after new comments are shipped and new funnels are made
+<span class="nc" id="L577">            AnalyticsUtils.trackWithBlogPostDetails(</span>
+<span class="nc" id="L578">                    AnalyticsTracker.Stat.NOTIFICATION_QUICK_ACTIONS_APPROVED, mNote.getSiteId(), mNote.getPostId());</span>
+<span class="nc" id="L579">            AnalyticsUtils.trackCommentActionWithSiteDetails(Stat.COMMENT_QUICK_ACTION_APPROVED,</span>
+                    AnalyticsCommentActionSource.NOTIFICATIONS, site);
+
+<span class="nc" id="L582">            AnalyticsUtils.trackQuickActionTouched(</span>
+                    QuickActionTrackPropertyValue.APPROVE,
+                    site,
+<span class="nc" id="L585">                    mNote.buildComment());</span>
+
+            // Update pseudo comment (built from the note)
+<span class="nc" id="L588">            CommentModel comment = mNote.buildComment();</span>
+<span class="nc" id="L589">            comment.setStatus(CommentStatus.APPROVED.toString());</span>
+
+<span class="nc bnc" id="L591" title="All 2 branches missed.">            if (site == null) {</span>
+<span class="nc" id="L592">                AppLog.e(T.NOTIFS, &quot;Impossible to approve a comment on a site that is not in the App. SiteId: &quot;</span>
+<span class="nc" id="L593">                                   + mNote.getSiteId());</span>
+<span class="nc" id="L594">                requestFailed(ARG_ACTION_APPROVE);</span>
+<span class="nc" id="L595">                return;</span>
+            }
+
+            // keep the CommentId, we'll use it later to know whether to trigger the end processing notification
+            // or not
+<span class="nc" id="L600">            keepRemoteCommentIdForPostProcessing(comment.getRemoteCommentId());</span>
+
+            // Push the comment
+<span class="nc" id="L603">            mCommentsStoreAdapter.dispatch(CommentActionBuilder</span>
+<span class="nc" id="L604">                    .newPushCommentAction(new RemoteCommentPayload(site, comment)));</span>
+<span class="nc" id="L605">        }</span>
+
+        private void replyToComment() {
+<span class="nc bnc" id="L608" title="All 2 branches missed.">            if (mNote == null) {</span>
+<span class="nc" id="L609">                requestFailed(ARG_ACTION_APPROVE);</span>
+<span class="nc" id="L610">                return;</span>
+            }
+
+<span class="nc bnc" id="L613" title="All 2 branches missed.">            if (TextUtils.isEmpty(mReplyText)) return;</span>
+
+<span class="nc" id="L615">            SiteModel site = mSiteStore.getSiteBySiteId(mNote.getSiteId());</span>
+<span class="nc bnc" id="L616" title="All 2 branches missed.">            if (site == null) {</span>
+<span class="nc" id="L617">                AppLog.e(T.NOTIFS, &quot;Impossible to reply to a comment on a site that is not in the App.&quot;</span>
+<span class="nc" id="L618">                                   + &quot; SiteId: &quot; + mNote.getSiteId());</span>
+<span class="nc" id="L619">                requestFailed(ARG_ACTION_APPROVE);</span>
+<span class="nc" id="L620">                return;</span>
+            }
+
+            // Pseudo comment (built from the note)
+<span class="nc" id="L624">            CommentModel comment = mNote.buildComment();</span>
+
+            // Pseudo comment reply
+<span class="nc" id="L627">            CommentModel reply = new CommentModel();</span>
+<span class="nc" id="L628">            reply.setContent(mReplyText);</span>
+
+            // Push the reply
+<span class="nc" id="L631">            RemoteCreateCommentPayload payload = new RemoteCreateCommentPayload(site, comment, reply);</span>
+<span class="nc" id="L632">            mCommentsStoreAdapter.dispatch(CommentActionBuilder.newCreateNewCommentAction(payload));</span>
+
+            // Bump analytics
+<span class="nc" id="L635">            AnalyticsUtils.trackCommentReplyWithDetails(true,</span>
+                    site, comment, AnalyticsCommentActionSource.NOTIFICATIONS);
+<span class="nc" id="L637">            AnalyticsUtils.trackQuickActionTouched(QuickActionTrackPropertyValue.REPLY_TO, site, comment);</span>
+<span class="nc" id="L638">        }</span>
+
+        private void resetOriginalNotification() {
+<span class="nc" id="L641">            mGCMMessageHandler.rebuildAndUpdateNotificationsOnSystemBarForThisNote(mContext, mNoteId);</span>
+<span class="nc" id="L642">        }</span>
+    }
+
+    // OnChanged events
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onCommentChanged(OnCommentChanged event) {
+<span class="nc bnc" id="L650" title="All 2 branches missed.">        if (mQuickActionProcessor == null) {</span>
+<span class="nc" id="L651">            return;</span>
+        }
+
+        // LIKE_COMMENT events do not hold event.changedCommentsLocalIds info so, just process them
+        // also CREATE_NEW_COMMENT, which are received for REPLY quick actions won't have a matching id as FluxC
+        // only notifies us of _new_ comments (the actual reply) so, no way to connect one another in this place.
+        // Therefore, we only care and match for `PUSH_COMMENT` to make sure there's a corresponding initial APPROVE
+        // quick action that corresponds to the resulting FluxC event.
+<span class="nc bnc" id="L659" title="All 2 branches missed.">        if (event.causeOfChange == CommentAction.PUSH_COMMENT) {</span>
+<span class="nc" id="L660">            List&lt;Long&gt; eventChangedCommentsRemoteIds = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L661" title="All 2 branches missed.">            if (mActionedCommentsRemoteIds.size() &gt; 0) {</span>
+                // prepare a comparable list of Ids
+<span class="nc bnc" id="L663" title="All 2 branches missed.">                for (Integer commentLocalId : event.changedCommentsLocalIds) {</span>
+<span class="nc" id="L664">                    CommentModel localComment = mCommentsStoreAdapter.getCommentByLocalId(commentLocalId);</span>
+<span class="nc bnc" id="L665" title="All 2 branches missed.">                    if (localComment != null) {</span>
+<span class="nc" id="L666">                        eventChangedCommentsRemoteIds.add(localComment.getRemoteCommentId());</span>
+                    }
+<span class="nc" id="L668">                }</span>
+
+                // here we need to check ids: is an event corresponding to an action triggered from this Service?
+<span class="nc bnc" id="L671" title="All 2 branches missed.">                for (Long oneEventCommentRemoteId : eventChangedCommentsRemoteIds) {</span>
+<span class="nc bnc" id="L672" title="All 2 branches missed.">                    if (mActionedCommentsRemoteIds.contains(oneEventCommentRemoteId)) {</span>
+<span class="nc bnc" id="L673" title="All 2 branches missed.">                        if (event.isError()) {</span>
+<span class="nc" id="L674">                            mQuickActionProcessor.requestFailed(ARG_ACTION_APPROVE);</span>
+                        } else {
+<span class="nc" id="L676">                            mQuickActionProcessor.requestCompleted(ARG_ACTION_APPROVE);</span>
+                        }
+                    }
+<span class="nc" id="L679">                }</span>
+            }
+
+            // now remove any remoteIds for already processed actions
+<span class="nc bnc" id="L683" title="All 2 branches missed.">            for (Long remoteId : eventChangedCommentsRemoteIds) {</span>
+<span class="nc" id="L684">                mActionedCommentsRemoteIds.remove(remoteId);</span>
+<span class="nc" id="L685">            }</span>
+<span class="nc bnc" id="L686" title="All 2 branches missed.">        } else if (event.causeOfChange == CommentAction.LIKE_COMMENT) {</span>
+<span class="nc bnc" id="L687" title="All 2 branches missed.">            if (event.isError()) {</span>
+<span class="nc" id="L688">                mQuickActionProcessor.requestFailed(ARG_ACTION_LIKE);</span>
+            } else {
+<span class="nc" id="L690">                mQuickActionProcessor.requestCompleted(ARG_ACTION_LIKE);</span>
+            }
+<span class="nc bnc" id="L692" title="All 2 branches missed.">        } else if (event.causeOfChange == CommentAction.CREATE_NEW_COMMENT) {</span>
+<span class="nc bnc" id="L693" title="All 2 branches missed.">            if (event.isError()) {</span>
+<span class="nc" id="L694">                mQuickActionProcessor.requestFailed(ARG_ACTION_REPLY);</span>
+            } else {
+<span class="nc" id="L696">                mQuickActionProcessor.requestCompleted(ARG_ACTION_REPLY);</span>
+            }
+        }
+<span class="nc" id="L699">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

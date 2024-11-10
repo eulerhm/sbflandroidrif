@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PageListEventListener.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.pages</a> &gt; <span class="el_source">PageListEventListener.kt</span></div><h1>PageListEventListener.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.viewmodel.pages
+
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode.BACKGROUND
+import org.greenrobot.eventbus.ThreadMode.MAIN
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.model.CauseOfOnPostChanged.RemoteAutoSavePost
+import org.wordpress.android.fluxc.model.CauseOfOnPostChanged.UpdatePost
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.LocalId
+import org.wordpress.android.fluxc.model.LocalOrRemoteId.RemoteId
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaChanged
+import org.wordpress.android.fluxc.store.MediaStore.OnMediaUploaded
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.fluxc.store.PostStore.OnPostChanged
+import org.wordpress.android.fluxc.store.PostStore.OnPostUploaded
+import org.wordpress.android.fluxc.store.SiteStore
+import org.wordpress.android.fluxc.store.SiteStore.OnSiteChanged
+import org.wordpress.android.ui.posts.PostUtils
+import org.wordpress.android.ui.uploads.PostEvents
+import org.wordpress.android.ui.uploads.ProgressEvent
+import org.wordpress.android.ui.uploads.UploadService
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.EventBusWrapper
+import javax.inject.Inject
+import kotlin.coroutines.CoroutineContext
+
+/**
+ * This is a temporary class to make the PagesViewModel more manageable. It was inspired by the PostListEventListener
+ */
+<span class="nc" id="L36">class PageListEventListener(</span>
+<span class="nc" id="L37">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L38">    private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L39">    private val postStore: PostStore,</span>
+<span class="nc" id="L40">    private val eventBusWrapper: EventBusWrapper,</span>
+<span class="nc" id="L41">    private val siteStore: SiteStore,</span>
+<span class="nc" id="L42">    private val site: SiteModel,</span>
+<span class="nc" id="L43">    private val handleRemoteAutoSave: (LocalId, Boolean) -&gt; Unit,</span>
+<span class="nc" id="L44">    private val handlePostUploadFinished: (RemoteId, Boolean, Boolean) -&gt; Unit,</span>
+<span class="nc" id="L45">    private val invalidateUploadStatus: (List&lt;LocalId&gt;) -&gt; Unit,</span>
+<span class="nc" id="L46">    private val handleHomepageSettingsChange: (SiteModel) -&gt; Unit</span>
+) : CoroutineScope {
+<span class="nc" id="L48">    init {</span>
+<span class="nc" id="L49">        dispatcher.register(this)</span>
+<span class="nc" id="L50">        eventBusWrapper.register(this)</span>
+<span class="nc" id="L51">    }</span>
+
+<span class="nc" id="L53">    private var job: Job = Job()</span>
+
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L56">        get() = bgDispatcher + job</span>
+
+    /**
+     * Handles the onDestroy event to cleanup the registration for dispatcher and cancelling any pending jobs.
+     */
+    fun onDestroy() {
+<span class="nc" id="L62">        job.cancel()</span>
+<span class="nc" id="L63">        dispatcher.unregister(this)</span>
+<span class="nc" id="L64">        eventBusWrapper.unregister(this)</span>
+<span class="nc" id="L65">    }</span>
+
+    /**
+     * Has lower priority than the PostUploadHandler and UploadService, which ensures that they already processed this
+     * OnPostChanged event. This means we can safely rely on their internal state being up to date.
+     */
+    @Suppress(&quot;unused&quot;)
+    @Subscribe(threadMode = MAIN, priority = 5)
+    fun onPostChanged(event: OnPostChanged) {
+        // We need to subscribe on the MAIN thread, in order to ensure the priority parameter is taken into account.
+        // However, we want to perform the body of the method on a background thread.
+<span class="nc bnc" id="L76" title="All 2 branches missed.">        launch {</span>
+<span class="nc" id="L77">            when (event.causeOfChange) {</span>
+                // Fetched post list event will be handled by OnListChanged
+<span class="nc bnc" id="L79" title="All 2 branches missed.">                is RemoteAutoSavePost -&gt; {</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">                    if (event.isError) {</span>
+<span class="nc" id="L81">                        AppLog.d(</span>
+<span class="nc" id="L82">                                T.POSTS, &quot;REMOTE_AUTO_SAVE_POST failed: &quot; +</span>
+<span class="nc" id="L83">                                event.error.type + &quot; - &quot; + event.error.message</span>
+                        )
+                    }
+
+<span class="nc bnc" id="L87" title="All 2 branches missed.">                    uploadStatusChanged(LocalId((event.causeOfChange as RemoteAutoSavePost).localPostId))</span>
+<span class="nc" id="L88">                    handleRemoteAutoSave.invoke(</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">                            LocalId((event.causeOfChange as RemoteAutoSavePost).localPostId),</span>
+<span class="nc" id="L90">                            event.isError</span>
+                    )
+                }
+
+<span class="nc bnc" id="L94" title="All 2 branches missed.">                is UpdatePost -&gt; {</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">                    if (event.isError) {</span>
+<span class="nc" id="L96">                        AppLog.e(</span>
+<span class="nc" id="L97">                                T.POSTS,</span>
+<span class="nc" id="L98">                                &quot;Error updating the post with type: ${event.error.type} and&quot; +</span>
+<span class="nc" id="L99">                                        &quot; message: ${event.error.message}&quot;</span>
+                        )
+                    }
+<span class="nc bnc" id="L102" title="All 2 branches missed.">                    uploadStatusChanged(LocalId((event.causeOfChange as UpdatePost).localPostId))</span>
+                }
+            }
+<span class="nc" id="L105">        }</span>
+<span class="nc" id="L106">    }</span>
+
+    @Suppress(&quot;unused&quot;)
+    @Subscribe(threadMode = BACKGROUND)
+    fun onMediaChanged(event: OnMediaChanged) {
+<span class="nc bnc" id="L111" title="All 2 branches missed.">        if (event.mediaList != null) {</span>
+<span class="nc" id="L112">            uploadStatusChanged(*event.mediaList.map { LocalId(it.localPostId) }.toTypedArray())</span>
+        }
+<span class="nc" id="L114">    }</span>
+
+    @Suppress(&quot;unused&quot;)
+    @Subscribe(threadMode = BACKGROUND)
+    fun onPostUploaded(event: OnPostUploaded) {
+<span class="nc bnc" id="L119" title="All 6 branches missed.">        if (event.post != null &amp;&amp; event.post.isPage &amp;&amp; event.post.localSiteId == site.id) {</span>
+<span class="nc" id="L120">            uploadStatusChanged(LocalId(event.post.id))</span>
+<span class="nc" id="L121">            handlePostUploadFinished(RemoteId(event.post.remotePostId), event.isError, event.isFirstTimePublish)</span>
+        }
+<span class="nc" id="L123">    }</span>
+
+    @Suppress(&quot;unused&quot;)
+    @Subscribe(threadMode = BACKGROUND)
+    fun onMediaUploaded(event: OnMediaUploaded) {
+<span class="nc bnc" id="L128" title="All 6 branches missed.">        if (event.media != null &amp;&amp; event.media.localPostId != 0 &amp;&amp; site.id == event.media.localSiteId) {</span>
+<span class="nc" id="L129">            uploadStatusChanged(LocalId(event.media.localPostId))</span>
+        }
+<span class="nc" id="L131">    }</span>
+
+    /**
+     * Upload started, reload so correct status on uploading post appears
+     */
+    @Suppress(&quot;unused&quot;)
+    @Subscribe(threadMode = BACKGROUND)
+    fun onEventBackgroundThread(event: PostEvents.PostUploadStarted) {
+<span class="nc bnc" id="L139" title="All 6 branches missed.">        if (event.post != null &amp;&amp; event.post.isPage &amp;&amp; event.post.localSiteId == site.id) {</span>
+<span class="nc" id="L140">            uploadStatusChanged(LocalId(event.post.id))</span>
+        }
+<span class="nc" id="L142">    }</span>
+
+    /**
+     * Upload cancelled (probably due to failed media), reload so correct status on uploading post appears
+     */
+    @Suppress(&quot;unused&quot;)
+    @Subscribe(threadMode = BACKGROUND)
+    fun onEventBackgroundThread(event: PostEvents.PostUploadCanceled) {
+<span class="nc bnc" id="L150" title="All 6 branches missed.">        if (event.post != null &amp;&amp; event.post.isPage &amp;&amp; event.post.localSiteId == site.id) {</span>
+<span class="nc" id="L151">            uploadStatusChanged(LocalId(event.post.id))</span>
+        }
+<span class="nc" id="L153">    }</span>
+
+    @Suppress(&quot;unused&quot;)
+    @Subscribe(threadMode = BACKGROUND)
+    fun onEventBackgroundThread(event: ProgressEvent) {
+<span class="nc bnc" id="L158" title="All 4 branches missed.">        if (event.media != null &amp;&amp; site.id == event.media.localSiteId) {</span>
+<span class="nc" id="L159">            uploadStatusChanged(LocalId(event.media.localPostId))</span>
+        }
+<span class="nc" id="L161">    }</span>
+
+    @Suppress(&quot;unused&quot;)
+    @Subscribe(threadMode = BACKGROUND)
+    fun onEventBackgroundThread(event: UploadService.UploadMediaRetryEvent) {
+<span class="nc bnc" id="L166" title="All 6 branches missed.">        if (event.mediaModelList != null &amp;&amp; event.mediaModelList.isNotEmpty()) {</span>
+            // if there' a Post to which the retried media belongs, clear their status
+<span class="nc" id="L168">            val postsToRefresh = PostUtils.getPostsThatIncludeAnyOfTheseMedia(postStore, event.mediaModelList)</span>
+<span class="nc" id="L169">            uploadStatusChanged(*postsToRefresh.map { LocalId(it.id) }.toTypedArray())</span>
+        }
+<span class="nc" id="L171">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = MAIN)
+    fun onSiteChanged(event: OnSiteChanged) {
+<span class="nc bnc" id="L176" title="All 4 branches missed.">        if (!event.isError &amp;&amp; siteStore.hasSiteWithLocalId(site.id)) {</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">            siteStore.getSiteByLocalId(site.id)?.let { updatedSite -&gt;</span>
+<span class="nc bnc" id="L178" title="All 2 branches missed.">                if (updatedSite.showOnFront != site.showOnFront ||</span>
+<span class="nc bnc" id="L179" title="All 2 branches missed.">                        updatedSite.pageForPosts != site.pageForPosts ||</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">                        updatedSite.pageOnFront != site.pageForPosts) {</span>
+<span class="nc" id="L181">                    handleHomepageSettingsChange(updatedSite)</span>
+                }
+<span class="nc" id="L183">            }</span>
+        }
+<span class="nc" id="L185">    }</span>
+
+    private fun uploadStatusChanged(vararg localPostIds: LocalId) {
+<span class="nc" id="L188">        invalidateUploadStatus.invoke(localPostIds.toList())</span>
+<span class="nc" id="L189">    }</span>
+
+<span class="nc" id="L191">    class Factory @Inject constructor() {</span>
+        fun createAndStartListening(
+            dispatcher: Dispatcher,
+            bgDispatcher: CoroutineDispatcher,
+            postStore: PostStore,
+            eventBusWrapper: EventBusWrapper,
+            siteStore: SiteStore,
+            site: SiteModel,
+            invalidateUploadStatus: (List&lt;LocalId&gt;) -&gt; Unit,
+            handleRemoteAutoSave: (LocalId, Boolean) -&gt; Unit,
+            handlePostUploadFinished: (RemoteId, Boolean, Boolean) -&gt; Unit,
+            handleHomepageSettingsChange: (SiteModel) -&gt; Unit
+        ): PageListEventListener {
+<span class="nc" id="L204">            return PageListEventListener(</span>
+<span class="nc" id="L205">                    dispatcher = dispatcher,</span>
+<span class="nc" id="L206">                    bgDispatcher = bgDispatcher,</span>
+<span class="nc" id="L207">                    postStore = postStore,</span>
+<span class="nc" id="L208">                    eventBusWrapper = eventBusWrapper,</span>
+<span class="nc" id="L209">                    siteStore = siteStore,</span>
+<span class="nc" id="L210">                    site = site,</span>
+<span class="nc" id="L211">                    invalidateUploadStatus = invalidateUploadStatus,</span>
+<span class="nc" id="L212">                    handleRemoteAutoSave = handleRemoteAutoSave,</span>
+<span class="nc" id="L213">                    handlePostUploadFinished = handlePostUploadFinished,</span>
+<span class="nc" id="L214">                    handleHomepageSettingsChange = handleHomepageSettingsChange</span>
+            )
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

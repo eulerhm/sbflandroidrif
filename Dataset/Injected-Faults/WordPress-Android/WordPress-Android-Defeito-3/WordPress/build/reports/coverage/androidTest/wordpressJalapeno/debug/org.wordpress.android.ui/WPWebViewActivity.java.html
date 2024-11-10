@@ -1,0 +1,983 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WPWebViewActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui</a> &gt; <span class="el_source">WPWebViewActivity.java</span></div><h1>WPWebViewActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Handler;
+import android.text.TextUtils;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.view.ViewGroup;
+import android.webkit.CookieManager;
+import android.webkit.WebViewClient;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.RelativeLayout;
+import android.widget.RelativeLayout.LayoutParams;
+import android.widget.TextView;
+
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.widget.Toolbar;
+import androidx.appcompat.widget.TooltipCompat;
+import androidx.lifecycle.Observer;
+import androidx.lifecycle.ViewModelProvider;
+
+import com.google.android.material.elevation.ElevationOverlayProvider;
+import com.google.android.material.snackbar.Snackbar;
+
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.SiteActionBuilder;
+import org.wordpress.android.fluxc.model.PostImmutableModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.network.rest.wpcom.site.PrivateAtomicCookie;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.fluxc.store.SiteStore.FetchPrivateAtomicCookiePayload;
+import org.wordpress.android.fluxc.store.SiteStore.OnPrivateAtomicCookieFetched;
+import org.wordpress.android.ui.PrivateAtCookieRefreshProgressDialog.PrivateAtCookieProgressDialogOnDismissListener;
+import org.wordpress.android.ui.WPWebChromeClientWithFileChooser.OnShowFileChooserListener;
+import org.wordpress.android.ui.reader.ReaderActivityLauncher;
+import org.wordpress.android.ui.utils.UiHelpers;
+import org.wordpress.android.util.AniUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.DisplayUtilsWrapper;
+import org.wordpress.android.util.ErrorManagedWebViewClient.ErrorManagedWebViewClientListener;
+import org.wordpress.android.util.StringUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.URLFilteredWebViewClient;
+import org.wordpress.android.util.UrlUtils;
+import org.wordpress.android.util.WPUrlUtils;
+import org.wordpress.android.util.WPWebViewClient;
+import org.wordpress.android.viewmodel.wpwebview.WPWebViewViewModel;
+import org.wordpress.android.viewmodel.wpwebview.WPWebViewViewModel.NavBarUiState;
+import org.wordpress.android.viewmodel.wpwebview.WPWebViewViewModel.PreviewModeSelectorStatus;
+import org.wordpress.android.viewmodel.wpwebview.WPWebViewViewModel.WebPreviewUiState;
+import org.wordpress.android.viewmodel.wpwebview.WPWebViewViewModel.WebPreviewUiState.WebPreviewFullscreenUiState;
+import org.wordpress.android.widgets.WPSnackbar;
+
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.inject.Inject;
+
+import kotlin.Unit;
+
+/**
+ * Activity for opening external WordPress links in a webview.
+ * &lt;p/&gt;
+ * Try to use one of the methods below to open the webview:
+ * - openURL
+ * - openUrlByUsingMainWPCOMCredentials
+ * - openUrlByUsingWPCOMCredentials
+ * - openUrlByUsingBlogCredentials (for self hosted sites)
+ * &lt;p/&gt;
+ * If you need to start the activity with delay, start activity with result, or none of the methods above are enough
+ * for your needs,
+ * you can start the activity by passing the required parameters, depending on what you need to do.
+ * &lt;p/&gt;
+ * 1. Load a simple URL (without any kind of authentication)
+ * - Start the activity with the parameter URL_TO_LOAD set to the URL to load.
+ * &lt;p/&gt;
+ * 2. Load a WordPress.com URL
+ * Start the activity with the following parameters:
+ * - URL_TO_LOAD: target URL to load in the webview.
+ * - AUTHENTICATION_URL: The address of the WordPress.com authentication endpoint. Please use WPCOM_LOGIN_URL.
+ * - AUTHENTICATION_USER: username.
+ * - AUTHENTICATION_PASSWD: password.
+ * &lt;p/&gt;
+ * 3. Load a WordPress.org URL with authentication
+ * - URL_TO_LOAD: target URL to load in the webview.
+ * - AUTHENTICATION_URL: The address of the authentication endpoint. Please use the value of getSiteLoginUrl()
+ * to retrieve the correct address of the authentication endpoint.
+ * - AUTHENTICATION_USER: username.
+ * - AUTHENTICATION_PASSWD: password.
+ * - LOCAL_BLOG_ID: local id of the blog in the app database. This is required since some blogs could have HTTP Auth,
+ * or self-signed certs in place.
+ * - REFERRER_URL: url to add as an HTTP referrer header, currently only used for non-authed reader posts
+ */
+<span class="nc" id="L114">public class WPWebViewActivity extends WebViewActivity implements ErrorManagedWebViewClientListener,</span>
+        PrivateAtCookieProgressDialogOnDismissListener, OnShowFileChooserListener {
+    public static final String AUTHENTICATION_URL = &quot;authenticated_url&quot;;
+    public static final String AUTHENTICATION_USER = &quot;authenticated_user&quot;;
+    public static final String AUTHENTICATION_PASSWD = &quot;authenticated_passwd&quot;;
+    public static final String USE_GLOBAL_WPCOM_USER = &quot;USE_GLOBAL_WPCOM_USER&quot;;
+    public static final String URL_TO_LOAD = &quot;url_to_load&quot;;
+    public static final String WPCOM_LOGIN_URL = &quot;https://wordpress.com/wp-login.php&quot;;
+    public static final String LOCAL_BLOG_ID = &quot;local_blog_id&quot;;
+    public static final String SHAREABLE_URL = &quot;shareable_url&quot;;
+    public static final String SHARE_SUBJECT = &quot;share_subject&quot;;
+    public static final String REFERRER_URL = &quot;referrer_url&quot;;
+    public static final String DISABLE_LINKS_ON_PAGE = &quot;DISABLE_LINKS_ON_PAGE&quot;;
+    public static final String ALLOWED_URLS = &quot;allowed_urls&quot;;
+    public static final String ENCODING_UTF8 = &quot;UTF-8&quot;;
+    public static final String WEBVIEW_USAGE_TYPE = &quot;webview_usage_type&quot;;
+    public static final String ACTION_BAR_TITLE = &quot;action_bar_title&quot;;
+    public static final String SHOW_PREVIEW_MODE_TOGGLE = &quot;SHOW_PREVIEW_MODE_TOGGLE&quot;;
+    public static final String PRIVATE_AT_SITE_ID = &quot;PRIVATE_AT_SITE_ID&quot;;
+    private static final int PREVIEW_INITIAL_SCALE = 90;
+    private static final long PREVIEW_JS_EVALUATION_DELAY = 250L;
+
+    @Inject AccountStore mAccountStore;
+    @Inject SiteStore mSiteStore;
+    @Inject ViewModelProvider.Factory mViewModelFactory;
+    @Inject UiHelpers mUiHelpers;
+    @Inject PrivateAtomicCookie mPrivateAtomicCookie;
+    @Inject Dispatcher mDispatcher;
+    @Inject DisplayUtilsWrapper mDisplayUtilsWrapper;
+
+    private ActionableEmptyView mActionableEmptyView;
+    private ViewGroup mFullScreenProgressLayout;
+    private WPWebViewViewModel mViewModel;
+    private PreviewModeSelectorPopup mPreviewModeSelectorPopup;
+    private ElevationOverlayProvider mElevationOverlayProvider;
+    private View mNavBarContainer;
+    private LinearLayout mNavBar;
+    private View mNavigateForwardButton;
+    private View mNavigateBackButton;
+    private View mShareButton;
+    private View mExternalBrowserButton;
+    private View mPreviewModeButton;
+    private TextView mDesktopPreviewHint;
+<span class="nc" id="L157">    private boolean mPreviewModeChangeAllowed = false;</span>
+    private WPWebChromeClientWithFileChooser mWPWebChromeClientWithFileChooser;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L162">        ((WordPress) getApplication()).component().inject(this);</span>
+<span class="nc" id="L163">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L164">    }</span>
+
+    @Override
+    public final void configureView() {
+<span class="nc" id="L168">        setContentView(R.layout.wpwebview_activity);</span>
+
+<span class="nc" id="L170">        mActionableEmptyView = findViewById(R.id.actionable_empty_view);</span>
+<span class="nc" id="L171">        mFullScreenProgressLayout = findViewById(R.id.progress_layout);</span>
+<span class="nc" id="L172">        mWebView = findViewById(R.id.webView);</span>
+
+<span class="nc" id="L174">        WPWebViewUsageCategory webViewUsageCategory = WPWebViewUsageCategory.fromInt(getIntent()</span>
+<span class="nc" id="L175">                .getIntExtra(WEBVIEW_USAGE_TYPE, 0));</span>
+
+<span class="nc" id="L177">        initRetryButton();</span>
+<span class="nc" id="L178">        initViewModel(webViewUsageCategory);</span>
+
+<span class="nc" id="L180">        mNavBarContainer = findViewById(R.id.navbar_container);</span>
+
+<span class="nc" id="L182">        mElevationOverlayProvider = new ElevationOverlayProvider(WPWebViewActivity.this);</span>
+
+<span class="nc" id="L184">        int elevatedAppbarColor =</span>
+<span class="nc" id="L185">                mElevationOverlayProvider.compositeOverlayWithThemeSurfaceColorIfNeeded(</span>
+<span class="nc" id="L186">                        getResources().getDimension(R.dimen.appbar_elevation));</span>
+
+<span class="nc" id="L188">        mNavBarContainer.setBackgroundColor(elevatedAppbarColor);</span>
+
+<span class="nc" id="L190">        mNavBar = findViewById(R.id.navbar);</span>
+
+<span class="nc" id="L192">        mNavigateBackButton = findViewById(R.id.back_button);</span>
+<span class="nc" id="L193">        mNavigateForwardButton = findViewById(R.id.forward_button);</span>
+<span class="nc" id="L194">        mShareButton = findViewById(R.id.share_button);</span>
+<span class="nc" id="L195">        mExternalBrowserButton = findViewById(R.id.external_browser_button);</span>
+<span class="nc" id="L196">        mPreviewModeButton = findViewById(R.id.preview_type_selector_button);</span>
+<span class="nc" id="L197">        mDesktopPreviewHint = findViewById(R.id.desktop_preview_hint);</span>
+
+<span class="nc" id="L199">        TooltipCompat.setTooltipText(mNavigateBackButton, mNavigateBackButton.getContentDescription());</span>
+<span class="nc" id="L200">        TooltipCompat.setTooltipText(mNavigateForwardButton, mNavigateForwardButton.getContentDescription());</span>
+<span class="nc" id="L201">        TooltipCompat.setTooltipText(mShareButton, mShareButton.getContentDescription());</span>
+<span class="nc" id="L202">        TooltipCompat.setTooltipText(mExternalBrowserButton, mExternalBrowserButton.getContentDescription());</span>
+<span class="nc" id="L203">        TooltipCompat.setTooltipText(mPreviewModeButton, mPreviewModeButton.getContentDescription());</span>
+
+<span class="nc" id="L205">        mNavigateBackButton.setOnClickListener(new OnClickListener() {</span>
+            @Override public void onClick(View v) {
+<span class="nc" id="L207">                mViewModel.navigateBack();</span>
+<span class="nc" id="L208">            }</span>
+        });
+
+<span class="nc" id="L211">        mNavigateForwardButton.setOnClickListener(new OnClickListener() {</span>
+            @Override public void onClick(View v) {
+<span class="nc" id="L213">                mViewModel.navigateForward();</span>
+<span class="nc" id="L214">            }</span>
+        });
+
+<span class="nc" id="L217">        mShareButton.setOnClickListener(new OnClickListener() {</span>
+            @Override public void onClick(View v) {
+<span class="nc" id="L219">                mViewModel.share();</span>
+<span class="nc" id="L220">            }</span>
+        });
+
+<span class="nc" id="L223">        mExternalBrowserButton.setOnClickListener(new OnClickListener() {</span>
+            @Override public void onClick(View v) {
+<span class="nc" id="L225">                mViewModel.openPageInExternalBrowser();</span>
+<span class="nc" id="L226">            }</span>
+        });
+
+<span class="nc" id="L229">        mPreviewModeButton.setOnClickListener(new OnClickListener() {</span>
+            @Override public void onClick(View v) {
+<span class="nc" id="L231">                mViewModel.togglePreviewModeSelectorVisibility(true);</span>
+<span class="nc" id="L232">            }</span>
+        });
+
+<span class="nc" id="L235">        final Bundle extras = getIntent().getExtras();</span>
+
+<span class="nc bnc" id="L237" title="All 2 branches missed.">        if (extras != null) {</span>
+<span class="nc" id="L238">            mPreviewModeChangeAllowed = extras.getBoolean(SHOW_PREVIEW_MODE_TOGGLE, false);</span>
+<span class="nc bnc" id="L239" title="All 2 branches missed.">            if (!mPreviewModeChangeAllowed) {</span>
+<span class="nc" id="L240">                mNavBar.setWeightSum(80);</span>
+<span class="nc" id="L241">                mPreviewModeButton.setVisibility(View.GONE);</span>
+            }
+        }
+
+<span class="nc" id="L245">        mPreviewModeSelectorPopup = new PreviewModeSelectorPopup(this, mPreviewModeButton);</span>
+
+<span class="nc" id="L247">        setupToolbar();</span>
+
+<span class="nc" id="L249">        mViewModel.track(Stat.WEBVIEW_DISPLAYED);</span>
+<span class="nc" id="L250">    }</span>
+
+    private void setupToolbar() {
+<span class="nc" id="L253">        Toolbar toolbar = findViewById(R.id.toolbar);</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">        if (toolbar != null) {</span>
+<span class="nc" id="L255">            setSupportActionBar(toolbar);</span>
+
+<span class="nc" id="L257">            ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">            if (actionBar != null) {</span>
+<span class="nc" id="L259">                showSubtitle(actionBar);</span>
+<span class="nc" id="L260">                actionBar.setDisplayShowTitleEnabled(true);</span>
+<span class="nc" id="L261">                actionBar.setDisplayHomeAsUpEnabled(true);</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">                if (isActionableDirectUsage()) {</span>
+<span class="nc" id="L263">                    String title = getIntent().getStringExtra(ACTION_BAR_TITLE);</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">                    if (title != null) {</span>
+<span class="nc" id="L265">                        actionBar.setTitle(title);</span>
+                    }
+                }
+            }
+        }
+<span class="nc" id="L270">    }</span>
+
+    private void showSubtitle(ActionBar actionBar) {
+<span class="nc" id="L273">        Bundle extras = getIntent().getExtras();</span>
+
+<span class="nc bnc" id="L275" title="All 2 branches missed.">        if (extras == null) {</span>
+<span class="nc" id="L276">            return;</span>
+        }
+
+<span class="nc" id="L279">        String originalUrl = extras.getString(URL_TO_LOAD);</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">        if (originalUrl != null) {</span>
+<span class="nc" id="L281">            Uri uri = Uri.parse(originalUrl);</span>
+<span class="nc" id="L282">            actionBar.setSubtitle(uri.getHost());</span>
+        }
+<span class="nc" id="L284">    }</span>
+
+    private void initRetryButton() {
+<span class="nc" id="L287">        mActionableEmptyView.button.setOnClickListener(new OnClickListener() {</span>
+            @Override public void onClick(View v) {
+<span class="nc" id="L289">                mViewModel.loadIfNecessary();</span>
+<span class="nc" id="L290">            }</span>
+        });
+<span class="nc" id="L292">    }</span>
+
+    private void initViewModel(WPWebViewUsageCategory webViewUsageCategory) {
+<span class="nc" id="L295">        mViewModel = new ViewModelProvider(this, mViewModelFactory).get(WPWebViewViewModel.class);</span>
+<span class="nc" id="L296">        mViewModel.getUiState().observe(this, new Observer&lt;WebPreviewUiState&gt;() {</span>
+            @Override public void onChanged(@Nullable WebPreviewUiState webPreviewUiState) {
+<span class="nc bnc" id="L298" title="All 2 branches missed.">                if (webPreviewUiState != null) {</span>
+<span class="nc" id="L299">                    mUiHelpers.updateVisibility(mActionableEmptyView,</span>
+<span class="nc" id="L300">                            webPreviewUiState.getActionableEmptyView());</span>
+<span class="nc" id="L301">                    mUiHelpers.updateVisibility(mFullScreenProgressLayout,</span>
+<span class="nc" id="L302">                            webPreviewUiState.getFullscreenProgressLayoutVisibility());</span>
+
+<span class="nc bnc" id="L304" title="All 2 branches missed.">                    if (webPreviewUiState instanceof WebPreviewFullscreenUiState) {</span>
+<span class="nc" id="L305">                        WebPreviewFullscreenUiState state = (WebPreviewFullscreenUiState) webPreviewUiState;</span>
+<span class="nc" id="L306">                        mUiHelpers.setImageOrHide(mActionableEmptyView.image, state.getImageRes());</span>
+<span class="nc" id="L307">                        mUiHelpers.setTextOrHide(mActionableEmptyView.title, state.getTitleText());</span>
+<span class="nc" id="L308">                        mUiHelpers.setTextOrHide(mActionableEmptyView.subtitle, state.getSubtitleText());</span>
+<span class="nc" id="L309">                        mUiHelpers.updateVisibility(mActionableEmptyView.button, state.getButtonVisibility());</span>
+                    }
+
+<span class="nc" id="L312">                    invalidateOptionsMenu();</span>
+                }
+<span class="nc" id="L314">            }</span>
+        });
+
+<span class="nc" id="L317">        mViewModel.getLoadNeeded().observe(this, new Observer&lt;Boolean&gt;() {</span>
+            @Override public void onChanged(@Nullable Boolean loadNeeded) {
+<span class="nc bnc" id="L319" title="All 6 branches missed.">                if (!isActionableDirectUsage() &amp;&amp; loadNeeded != null &amp;&amp; loadNeeded) {</span>
+<span class="nc" id="L320">                    loadContent();</span>
+                }
+<span class="nc" id="L322">            }</span>
+        });
+
+
+<span class="nc" id="L326">        mViewModel.getNavbarUiState().observe(this, new Observer&lt;NavBarUiState&gt;() {</span>
+            @Override
+            public void onChanged(@Nullable NavBarUiState navBarUiState) {
+<span class="nc bnc" id="L329" title="All 2 branches missed.">                if (navBarUiState != null) {</span>
+<span class="nc" id="L330">                    mNavigateBackButton.setEnabled(navBarUiState.getBackNavigationEnabled());</span>
+<span class="nc" id="L331">                    mNavigateForwardButton.setEnabled(navBarUiState.getForwardNavigationEnabled());</span>
+<span class="nc" id="L332">                    AniUtils.animateBottomBar(mDesktopPreviewHint, navBarUiState.getPreviewModeHintVisible());</span>
+<span class="nc" id="L333">                    mDesktopPreviewHint.setText(navBarUiState.getReviewHintResId());</span>
+                }
+<span class="nc" id="L335">            }</span>
+        });
+
+<span class="nc" id="L338">        mViewModel.getNavigateBack().observe(this, new Observer&lt;Unit&gt;() {</span>
+            @Override
+            public void onChanged(@Nullable Unit unit) {
+<span class="nc bnc" id="L341" title="All 2 branches missed.">                if (mWebView.canGoBack()) {</span>
+<span class="nc" id="L342">                    mWebView.goBack();</span>
+<span class="nc" id="L343">                    refreshBackForwardNavButtons();</span>
+                }
+<span class="nc" id="L345">            }</span>
+        });
+
+<span class="nc" id="L348">        mViewModel.getNavigateForward().observe(this, new Observer&lt;Unit&gt;() {</span>
+            @Override
+            public void onChanged(@Nullable Unit unit) {
+<span class="nc bnc" id="L351" title="All 2 branches missed.">                if (mWebView.canGoForward()) {</span>
+<span class="nc" id="L352">                    mWebView.goForward();</span>
+<span class="nc" id="L353">                    refreshBackForwardNavButtons();</span>
+                }
+<span class="nc" id="L355">            }</span>
+        });
+
+<span class="nc" id="L358">        mViewModel.getShare().observe(this, new Observer&lt;Unit&gt;() {</span>
+            @Override
+            public void onChanged(@Nullable Unit unit) {
+<span class="nc" id="L361">                Intent share = new Intent(Intent.ACTION_SEND);</span>
+<span class="nc" id="L362">                share.setType(&quot;text/plain&quot;);</span>
+                // Use the preferred shareable URL or the default webview URL
+<span class="nc" id="L364">                Bundle extras = getIntent().getExtras();</span>
+<span class="nc" id="L365">                String shareableUrl = extras.getString(SHAREABLE_URL, null);</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">                if (TextUtils.isEmpty(shareableUrl)) {</span>
+<span class="nc" id="L367">                    shareableUrl = mWebView.getUrl();</span>
+                }
+<span class="nc" id="L369">                share.putExtra(Intent.EXTRA_TEXT, shareableUrl);</span>
+<span class="nc" id="L370">                String shareSubject = extras.getString(SHARE_SUBJECT, null);</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">                if (!TextUtils.isEmpty(shareSubject)) {</span>
+<span class="nc" id="L372">                    share.putExtra(Intent.EXTRA_SUBJECT, shareSubject);</span>
+                }
+<span class="nc" id="L374">                startActivity(Intent.createChooser(share, getText(R.string.share_link)));</span>
+<span class="nc" id="L375">            }</span>
+        });
+
+<span class="nc" id="L378">        mViewModel.getOpenExternalBrowser().observe(this, new Observer&lt;Unit&gt;() {</span>
+            @Override
+            public void onChanged(@Nullable Unit unit) {
+<span class="nc" id="L381">                ReaderActivityLauncher.openUrl(WPWebViewActivity.this, mWebView.getUrl(),</span>
+                        ReaderActivityLauncher.OpenUrlType.EXTERNAL);
+<span class="nc" id="L383">            }</span>
+        });
+
+<span class="nc" id="L386">        mViewModel.getPreviewModeSelector().observe(this, new Observer&lt;PreviewModeSelectorStatus&gt;() {</span>
+            @Override
+            public void onChanged(final @Nullable PreviewModeSelectorStatus previewModelSelectorStatus) {
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                if (previewModelSelectorStatus != null) {</span>
+<span class="nc" id="L390">                    mPreviewModeButton.setEnabled(previewModelSelectorStatus.isEnabled());</span>
+<span class="nc bnc" id="L391" title="All 2 branches missed.">                    if (previewModelSelectorStatus.isVisible()) {</span>
+<span class="nc" id="L392">                        mPreviewModeSelectorPopup.show(mViewModel);</span>
+                    }
+                }
+<span class="nc" id="L395">            }</span>
+        });
+
+<span class="nc" id="L398">        mViewModel.getPreviewMode().observe(this, new Observer&lt;PreviewMode&gt;() {</span>
+            @Override
+            public void onChanged(@Nullable PreviewMode previewMode) {
+<span class="nc" id="L401">                mWebView.reload();</span>
+<span class="nc" id="L402">            }</span>
+        });
+<span class="nc" id="L404">        mViewModel.start(webViewUsageCategory);</span>
+<span class="nc" id="L405">    }</span>
+
+    public static void openUrlByUsingGlobalWPCOMCredentials(Context context, String url) {
+<span class="nc" id="L408">        openWPCOMURL(context, url, null, null, false, false);</span>
+<span class="nc" id="L409">    }</span>
+
+    public static void openUrlByUsingGlobalWPCOMCredentials(Context context,
+                                                            String url,
+                                                            boolean allowPreviewModeSelection) {
+<span class="nc" id="L414">        openWPCOMURL(context, url, null, null, allowPreviewModeSelection, false);</span>
+<span class="nc" id="L415">    }</span>
+
+    public static void openPostUrlByUsingGlobalWPCOMCredentials(Context context, String url, String shareableUrl,
+                                                                String shareSubject, boolean allowPreviewModeSelection,
+                                                                boolean startPreviewForResult) {
+<span class="nc" id="L420">        openWPCOMURL(context, url, shareableUrl, shareSubject, allowPreviewModeSelection, startPreviewForResult);</span>
+<span class="nc" id="L421">    }</span>
+
+    // frameNonce is used to show drafts, without it &quot;no page found&quot; error would be thrown
+    public static void openJetpackBlogPostPreview(Context context, String url, String shareableUrl, String shareSubject,
+                                                  String frameNonce, boolean allowPreviewModeSelection,
+                                                  boolean startPreviewForResult, long privateSiteId) {
+<span class="nc bnc" id="L427" title="All 2 branches missed.">        if (!TextUtils.isEmpty(frameNonce)) {</span>
+<span class="nc" id="L428">            url += &quot;&amp;frame-nonce=&quot; + UrlUtils.urlEncode(frameNonce);</span>
+        }
+<span class="nc" id="L430">        Intent intent = new Intent(context, WPWebViewActivity.class);</span>
+<span class="nc" id="L431">        intent.putExtra(WPWebViewActivity.URL_TO_LOAD, url);</span>
+<span class="nc" id="L432">        intent.putExtra(WPWebViewActivity.DISABLE_LINKS_ON_PAGE, false);</span>
+<span class="nc" id="L433">        intent.putExtra(WPWebViewActivity.SHOW_PREVIEW_MODE_TOGGLE, allowPreviewModeSelection);</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">        if (!TextUtils.isEmpty(shareableUrl)) {</span>
+<span class="nc" id="L435">            intent.putExtra(WPWebViewActivity.SHAREABLE_URL, shareableUrl);</span>
+        }
+<span class="nc bnc" id="L437" title="All 2 branches missed.">        if (!TextUtils.isEmpty(shareSubject)) {</span>
+<span class="nc" id="L438">            intent.putExtra(WPWebViewActivity.SHARE_SUBJECT, shareSubject);</span>
+        }
+<span class="nc bnc" id="L440" title="All 2 branches missed.">        if (privateSiteId &gt; 0) {</span>
+<span class="nc" id="L441">            intent.putExtra(WPWebViewActivity.PRIVATE_AT_SITE_ID, privateSiteId);</span>
+        }
+<span class="nc bnc" id="L443" title="All 2 branches missed.">        if (startPreviewForResult) {</span>
+<span class="nc" id="L444">            intent.putExtra(WPWebViewActivity.WEBVIEW_USAGE_TYPE, WPWebViewUsageCategory.REMOTE_PREVIEWING.getValue());</span>
+<span class="nc" id="L445">            ((Activity) context).startActivityForResult(intent, RequestCodes.REMOTE_PREVIEW_POST);</span>
+        } else {
+<span class="nc" id="L447">            context.startActivity(intent);</span>
+        }
+<span class="nc" id="L449">    }</span>
+
+    public static void openUrlByUsingBlogCredentials(
+            Context context,
+            SiteModel site,
+            PostImmutableModel post,
+            String url,
+            String[] listOfAllowedURLs,
+            boolean disableLinks,
+            boolean allowPreviewModeSelection,
+            boolean startPreviewForResult) {
+<span class="nc bnc" id="L460" title="All 2 branches missed.">        if (context == null) {</span>
+<span class="nc" id="L461">            AppLog.e(AppLog.T.UTILS, &quot;Context is null&quot;);</span>
+<span class="nc" id="L462">            return;</span>
+        }
+
+<span class="nc bnc" id="L465" title="All 2 branches missed.">        if (site == null) {</span>
+<span class="nc" id="L466">            AppLog.e(AppLog.T.UTILS, &quot;Site is null&quot;);</span>
+<span class="nc" id="L467">            return;</span>
+        }
+
+<span class="nc bnc" id="L470" title="All 2 branches missed.">        if (TextUtils.isEmpty(url)) {</span>
+<span class="nc" id="L471">            AppLog.e(AppLog.T.UTILS, &quot;Empty or null URL&quot;);</span>
+<span class="nc" id="L472">            ToastUtils.showToast(context, R.string.invalid_site_url_message, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L473">            return;</span>
+        }
+
+<span class="nc" id="L476">        String authURL = WPWebViewActivity.getSiteLoginUrl(site);</span>
+<span class="nc" id="L477">        Intent intent = new Intent(context, WPWebViewActivity.class);</span>
+<span class="nc" id="L478">        intent.putExtra(WPWebViewActivity.AUTHENTICATION_USER, site.getUsername());</span>
+<span class="nc" id="L479">        intent.putExtra(WPWebViewActivity.AUTHENTICATION_PASSWD, site.getPassword());</span>
+<span class="nc" id="L480">        intent.putExtra(WPWebViewActivity.URL_TO_LOAD, url);</span>
+<span class="nc" id="L481">        intent.putExtra(WPWebViewActivity.AUTHENTICATION_URL, authURL);</span>
+<span class="nc" id="L482">        intent.putExtra(WPWebViewActivity.LOCAL_BLOG_ID, site.getId());</span>
+<span class="nc" id="L483">        intent.putExtra(WPWebViewActivity.DISABLE_LINKS_ON_PAGE, disableLinks);</span>
+<span class="nc" id="L484">        intent.putExtra(WPWebViewActivity.SHOW_PREVIEW_MODE_TOGGLE, allowPreviewModeSelection);</span>
+<span class="nc" id="L485">        intent.putExtra(ALLOWED_URLS, listOfAllowedURLs);</span>
+<span class="nc bnc" id="L486" title="All 2 branches missed.">        if (post != null) {</span>
+<span class="nc" id="L487">            intent.putExtra(WPWebViewActivity.SHAREABLE_URL, post.getLink());</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">            if (!TextUtils.isEmpty(post.getTitle())) {</span>
+<span class="nc" id="L489">                intent.putExtra(WPWebViewActivity.SHARE_SUBJECT, post.getTitle());</span>
+            }
+        }
+
+<span class="nc bnc" id="L493" title="All 2 branches missed.">        if (startPreviewForResult) {</span>
+<span class="nc" id="L494">            intent.putExtra(WPWebViewActivity.WEBVIEW_USAGE_TYPE,</span>
+<span class="nc" id="L495">                    WPWebViewUsageCategory.REMOTE_PREVIEWING.getValue());</span>
+<span class="nc" id="L496">            ((Activity) context).startActivityForResult(intent, RequestCodes.REMOTE_PREVIEW_POST);</span>
+        } else {
+<span class="nc" id="L498">            context.startActivity(intent);</span>
+        }
+<span class="nc" id="L500">    }</span>
+
+    public static void openActionableEmptyViewDirectly(
+            Context context,
+            WPWebViewUsageCategory directUsageCategory,
+            String postTitle
+    ) {
+<span class="nc" id="L507">        Intent intent = new Intent(context, WPWebViewActivity.class);</span>
+<span class="nc" id="L508">        intent.putExtra(WPWebViewActivity.WEBVIEW_USAGE_TYPE, directUsageCategory.getValue());</span>
+<span class="nc" id="L509">        intent.putExtra(WPWebViewActivity.ACTION_BAR_TITLE, postTitle);</span>
+<span class="nc" id="L510">        context.startActivity(intent);</span>
+<span class="nc" id="L511">    }</span>
+
+    protected void toggleNavbarVisibility(boolean isVisible) {
+<span class="nc bnc" id="L514" title="All 2 branches missed.">        if (mNavBarContainer != null) {</span>
+<span class="nc bnc" id="L515" title="All 2 branches missed.">            if (isVisible) {</span>
+<span class="nc" id="L516">                mNavBarContainer.setVisibility(View.VISIBLE);</span>
+            } else {
+<span class="nc" id="L518">                mNavBarContainer.setVisibility(View.GONE);</span>
+            }
+        }
+<span class="nc" id="L521">    }</span>
+
+    public static void openURL(Context context, String url) {
+<span class="nc" id="L524">        openURL(context, url, false, 0);</span>
+<span class="nc" id="L525">    }</span>
+
+    public static void openURL(Context context, String url, String referrer) {
+<span class="nc" id="L528">        openURL(context, url, referrer, false, 0);</span>
+<span class="nc" id="L529">    }</span>
+
+    public static void openURL(Context context, String url, boolean allowPreviewModeSelection,
+                               long privateSiteId) {
+<span class="nc" id="L533">        openURL(context, url, null, allowPreviewModeSelection, privateSiteId);</span>
+<span class="nc" id="L534">    }</span>
+
+    public static void openURL(Context context, String url, String referrer,
+                               boolean allowPreviewModeSelection, long privateSiteId) {
+<span class="nc bnc" id="L538" title="All 2 branches missed.">        if (context == null) {</span>
+<span class="nc" id="L539">            AppLog.e(AppLog.T.UTILS, &quot;Context is null&quot;);</span>
+<span class="nc" id="L540">            return;</span>
+        }
+
+<span class="nc bnc" id="L543" title="All 2 branches missed.">        if (TextUtils.isEmpty(url)) {</span>
+<span class="nc" id="L544">            AppLog.e(AppLog.T.UTILS, &quot;Empty or null URL&quot;);</span>
+<span class="nc" id="L545">            ToastUtils.showToast(context, R.string.invalid_site_url_message, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L546">            return;</span>
+        }
+
+<span class="nc" id="L549">        Intent intent = new Intent(context, WPWebViewActivity.class);</span>
+<span class="nc" id="L550">        intent.putExtra(WPWebViewActivity.URL_TO_LOAD, url);</span>
+<span class="nc" id="L551">        intent.putExtra(WPWebViewActivity.SHOW_PREVIEW_MODE_TOGGLE, allowPreviewModeSelection);</span>
+<span class="nc bnc" id="L552" title="All 2 branches missed.">        if (privateSiteId &gt; 0) {</span>
+<span class="nc" id="L553">            intent.putExtra(WPWebViewActivity.PRIVATE_AT_SITE_ID, privateSiteId);</span>
+        }
+<span class="nc bnc" id="L555" title="All 2 branches missed.">        if (!TextUtils.isEmpty(referrer)) {</span>
+<span class="nc" id="L556">            intent.putExtra(REFERRER_URL, referrer);</span>
+        }
+<span class="nc" id="L558">        context.startActivity(intent);</span>
+<span class="nc" id="L559">    }</span>
+
+    protected static boolean checkContextAndUrl(Context context, String url) {
+<span class="nc bnc" id="L562" title="All 2 branches missed.">        if (context == null) {</span>
+<span class="nc" id="L563">            AppLog.e(AppLog.T.UTILS, &quot;Context is null&quot;);</span>
+<span class="nc" id="L564">            return false;</span>
+        }
+
+<span class="nc bnc" id="L567" title="All 2 branches missed.">        if (TextUtils.isEmpty(url)) {</span>
+<span class="nc" id="L568">            AppLog.e(AppLog.T.UTILS, &quot;Empty or null URL passed to openUrlByUsingMainWPCOMCredentials&quot;);</span>
+<span class="nc" id="L569">            ToastUtils.showToast(context, R.string.invalid_site_url_message, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L570">            return false;</span>
+        }
+<span class="nc" id="L572">        return true;</span>
+    }
+
+    private static void openWPCOMURL(Context context, String url, String shareableUrl, String shareSubject) {
+<span class="nc" id="L576">        openWPCOMURL(context, url, shareableUrl, shareSubject, false, false);</span>
+<span class="nc" id="L577">    }</span>
+
+    private static void openWPCOMURL(
+            Context context,
+            String url,
+            String shareableUrl,
+            String shareSubject,
+            boolean allowPreviewModeSelection,
+            boolean startPreviewForResult
+    ) {
+<span class="nc bnc" id="L587" title="All 2 branches missed.">        if (!checkContextAndUrl(context, url)) {</span>
+<span class="nc" id="L588">            return;</span>
+        }
+
+<span class="nc" id="L591">        Intent intent = new Intent(context, WPWebViewActivity.class);</span>
+<span class="nc" id="L592">        intent.putExtra(WPWebViewActivity.USE_GLOBAL_WPCOM_USER, true);</span>
+<span class="nc" id="L593">        intent.putExtra(WPWebViewActivity.URL_TO_LOAD, url);</span>
+<span class="nc" id="L594">        intent.putExtra(WPWebViewActivity.AUTHENTICATION_URL, WPCOM_LOGIN_URL);</span>
+<span class="nc" id="L595">        intent.putExtra(WPWebViewActivity.SHOW_PREVIEW_MODE_TOGGLE, allowPreviewModeSelection);</span>
+<span class="nc bnc" id="L596" title="All 2 branches missed.">        if (!TextUtils.isEmpty(shareableUrl)) {</span>
+<span class="nc" id="L597">            intent.putExtra(WPWebViewActivity.SHAREABLE_URL, shareableUrl);</span>
+        }
+<span class="nc bnc" id="L599" title="All 2 branches missed.">        if (!TextUtils.isEmpty(shareSubject)) {</span>
+<span class="nc" id="L600">            intent.putExtra(WPWebViewActivity.SHARE_SUBJECT, shareSubject);</span>
+        }
+
+<span class="nc bnc" id="L603" title="All 2 branches missed.">        if (startPreviewForResult) {</span>
+<span class="nc" id="L604">            intent.putExtra(WPWebViewActivity.WEBVIEW_USAGE_TYPE,</span>
+<span class="nc" id="L605">                    WPWebViewUsageCategory.REMOTE_PREVIEWING.getValue());</span>
+<span class="nc" id="L606">            ((Activity) context).startActivityForResult(intent, RequestCodes.REMOTE_PREVIEW_POST);</span>
+        } else {
+<span class="nc" id="L608">            context.startActivity(intent);</span>
+        }
+<span class="nc" id="L610">    }</span>
+
+    @SuppressLint(&quot;SetJavaScriptEnabled&quot;)
+    @Override
+    protected void configureWebView() {
+<span class="nc bnc" id="L615" title="All 2 branches missed.">        if (isActionableDirectUsage()) {</span>
+<span class="nc" id="L616">            return;</span>
+        }
+
+<span class="nc" id="L619">        mWebView.getSettings().setJavaScriptEnabled(true);</span>
+<span class="nc" id="L620">        mWebView.getSettings().setDomStorageEnabled(true);</span>
+<span class="nc" id="L621">        CookieManager cookieManager = CookieManager.getInstance();</span>
+<span class="nc" id="L622">        cookieManager.setAcceptThirdPartyCookies(mWebView, true);</span>
+
+<span class="nc" id="L624">        final Bundle extras = getIntent().getExtras();</span>
+
+        // Configure the allowed URLs if available
+<span class="nc" id="L627">        ArrayList&lt;String&gt; allowedURL = null;</span>
+<span class="nc bnc" id="L628" title="All 4 branches missed.">        if (extras != null &amp;&amp; extras.getBoolean(DISABLE_LINKS_ON_PAGE, false)) {</span>
+<span class="nc" id="L629">            String addressToLoad = extras.getString(URL_TO_LOAD);</span>
+<span class="nc" id="L630">            String authURL = extras.getString(AUTHENTICATION_URL);</span>
+<span class="nc" id="L631">            allowedURL = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L632" title="All 2 branches missed.">            if (!TextUtils.isEmpty(addressToLoad)) {</span>
+<span class="nc" id="L633">                allowedURL.add(addressToLoad);</span>
+            }
+<span class="nc bnc" id="L635" title="All 2 branches missed.">            if (!TextUtils.isEmpty(authURL)) {</span>
+<span class="nc" id="L636">                allowedURL.add(authURL);</span>
+            }
+
+<span class="nc bnc" id="L639" title="All 2 branches missed.">            if (extras.getStringArray(ALLOWED_URLS) != null) {</span>
+<span class="nc" id="L640">                String[] urls = extras.getStringArray(ALLOWED_URLS);</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">                for (String currentURL : urls) {</span>
+<span class="nc" id="L642">                    allowedURL.add(currentURL);</span>
+                }
+            }
+        }
+
+<span class="nc bnc" id="L647" title="All 2 branches missed.">        if (mPreviewModeChangeAllowed) {</span>
+<span class="nc" id="L648">            mWebView.getSettings().setUseWideViewPort(true);</span>
+<span class="nc" id="L649">            mWebView.setInitialScale(PREVIEW_INITIAL_SCALE);</span>
+        }
+
+<span class="nc" id="L652">        WebViewClient webViewClient = createWebViewClient(allowedURL);</span>
+
+<span class="nc" id="L654">        mWebView.setWebViewClient(webViewClient);</span>
+<span class="nc" id="L655">        mWPWebChromeClientWithFileChooser = new WPWebChromeClientWithFileChooser(</span>
+                this,
+                mWebView,
+                R.drawable.media_movieclip,
+<span class="nc" id="L659">                (ProgressBar) findViewById(R.id.progress_bar),</span>
+                this
+        );
+<span class="nc" id="L662">        mWebView.setWebChromeClient(mWPWebChromeClientWithFileChooser);</span>
+<span class="nc" id="L663">    }</span>
+
+    protected WebViewClient createWebViewClient(List&lt;String&gt; allowedURL) {
+        URLFilteredWebViewClient webViewClient;
+<span class="nc bnc" id="L667" title="All 2 branches missed.">        if (getIntent().hasExtra(LOCAL_BLOG_ID)) {</span>
+<span class="nc" id="L668">            SiteModel site = mSiteStore.getSiteByLocalId(getIntent().getIntExtra(LOCAL_BLOG_ID, -1));</span>
+<span class="nc bnc" id="L669" title="All 2 branches missed.">            if (site == null) {</span>
+<span class="nc" id="L670">                AppLog.e(AppLog.T.UTILS, &quot;No valid blog passed to WPWebViewActivity&quot;);</span>
+<span class="nc" id="L671">                setResultIfNeededAndFinish();</span>
+            }
+<span class="nc" id="L673">            webViewClient = new WPWebViewClient(site, mAccountStore.getAccessToken(), allowedURL, this);</span>
+<span class="nc" id="L674">        } else {</span>
+<span class="nc" id="L675">            webViewClient = new URLFilteredWebViewClient(allowedURL, this);</span>
+        }
+<span class="nc" id="L677">        return webViewClient;</span>
+    }
+
+    @Override
+    public void onWebViewPageLoaded() {
+<span class="nc bnc" id="L682" title="All 2 branches missed.">        if (mPreviewModeChangeAllowed) {</span>
+<span class="nc" id="L683">            enforcePreviewMode();</span>
+        } else {
+<span class="nc" id="L685">            mViewModel.onUrlLoaded();</span>
+        }
+<span class="nc" id="L687">        refreshBackForwardNavButtons();</span>
+<span class="nc" id="L688">    }</span>
+
+    private void refreshBackForwardNavButtons() {
+<span class="nc" id="L691">        mViewModel.toggleBackNavigation(mWebView.canGoBack());</span>
+<span class="nc" id="L692">        mViewModel.toggleForwardNavigation(mWebView.canGoForward());</span>
+<span class="nc" id="L693">    }</span>
+
+    private void enforcePreviewMode() {
+<span class="nc" id="L696">        int previewWidth = mViewModel.selectedPreviewMode().getPreviewWidth();</span>
+<span class="nc" id="L697">        setWebViewWidth(previewWidth);</span>
+<span class="nc" id="L698">        String script = getResources().getString(R.string.web_preview_width_script, previewWidth);</span>
+<span class="nc" id="L699">        new Handler().postDelayed(new Runnable() {</span>
+            @Override
+            public void run() {
+<span class="nc" id="L702">                mWebView.evaluateJavascript(script, value -&gt; mViewModel.onUrlLoaded());</span>
+<span class="nc" id="L703">            }</span>
+        }, PREVIEW_JS_EVALUATION_DELAY);
+<span class="nc" id="L705">    }</span>
+
+    private void setWebViewWidth(int previewWidth) {
+<span class="nc bnc" id="L708" title="All 2 branches missed.">        if (!mDisplayUtilsWrapper.isTablet()) return;</span>
+<span class="nc bnc" id="L709" title="All 2 branches missed.">        if (mViewModel.selectedPreviewMode() == PreviewMode.MOBILE) {</span>
+<span class="nc" id="L710">            int width = previewWidth * (int) getResources().getDisplayMetrics().density;</span>
+<span class="nc" id="L711">            LayoutParams params = new LayoutParams(width, LayoutParams.MATCH_PARENT);</span>
+<span class="nc" id="L712">            params.addRule(RelativeLayout.CENTER_HORIZONTAL);</span>
+<span class="nc" id="L713">            mWebView.setLayoutParams(params);</span>
+<span class="nc" id="L714">        } else {</span>
+<span class="nc" id="L715">            LayoutParams params = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);</span>
+<span class="nc" id="L716">            mWebView.setLayoutParams(params);</span>
+        }
+<span class="nc" id="L718">    }</span>
+
+    @Override
+    public void onWebViewReceivedError() {
+<span class="nc" id="L722">        mViewModel.onReceivedError();</span>
+<span class="nc" id="L723">    }</span>
+
+    @Override
+    protected void loadContent() {
+<span class="nc bnc" id="L727" title="All 2 branches missed.">        if (isActionableDirectUsage()) {</span>
+<span class="nc" id="L728">            return;</span>
+        }
+
+<span class="nc" id="L731">        Bundle extras = getIntent().getExtras();</span>
+
+<span class="nc bnc" id="L733" title="All 2 branches missed.">        if (extras == null) {</span>
+<span class="nc" id="L734">            AppLog.e(AppLog.T.UTILS, &quot;No valid parameters passed to WPWebViewActivity&quot;);</span>
+<span class="nc" id="L735">            setResultIfNeededAndFinish();</span>
+<span class="nc" id="L736">            return;</span>
+        }
+
+        // if we load content of private AT site we need to make sure we have a special cookie first
+<span class="nc" id="L740">        long privateAtSiteId = extras.getLong(PRIVATE_AT_SITE_ID);</span>
+<span class="nc bnc" id="L741" title="All 4 branches missed.">        if (privateAtSiteId &gt; 0 &amp;&amp; mPrivateAtomicCookie.isCookieRefreshRequired()) {</span>
+<span class="nc" id="L742">            PrivateAtCookieRefreshProgressDialog.Companion.showIfNecessary(getSupportFragmentManager());</span>
+<span class="nc" id="L743">            mDispatcher.dispatch(SiteActionBuilder.newFetchPrivateAtomicCookieAction(</span>
+                    new FetchPrivateAtomicCookiePayload(privateAtSiteId)));
+<span class="nc" id="L745">            return;</span>
+<span class="nc bnc" id="L746" title="All 4 branches missed.">        } else if (privateAtSiteId &gt; 0 &amp;&amp; mPrivateAtomicCookie.exists()) {</span>
+            // make sure we add cookie to the cookie manager if it exists
+<span class="nc" id="L748">            CookieManager.getInstance().setCookie(</span>
+<span class="nc" id="L749">                    mPrivateAtomicCookie.getDomain(), mPrivateAtomicCookie.getCookieContent()</span>
+            );
+        }
+
+<span class="nc" id="L753">        loadWebContent();</span>
+<span class="nc" id="L754">    }</span>
+
+    private void loadWebContent() {
+<span class="nc" id="L757">        Bundle extras = getIntent().getExtras();</span>
+<span class="nc" id="L758">        String addressToLoad = extras.getString(URL_TO_LOAD);</span>
+<span class="nc" id="L759">        String username = extras.getString(AUTHENTICATION_USER, &quot;&quot;);</span>
+<span class="nc" id="L760">        String password = extras.getString(AUTHENTICATION_PASSWD, &quot;&quot;);</span>
+<span class="nc" id="L761">        String authURL = extras.getString(AUTHENTICATION_URL);</span>
+
+<span class="nc bnc" id="L763" title="All 4 branches missed.">        if (TextUtils.isEmpty(addressToLoad) || !UrlUtils.isValidUrlAndHostNotNull(addressToLoad)) {</span>
+<span class="nc" id="L764">            AppLog.e(AppLog.T.UTILS, &quot;Empty or null or invalid URL passed to WPWebViewActivity&quot;);</span>
+<span class="nc" id="L765">            ToastUtils.showToast(this, R.string.invalid_site_url_message, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L766">            setResultIfNeededAndFinish();</span>
+<span class="nc" id="L767">            return;</span>
+        }
+
+<span class="nc bnc" id="L770" title="All 2 branches missed.">        if (extras.getBoolean(USE_GLOBAL_WPCOM_USER, false)) {</span>
+<span class="nc" id="L771">            username = mAccountStore.getAccount().getUserName();</span>
+
+            // Custom domains are not properly authenticated due to a server side(?) issue, so this gets around that
+<span class="nc bnc" id="L774" title="All 2 branches missed.">            if (!addressToLoad.contains(&quot;.wordpress.com&quot;)) {</span>
+<span class="nc" id="L775">                List&lt;SiteModel&gt; wpComSites = mSiteStore.getWPComSites();</span>
+<span class="nc bnc" id="L776" title="All 2 branches missed.">                for (SiteModel siteModel : wpComSites) {</span>
+                    // Only replace the url if we know the unmapped url and if it's a custom domain
+<span class="nc bnc" id="L778" title="All 2 branches missed.">                    if (!TextUtils.isEmpty(siteModel.getUnmappedUrl())</span>
+<span class="nc bnc" id="L779" title="All 2 branches missed.">                        &amp;&amp; !siteModel.getUrl().contains(&quot;.wordpress.com&quot;)) {</span>
+<span class="nc" id="L780">                        addressToLoad = addressToLoad.replace(siteModel.getUrl(), siteModel.getUnmappedUrl());</span>
+                    }
+<span class="nc" id="L782">                }</span>
+            }
+        }
+
+<span class="nc bnc" id="L786" title="All 6 branches missed.">        if (TextUtils.isEmpty(authURL) &amp;&amp; TextUtils.isEmpty(username) &amp;&amp; TextUtils.isEmpty(password)) {</span>
+            // Only the URL to load is passed to this activity. Use the normal un-authenticated
+            // loader, optionally with our referrer header
+<span class="nc" id="L789">            String referrerUrl = extras.getString(REFERRER_URL);</span>
+<span class="nc bnc" id="L790" title="All 2 branches missed.">            if (!TextUtils.isEmpty(referrerUrl)) {</span>
+<span class="nc" id="L791">                Map&lt;String, String&gt; headers = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L792">                headers.put(&quot;Referer&quot;, referrerUrl);</span>
+<span class="nc" id="L793">                loadUrl(addressToLoad, headers);</span>
+<span class="nc" id="L794">            } else {</span>
+<span class="nc" id="L795">                loadUrl(addressToLoad);</span>
+            }
+<span class="nc" id="L797">        } else {</span>
+<span class="nc bnc" id="L798" title="All 4 branches missed.">            if (TextUtils.isEmpty(authURL) || !UrlUtils.isValidUrlAndHostNotNull(authURL)) {</span>
+<span class="nc" id="L799">                AppLog.e(AppLog.T.UTILS, &quot;Empty or null or invalid auth URL passed to WPWebViewActivity&quot;);</span>
+<span class="nc" id="L800">                ToastUtils.showToast(this, R.string.invalid_site_url_message, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L801">                setResultIfNeededAndFinish();</span>
+            }
+
+<span class="nc bnc" id="L804" title="All 2 branches missed.">            if (TextUtils.isEmpty(username)) {</span>
+<span class="nc" id="L805">                AppLog.e(AppLog.T.UTILS, &quot;Username empty/null&quot;);</span>
+<span class="nc" id="L806">                ToastUtils.showToast(this, R.string.incorrect_credentials, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L807">                setResultIfNeededAndFinish();</span>
+            }
+
+<span class="nc" id="L810">            loadAuthenticatedUrl(authURL, addressToLoad, username, password);</span>
+        }
+<span class="nc" id="L812">    }</span>
+
+    /**
+     * Login to the WordPress.com and load the specified URL.
+     */
+    protected void loadAuthenticatedUrl(String authenticationURL, String urlToLoad, String username, String password) {
+<span class="nc" id="L818">        String postData = getAuthenticationPostData(authenticationURL, urlToLoad, username, password,</span>
+<span class="nc" id="L819">                mAccountStore.getAccessToken());</span>
+
+<span class="nc" id="L821">        mWebView.postUrl(authenticationURL, postData.getBytes());</span>
+<span class="nc" id="L822">    }</span>
+
+    public static String getAuthenticationPostData(String authenticationUrl, String urlToLoad, String username,
+                                                   String password, String token) {
+<span class="nc bnc" id="L826" title="All 2 branches missed.">        if (TextUtils.isEmpty(authenticationUrl)) {</span>
+<span class="nc" id="L827">            return &quot;&quot;;</span>
+        }
+
+        try {
+<span class="nc" id="L831">            String postData = String.format(</span>
+                    &quot;log=%s&amp;pwd=%s&amp;redirect_to=%s&quot;,
+<span class="nc" id="L833">                    URLEncoder.encode(StringUtils.notNullStr(username), ENCODING_UTF8),</span>
+<span class="nc" id="L834">                    URLEncoder.encode(StringUtils.notNullStr(password), ENCODING_UTF8),</span>
+<span class="nc" id="L835">                    URLEncoder.encode(StringUtils.notNullStr(urlToLoad), ENCODING_UTF8)</span>
+            );
+
+            // Add token authorization when signing in to WP.com
+<span class="nc bnc" id="L839" title="All 2 branches missed.">            if (WPUrlUtils.safeToAddWordPressComAuthToken(authenticationUrl)</span>
+<span class="nc bnc" id="L840" title="All 4 branches missed.">                &amp;&amp; authenticationUrl.contains(&quot;wordpress.com/wp-login.php&quot;) &amp;&amp; !TextUtils.isEmpty(token)) {</span>
+<span class="nc" id="L841">                postData += &quot;&amp;authorization=Bearer &quot; + URLEncoder.encode(token, ENCODING_UTF8);</span>
+            }
+
+<span class="nc" id="L844">            return postData;</span>
+<span class="nc" id="L845">        } catch (UnsupportedEncodingException e) {</span>
+<span class="nc" id="L846">            AppLog.e(AppLog.T.UTILS, e);</span>
+        }
+
+<span class="nc" id="L849">        return &quot;&quot;;</span>
+    }
+
+    /**
+     * Get the URL of the WordPress login page.
+     *
+     * @return URL of the login page.
+     */
+    public static String getSiteLoginUrl(SiteModel site) {
+<span class="nc" id="L858">        String loginURL = site.getLoginUrl();</span>
+
+        // Try to guess the login URL if blogOptions is null (blog not added to the app), or WP version is &lt; 3.6
+<span class="nc bnc" id="L861" title="All 2 branches missed.">        if (loginURL == null) {</span>
+<span class="nc bnc" id="L862" title="All 2 branches missed.">            if (site.getUrl() != null) {</span>
+<span class="nc" id="L863">                return site.getUrl() + &quot;/wp-login.php&quot;;</span>
+            } else {
+<span class="nc" id="L865">                return site.getXmlRpcUrl().replace(&quot;xmlrpc.php&quot;, &quot;wp-login.php&quot;);</span>
+            }
+        }
+
+<span class="nc" id="L869">        return loginURL;</span>
+    }
+
+    private boolean isActionableDirectUsage() {
+<span class="nc" id="L873">        return mViewModel.isActionableDirectUsage();</span>
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+<span class="nc" id="L878">        super.onCreateOptionsMenu(menu);</span>
+
+<span class="nc" id="L880">        MenuInflater inflater = getMenuInflater();</span>
+<span class="nc" id="L881">        inflater.inflate(R.menu.webview, menu);</span>
+<span class="nc" id="L882">        return true;</span>
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(final MenuItem item) {
+<span class="nc bnc" id="L887" title="All 2 branches missed.">        if (mWebView == null) {</span>
+<span class="nc" id="L888">            return false;</span>
+        }
+
+<span class="nc" id="L891">        int itemID = item.getItemId();</span>
+
+<span class="nc bnc" id="L893" title="All 2 branches missed.">        if (itemID == android.R.id.home) {</span>
+<span class="nc" id="L894">            mViewModel.track(Stat.WEBVIEW_DISMISSED);</span>
+<span class="nc" id="L895">            setResultIfNeeded();</span>
+<span class="nc bnc" id="L896" title="All 2 branches missed.">        } else if (itemID == R.id.menu_refresh) {</span>
+<span class="nc" id="L897">            mViewModel.track(Stat.WEBVIEW_RELOAD_TAPPED);</span>
+<span class="nc" id="L898">            mWebView.reload();</span>
+<span class="nc" id="L899">            return true;</span>
+        }
+
+<span class="nc" id="L902">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    // Since currently we are going to look at the request code and not at the result code
+    // in the onActivityResult callbacks, this method is actually redundant, but wanted
+    // to be explicit in case of future expansions on this.
+    private void setResultIfNeeded() {
+<span class="nc bnc" id="L909" title="All 2 branches missed.">        if (getCallingActivity() != null) {</span>
+<span class="nc" id="L910">            setResult(RESULT_OK);</span>
+        }
+<span class="nc" id="L912">    }</span>
+
+    private void setResultIfNeededAndFinish() {
+<span class="nc" id="L915">        setResultIfNeeded();</span>
+<span class="nc" id="L916">        finish();</span>
+<span class="nc" id="L917">    }</span>
+
+    @Override
+    public void onBackPressed() {
+<span class="nc bnc" id="L921" title="All 2 branches missed.">        if (mWebView.canGoBack()) {</span>
+<span class="nc" id="L922">            mWebView.goBack();</span>
+<span class="nc" id="L923">            refreshBackForwardNavButtons();</span>
+        } else {
+<span class="nc" id="L925">            super.onBackPressed();</span>
+<span class="nc" id="L926">            mViewModel.track(Stat.WEBVIEW_DISMISSED);</span>
+<span class="nc" id="L927">            setResultIfNeeded();</span>
+        }
+<span class="nc" id="L929">    }</span>
+
+    @Override
+    public void onStart() {
+<span class="nc" id="L933">        super.onStart();</span>
+<span class="nc" id="L934">        mDispatcher.register(this);</span>
+<span class="nc" id="L935">    }</span>
+
+    @Override
+    public void onStop() {
+<span class="nc" id="L939">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L940">        super.onStop();</span>
+<span class="nc" id="L941">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onPrivateAtomicCookieFetched(OnPrivateAtomicCookieFetched event) {
+<span class="nc bnc" id="L946" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L947">            AppLog.e(AppLog.T.MAIN,</span>
+                    &quot;Failed to load private AT cookie. &quot; + event.error.type + &quot; - &quot; + event.error.message);
+<span class="nc" id="L949">            WPSnackbar.make(findViewById(R.id.webview_wrapper), R.string.media_accessing_failed, Snackbar.LENGTH_LONG)</span>
+<span class="nc" id="L950">                      .show();</span>
+        } else {
+<span class="nc" id="L952">            CookieManager.getInstance().setCookie(mPrivateAtomicCookie.getDomain(),</span>
+<span class="nc" id="L953">                    mPrivateAtomicCookie.getCookieContent());</span>
+        }
+
+        // if the dialog is not showing by the time cookie fetched it means that it was dismissed and content was loaded
+<span class="nc bnc" id="L957" title="All 2 branches missed.">        if (PrivateAtCookieRefreshProgressDialog.Companion.isShowing(getSupportFragmentManager())) {</span>
+<span class="nc" id="L958">            loadWebContent();</span>
+<span class="nc" id="L959">            PrivateAtCookieRefreshProgressDialog.Companion.dismissIfNecessary(getSupportFragmentManager());</span>
+        }
+<span class="nc" id="L961">    }</span>
+
+    @Override
+    public void onCookieProgressDialogCancelled() {
+<span class="nc" id="L965">        WPSnackbar.make(findViewById(R.id.webview_wrapper), R.string.media_accessing_failed, Snackbar.LENGTH_LONG)</span>
+<span class="nc" id="L966">                  .show();</span>
+<span class="nc" id="L967">        loadWebContent();</span>
+<span class="nc" id="L968">    }</span>
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+<span class="nc" id="L972">        super.onActivityResult(requestCode, resultCode, data);</span>
+<span class="nc bnc" id="L973" title="All 2 branches missed.">        if (mWPWebChromeClientWithFileChooser != null) {</span>
+<span class="nc" id="L974">            mWPWebChromeClientWithFileChooser.onActivityResult(requestCode, resultCode, data);</span>
+        }
+<span class="nc" id="L976">    }</span>
+
+    @Override
+    public void startActivityForFileChooserResult(Intent intent, int requestCode) {
+<span class="nc" id="L980">        startActivityForResult(intent, requestCode);</span>
+<span class="nc" id="L981">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

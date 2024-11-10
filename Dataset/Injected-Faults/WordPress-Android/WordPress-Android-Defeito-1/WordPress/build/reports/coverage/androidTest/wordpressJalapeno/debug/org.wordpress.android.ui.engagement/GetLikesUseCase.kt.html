@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GetLikesUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.engagement</a> &gt; <span class="el_source">GetLikesUseCase.kt</span></div><h1>GetLikesUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.engagement
+
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.flow
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.action.CommentAction.FETCHED_COMMENT_LIKES
+import org.wordpress.android.fluxc.generated.CommentActionBuilder
+import org.wordpress.android.fluxc.generated.PostActionBuilder
+import org.wordpress.android.fluxc.model.CauseOfOnPostChanged.FetchPostLikes
+import org.wordpress.android.fluxc.model.LikeModel
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.CommentStore
+import org.wordpress.android.fluxc.store.CommentStore.FetchCommentLikesPayload
+import org.wordpress.android.fluxc.store.CommentStore.OnCommentLikesChanged
+import org.wordpress.android.fluxc.store.PostStore
+import org.wordpress.android.fluxc.store.PostStore.FetchPostLikesPayload
+import org.wordpress.android.fluxc.store.PostStore.OnPostLikesChanged
+import org.wordpress.android.fluxc.store.Store.OnChanged
+import org.wordpress.android.ui.engagement.GetLikesUseCase.FailureType.GENERIC
+import org.wordpress.android.ui.engagement.GetLikesUseCase.FailureType.NO_NETWORK
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.Failure
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.Failure.EmptyStateData
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.LikesData
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.Loading
+import org.wordpress.android.ui.engagement.GetLikesUseCase.LikeCategory.COMMENT_LIKE
+import org.wordpress.android.ui.engagement.GetLikesUseCase.LikeCategory.POST_LIKE
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.ui.utils.UiString.UiStringText
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.NetworkUtilsWrapper
+import javax.inject.Inject
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+
+// NOTE: Do not remove the commentStore and postStore fields; commentStore seems needed so that the store is registered
+// when we dispatch events; postStore added to keep the rational even if not strictly needed as of today.
+// Possibly there is a better way, in that case please update here.
+<span class="nc" id="L46">class GetLikesUseCase @Inject constructor(</span>
+<span class="nc" id="L47">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L48">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L49">    @SuppressWarnings(&quot;Unused&quot;)</span>
+<span class="nc" id="L50">    val commentStore: CommentStore,</span>
+<span class="nc" id="L51">    @SuppressWarnings(&quot;Unused&quot;)</span>
+<span class="nc" id="L52">    val postStore: PostStore,</span>
+<span class="nc" id="L53">    val accountStore: AccountStore</span>
+) {
+<span class="nc" id="L55">    private var getLikesContinuations = mutableMapOf&lt;String, Continuation&lt;OnChanged&lt;*&gt;&gt;&gt;()</span>
+
+<span class="nc" id="L57">    init {</span>
+<span class="nc" id="L58">        dispatcher.register(this)</span>
+<span class="nc" id="L59">    }</span>
+
+    fun clear() {
+<span class="nc" id="L62">        dispatcher.unregister(this)</span>
+<span class="nc" id="L63">    }</span>
+
+    suspend fun getLikesForPost(
+        fingerPrint: LikeGroupFingerPrint,
+        paginationParams: PaginationParams
+<span class="nc" id="L68">    ): Flow&lt;GetLikesState&gt; = flow {</span>
+<span class="nc" id="L69">        getLikes(POST_LIKE, this, fingerPrint, paginationParams)</span>
+<span class="nc" id="L70">    }</span>
+
+    suspend fun getLikesForComment(
+        fingerPrint: LikeGroupFingerPrint,
+        paginationParams: PaginationParams
+<span class="nc" id="L75">    ): Flow&lt;GetLikesState&gt; = flow {</span>
+<span class="nc" id="L76">        getLikes(COMMENT_LIKE, this, fingerPrint, paginationParams)</span>
+<span class="nc" id="L77">    }</span>
+
+    @SuppressWarnings(&quot;ComplexMethod&quot;, &quot;NestedBlockDepth&quot;, &quot;LoopWithTooManyJumpStatements&quot;)
+<span class="nc" id="L80">    private suspend fun getLikes(</span>
+        category: LikeCategory,
+        flow: FlowCollector&lt;GetLikesState&gt;,
+        fingerPrint: LikeGroupFingerPrint,
+        paginationParams: PaginationParams
+    ) {
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        if (!paginationParams.requestNextPage) {</span>
+<span class="nc" id="L87">            flow.emit(Loading)</span>
+<span class="nc" id="L88">            delay(PROGRESS_DELAY_MS)</span>
+        }
+
+<span class="nc bnc" id="L91" title="All 2 branches missed.">        val noNetworkDetected = !networkUtilsWrapper.isNetworkAvailable()</span>
+
+<span class="nc" id="L93">        val result = makeRequest(category, fingerPrint, paginationParams)</span>
+
+<span class="nc bnc" id="L95" title="All 4 branches missed.">        val isPostLikeEvent = category == POST_LIKE &amp;&amp; result is OnPostLikesChanged</span>
+<span class="nc bnc" id="L96" title="All 4 branches missed.">        val isCommentLikeEvent = category == COMMENT_LIKE &amp;&amp; result is OnCommentLikesChanged</span>
+
+<span class="nc bnc" id="L98" title="All 4 branches missed.">        if (isPostLikeEvent || isCommentLikeEvent) {</span>
+<span class="nc" id="L99">            var likes = listOf&lt;LikeModel&gt;()</span>
+<span class="nc" id="L100">            var errorMessage: String? = null</span>
+<span class="nc" id="L101">            var hasMore = false</span>
+
+<span class="nc bnc" id="L103" title="All 2 branches missed.">            if (result is OnPostLikesChanged) {</span>
+<span class="nc" id="L104">                likes = result.postLikes</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                if (result.isError) errorMessage = result.error.message</span>
+<span class="nc" id="L106">                hasMore = result.hasMore</span>
+            }
+
+<span class="nc bnc" id="L109" title="All 2 branches missed.">            if (result is OnCommentLikesChanged) {</span>
+<span class="nc" id="L110">                likes = result.commentLikes</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">                if (result.isError) errorMessage = result.error.message</span>
+            }
+
+<span class="nc" id="L114">            val pageInfo = PagingInfo(</span>
+<span class="nc" id="L115">                    pageLength = paginationParams.pageLength,</span>
+<span class="nc bnc" id="L116" title="All 4 branches missed.">                    page = if (likes.isNotEmpty()) ((likes.size - 1) / paginationParams.pageLength) + 1 else 1</span>
+            )
+<span class="nc" id="L118">            flow.emit(</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">                if (result.isError) {</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">                    getFailureState(noNetworkDetected, likes, errorMessage, fingerPrint.expectedNumLikes, pageInfo)</span>
+                } else {
+<span class="nc bnc" id="L122" title="All 2 branches missed.">                    LikesData(likes, fingerPrint.expectedNumLikes, hasMore, pageInfo)</span>
+                }
+            )
+        }
+<span class="nc" id="L126">    }</span>
+
+    private suspend fun makeRequest(
+        category: LikeCategory,
+        fingerPrint: LikeGroupFingerPrint,
+        paginationParams: PaginationParams
+    ): OnChanged&lt;*&gt; {
+<span class="nc bnc" id="L133" title="All 2 branches missed.">        return suspendCoroutine {</span>
+<span class="nc" id="L134">            getLikesContinuations[category.getActionKey(fingerPrint.siteId, fingerPrint.postOrCommentId)] = it</span>
+<span class="nc bnc" id="L135" title="All 3 branches missed.">            when (category) {</span>
+                POST_LIKE -&gt; {
+<span class="nc" id="L137">                    val payload = FetchPostLikesPayload(</span>
+<span class="nc" id="L138">                            fingerPrint.siteId,</span>
+<span class="nc" id="L139">                            fingerPrint.postOrCommentId,</span>
+<span class="nc" id="L140">                            paginationParams.requestNextPage,</span>
+<span class="nc" id="L141">                            paginationParams.pageLength</span>
+                    )
+<span class="nc" id="L143">                    dispatcher.dispatch(PostActionBuilder.newFetchPostLikesAction(payload))</span>
+                }
+                COMMENT_LIKE -&gt; {
+<span class="nc" id="L146">                    val payload = FetchCommentLikesPayload(</span>
+<span class="nc" id="L147">                            fingerPrint.siteId,</span>
+<span class="nc" id="L148">                            fingerPrint.postOrCommentId,</span>
+<span class="nc" id="L149">                            paginationParams.requestNextPage,</span>
+<span class="nc" id="L150">                            paginationParams.pageLength</span>
+                    )
+<span class="nc" id="L152">                    dispatcher.dispatch(CommentActionBuilder.newFetchCommentLikesAction(payload))</span>
+                }
+            }
+<span class="nc" id="L155">        }</span>
+    }
+
+    private fun getFailureState(
+        noNetworkDetected: Boolean,
+        orderedLikes: List&lt;LikeModel&gt;,
+        errorMessage: String?,
+        expectedNumLikes: Int,
+        pageInfo: PagingInfo
+    ): Failure {
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        return if (noNetworkDetected) {</span>
+<span class="nc" id="L166">            Failure(</span>
+<span class="nc" id="L167">                    NO_NETWORK,</span>
+<span class="nc" id="L168">                    UiStringRes(R.string.get_likes_no_network_error),</span>
+<span class="nc" id="L169">                    orderedLikes,</span>
+<span class="nc" id="L170">                    EmptyStateData(</span>
+<span class="nc" id="L171">                            orderedLikes.isEmpty(),</span>
+<span class="nc" id="L172">                            UiStringRes(R.string.no_network_title)</span>
+                    ),
+<span class="nc" id="L174">                    expectedNumLikes,</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                    orderedLikes.isNotEmpty(),</span>
+<span class="nc" id="L176">                    pageInfo</span>
+            )
+        } else {
+<span class="nc" id="L179">            Failure(</span>
+<span class="nc" id="L180">                    GENERIC,</span>
+<span class="nc bnc" id="L181" title="All 6 branches missed.">                    if (errorMessage.isNullOrEmpty()) {</span>
+<span class="nc" id="L182">                        UiStringRes(R.string.get_likes_unknown_error)</span>
+                    } else {
+<span class="nc" id="L184">                        UiStringText(errorMessage)</span>
+                    },
+<span class="nc" id="L186">                    orderedLikes,</span>
+<span class="nc" id="L187">                    EmptyStateData(</span>
+<span class="nc" id="L188">                            orderedLikes.isEmpty(),</span>
+<span class="nc" id="L189">                            UiStringRes(R.string.get_likes_empty_state_title)</span>
+                    ),
+<span class="nc" id="L191">                    expectedNumLikes,</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">                    orderedLikes.isNotEmpty(),</span>
+<span class="nc" id="L193">                    pageInfo</span>
+            )
+        }
+    }
+
+    @Subscribe(threadMode = ThreadMode.BACKGROUND)
+    fun onPostLikesChanged(event: OnPostLikesChanged) {
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        if (event.causeOfChange !is FetchPostLikes) {</span>
+<span class="nc" id="L201">            AppLog.d(T.POSTS, &quot;GetLikesUseCase &gt; unexpected event cause received [${event.causeOfChange}]&quot;)</span>
+<span class="nc" id="L202">            return</span>
+        }
+
+<span class="nc" id="L205">        val key = POST_LIKE.getActionKey(event.siteId, event.postId)</span>
+
+<span class="nc bnc" id="L207" title="All 2 branches missed.">        getLikesContinuations[key]?.let {</span>
+<span class="nc" id="L208">            it.resume(event)</span>
+<span class="nc" id="L209">            getLikesContinuations.remove(key)</span>
+        }
+<span class="nc" id="L211">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.BACKGROUND)
+    fun onCommentLikesChanged(event: OnCommentLikesChanged) {
+<span class="nc bnc" id="L215" title="All 2 branches missed.">        if (event.causeOfChange != FETCHED_COMMENT_LIKES) {</span>
+<span class="nc" id="L216">            AppLog.d(T.COMMENTS, &quot;GetLikesUseCase &gt; unexpected event cause received [${event.causeOfChange}]&quot;)</span>
+<span class="nc" id="L217">            return</span>
+        }
+
+<span class="nc" id="L220">        val key = COMMENT_LIKE.getActionKey(event.siteId, event.commentId)</span>
+
+<span class="nc bnc" id="L222" title="All 2 branches missed.">        getLikesContinuations[key]?.let {</span>
+<span class="nc" id="L223">            it.resume(event)</span>
+<span class="nc" id="L224">            getLikesContinuations.remove(key)</span>
+        }
+<span class="nc" id="L226">    }</span>
+
+    sealed class GetLikesState {
+<span class="nc" id="L229">        object Loading : GetLikesState()</span>
+
+<span class="nc" id="L231">        data class LikesData(</span>
+<span class="nc" id="L232">            val likes: List&lt;LikeModel&gt;,</span>
+<span class="nc" id="L233">            val expectedNumLikes: Int,</span>
+<span class="nc" id="L234">            val hasMore: Boolean = false,</span>
+<span class="nc" id="L235">            val pageInfo: PagingInfo,</span>
+<span class="nc" id="L236">            val iLike: Boolean? = null</span>
+<span class="nc" id="L237">        ) : GetLikesState()</span>
+
+<span class="nc" id="L239">        data class Failure(</span>
+<span class="nc" id="L240">            val failureType: FailureType,</span>
+<span class="nc" id="L241">            val error: UiString,</span>
+<span class="nc" id="L242">            val cachedLikes: List&lt;LikeModel&gt;,</span>
+<span class="nc" id="L243">            val emptyStateData: EmptyStateData,</span>
+<span class="nc" id="L244">            val expectedNumLikes: Int,</span>
+<span class="nc" id="L245">            val hasMore: Boolean,</span>
+<span class="nc" id="L246">            val pageInfo: PagingInfo,</span>
+<span class="nc" id="L247">            val iLike: Boolean? = null</span>
+<span class="nc" id="L248">        ) : GetLikesState() {</span>
+<span class="nc" id="L249">            data class EmptyStateData(</span>
+<span class="nc" id="L250">                val showEmptyState: Boolean,</span>
+<span class="nc" id="L251">                val title: UiStringRes? = null</span>
+<span class="nc" id="L252">            )</span>
+<span class="nc" id="L253">        }</span>
+    }
+
+<span class="nc" id="L256">    data class PagingInfo(val pageLength: Int, val page: Int)</span>
+
+    // Extend error categories if appropriate
+    enum class FailureType {
+<span class="nc" id="L260">        NO_NETWORK,</span>
+<span class="nc" id="L261">        GENERIC</span>
+    }
+
+    enum class LikeCategory {
+<span class="nc" id="L265">        POST_LIKE,</span>
+<span class="nc" id="L266">        COMMENT_LIKE;</span>
+
+        fun getActionKey(siteId: Long, entityId: Long): String {
+<span class="nc" id="L269">            return &quot;${this.name}-$siteId-$entityId&quot;</span>
+        }
+    }
+
+<span class="nc" id="L273">    data class LikeGroupFingerPrint(val siteId: Long, val postOrCommentId: Long, val expectedNumLikes: Int)</span>
+<span class="nc" id="L274">    data class PaginationParams(val requestNextPage: Boolean, val pageLength: Int)</span>
+
+    companion object {
+        // Pretty arbitrary amount to allow the loading state to appear to the user
+        private const val PROGRESS_DELAY_MS = 600L
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

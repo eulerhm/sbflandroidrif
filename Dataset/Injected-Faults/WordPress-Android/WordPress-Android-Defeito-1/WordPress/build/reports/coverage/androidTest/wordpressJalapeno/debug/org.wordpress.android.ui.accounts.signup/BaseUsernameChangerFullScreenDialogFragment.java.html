@@ -1,0 +1,392 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>BaseUsernameChangerFullScreenDialogFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.accounts.signup</a> &gt; <span class="el_source">BaseUsernameChangerFullScreenDialogFragment.java</span></div><h1>BaseUsernameChangerFullScreenDialogFragment.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.accounts.signup;
+
+import android.os.Bundle;
+import android.os.Handler;
+import android.text.Editable;
+import android.text.Html;
+import android.text.Spanned;
+import android.text.SpannedString;
+import android.text.TextUtils;
+import android.text.TextWatcher;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.SimpleItemAnimator;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.textfield.TextInputEditText;
+
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.jetbrains.annotations.NotNull;
+import org.wordpress.android.R;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.AccountActionBuilder;
+import org.wordpress.android.fluxc.store.AccountStore.FetchUsernameSuggestionsPayload;
+import org.wordpress.android.fluxc.store.AccountStore.OnUsernameSuggestionsFetched;
+import org.wordpress.android.ui.FullScreenDialogFragment.FullScreenDialogContent;
+import org.wordpress.android.ui.FullScreenDialogFragment.FullScreenDialogController;
+import org.wordpress.android.ui.accounts.signup.UsernameChangerRecyclerViewAdapter.OnUsernameSelectedListener;
+import org.wordpress.android.util.ActivityUtils;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+import javax.inject.Inject;
+
+import dagger.android.support.DaggerFragment;
+
+/**
+ * Created so that the base suggestions functionality can become shareable as similar functionality is being used in the
+ * the Account settings &amp; sign-up flow to change the username.
+ */
+<span class="nc" id="L58">public abstract class BaseUsernameChangerFullScreenDialogFragment extends DaggerFragment implements</span>
+        FullScreenDialogContent, OnUsernameSelectedListener {
+    private ProgressBar mProgressBar;
+
+    private FullScreenDialogController mDialogController;
+    private Handler mGetSuggestionsHandler;
+    private RecyclerView mUsernameSuggestions;
+    private Runnable mGetSuggestionsRunnable;
+    private String mDisplayName;
+    private String mUsername;
+    private String mUsernameSelected;
+    private String mUsernameSuggestionInput;
+    private TextInputEditText mUsernameView;
+    private TextView mHeaderView;
+    private UsernameChangerRecyclerViewAdapter mUsernamesAdapter;
+    private boolean mIsShowingDismissDialog;
+    private boolean mShouldWatchText; // Flag handling text watcher to avoid network call on device rotation.
+    private int mUsernameSelectedIndex;
+<span class="nc" id="L76">    private int mSearchCount = 0;</span>
+
+    public static final String EXTRA_DISPLAY_NAME = &quot;EXTRA_DISPLAY_NAME&quot;;
+    public static final String EXTRA_USERNAME = &quot;EXTRA_USERNAME&quot;;
+    public static final String KEY_IS_SHOWING_DISMISS_DIALOG = &quot;KEY_IS_SHOWING_DISMISS_DIALOG&quot;;
+    public static final String KEY_SHOULD_WATCH_TEXT = &quot;KEY_SHOULD_WATCH_TEXT&quot;;
+    public static final String KEY_USERNAME_SELECTED = &quot;KEY_USERNAME_SELECTED&quot;;
+    public static final String KEY_USERNAME_SELECTED_INDEX = &quot;KEY_USERNAME_SELECTED_INDEX&quot;;
+    public static final String KEY_USERNAME_SUGGESTIONS = &quot;KEY_USERNAME_SUGGESTIONS&quot;;
+    public static final String RESULT_USERNAME = &quot;RESULT_USERNAME&quot;;
+    public static final String KEY_SEARCH_COUNT = &quot;KEY_SEARCH_COUNT&quot;;
+    public static final int GET_SUGGESTIONS_INTERVAL_MS = 1000;
+    public static final String SOURCE = &quot;source&quot;;
+    public static final String SEARCH_COUNT = &quot;search_count&quot;;
+
+    @Inject protected Dispatcher mDispatcher;
+
+    /**
+     * Fragments that extend this class are required to provide the event that should be
+     * tracked in case fetching of the username suggestions fail.
+     *
+     * @return {@link Stat}
+     */
+    abstract Stat getSuggestionsFailedStat();
+
+    /**
+     * Specifies if the header text should be updated when a new username is selected
+     * or if the the initial username should remain.
+     *
+     * @return true or false
+     */
+    abstract boolean canHeaderTextLiveUpdate();
+
+    /**
+     * Creates the text that's displayed in the header.
+     *
+     * @param username
+     * @param display
+     * @return formatted header template
+     */
+    abstract Spanned getHeaderText(String username, String display);
+
+    /**
+     * Fragments that extend this class are required to provide the tracking event source
+     * @return String
+     */
+    abstract String getTrackEventSource();
+
+    public static Bundle newBundle(String displayName, String username) {
+<span class="nc" id="L125">        Bundle bundle = new Bundle();</span>
+<span class="nc" id="L126">        bundle.putString(EXTRA_DISPLAY_NAME, displayName);</span>
+<span class="nc" id="L127">        bundle.putString(EXTRA_USERNAME, username);</span>
+<span class="nc" id="L128">        return bundle;</span>
+    }
+
+    @Nullable
+    @Override
+    public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container,
+                             @Nullable Bundle savedInstanceState) {
+<span class="nc" id="L135">        ViewGroup rootView = (ViewGroup) inflater.inflate(R.layout.username_changer_dialog_fragment, container, false);</span>
+
+<span class="nc" id="L137">        mDisplayName = getArguments().getString(EXTRA_DISPLAY_NAME);</span>
+<span class="nc" id="L138">        mUsername = getArguments().getString(EXTRA_USERNAME);</span>
+
+<span class="nc" id="L140">        mUsernameSuggestions = rootView.findViewById(R.id.suggestions);</span>
+<span class="nc" id="L141">        mUsernameSuggestions.setLayoutManager(new LinearLayoutManager(getActivity()));</span>
+        // Stop list from blinking when data set is updated.
+<span class="nc" id="L143">        ((SimpleItemAnimator) mUsernameSuggestions.getItemAnimator()).setSupportsChangeAnimations(false);</span>
+
+<span class="nc" id="L145">        mProgressBar = rootView.findViewById(R.id.progress);</span>
+
+<span class="nc" id="L147">        return rootView;</span>
+    }
+
+    @Override
+    public void setController(final FullScreenDialogController controller) {
+<span class="nc" id="L152">        mDialogController = controller;</span>
+<span class="nc" id="L153">    }</span>
+
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+<span class="nc" id="L157">        super.onViewCreated(view, savedInstanceState);</span>
+
+<span class="nc bnc" id="L159" title="All 2 branches missed.">        if (savedInstanceState != null) {</span>
+<span class="nc" id="L160">            mIsShowingDismissDialog = savedInstanceState.getBoolean(KEY_IS_SHOWING_DISMISS_DIALOG);</span>
+<span class="nc" id="L161">            mShouldWatchText = savedInstanceState.getBoolean(KEY_SHOULD_WATCH_TEXT);</span>
+<span class="nc" id="L162">            mUsernameSelected = savedInstanceState.getString(KEY_USERNAME_SELECTED);</span>
+<span class="nc" id="L163">            mUsernameSelectedIndex = savedInstanceState.getInt(KEY_USERNAME_SELECTED_INDEX);</span>
+<span class="nc" id="L164">            mSearchCount = savedInstanceState.getInt(KEY_SEARCH_COUNT);</span>
+<span class="nc" id="L165">            ArrayList&lt;String&gt; suggestions = savedInstanceState.getStringArrayList(KEY_USERNAME_SUGGESTIONS);</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">            if (suggestions != null) {</span>
+<span class="nc" id="L167">                setUsernameSuggestions(suggestions);</span>
+            } else {
+<span class="nc" id="L169">                mUsernameSuggestionInput = getUsernameQueryFromDisplayName();</span>
+<span class="nc" id="L170">                getUsernameSuggestions(mUsernameSuggestionInput);</span>
+            }
+
+<span class="nc bnc" id="L173" title="All 2 branches missed.">            if (mIsShowingDismissDialog) {</span>
+<span class="nc" id="L174">                showDismissDialog();</span>
+            }
+<span class="nc" id="L176">        } else {</span>
+<span class="nc" id="L177">            mShouldWatchText = true;</span>
+<span class="nc" id="L178">            mUsernameSelected = mUsername;</span>
+<span class="nc" id="L179">            mUsernameSelectedIndex = 0;</span>
+<span class="nc" id="L180">            mUsernameSuggestionInput = getUsernameQueryFromDisplayName();</span>
+<span class="nc" id="L181">            getUsernameSuggestions(mUsernameSuggestionInput);</span>
+<span class="nc" id="L182">            mSearchCount = 0;</span>
+        }
+
+<span class="nc" id="L185">        mHeaderView = getView().findViewById(R.id.header);</span>
+<span class="nc" id="L186">        mHeaderView.setText(getHeaderText(getUsernameOrSelected(), mDisplayName));</span>
+
+<span class="nc" id="L188">        mUsernameView = getView().findViewById(R.id.username);</span>
+<span class="nc" id="L189">        mUsernameView.addTextChangedListener(new TextWatcher() {</span>
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+<span class="nc" id="L192">            }</span>
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+<span class="nc" id="L196">            }</span>
+
+            @Override
+            public void afterTextChanged(Editable s) {
+<span class="nc bnc" id="L200" title="All 2 branches missed.">                if (s.toString().trim().isEmpty()) {</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">                    if (canHeaderTextLiveUpdate()) {</span>
+<span class="nc" id="L202">                        mHeaderView.setText(getHeaderText(getUsernameOrSelected(), mDisplayName));</span>
+                    }
+<span class="nc" id="L204">                    mGetSuggestionsHandler.removeCallbacks(mGetSuggestionsRunnable);</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">                } else if (mShouldWatchText) {</span>
+<span class="nc" id="L206">                    mGetSuggestionsHandler.removeCallbacks(mGetSuggestionsRunnable);</span>
+<span class="nc" id="L207">                    mGetSuggestionsHandler.postDelayed(mGetSuggestionsRunnable, GET_SUGGESTIONS_INTERVAL_MS);</span>
+                } else {
+<span class="nc" id="L209">                    mShouldWatchText = true;</span>
+                }
+<span class="nc" id="L211">            }</span>
+        });
+
+<span class="nc" id="L214">        mGetSuggestionsHandler = new Handler();</span>
+<span class="nc" id="L215">        mGetSuggestionsRunnable = () -&gt; {</span>
+<span class="nc" id="L216">            mSearchCount++;</span>
+<span class="nc" id="L217">            trackSearch();</span>
+<span class="nc" id="L218">            mUsernameSuggestionInput = mUsernameView.getText().toString();</span>
+<span class="nc" id="L219">            getUsernameSuggestions(mUsernameSuggestionInput);</span>
+<span class="nc" id="L220">        };</span>
+<span class="nc" id="L221">    }</span>
+
+    @Override
+    public void onStart() {
+<span class="nc" id="L225">        super.onStart();</span>
+<span class="nc" id="L226">        mDispatcher.register(this);</span>
+<span class="nc" id="L227">    }</span>
+
+    @Override
+    public void onStop() {
+<span class="nc" id="L231">        super.onStop();</span>
+<span class="nc" id="L232">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L233">    }</span>
+
+    @Override
+    public void onDestroy() {
+<span class="nc" id="L237">        mGetSuggestionsHandler.removeCallbacksAndMessages(null);</span>
+<span class="nc" id="L238">        super.onDestroy();</span>
+<span class="nc" id="L239">    }</span>
+
+    @Override
+    public boolean onConfirmClicked(FullScreenDialogController controller) {
+<span class="nc" id="L243">        ActivityUtils.hideKeyboard(getActivity());</span>
+
+<span class="nc bnc" id="L245" title="All 4 branches missed.">        if (mUsernamesAdapter != null &amp;&amp; mUsernamesAdapter.mItems != null) {</span>
+<span class="nc" id="L246">            onUsernameConfirmed(controller, mUsernameSelected);</span>
+        } else {
+<span class="nc" id="L248">            controller.dismiss();</span>
+        }
+
+<span class="nc" id="L251">        return true;</span>
+    }
+
+    public abstract void onUsernameConfirmed(FullScreenDialogController controller, String usernameSelected);
+
+    @Override
+    public boolean onDismissClicked(FullScreenDialogController controller) {
+<span class="nc" id="L258">        ActivityUtils.hideKeyboard(getActivity());</span>
+
+<span class="nc bnc" id="L260" title="All 2 branches missed.">        if (hasUsernameChanged()) {</span>
+<span class="nc" id="L261">            showDismissDialog();</span>
+        } else {
+<span class="nc" id="L263">            controller.dismiss();</span>
+        }
+
+<span class="nc" id="L266">        return true;</span>
+    }
+
+    @Override
+    public void onSaveInstanceState(@NotNull Bundle outState) {
+<span class="nc" id="L271">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L272">        outState.putBoolean(KEY_IS_SHOWING_DISMISS_DIALOG, mIsShowingDismissDialog);</span>
+<span class="nc" id="L273">        outState.putBoolean(KEY_SHOULD_WATCH_TEXT, false);</span>
+<span class="nc" id="L274">        outState.putString(KEY_USERNAME_SELECTED, mUsernameSelected);</span>
+<span class="nc" id="L275">        outState.putInt(KEY_USERNAME_SELECTED_INDEX, mUsernameSelectedIndex);</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">        if (mUsernamesAdapter != null) {</span>
+<span class="nc" id="L277">            outState.putStringArrayList(KEY_USERNAME_SUGGESTIONS, new ArrayList&lt;&gt;(mUsernamesAdapter.mItems));</span>
+        }
+<span class="nc" id="L279">        outState.putInt(KEY_SEARCH_COUNT, mSearchCount);</span>
+<span class="nc" id="L280">    }</span>
+
+    @Override
+    public void onUsernameSelected(String username) {
+<span class="nc bnc" id="L284" title="All 2 branches missed.">        if (canHeaderTextLiveUpdate()) {</span>
+<span class="nc" id="L285">            mHeaderView.setText(getHeaderText(username, mDisplayName));</span>
+        }
+<span class="nc" id="L287">        mUsernameSelected = username;</span>
+<span class="nc" id="L288">        mUsernameSelectedIndex = mUsernamesAdapter.getSelectedItem();</span>
+<span class="nc" id="L289">    }</span>
+
+    private String getUsernameOrSelected() {
+<span class="nc bnc" id="L292" title="All 2 branches missed.">        return TextUtils.isEmpty(mUsernameSelected) ? mUsername : mUsernameSelected;</span>
+    }
+
+    public String getUsernameSelected() {
+<span class="nc" id="L296">        return mUsernameSelected;</span>
+    }
+
+    private void getUsernameSuggestions(String usernameQuery) {
+<span class="nc" id="L300">        showProgress(true);</span>
+
+<span class="nc" id="L302">        FetchUsernameSuggestionsPayload payload = new FetchUsernameSuggestionsPayload(usernameQuery);</span>
+<span class="nc" id="L303">        mDispatcher.dispatch(AccountActionBuilder.newFetchUsernameSuggestionsAction(payload));</span>
+<span class="nc" id="L304">    }</span>
+
+    private String getUsernameQueryFromDisplayName() {
+<span class="nc" id="L307">        return mDisplayName.replace(&quot; &quot;, &quot;&quot;).toLowerCase(Locale.ROOT);</span>
+    }
+
+    public boolean hasUsernameChanged() {
+<span class="nc bnc" id="L311" title="All 2 branches missed.">        return !TextUtils.equals(mUsername, mUsernameSelected);</span>
+    }
+
+    private void populateUsernameSuggestions(List&lt;String&gt; suggestions) {
+<span class="nc" id="L315">        String usernameOrSelected = getUsernameOrSelected();</span>
+
+<span class="nc" id="L317">        List&lt;String&gt; suggestionList = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L318">        suggestionList.add(usernameOrSelected);</span>
+
+<span class="nc bnc" id="L320" title="All 2 branches missed.">        for (String suggestion : suggestions) {</span>
+<span class="nc bnc" id="L321" title="All 2 branches missed.">            if (!TextUtils.equals(suggestion, usernameOrSelected)) {</span>
+<span class="nc" id="L322">                suggestionList.add(suggestion);</span>
+            }
+<span class="nc" id="L324">        }</span>
+
+<span class="nc" id="L326">        mUsernameSelectedIndex = 0;</span>
+<span class="nc" id="L327">        setUsernameSuggestions(suggestionList);</span>
+<span class="nc" id="L328">    }</span>
+
+    private void setUsernameSuggestions(List&lt;String&gt; suggestions) {
+<span class="nc" id="L331">        mUsernamesAdapter = new UsernameChangerRecyclerViewAdapter(getActivity(), suggestions);</span>
+<span class="nc" id="L332">        mUsernamesAdapter.setOnUsernameSelectedListener(BaseUsernameChangerFullScreenDialogFragment.this);</span>
+<span class="nc" id="L333">        mUsernamesAdapter.setSelectedItem(mUsernameSelectedIndex);</span>
+<span class="nc" id="L334">        mUsernameSuggestions.setAdapter(mUsernamesAdapter);</span>
+<span class="nc" id="L335">    }</span>
+
+    private void showDismissDialog() {
+<span class="nc" id="L338">        mIsShowingDismissDialog = true;</span>
+
+<span class="nc" id="L340">        new MaterialAlertDialogBuilder(getContext())</span>
+<span class="nc" id="L341">                .setMessage(R.string.username_changer_dismiss_message)</span>
+<span class="nc" id="L342">                .setPositiveButton(R.string.username_changer_dismiss_button_positive,</span>
+<span class="nc" id="L343">                        (dialog, which) -&gt; mDialogController.dismiss())</span>
+<span class="nc" id="L344">                .setNegativeButton(android.R.string.cancel,</span>
+<span class="nc" id="L345">                        (dialog, which) -&gt; mIsShowingDismissDialog = false)</span>
+<span class="nc" id="L346">                .show();</span>
+<span class="nc" id="L347">    }</span>
+
+    protected void showErrorDialog(Spanned message) {
+<span class="nc" id="L350">        AlertDialog dialog = new MaterialAlertDialogBuilder(getContext())</span>
+<span class="nc" id="L351">                .setMessage(message)</span>
+<span class="nc" id="L352">                .setPositiveButton(R.string.login_error_button, null)</span>
+<span class="nc" id="L353">                .create();</span>
+<span class="nc" id="L354">        dialog.show();</span>
+<span class="nc" id="L355">    }</span>
+
+    protected void showProgress(boolean showProgress) {
+<span class="nc bnc" id="L358" title="All 2 branches missed.">        mUsernameSuggestions.setVisibility(showProgress ? View.GONE : View.VISIBLE);</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">        mProgressBar.setVisibility(showProgress ? View.VISIBLE : View.GONE);</span>
+<span class="nc" id="L360">    }</span>
+
+    private void trackSearch() {
+<span class="nc" id="L363">        Map&lt;String, String&gt; props = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L364">        props.put(SOURCE, getTrackEventSource());</span>
+<span class="nc" id="L365">        props.put(SEARCH_COUNT, String.valueOf(mSearchCount));</span>
+<span class="nc" id="L366">        AnalyticsTracker.track(Stat.CHANGE_USERNAME_SEARCH_PERFORMED, props);</span>
+<span class="nc" id="L367">    }</span>
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onUsernameSuggestionsFetched(OnUsernameSuggestionsFetched event) {
+<span class="nc" id="L371">        showProgress(false);</span>
+
+<span class="nc bnc" id="L373" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L374">            AnalyticsTracker.track(getSuggestionsFailedStat());</span>
+<span class="nc" id="L375">            AppLog.e(T.API, &quot;onUsernameSuggestionsFetched: &quot; + event.error.type + &quot; - &quot; + event.error.message);</span>
+<span class="nc" id="L376">            showErrorDialog(new SpannedString(getString(R.string.username_changer_error_generic)));</span>
+<span class="nc bnc" id="L377" title="All 2 branches missed.">        } else if (event.suggestions.size() == 0) {</span>
+<span class="nc" id="L378">            String error = String.format(</span>
+<span class="nc" id="L379">                    getString(R.string.username_changer_error_none),</span>
+                    &quot;&lt;b&gt;&quot;,
+                    mUsernameSuggestionInput,
+                    &quot;&lt;/b&gt;&quot;
+            );
+<span class="nc" id="L384">            mUsernameView.setError(Html.fromHtml(</span>
+                    error
+            ));
+<span class="nc" id="L387">        } else {</span>
+<span class="nc" id="L388">            populateUsernameSuggestions(event.suggestions);</span>
+        }
+<span class="nc" id="L390">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

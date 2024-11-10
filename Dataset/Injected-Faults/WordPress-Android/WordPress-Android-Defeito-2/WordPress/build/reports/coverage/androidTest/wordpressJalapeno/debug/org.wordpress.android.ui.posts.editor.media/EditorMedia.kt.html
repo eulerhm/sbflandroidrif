@@ -1,0 +1,332 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EditorMedia.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts.editor.media</a> &gt; <span class="el_source">EditorMedia.kt</span></div><h1>EditorMedia.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts.editor.media
+
+import android.net.Uri
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.analytics.AnalyticsTracker.Stat.EDITOR_UPLOAD_MEDIA_FAILED
+import org.wordpress.android.editor.EditorMediaUploadListener
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.generated.MediaActionBuilder
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.MediaModel.MediaUploadState
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.MediaStore
+import org.wordpress.android.fluxc.store.MediaStore.CancelMediaPayload
+import org.wordpress.android.fluxc.store.MediaStore.FetchMediaListPayload
+import org.wordpress.android.fluxc.store.MediaStore.MediaError
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.posts.EditPostRepository
+import org.wordpress.android.ui.posts.ProgressDialogUiState
+import org.wordpress.android.ui.posts.ProgressDialogUiState.HiddenProgressDialog
+import org.wordpress.android.ui.posts.ProgressDialogUiState.VisibleProgressDialog
+import org.wordpress.android.ui.posts.editor.media.EditorMedia.AddMediaToPostUiState.AddingMediaIdle
+import org.wordpress.android.ui.posts.editor.media.EditorMedia.AddMediaToPostUiState.AddingMultipleMedia
+import org.wordpress.android.ui.posts.editor.media.EditorMedia.AddMediaToPostUiState.AddingSingleMedia
+import org.wordpress.android.ui.uploads.UploadService
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.MediaUtilsWrapper
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.StringUtils
+import org.wordpress.android.util.ToastUtils.Duration
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.util.analytics.AnalyticsUtilsWrapper
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import org.wordpress.android.viewmodel.helpers.ToastMessageHolder
+import java.util.ArrayList
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.CoroutineContext
+
+<span class="nc" id="L52">class EditorMedia @Inject constructor(</span>
+<span class="nc" id="L53">    private val updateMediaModelUseCase: UpdateMediaModelUseCase,</span>
+<span class="nc" id="L54">    private val getMediaModelUseCase: GetMediaModelUseCase,</span>
+<span class="nc" id="L55">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L56">    private val mediaUtilsWrapper: MediaUtilsWrapper,</span>
+<span class="nc" id="L57">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L58">    private val addLocalMediaToPostUseCase: AddLocalMediaToPostUseCase,</span>
+<span class="nc" id="L59">    private val addExistingMediaToPostUseCase: AddExistingMediaToPostUseCase,</span>
+<span class="nc" id="L60">    private val retryFailedMediaUploadUseCase: RetryFailedMediaUploadUseCase,</span>
+<span class="nc" id="L61">    private val cleanUpMediaToPostAssociationUseCase: CleanUpMediaToPostAssociationUseCase,</span>
+<span class="nc" id="L62">    private val removeMediaUseCase: RemoveMediaUseCase,</span>
+<span class="nc" id="L63">    private val reattachUploadingMediaUseCase: ReattachUploadingMediaUseCase,</span>
+<span class="nc" id="L64">    private val analyticsUtilsWrapper: AnalyticsUtilsWrapper,</span>
+<span class="nc" id="L65">    private val analyticsTrackerWrapper: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L66">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L67">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+) : CoroutineScope {
+    // region Fields
+<span class="nc" id="L70">    private var job: Job = Job()</span>
+
+    override val coroutineContext: CoroutineContext
+<span class="nc" id="L73">        get() = mainDispatcher + job</span>
+
+    private lateinit var site: SiteModel
+    private lateinit var editorMediaListener: EditorMediaListener
+
+<span class="nc" id="L78">    private val deletedMediaItemIds = mutableListOf&lt;String&gt;()</span>
+
+<span class="nc" id="L80">    private val _uiState: MutableLiveData&lt;AddMediaToPostUiState&gt; = MutableLiveData()</span>
+<span class="nc" id="L81">    val uiState: LiveData&lt;AddMediaToPostUiState&gt; = _uiState</span>
+
+<span class="nc" id="L83">    private val _snackBarMessage = MutableLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L84">    val snackBarMessage = _snackBarMessage as LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;</span>
+
+<span class="nc" id="L86">    private val _toastMessage = SingleLiveEvent&lt;Event&lt;ToastMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L87">    val toastMessage: LiveData&lt;Event&lt;ToastMessageHolder&gt;&gt; = _toastMessage</span>
+
+    // for keeping the media uri while asking for permissions
+<span class="nc" id="L90">    var droppedMediaUris: ArrayList&lt;Uri&gt; = ArrayList()</span>
+    // endregion
+
+    fun start(site: SiteModel, editorMediaListener: EditorMediaListener) {
+<span class="nc" id="L94">        this.site = site</span>
+<span class="nc" id="L95">        this.editorMediaListener = editorMediaListener</span>
+<span class="nc" id="L96">        _uiState.value = AddingMediaIdle</span>
+<span class="nc" id="L97">    }</span>
+
+    // region Adding new media to a post
+    fun advertiseImageOptimisationAndAddMedia(uriList: List&lt;Uri&gt;) {
+<span class="nc bnc" id="L101" title="All 2 branches missed.">        if (mediaUtilsWrapper.shouldAdvertiseImageOptimization()) {</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">            editorMediaListener.advertiseImageOptimization {</span>
+<span class="nc" id="L103">                addNewMediaItemsToEditorAsync(</span>
+<span class="nc" id="L104">                        uriList,</span>
+<span class="nc" id="L105">                        false</span>
+                )
+<span class="nc" id="L107">            }</span>
+        } else {
+<span class="nc" id="L109">            addNewMediaItemsToEditorAsync(uriList, false)</span>
+        }
+<span class="nc" id="L111">    }</span>
+
+    fun addNewMediaToEditorAsync(mediaUri: Uri, freshlyTaken: Boolean) {
+<span class="nc" id="L114">        addNewMediaItemsToEditorAsync(listOf(mediaUri), freshlyTaken)</span>
+<span class="nc" id="L115">    }</span>
+
+    fun addNewMediaItemsToEditorAsync(uriList: List&lt;Uri&gt;, freshlyTaken: Boolean) {
+<span class="nc" id="L118">        launch {</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">            _uiState.value = if (uriList.size &gt; 1) {</span>
+<span class="nc" id="L120">                AddingMultipleMedia</span>
+            } else {
+<span class="nc" id="L122">                AddingSingleMedia</span>
+            }
+<span class="nc" id="L124">            val allMediaSucceed = addLocalMediaToPostUseCase.addNewMediaToEditorAsync(</span>
+<span class="nc" id="L125">                    uriList,</span>
+<span class="nc bnc" id="L126" title="All 2 branches missed.">                    site,</span>
+<span class="nc" id="L127">                    freshlyTaken,</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">                    editorMediaListener,</span>
+<span class="nc" id="L129">                    true</span>
+            )
+<span class="nc bnc" id="L131" title="All 2 branches missed.">            if (!allMediaSucceed) {</span>
+<span class="nc" id="L132">                _snackBarMessage.value = Event(SnackbarMessageHolder(UiStringRes(R.string.gallery_error)))</span>
+            }
+<span class="nc" id="L134">            _uiState.value = AddingMediaIdle</span>
+<span class="nc" id="L135">        }</span>
+<span class="nc" id="L136">    }</span>
+
+    /**
+     * This won't create a MediaModel. It assumes the model was already created.
+     */
+    fun addGifMediaToPostAsync(localMediaIds: IntArray) {
+<span class="nc" id="L142">        launch {</span>
+<span class="nc" id="L143">            addLocalMediaToPostUseCase.addLocalMediaToEditorAsync(</span>
+<span class="nc" id="L144">                    localMediaIds.toList(),</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">                    editorMediaListener</span>
+            )
+<span class="nc" id="L147">        }</span>
+<span class="nc" id="L148">    }</span>
+
+    fun addFreshlyTakenVideoToEditor() {
+<span class="nc" id="L151">        addNewMediaItemsToEditorAsync(listOf(mediaUtilsWrapper.getLastRecordedVideoUri()), true)</span>
+<span class="nc" id="L152">                .also { AnalyticsTracker.track(Stat.EDITOR_ADDED_VIDEO_NEW) }</span>
+<span class="nc" id="L153">    }</span>
+
+    fun onPhotoPickerMediaChosen(uriList: List&lt;Uri&gt;) {
+<span class="nc bnc" id="L156" title="All 2 branches missed.">        val onlyVideos = uriList.all { mediaUtilsWrapper.isVideo(it.toString()) }</span>
+<span class="nc bnc" id="L157" title="All 2 branches missed.">        if (onlyVideos) {</span>
+<span class="nc" id="L158">            addNewMediaItemsToEditorAsync(uriList, false)</span>
+        } else {
+<span class="nc" id="L160">            advertiseImageOptimisationAndAddMedia(uriList)</span>
+        }
+<span class="nc" id="L162">    }</span>
+    // endregion
+
+    // region Add existing media to a post
+    fun addExistingMediaToEditorAsync(
+        mediaModels: List&lt;MediaModel&gt;,
+        source: AddExistingMediaSource
+    ) {
+<span class="nc" id="L170">        addExistingMediaToEditorAsync(source, mediaModels.map { it.mediaId })</span>
+<span class="nc" id="L171">    }</span>
+
+    fun addExistingMediaToEditorAsync(source: AddExistingMediaSource, mediaIds: LongArray) {
+<span class="nc" id="L174">        addExistingMediaToEditorAsync(source, mediaIds.toList())</span>
+<span class="nc" id="L175">    }</span>
+
+    fun addExistingMediaToEditorAsync(source: AddExistingMediaSource, mediaIdList: List&lt;Long&gt;) {
+<span class="nc" id="L178">        launch {</span>
+<span class="nc" id="L179">            addExistingMediaToPostUseCase.addMediaExistingInRemoteToEditorAsync(</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">                    site,</span>
+<span class="nc" id="L181">                    source,</span>
+<span class="nc" id="L182">                    mediaIdList,</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                    editorMediaListener</span>
+            )
+<span class="nc" id="L185">        }</span>
+<span class="nc" id="L186">    }</span>
+    // endregion
+
+    // region Other
+    fun cancelMediaUploadAsync(localMediaId: Int, delete: Boolean) {
+<span class="nc" id="L191">        launch {</span>
+<span class="nc" id="L192">            getMediaModelUseCase</span>
+<span class="nc" id="L193">                    .loadMediaByLocalId(listOf(localMediaId))</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">                    .firstOrNull()</span>
+<span class="nc" id="L195">                    ?.let { mediaModel -&gt;</span>
+<span class="nc bnc" id="L196" title="All 4 branches missed.">                        val payload = CancelMediaPayload(site, mediaModel, delete)</span>
+<span class="nc" id="L197">                        dispatcher.dispatch(MediaActionBuilder.newCancelMediaUploadAction(payload))</span>
+<span class="nc" id="L198">                    }</span>
+<span class="nc" id="L199">        }</span>
+<span class="nc" id="L200">    }</span>
+
+    fun refreshBlogMedia() {
+<span class="nc bnc" id="L203" title="All 2 branches missed.">        if (networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">            val payload = FetchMediaListPayload(site, MediaStore.DEFAULT_NUM_MEDIA_PER_FETCH, false)</span>
+<span class="nc" id="L205">            dispatcher.dispatch(MediaActionBuilder.newFetchMediaListAction(payload))</span>
+        } else {
+<span class="nc" id="L207">            _toastMessage.value = Event(</span>
+<span class="nc" id="L208">                    ToastMessageHolder(</span>
+<span class="nc" id="L209">                            R.string.error_media_refresh_no_connection,</span>
+<span class="nc" id="L210">                            Duration.SHORT</span>
+                    )
+            )
+        }
+<span class="nc" id="L214">    }</span>
+
+    @Deprecated(message = &quot;Blocking method shouldn't be used in new code.&quot;)
+    fun updateMediaUploadStateBlocking(uri: Uri, mediaUploadState: MediaUploadState): MediaModel? {
+<span class="nc" id="L218">        return runBlocking {</span>
+<span class="nc bnc" id="L219" title="All 4 branches missed.">            getMediaModelUseCase.createMediaModelFromUri(site.id, uri).mediaModels.firstOrNull()</span>
+<span class="nc" id="L220">                    ?.let {</span>
+<span class="nc" id="L221">                        updateMediaModelUseCase.updateMediaModel(</span>
+<span class="nc" id="L222">                                it,</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                                editorMediaListener.getImmutablePost(),</span>
+<span class="nc" id="L224">                                mediaUploadState</span>
+                        )
+<span class="nc" id="L226">                        it</span>
+                    }
+        }
+    }
+
+    fun retryFailedMediaAsync(failedMediaIds: List&lt;Int&gt;) {
+<span class="nc" id="L232">        launch {</span>
+<span class="nc bnc" id="L233" title="All 2 branches missed.">            retryFailedMediaUploadUseCase.retryFailedMediaAsync(editorMediaListener, failedMediaIds)</span>
+<span class="nc" id="L234">        }</span>
+<span class="nc" id="L235">    }</span>
+
+    fun purgeMediaToPostAssociationsIfNotInPostAnymoreAsync() {
+<span class="nc" id="L238">        launch {</span>
+<span class="nc" id="L239">            cleanUpMediaToPostAssociationUseCase</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">                    .purgeMediaToPostAssociationsIfNotInPostAnymore(editorMediaListener.getImmutablePost())</span>
+<span class="nc" id="L241">        }</span>
+<span class="nc" id="L242">    }</span>
+
+    fun reattachUploadingMediaForAztec(
+        editPostRepository: EditPostRepository,
+        isAztec: Boolean,
+        editorMediaUploadListener: EditorMediaUploadListener
+    ) {
+<span class="nc bnc" id="L249" title="All 2 branches missed.">        if (isAztec) {</span>
+<span class="nc" id="L250">            reattachUploadingMediaUseCase.reattachUploadingMediaForAztec(</span>
+<span class="nc" id="L251">                    editPostRepository,</span>
+<span class="nc" id="L252">                    editorMediaUploadListener</span>
+            )
+        }
+<span class="nc" id="L255">    }</span>
+
+    /*
+    * When the user deletes a media item that was being uploaded at that moment, we only cancel the
+    * upload but keep the media item in FluxC DB because the user might have deleted it accidentally,
+    * and they can always UNDO the delete action in Aztec.
+    * So, when the user exits then editor (and thus we lose the undo/redo history) we are safe to
+    * physically delete from the FluxC DB those items that have been deleted by the user using backspace.
+    * */
+    fun definitelyDeleteBackspaceDeletedMediaItemsAsync() {
+<span class="nc" id="L265">        launch {</span>
+<span class="nc" id="L266">            removeMediaUseCase.removeMediaIfNotUploading(deletedMediaItemIds)</span>
+<span class="nc" id="L267">        }</span>
+<span class="nc" id="L268">    }</span>
+
+    fun updateDeletedMediaItemIds(localMediaId: String) {
+<span class="nc" id="L271">        deletedMediaItemIds.add(localMediaId)</span>
+<span class="nc" id="L272">        UploadService.setDeletedMediaItemIds(deletedMediaItemIds)</span>
+<span class="nc" id="L273">    }</span>
+
+    // endregion
+
+    fun cancelAddMediaToEditorActions() {
+<span class="nc" id="L278">        job.cancel()</span>
+<span class="nc" id="L279">    }</span>
+
+    fun onMediaDeleted(
+        showAztecEditor: Boolean,
+        showGutenbergEditor: Boolean,
+        localMediaId: String
+    ) {
+<span class="nc" id="L286">        updateDeletedMediaItemIds(localMediaId)</span>
+<span class="nc bnc" id="L287" title="All 4 branches missed.">        if (showAztecEditor &amp;&amp; !showGutenbergEditor) {</span>
+            // passing false here as we need to keep the media item in case the user wants to undo
+<span class="nc" id="L289">            cancelMediaUploadAsync(StringUtils.stringToInt(localMediaId), false)</span>
+        } else {
+<span class="nc" id="L291">            launch {</span>
+<span class="nc" id="L292">                removeMediaUseCase.removeMediaIfNotUploading(listOf(localMediaId))</span>
+<span class="nc" id="L293">            }</span>
+        }
+<span class="nc" id="L295">    }</span>
+
+<span class="nc" id="L297">    fun onMediaUploadError(listener: EditorMediaUploadListener, media: MediaModel, error: MediaError) = launch {</span>
+<span class="nc bnc" id="L298" title="All 2 branches missed.">        val properties: Map&lt;String, Any?&gt; = withContext(bgDispatcher) {</span>
+<span class="nc" id="L299">            analyticsUtilsWrapper</span>
+<span class="nc" id="L300">                    .getMediaProperties(media.isVideo, null, media.filePath)</span>
+<span class="nc" id="L301">                    .also {</span>
+<span class="nc" id="L302">                        it[&quot;error_type&quot;] = error.type.name</span>
+<span class="nc" id="L303">                    }</span>
+        }
+<span class="nc" id="L305">        analyticsTrackerWrapper.track(EDITOR_UPLOAD_MEDIA_FAILED, properties)</span>
+<span class="nc" id="L306">        listener.onMediaUploadFailed(media.id.toString())</span>
+<span class="nc" id="L307">    }</span>
+
+<span class="nc" id="L309">    sealed class AddMediaToPostUiState(</span>
+<span class="nc" id="L310">        val editorOverlayVisibility: Boolean,</span>
+<span class="nc" id="L311">        val progressDialogUiState: ProgressDialogUiState</span>
+    ) {
+        /**
+         * Adding multiple media items at once can take several seconds on slower devices, so we show a blocking
+         * progress dialog in this situation - otherwise the user could accidentally back out of the process
+         * before all items were added
+         */
+<span class="nc" id="L318">        object AddingMultipleMedia : AddMediaToPostUiState(</span>
+<span class="nc" id="L319">                editorOverlayVisibility = true,</span>
+<span class="nc" id="L320">                progressDialogUiState = VisibleProgressDialog(</span>
+<span class="nc" id="L321">                        messageString = UiStringRes(R.string.add_media_progress),</span>
+<span class="nc" id="L322">                        cancelable = false,</span>
+<span class="nc" id="L323">                        indeterminate = true</span>
+                )
+        )
+
+<span class="nc" id="L327">        object AddingSingleMedia : AddMediaToPostUiState(true, HiddenProgressDialog)</span>
+
+<span class="nc" id="L329">        object AddingMediaIdle : AddMediaToPostUiState(false, HiddenProgressDialog)</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

@@ -1,0 +1,1438 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MySiteViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.mysite</a> &gt; <span class="el_source">MySiteViewModel.kt</span></div><h1>MySiteViewModel.kt</h1><pre class="source lang-java linenums">@file:Suppress(&quot;MaximumLineLength&quot;)
+
+package org.wordpress.android.ui.mysite
+
+import android.content.Intent
+import android.net.Uri
+import android.text.TextUtils
+import androidx.annotation.DimenRes
+import androidx.annotation.StringRes
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.distinctUntilChanged
+import androidx.lifecycle.switchMap
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode.MAIN
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.model.DynamicCardType
+import org.wordpress.android.fluxc.model.MediaModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.dashboard.CardModel.PostsCardModel
+import org.wordpress.android.fluxc.model.dashboard.CardModel.TodaysStatsCardModel
+import org.wordpress.android.fluxc.store.AccountStore
+import org.wordpress.android.fluxc.store.PostStore.OnPostUploaded
+import org.wordpress.android.fluxc.store.QuickStartStore.Companion.QUICK_START_CHECK_STATS_LABEL
+import org.wordpress.android.fluxc.store.QuickStartStore.Companion.QUICK_START_UPLOAD_MEDIA_LABEL
+import org.wordpress.android.fluxc.store.QuickStartStore.Companion.QUICK_START_VIEW_SITE_LABEL
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartNewSiteTask
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartTask
+import org.wordpress.android.fluxc.store.QuickStartStore.QuickStartTaskType
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.PagePostCreationSourcesDetail.STORY_FROM_MY_SITE
+import org.wordpress.android.ui.mysite.MySiteCardAndItem.Card.DashboardCards
+import org.wordpress.android.ui.mysite.MySiteCardAndItem.Card.DomainRegistrationCard
+import org.wordpress.android.ui.mysite.MySiteCardAndItem.Card.QuickStartCard
+import org.wordpress.android.ui.mysite.MySiteCardAndItem.Item.InfoItem
+import org.wordpress.android.ui.mysite.MySiteCardAndItem.SiteInfoHeaderCard
+import org.wordpress.android.ui.mysite.MySiteCardAndItem.Type
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.BloggingPromptCardBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.DashboardCardsBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.DomainRegistrationCardBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.InfoItemBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.PostCardBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.PostCardBuilderParams.PostItemClickParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.QuickActionsCardBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.QuickLinkRibbonBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.QuickStartCardBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.SiteInfoCardBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.SiteItemsBuilderParams
+import org.wordpress.android.ui.mysite.MySiteCardAndItemBuilderParams.TodaysStatsCardBuilderParams
+import org.wordpress.android.ui.mysite.MySiteUiState.PartialState
+import org.wordpress.android.ui.mysite.MySiteUiState.PartialState.BloggingPromptUpdate
+import org.wordpress.android.ui.mysite.MySiteUiState.PartialState.CardsUpdate
+import org.wordpress.android.ui.mysite.MySiteViewModel.State.NoSites
+import org.wordpress.android.ui.mysite.MySiteViewModel.State.SiteSelected
+import org.wordpress.android.ui.mysite.MySiteViewModel.TabsUiState.TabUiState
+import org.wordpress.android.ui.mysite.SiteDialogModel.AddSiteIconDialogModel
+import org.wordpress.android.ui.mysite.SiteDialogModel.ChangeSiteIconDialogModel
+import org.wordpress.android.ui.mysite.SiteDialogModel.ShowRemoveNextStepsDialog
+import org.wordpress.android.ui.mysite.cards.CardsBuilder
+import org.wordpress.android.ui.mysite.cards.DomainRegistrationCardShownTracker
+import org.wordpress.android.ui.mysite.cards.dashboard.CardsTracker
+import org.wordpress.android.ui.mysite.cards.dashboard.bloggingprompts.BloggingPromptsCardAnalyticsTracker
+import org.wordpress.android.ui.mysite.cards.dashboard.posts.PostCardType
+import org.wordpress.android.ui.mysite.cards.dashboard.todaysstats.TodaysStatsCardBuilder.Companion.URL_GET_MORE_VIEWS_AND_TRAFFIC
+import org.wordpress.android.ui.mysite.cards.quickstart.QuickStartCardBuilder
+import org.wordpress.android.ui.mysite.cards.quickstart.QuickStartRepository
+import org.wordpress.android.ui.mysite.cards.quickstart.QuickStartRepository.QuickStartCategory
+import org.wordpress.android.ui.mysite.cards.quickstart.QuickStartRepository.QuickStartTabStep
+import org.wordpress.android.ui.mysite.cards.siteinfo.SiteInfoHeaderCardBuilder
+import org.wordpress.android.ui.mysite.dynamiccards.DynamicCardMenuFragment.DynamicCardMenuModel
+import org.wordpress.android.ui.mysite.dynamiccards.DynamicCardMenuViewModel.DynamicCardMenuInteraction
+import org.wordpress.android.ui.mysite.dynamiccards.DynamicCardsBuilder
+import org.wordpress.android.ui.mysite.items.SiteItemsBuilder
+import org.wordpress.android.ui.mysite.items.SiteItemsTracker
+import org.wordpress.android.ui.mysite.items.listitem.ListItemAction
+import org.wordpress.android.ui.mysite.tabs.MySiteTabType
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.photopicker.PhotoPickerActivity.PhotoPickerMediaSource
+import org.wordpress.android.ui.photopicker.PhotoPickerActivity.PhotoPickerMediaSource.ANDROID_CAMERA
+import org.wordpress.android.ui.posts.BasicDialogViewModel.DialogInteraction
+import org.wordpress.android.ui.posts.BasicDialogViewModel.DialogInteraction.Dismissed
+import org.wordpress.android.ui.posts.BasicDialogViewModel.DialogInteraction.Negative
+import org.wordpress.android.ui.posts.BasicDialogViewModel.DialogInteraction.Positive
+import org.wordpress.android.ui.prefs.AppPrefsWrapper
+import org.wordpress.android.ui.quickstart.QuickStartTracker
+import org.wordpress.android.ui.quickstart.QuickStartType.NewSiteQuickStartType
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationSource
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.BuildConfigWrapper
+import org.wordpress.android.util.DisplayUtilsWrapper
+import org.wordpress.android.util.FluxCUtilsWrapper
+import org.wordpress.android.util.MediaUtilsWrapper
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.QuickStartUtilsWrapper
+import org.wordpress.android.util.SiteUtils
+import org.wordpress.android.util.SnackbarSequencer
+import org.wordpress.android.util.UriWrapper
+import org.wordpress.android.util.WPMediaUtilsWrapper
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.util.config.BloggingPromptsFeatureConfig
+import org.wordpress.android.util.config.LandOnTheEditorFeatureConfig
+import org.wordpress.android.util.config.MySiteDashboardTabsFeatureConfig
+import org.wordpress.android.util.config.QuickStartDynamicCardsFeatureConfig
+import org.wordpress.android.util.filter
+import org.wordpress.android.util.getEmailValidationMessage
+import org.wordpress.android.util.map
+import org.wordpress.android.util.merge
+import org.wordpress.android.viewmodel.ContextProvider
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import java.io.File
+import java.util.Date
+import javax.inject.Inject
+import javax.inject.Named
+
+@Suppress(&quot;LargeClass&quot;, &quot;LongMethod&quot;, &quot;LongParameterList&quot;, &quot;TooManyFunctions&quot;)
+<span class="nc" id="L126">class MySiteViewModel @Inject constructor(</span>
+<span class="nc" id="L127">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L128">    @param:Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L129">    @param:Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L130">    private val analyticsTrackerWrapper: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L131">    private val siteItemsBuilder: SiteItemsBuilder,</span>
+<span class="nc" id="L132">    private val accountStore: AccountStore,</span>
+<span class="nc" id="L133">    private val selectedSiteRepository: SelectedSiteRepository,</span>
+<span class="nc" id="L134">    private val wpMediaUtilsWrapper: WPMediaUtilsWrapper,</span>
+<span class="nc" id="L135">    private val mediaUtilsWrapper: MediaUtilsWrapper,</span>
+<span class="nc" id="L136">    private val fluxCUtilsWrapper: FluxCUtilsWrapper,</span>
+<span class="nc" id="L137">    private val contextProvider: ContextProvider,</span>
+<span class="nc" id="L138">    private val siteIconUploadHandler: SiteIconUploadHandler,</span>
+<span class="nc" id="L139">    private val siteStoriesHandler: SiteStoriesHandler,</span>
+<span class="nc" id="L140">    private val displayUtilsWrapper: DisplayUtilsWrapper,</span>
+<span class="nc" id="L141">    private val quickStartRepository: QuickStartRepository,</span>
+<span class="nc" id="L142">    private val quickStartCardBuilder: QuickStartCardBuilder,</span>
+<span class="nc" id="L143">    private val siteInfoHeaderCardBuilder: SiteInfoHeaderCardBuilder,</span>
+<span class="nc" id="L144">    private val homePageDataLoader: HomePageDataLoader,</span>
+<span class="nc" id="L145">    private val quickStartDynamicCardsFeatureConfig: QuickStartDynamicCardsFeatureConfig,</span>
+<span class="nc" id="L146">    private val quickStartUtilsWrapper: QuickStartUtilsWrapper,</span>
+<span class="nc" id="L147">    private val snackbarSequencer: SnackbarSequencer,</span>
+<span class="nc" id="L148">    private val cardsBuilder: CardsBuilder,</span>
+<span class="nc" id="L149">    private val dynamicCardsBuilder: DynamicCardsBuilder,</span>
+<span class="nc" id="L150">    private val landOnTheEditorFeatureConfig: LandOnTheEditorFeatureConfig,</span>
+<span class="nc" id="L151">    private val mySiteSourceManager: MySiteSourceManager,</span>
+<span class="nc" id="L152">    private val cardsTracker: CardsTracker,</span>
+<span class="nc" id="L153">    private val siteItemsTracker: SiteItemsTracker,</span>
+<span class="nc" id="L154">    private val domainRegistrationCardShownTracker: DomainRegistrationCardShownTracker,</span>
+<span class="nc" id="L155">    private val buildConfigWrapper: BuildConfigWrapper,</span>
+    mySiteDashboardTabsFeatureConfig: MySiteDashboardTabsFeatureConfig,
+    bloggingPromptsFeatureConfig: BloggingPromptsFeatureConfig,
+<span class="nc" id="L158">    private val appPrefsWrapper: AppPrefsWrapper,</span>
+<span class="nc" id="L159">    private val bloggingPromptsCardAnalyticsTracker: BloggingPromptsCardAnalyticsTracker,</span>
+<span class="nc" id="L160">    private val quickStartTracker: QuickStartTracker,</span>
+<span class="nc" id="L161">    private val dispatcher: Dispatcher</span>
+<span class="nc" id="L162">) : ScopedViewModel(mainDispatcher) {</span>
+    private var isDefaultABExperimentTabSet: Boolean = false
+<span class="nc" id="L164">    private val _onSnackbarMessage = MutableLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L165">    private val _onTechInputDialogShown = MutableLiveData&lt;Event&lt;TextInputDialogModel&gt;&gt;()</span>
+<span class="nc" id="L166">    private val _onBasicDialogShown = MutableLiveData&lt;Event&lt;SiteDialogModel&gt;&gt;()</span>
+<span class="nc" id="L167">    private val _onDynamicCardMenuShown = MutableLiveData&lt;Event&lt;DynamicCardMenuModel&gt;&gt;()</span>
+<span class="nc" id="L168">    private val _onNavigation = MutableLiveData&lt;Event&lt;SiteNavigationAction&gt;&gt;()</span>
+<span class="nc" id="L169">    private val _onMediaUpload = MutableLiveData&lt;Event&lt;MediaModel&gt;&gt;()</span>
+<span class="nc" id="L170">    private val _activeTaskPosition = MutableLiveData&lt;Pair&lt;QuickStartTask, Int&gt;&gt;()</span>
+<span class="nc" id="L171">    private val _onShare = MutableLiveData&lt;Event&lt;String&gt;&gt;()</span>
+<span class="nc" id="L172">    private val _onTrackWithTabSource = MutableLiveData&lt;Event&lt;MySiteTrackWithTabSource&gt;&gt;()</span>
+<span class="nc" id="L173">    private val _selectTab = MutableLiveData&lt;Event&lt;TabNavigation&gt;&gt;()</span>
+<span class="nc" id="L174">    private val _onAnswerBloggingPrompt = SingleLiveEvent&lt;Event&lt;Pair&lt;SiteModel, PromptID&gt;&gt;&gt;()</span>
+<span class="nc" id="L175">    private val _onBloggingPromptsLearnMore = SingleLiveEvent&lt;Event&lt;Unit&gt;&gt;()</span>
+
+<span class="nc" id="L177">    private val tabsUiState: LiveData&lt;TabsUiState&gt; = quickStartRepository.onQuickStartTabStep</span>
+<span class="nc" id="L178">            .switchMap { quickStartSiteMenuStep -&gt;</span>
+                val result = MutableLiveData&lt;TabsUiState&gt;()
+                /* We want to filter out tabs state livedata update when state is not set in uiModel.
+                   Without this check, tabs state livedata merge with state livedata may return a null state
+                   when building UiModel. */
+                uiModel.value?.state?.tabsUiState?.let {
+                    result.value = it.copy(tabUiStates = it.update(quickStartSiteMenuStep))
+                }
+                result
+            }
+
+    /* Capture and track the site selected event so we can circumvent refreshing sources on resume
+       as they're already built on site select. */
+    private var isSiteSelected = false
+
+<span class="nc" id="L193">    private val isMySiteDashboardTabsFeatureConfigEnabled = mySiteDashboardTabsFeatureConfig.isEnabled()</span>
+<span class="nc" id="L194">    private val isBloggingPromptsFeatureConfigEnabled = bloggingPromptsFeatureConfig.isEnabled()</span>
+
+    val isMySiteTabsEnabled: Boolean
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        get() = isMySiteDashboardTabsFeatureConfigEnabled &amp;&amp;</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">                buildConfigWrapper.isMySiteTabsEnabled &amp;&amp;</span>
+<span class="nc bnc" id="L199" title="All 4 branches missed.">                selectedSiteRepository.getSelectedSite()?.isUsingWpComRestApi ?: true</span>
+
+    val orderedTabTypes: List&lt;MySiteTabType&gt;
+<span class="nc bnc" id="L202" title="All 2 branches missed.">        get() = if (isMySiteTabsEnabled) {</span>
+<span class="nc" id="L203">            listOf(MySiteTabType.DASHBOARD, MySiteTabType.SITE_MENU)</span>
+        } else {
+<span class="nc" id="L205">            listOf(MySiteTabType.ALL)</span>
+<span class="nc" id="L206">        }</span>
+
+    private val defaultABExperimentTab: MySiteTabType
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        get() = if (isMySiteTabsEnabled) {</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">            if (appPrefsWrapper.getMySiteInitialScreen() == MySiteTabType.SITE_MENU.label) {</span>
+<span class="nc" id="L211">                MySiteTabType.SITE_MENU</span>
+            } else {
+<span class="nc" id="L213">                MySiteTabType.DASHBOARD</span>
+            }
+        } else {
+<span class="nc" id="L216">            MySiteTabType.ALL</span>
+<span class="nc" id="L217">        }</span>
+
+<span class="nc" id="L219">    val onScrollTo: LiveData&lt;Event&lt;Int&gt;&gt; = merge(</span>
+<span class="nc" id="L220">            _activeTaskPosition.distinctUntilChanged(),</span>
+<span class="nc" id="L221">            quickStartRepository.activeTask</span>
+    ) { pair, activeTask -&gt;
+<span class="nc bnc" id="L223" title="All 6 branches missed.">        if (pair != null &amp;&amp; activeTask != null &amp;&amp; pair.first == activeTask) {</span>
+<span class="nc" id="L224">            Event(pair.second)</span>
+        } else {
+<span class="nc" id="L226">            null</span>
+        }
+    }
+<span class="nc" id="L229">    val onSnackbarMessage = merge(_onSnackbarMessage, siteStoriesHandler.onSnackbar, quickStartRepository.onSnackbar)</span>
+<span class="nc" id="L230">    val onQuickStartMySitePrompts = quickStartRepository.onQuickStartMySitePrompts</span>
+<span class="nc" id="L231">    val onTextInputDialogShown = _onTechInputDialogShown as LiveData&lt;Event&lt;TextInputDialogModel&gt;&gt;</span>
+<span class="nc" id="L232">    val onBasicDialogShown = _onBasicDialogShown as LiveData&lt;Event&lt;SiteDialogModel&gt;&gt;</span>
+<span class="nc" id="L233">    val onDynamicCardMenuShown = _onDynamicCardMenuShown as LiveData&lt;Event&lt;DynamicCardMenuModel&gt;&gt;</span>
+<span class="nc" id="L234">    val onNavigation = merge(_onNavigation, siteStoriesHandler.onNavigation)</span>
+<span class="nc" id="L235">    val onMediaUpload = _onMediaUpload as LiveData&lt;Event&lt;MediaModel&gt;&gt;</span>
+<span class="nc" id="L236">    val onUploadedItem = siteIconUploadHandler.onUploadedItem</span>
+<span class="nc" id="L237">    val onShare = _onShare</span>
+<span class="nc" id="L238">    val onAnswerBloggingPrompt = _onAnswerBloggingPrompt as LiveData&lt;Event&lt;Pair&lt;SiteModel, Int&gt;&gt;&gt;</span>
+<span class="nc" id="L239">    val onBloggingPromptsLearnMore = _onBloggingPromptsLearnMore as LiveData&lt;Event&lt;Unit&gt;&gt;</span>
+<span class="nc" id="L240">    val onTrackWithTabSource = _onTrackWithTabSource as LiveData&lt;Event&lt;MySiteTrackWithTabSource&gt;&gt;</span>
+<span class="nc" id="L241">    val selectTab: LiveData&lt;Event&lt;TabNavigation&gt;&gt; = _selectTab</span>
+    private var shouldMarkUpdateSiteTitleTaskComplete = false
+
+<span class="nc" id="L244">    val state: LiveData&lt;MySiteUiState&gt; =</span>
+<span class="nc" id="L245">            selectedSiteRepository.siteSelected.switchMap { siteLocalId -&gt;</span>
+                isSiteSelected = true
+                resetShownTrackers()
+                val result = MediatorLiveData&lt;SiteIdToState&gt;()
+                for (newSource in mySiteSourceManager.build(viewModelScope, siteLocalId)) {
+                    result.addSource(newSource) { partialState -&gt;
+<span class="nc bnc" id="L251" title="All 2 branches missed.">                        if (partialState != null) {</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">                            result.value = (result.value ?: SiteIdToState(siteLocalId)).update(partialState)</span>
+                        }
+<span class="nc" id="L254">                    }</span>
+                }
+                // We want to filter out the empty state where we have a site ID but site object is missing.
+                // Without this check there is an emission of a NoSites state even if we have the site
+<span class="nc bnc" id="L258" title="All 4 branches missed.">                result.filter { it.siteId == null || it.state.site != null }.map { it.state }</span>
+            }
+
+<span class="nc" id="L261">    val uiModel: LiveData&lt;UiModel&gt; = merge(tabsUiState, state) { tabsUiState, mySiteUiState -&gt;</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">        with(requireNotNull(mySiteUiState)) {</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">            val state = if (site != null) {</span>
+<span class="nc bnc" id="L264" title="All 2 branches missed.">                cardsUpdate?.checkAndShowSnackbarError()</span>
+<span class="nc" id="L265">                val state = buildSiteSelectedStateAndScroll(</span>
+<span class="nc" id="L266">                        tabsUiState,</span>
+<span class="nc" id="L267">                        site,</span>
+<span class="nc" id="L268">                        showSiteIconProgressBar,</span>
+<span class="nc" id="L269">                        activeTask,</span>
+<span class="nc" id="L270">                        isDomainCreditAvailable,</span>
+<span class="nc" id="L271">                        quickStartCategories,</span>
+<span class="nc" id="L272">                        pinnedDynamicCard,</span>
+<span class="nc" id="L273">                        visibleDynamicCards,</span>
+<span class="nc" id="L274">                        backupAvailable,</span>
+<span class="nc" id="L275">                        scanAvailable,</span>
+<span class="nc" id="L276">                        cardsUpdate,</span>
+<span class="nc" id="L277">                        bloggingPromptsUpdate</span>
+                )
+<span class="nc" id="L279">                selectDefaultTabIfNeeded()</span>
+<span class="nc" id="L280">                trackCardsAndItemsShownIfNeeded(state)</span>
+<span class="nc" id="L281">                state</span>
+            } else {
+<span class="nc" id="L283">                buildNoSiteState()</span>
+            }
+<span class="nc bnc" id="L285" title="All 2 branches missed.">            UiModel(currentAvatarUrl.orEmpty(), state)</span>
+        }
+    }
+
+    private fun CardsUpdate.checkAndShowSnackbarError() {
+<span class="nc bnc" id="L290" title="All 2 branches missed.">        if (showSnackbarError) {</span>
+<span class="nc" id="L291">            _onSnackbarMessage</span>
+<span class="nc" id="L292">                    .postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.my_site_dashboard_update_error))))</span>
+        }
+<span class="nc" id="L294">    }</span>
+
+<span class="nc" id="L296">    init {</span>
+<span class="nc" id="L297">        dispatcher.register(this)</span>
+<span class="nc" id="L298">    }</span>
+
+    @Suppress(&quot;LongParameterList&quot;)
+    private fun buildSiteSelectedStateAndScroll(
+        tabsUiState: TabsUiState?,
+        site: SiteModel,
+        showSiteIconProgressBar: Boolean,
+        activeTask: QuickStartTask?,
+        isDomainCreditAvailable: Boolean,
+        quickStartCategories: List&lt;QuickStartCategory&gt;,
+        pinnedDynamicCard: DynamicCardType?,
+        visibleDynamicCards: List&lt;DynamicCardType&gt;,
+        backupAvailable: Boolean,
+        scanAvailable: Boolean,
+        cardsUpdate: CardsUpdate?,
+        bloggingPromptUpdate: BloggingPromptUpdate?
+    ): SiteSelected {
+<span class="nc" id="L315">        val siteItems = buildSiteSelectedState(</span>
+<span class="nc" id="L316">                site,</span>
+<span class="nc" id="L317">                activeTask,</span>
+<span class="nc" id="L318">                isDomainCreditAvailable,</span>
+<span class="nc" id="L319">                quickStartCategories,</span>
+<span class="nc" id="L320">                pinnedDynamicCard,</span>
+<span class="nc" id="L321">                visibleDynamicCards,</span>
+<span class="nc" id="L322">                backupAvailable,</span>
+<span class="nc" id="L323">                scanAvailable,</span>
+<span class="nc" id="L324">                cardsUpdate,</span>
+<span class="nc" id="L325">                bloggingPromptUpdate</span>
+        )
+
+<span class="nc" id="L328">        val siteInfoCardBuilderParams = SiteInfoCardBuilderParams(</span>
+<span class="nc" id="L329">                site = site,</span>
+<span class="nc" id="L330">                showSiteIconProgressBar = showSiteIconProgressBar,</span>
+<span class="nc" id="L331">                titleClick = this::titleClick,</span>
+<span class="nc" id="L332">                iconClick = this::iconClick,</span>
+<span class="nc" id="L333">                urlClick = this::urlClick,</span>
+<span class="nc" id="L334">                switchSiteClick = this::switchSiteClick,</span>
+<span class="nc" id="L335">                activeTask = activeTask</span>
+        )
+
+<span class="nc" id="L338">        val siteInfo = siteInfoHeaderCardBuilder.buildSiteInfoCard(siteInfoCardBuilderParams)</span>
+
+<span class="nc bnc" id="L340" title="All 2 branches missed.">        if (activeTask != null) {</span>
+<span class="nc" id="L341">            scrollToQuickStartTaskIfNecessary(</span>
+<span class="nc" id="L342">                    activeTask,</span>
+<span class="nc" id="L343">                    getPositionOfQuickStartItem(siteItems, activeTask)</span>
+            )
+        }
+        // It is okay to use !! here because we are explicitly creating the lists
+<span class="nc" id="L347">        return SiteSelected(</span>
+<span class="nc bnc" id="L348" title="All 4 branches missed.">                tabsUiState = tabsUiState?.copy(</span>
+<span class="nc" id="L349">                        showTabs = isMySiteTabsEnabled,</span>
+<span class="nc" id="L350">                        tabUiStates = orderedTabTypes.mapToTabUiStates(),</span>
+<span class="nc" id="L351">                        shouldUpdateViewPager = shouldUpdateViewPager()</span>
+<span class="nc" id="L352">                ) ?: createTabsUiState(),</span>
+<span class="nc" id="L353">                siteInfoToolbarViewParams = getSiteInfoToolbarViewParams(),</span>
+<span class="nc" id="L354">                siteInfoHeaderState = SiteInfoHeaderState(</span>
+<span class="nc" id="L355">                        hasUpdates = hasSiteHeaderUpdates(siteInfo),</span>
+<span class="nc" id="L356">                        siteInfoHeader = siteInfo</span>
+                ),
+<span class="nc" id="L358">                cardAndItems = siteItems[MySiteTabType.ALL]!!,</span>
+<span class="nc" id="L359">                siteMenuCardsAndItems = siteItems[MySiteTabType.SITE_MENU]!!,</span>
+<span class="nc" id="L360">                dashboardCardsAndItems = siteItems[MySiteTabType.DASHBOARD]!!</span>
+        )
+    }
+
+    private fun getSiteInfoToolbarViewParams(): SiteInfoToolbarViewParams {
+<span class="nc bnc" id="L365" title="All 2 branches missed.">        return if (isMySiteTabsEnabled) {</span>
+<span class="nc" id="L366">            SiteInfoToolbarViewParams(</span>
+<span class="nc" id="L367">                    R.dimen.app_bar_with_site_info_tabs_height,</span>
+<span class="nc" id="L368">                    R.dimen.toolbar_bottom_margin_with_tabs</span>
+            )
+        } else {
+<span class="nc" id="L371">            SiteInfoToolbarViewParams(</span>
+<span class="nc" id="L372">                    R.dimen.app_bar_with_site_info_height,</span>
+<span class="nc" id="L373">                    R.dimen.toolbar_bottom_margin_with_no_tabs</span>
+            )
+        }
+    }
+
+    private fun getPositionOfQuickStartItem(
+        siteItems: Map&lt;MySiteTabType, List&lt;MySiteCardAndItem&gt;&gt;,
+        activeTask: QuickStartTask
+<span class="nc bnc" id="L381" title="All 2 branches missed.">    ) = if (isMySiteTabsEnabled) {</span>
+<span class="nc bnc" id="L382" title="All 2 branches missed.">        _selectTab.value?.let { tabEvent -&gt;</span>
+<span class="nc" id="L383">            val currentTab = orderedTabTypes[tabEvent.peekContent().position]</span>
+<span class="nc bnc" id="L384" title="All 4 branches missed.">            if (currentTab == MySiteTabType.DASHBOARD &amp;&amp; activeTask.showInSiteMenu()) {</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">                (siteItems[MySiteTabType.SITE_MENU] as List&lt;MySiteCardAndItem&gt;)</span>
+<span class="nc bnc" id="L386" title="All 2 branches missed.">                        .indexOfFirst { it.activeQuickStartItem }</span>
+            } else {
+<span class="nc bnc" id="L388" title="All 2 branches missed.">                (siteItems[currentTab] as List&lt;MySiteCardAndItem&gt;)</span>
+<span class="nc bnc" id="L389" title="All 2 branches missed.">                        .indexOfFirst { it.activeQuickStartItem }</span>
+            }
+<span class="nc" id="L391">        } ?: LIST_INDEX_NO_ACTIVE_QUICK_START_ITEM</span>
+    } else {
+<span class="nc bnc" id="L393" title="All 2 branches missed.">        (siteItems[MySiteTabType.ALL] as List&lt;MySiteCardAndItem&gt;)</span>
+<span class="nc bnc" id="L394" title="All 2 branches missed.">                .indexOfFirst { it.activeQuickStartItem }</span>
+<span class="nc" id="L395">    }</span>
+
+<span class="nc" id="L397">    private fun QuickStartTask.showInSiteMenu() = when (this) {</span>
+<span class="nc bnc" id="L398" title="All 2 branches missed.">        QuickStartNewSiteTask.ENABLE_POST_SHARING -&gt; true</span>
+<span class="nc" id="L399">        else -&gt; false</span>
+<span class="nc" id="L400">    }</span>
+
+    @Suppress(&quot;LongParameterList&quot;)
+    private fun buildSiteSelectedState(
+        site: SiteModel,
+        activeTask: QuickStartTask?,
+        isDomainCreditAvailable: Boolean,
+        quickStartCategories: List&lt;QuickStartCategory&gt;,
+        pinnedDynamicCard: DynamicCardType?,
+        visibleDynamicCards: List&lt;DynamicCardType&gt;,
+        backupAvailable: Boolean,
+        scanAvailable: Boolean,
+        cardsUpdate: CardsUpdate?,
+        bloggingPromptUpdate: BloggingPromptUpdate?
+    ): Map&lt;MySiteTabType, List&lt;MySiteCardAndItem&gt;&gt; {
+<span class="nc" id="L415">        val infoItem = siteItemsBuilder.build(</span>
+<span class="nc" id="L416">                InfoItemBuilderParams(</span>
+<span class="nc bnc" id="L417" title="All 2 branches missed.">                        isStaleMessagePresent = cardsUpdate?.showStaleMessage ?: false</span>
+                )
+        )
+<span class="nc" id="L420">        val cardsResult = cardsBuilder.build(</span>
+<span class="nc" id="L421">                QuickActionsCardBuilderParams(</span>
+<span class="nc" id="L422">                        siteModel = site,</span>
+<span class="nc" id="L423">                        onQuickActionStatsClick = this::quickActionStatsClick,</span>
+<span class="nc" id="L424">                        onQuickActionPagesClick = this::quickActionPagesClick,</span>
+<span class="nc" id="L425">                        onQuickActionPostsClick = this::quickActionPostsClick,</span>
+<span class="nc" id="L426">                        onQuickActionMediaClick = this::quickActionMediaClick</span>
+                ),
+<span class="nc" id="L428">                DomainRegistrationCardBuilderParams(</span>
+<span class="nc" id="L429">                        isDomainCreditAvailable = isDomainCreditAvailable,</span>
+<span class="nc" id="L430">                        domainRegistrationClick = this::domainRegistrationClick</span>
+                ),
+<span class="nc" id="L432">                QuickStartCardBuilderParams(</span>
+<span class="nc" id="L433">                        quickStartCategories = quickStartCategories,</span>
+<span class="nc" id="L434">                        onQuickStartBlockRemoveMenuItemClick = this::onQuickStartBlockRemoveMenuItemClick,</span>
+<span class="nc" id="L435">                        onQuickStartTaskTypeItemClick = this::onQuickStartTaskTypeItemClick</span>
+                ),
+<span class="nc" id="L437">                DashboardCardsBuilderParams(</span>
+<span class="nc bnc" id="L438" title="All 4 branches missed.">                        showErrorCard = cardsUpdate?.showErrorCard == true,</span>
+<span class="nc" id="L439">                        onErrorRetryClick = this::onDashboardErrorRetry,</span>
+<span class="nc" id="L440">                        todaysStatsCardBuilderParams = TodaysStatsCardBuilderParams(</span>
+<span class="nc bnc" id="L441" title="All 8 branches missed.">                                todaysStatsCard = cardsUpdate?.cards?.firstOrNull { it is TodaysStatsCardModel }</span>
+                                        as? TodaysStatsCardModel,
+<span class="nc" id="L443">                                onTodaysStatsCardClick = this::onTodaysStatsCardClick,</span>
+<span class="nc" id="L444">                                onGetMoreViewsClick = this::onGetMoreViewsClick,</span>
+<span class="nc" id="L445">                                onFooterLinkClick = this::onTodaysStatsCardFooterLinkClick</span>
+                        ),
+<span class="nc" id="L447">                        postCardBuilderParams = PostCardBuilderParams(</span>
+<span class="nc bnc" id="L448" title="All 8 branches missed.">                                posts = cardsUpdate?.cards?.firstOrNull { it is PostsCardModel } as? PostsCardModel,</span>
+<span class="nc" id="L449">                                onPostItemClick = this::onPostItemClick,</span>
+<span class="nc" id="L450">                                onFooterLinkClick = this::onPostCardFooterLinkClick</span>
+                        ),
+<span class="nc" id="L452">                        bloggingPromptCardBuilderParams = BloggingPromptCardBuilderParams(</span>
+<span class="nc bnc" id="L453" title="All 2 branches missed.">                                bloggingPrompt = if (isBloggingPromptsFeatureConfigEnabled) {</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">                                    bloggingPromptUpdate?.promptModel</span>
+<span class="nc" id="L455">                                } else null,</span>
+<span class="nc" id="L456">                                onShareClick = this::onBloggingPromptShareClick,</span>
+<span class="nc" id="L457">                                onAnswerClick = this::onBloggingPromptAnswerClick,</span>
+<span class="nc" id="L458">                                onSkipClick = this::onBloggingPromptSkipClicked</span>
+                        )
+                ),
+<span class="nc" id="L461">                QuickLinkRibbonBuilderParams(</span>
+<span class="nc" id="L462">                        siteModel = site,</span>
+<span class="nc" id="L463">                        onPagesClick = this::onQuickLinkRibbonPagesClick,</span>
+<span class="nc" id="L464">                        onPostsClick = this::onQuickLinkRibbonPostsClick,</span>
+<span class="nc" id="L465">                        onMediaClick = this::onQuickLinkRibbonMediaClick,</span>
+<span class="nc" id="L466">                        onStatsClick = this::onQuickLinkRibbonStatsClick,</span>
+<span class="nc" id="L467">                        activeTask = activeTask,</span>
+<span class="nc" id="L468">                        enableFocusPoints = shouldEnableQuickLinkRibbonFocusPoints()</span>
+                ),
+<span class="nc" id="L470">                isMySiteTabsEnabled</span>
+        )
+<span class="nc" id="L472">        val dynamicCards = dynamicCardsBuilder.build(</span>
+<span class="nc" id="L473">                quickStartCategories,</span>
+<span class="nc" id="L474">                pinnedDynamicCard,</span>
+<span class="nc" id="L475">                visibleDynamicCards,</span>
+<span class="nc" id="L476">                this::onDynamicCardMoreClick,</span>
+<span class="nc" id="L477">                this::onQuickStartTaskCardClick</span>
+        )
+
+<span class="nc" id="L480">        val siteItems = siteItemsBuilder.build(</span>
+<span class="nc" id="L481">                SiteItemsBuilderParams(</span>
+<span class="nc" id="L482">                        site = site,</span>
+<span class="nc" id="L483">                        activeTask = activeTask,</span>
+<span class="nc" id="L484">                        backupAvailable = backupAvailable,</span>
+<span class="nc" id="L485">                        scanAvailable = scanAvailable,</span>
+<span class="nc" id="L486">                        enableStatsFocusPoint = shouldEnableSiteItemsFocusPoints(),</span>
+<span class="nc" id="L487">                        enablePagesFocusPoint = shouldEnableSiteItemsFocusPoints(),</span>
+<span class="nc" id="L488">                        enableMediaFocusPoint = shouldEnableSiteItemsFocusPoints(),</span>
+<span class="nc" id="L489">                        onClick = this::onItemClick</span>
+                )
+        )
+
+<span class="nc" id="L493">        return mapOf(</span>
+<span class="nc" id="L494">                MySiteTabType.ALL to orderForDisplay(</span>
+<span class="nc" id="L495">                        infoItem,</span>
+<span class="nc" id="L496">                        cardsResult,</span>
+<span class="nc" id="L497">                        dynamicCards,</span>
+<span class="nc" id="L498">                        siteItems</span>
+                ),
+<span class="nc" id="L500">                MySiteTabType.SITE_MENU to orderForDisplay(</span>
+<span class="nc" id="L501">                        infoItem,</span>
+<span class="nc" id="L502">                        cardsResult.filterNot {</span>
+<span class="nc bnc" id="L503" title="All 2 branches missed.">                            getCardTypeExclusionFiltersForTab(MySiteTabType.SITE_MENU).contains(it.type)</span>
+                        },
+<span class="nc bnc" id="L505" title="All 2 branches missed.">                        if (shouldIncludeDynamicCards(MySiteTabType.SITE_MENU)) dynamicCards else listOf(),</span>
+<span class="nc" id="L506">                        siteItems</span>
+                ),
+<span class="nc" id="L508">                MySiteTabType.DASHBOARD to orderForDisplay(</span>
+<span class="nc" id="L509">                        infoItem,</span>
+<span class="nc" id="L510">                        cardsResult.filterNot {</span>
+<span class="nc bnc" id="L511" title="All 2 branches missed.">                            getCardTypeExclusionFiltersForTab(MySiteTabType.DASHBOARD).contains(it.type)</span>
+                        },
+<span class="nc bnc" id="L513" title="All 2 branches missed.">                        if (shouldIncludeDynamicCards(MySiteTabType.DASHBOARD)) dynamicCards else listOf(),</span>
+<span class="nc" id="L514">                        listOf()</span>
+                )
+        )
+    }
+
+<span class="nc bnc" id="L519" title="All 2 branches missed.">    private fun shouldEnableQuickLinkRibbonFocusPoints() = defaultABExperimentTab == MySiteTabType.DASHBOARD</span>
+
+<span class="nc bnc" id="L521" title="All 2 branches missed.">    private fun shouldEnableSiteItemsFocusPoints() = defaultABExperimentTab != MySiteTabType.DASHBOARD</span>
+
+<span class="nc bnc" id="L523" title="All 3 branches missed.">    private fun getCardTypeExclusionFiltersForTab(tabType: MySiteTabType) = when (tabType) {</span>
+<span class="nc" id="L524">        MySiteTabType.SITE_MENU -&gt; mutableListOf&lt;Type&gt;().apply {</span>
+<span class="nc" id="L525">            add(Type.DASHBOARD_CARDS)</span>
+<span class="nc bnc" id="L526" title="All 2 branches missed.">            if (defaultABExperimentTab == MySiteTabType.DASHBOARD) {</span>
+<span class="nc" id="L527">                add(Type.QUICK_START_CARD)</span>
+            }
+<span class="nc" id="L529">            add(Type.QUICK_LINK_RIBBON)</span>
+<span class="nc" id="L530">        }</span>
+<span class="nc" id="L531">        MySiteTabType.DASHBOARD -&gt; mutableListOf&lt;Type&gt;().apply {</span>
+<span class="nc bnc" id="L532" title="All 2 branches missed.">            if (defaultABExperimentTab == MySiteTabType.SITE_MENU) {</span>
+<span class="nc" id="L533">                add(Type.QUICK_START_CARD)</span>
+            }
+<span class="nc" id="L535">            add(Type.DOMAIN_REGISTRATION_CARD)</span>
+<span class="nc" id="L536">            add(Type.QUICK_ACTIONS_CARD)</span>
+<span class="nc" id="L537">        }</span>
+<span class="nc" id="L538">        MySiteTabType.ALL -&gt; emptyList()</span>
+<span class="nc" id="L539">    }</span>
+
+<span class="nc bnc" id="L541" title="All 3 branches missed.">    private fun shouldIncludeDynamicCards(tabType: MySiteTabType) = when (tabType) {</span>
+<span class="nc bnc" id="L542" title="All 2 branches missed.">        MySiteTabType.SITE_MENU -&gt; defaultABExperimentTab != MySiteTabType.DASHBOARD</span>
+<span class="nc bnc" id="L543" title="All 2 branches missed.">        MySiteTabType.DASHBOARD -&gt; defaultABExperimentTab != MySiteTabType.SITE_MENU</span>
+<span class="nc" id="L544">        MySiteTabType.ALL -&gt; true</span>
+<span class="nc" id="L545">    }</span>
+
+    @Suppress(&quot;EmptyFunctionBlock&quot;)
+    private fun onGetMoreViewsClick() {
+<span class="nc" id="L549">        cardsTracker.trackTodaysStatsCardGetMoreViewsNudgeClicked()</span>
+<span class="nc" id="L550">        _onNavigation.value = Event(</span>
+<span class="nc" id="L551">                SiteNavigationAction.OpenTodaysStatsGetMoreViewsExternalUrl(URL_GET_MORE_VIEWS_AND_TRAFFIC)</span>
+        )
+<span class="nc" id="L553">    }</span>
+
+    private fun onTodaysStatsCardFooterLinkClick() {
+<span class="nc" id="L556">        cardsTracker.trackTodaysStatsCardFooterLinkClicked()</span>
+<span class="nc" id="L557">        navigateToTodaysStats()</span>
+<span class="nc" id="L558">    }</span>
+
+    private fun onTodaysStatsCardClick() {
+<span class="nc" id="L561">        cardsTracker.trackTodaysStatsCardClicked()</span>
+<span class="nc" id="L562">        navigateToTodaysStats()</span>
+<span class="nc" id="L563">    }</span>
+
+    private fun navigateToTodaysStats() {
+<span class="nc bnc" id="L566" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L567">        _onNavigation.value = Event(SiteNavigationAction.OpenStatsInsights(selectedSite))</span>
+<span class="nc" id="L568">    }</span>
+
+    private fun buildNoSiteState(): NoSites {
+        // Hide actionable empty view image when screen height is under specified min height.
+<span class="nc bnc" id="L572" title="All 2 branches missed.">        val shouldShowImage = !buildConfigWrapper.isJetpackApp &amp;&amp;</span>
+<span class="nc bnc" id="L573" title="All 2 branches missed.">                displayUtilsWrapper.getWindowPixelHeight() &gt;= MIN_DISPLAY_PX_HEIGHT_NO_SITE_IMAGE</span>
+<span class="nc" id="L574">        return NoSites(</span>
+<span class="nc" id="L575">                tabsUiState = TabsUiState(showTabs = false, tabUiStates = emptyList()),</span>
+<span class="nc" id="L576">                siteInfoToolbarViewParams = SiteInfoToolbarViewParams(</span>
+<span class="nc" id="L577">                        appBarHeight = R.dimen.app_bar_with_no_site_info_height,</span>
+<span class="nc" id="L578">                        toolbarBottomMargin = R.dimen.toolbar_bottom_margin_with_no_tabs,</span>
+<span class="nc" id="L579">                        headerVisible = false,</span>
+<span class="nc" id="L580">                        appBarLiftOnScroll = true</span>
+
+                ),
+<span class="nc" id="L583">                shouldShowImage = shouldShowImage</span>
+        )
+    }
+
+    private fun orderForDisplay(
+        infoItem: InfoItem?,
+        cards: List&lt;MySiteCardAndItem&gt;,
+        dynamicCards: List&lt;MySiteCardAndItem&gt;,
+        siteItems: List&lt;MySiteCardAndItem&gt;
+    ): List&lt;MySiteCardAndItem&gt; {
+<span class="nc bnc" id="L593" title="All 2 branches missed.">        val indexOfDashboardCards = cards.indexOfFirst { it is DashboardCards }</span>
+<span class="nc" id="L594">        return mutableListOf&lt;MySiteCardAndItem&gt;().apply {</span>
+<span class="nc bnc" id="L595" title="All 2 branches missed.">            infoItem?.let { add(infoItem) }</span>
+<span class="nc" id="L596">            addAll(cards)</span>
+<span class="nc bnc" id="L597" title="All 2 branches missed.">            if (indexOfDashboardCards == -1) {</span>
+<span class="nc" id="L598">                addAll(dynamicCards)</span>
+            } else {
+<span class="nc" id="L600">                addAll(indexOfDashboardCards, dynamicCards)</span>
+            }
+<span class="nc" id="L602">            addAll(siteItems)</span>
+<span class="nc" id="L603">        }.toList()</span>
+    }
+
+    private fun scrollToQuickStartTaskIfNecessary(
+        quickStartTask: QuickStartTask,
+        position: Int
+    ) {
+<span class="nc bnc" id="L610" title="All 6 branches missed.">        if (_activeTaskPosition.value?.first != quickStartTask &amp;&amp; isValidQuickStartFocusPosition(</span>
+<span class="nc" id="L611">                        quickStartTask,</span>
+<span class="nc" id="L612">                        position</span>
+                )) {
+<span class="nc" id="L614">            _activeTaskPosition.postValue(quickStartTask to position)</span>
+        }
+<span class="nc" id="L616">    }</span>
+
+    private fun isValidQuickStartFocusPosition(quickStartTask: QuickStartTask, position: Int): Boolean {
+<span class="nc bnc" id="L619" title="All 4 branches missed.">        return if (position == LIST_INDEX_NO_ACTIVE_QUICK_START_ITEM &amp;&amp; isSiteHeaderQuickStartTask(quickStartTask)) {</span>
+<span class="nc" id="L620">            true</span>
+        } else {
+<span class="nc bnc" id="L622" title="All 2 branches missed.">            position &gt;= 0</span>
+        }
+    }
+
+    private fun isSiteHeaderQuickStartTask(quickStartTask: QuickStartTask): Boolean {
+<span class="nc" id="L627">        return when (quickStartTask) {</span>
+<span class="nc bnc" id="L628" title="All 2 branches missed.">            QuickStartNewSiteTask.UPDATE_SITE_TITLE,</span>
+<span class="nc bnc" id="L629" title="All 4 branches missed.">            QuickStartNewSiteTask.UPLOAD_SITE_ICON,</span>
+<span class="nc bnc" id="L630" title="All 2 branches missed.">            quickStartRepository.quickStartType.getTaskFromString(QUICK_START_VIEW_SITE_LABEL) -&gt; true</span>
+<span class="nc" id="L631">            else -&gt; false</span>
+        }
+    }
+
+    fun onTabChanged(position: Int) {
+<span class="nc" id="L636">        quickStartRepository.currentTab = orderedTabTypes[position]</span>
+<span class="nc bnc" id="L637" title="All 4 branches missed.">        findUiStateForTab(orderedTabTypes[position])?.pendingTask?.let { requestTabStepPendingTask(it) }</span>
+<span class="nc bnc" id="L638" title="All 2 branches missed.">        trackTabChanged(position == orderedTabTypes.indexOf(MySiteTabType.SITE_MENU))</span>
+<span class="nc" id="L639">    }</span>
+
+    private fun requestTabStepPendingTask(pendingTask: QuickStartTask) {
+<span class="nc" id="L642">        quickStartRepository.clearTabStep()</span>
+<span class="nc" id="L643">        launch {</span>
+<span class="nc" id="L644">            delay(LIST_SCROLL_DELAY_MS)</span>
+<span class="nc" id="L645">            quickStartRepository.setActiveTask(pendingTask)</span>
+<span class="nc" id="L646">        }</span>
+<span class="nc" id="L647">    }</span>
+
+    @Suppress(&quot;ComplexMethod&quot;)
+    private fun onItemClick(action: ListItemAction) {
+<span class="nc bnc" id="L651" title="All 4 branches missed.">        selectedSiteRepository.getSelectedSite()?.let { selectedSite -&gt;</span>
+<span class="nc" id="L652">            siteItemsTracker.trackSiteItemClicked(action)</span>
+<span class="nc bnc" id="L653" title="All 18 branches missed.">            val navigationAction = when (action) {</span>
+<span class="nc" id="L654">                ListItemAction.ACTIVITY_LOG -&gt; SiteNavigationAction.OpenActivityLog(selectedSite)</span>
+<span class="nc" id="L655">                ListItemAction.BACKUP -&gt; SiteNavigationAction.OpenBackup(selectedSite)</span>
+<span class="nc" id="L656">                ListItemAction.SCAN -&gt; SiteNavigationAction.OpenScan(selectedSite)</span>
+                ListItemAction.PLAN -&gt; {
+<span class="nc" id="L658">                    SiteNavigationAction.OpenPlan(selectedSite)</span>
+                }
+<span class="nc" id="L660">                ListItemAction.POSTS -&gt; SiteNavigationAction.OpenPosts(selectedSite)</span>
+                ListItemAction.PAGES -&gt; {
+<span class="nc" id="L662">                    quickStartRepository.completeTask(QuickStartNewSiteTask.REVIEW_PAGES)</span>
+<span class="nc" id="L663">                    SiteNavigationAction.OpenPages(selectedSite)</span>
+                }
+<span class="nc" id="L665">                ListItemAction.ADMIN -&gt; SiteNavigationAction.OpenAdmin(selectedSite)</span>
+<span class="nc" id="L666">                ListItemAction.PEOPLE -&gt; SiteNavigationAction.OpenPeople(selectedSite)</span>
+                ListItemAction.SHARING -&gt; {
+<span class="nc" id="L668">                    quickStartRepository.requestNextStepOfTask(QuickStartNewSiteTask.ENABLE_POST_SHARING)</span>
+<span class="nc" id="L669">                    SiteNavigationAction.OpenSharing(selectedSite)</span>
+                }
+<span class="nc" id="L671">                ListItemAction.DOMAINS -&gt; SiteNavigationAction.OpenDomains(selectedSite)</span>
+<span class="nc" id="L672">                ListItemAction.SITE_SETTINGS -&gt; SiteNavigationAction.OpenSiteSettings(selectedSite)</span>
+<span class="nc" id="L673">                ListItemAction.THEMES -&gt; SiteNavigationAction.OpenThemes(selectedSite)</span>
+<span class="nc" id="L674">                ListItemAction.PLUGINS -&gt; SiteNavigationAction.OpenPlugins(selectedSite)</span>
+                ListItemAction.STATS -&gt; {
+<span class="nc" id="L676">                    quickStartRepository.completeTask(</span>
+<span class="nc" id="L677">                            quickStartRepository.quickStartType.getTaskFromString(QUICK_START_CHECK_STATS_LABEL)</span>
+                    )
+<span class="nc" id="L679">                    getStatsNavigationActionForSite(selectedSite)</span>
+                }
+                ListItemAction.MEDIA -&gt; {
+<span class="nc" id="L682">                    quickStartRepository.requestNextStepOfTask(</span>
+<span class="nc" id="L683">                            quickStartRepository.quickStartType.getTaskFromString(QUICK_START_UPLOAD_MEDIA_LABEL)</span>
+                    )
+<span class="nc" id="L685">                    SiteNavigationAction.OpenMedia(selectedSite)</span>
+                }
+<span class="nc" id="L687">                ListItemAction.COMMENTS -&gt; SiteNavigationAction.OpenUnifiedComments(selectedSite)</span>
+                ListItemAction.VIEW_SITE -&gt; {
+<span class="nc" id="L689">                    SiteNavigationAction.OpenSite(selectedSite)</span>
+                }
+<span class="nc" id="L691">                ListItemAction.JETPACK_SETTINGS -&gt; SiteNavigationAction.OpenJetpackSettings(selectedSite)</span>
+            }
+<span class="nc" id="L693">            _onNavigation.postValue(Event(navigationAction))</span>
+<span class="nc" id="L694">        } ?: _onSnackbarMessage.postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.site_cannot_be_loaded))))</span>
+<span class="nc" id="L695">    }</span>
+
+    private fun onDynamicCardMoreClick(model: DynamicCardMenuModel) {
+<span class="nc" id="L698">        _onDynamicCardMenuShown.postValue(Event(model))</span>
+<span class="nc" id="L699">    }</span>
+
+    private fun onQuickStartBlockRemoveMenuItemClick() {
+<span class="nc" id="L702">        _onBasicDialogShown.value = Event(ShowRemoveNextStepsDialog)</span>
+<span class="nc" id="L703">    }</span>
+
+    private fun onQuickStartTaskTypeItemClick(type: QuickStartTaskType) {
+<span class="nc" id="L706">        clearActiveQuickStartTask()</span>
+<span class="nc bnc" id="L707" title="All 2 branches missed.">        if (defaultABExperimentTab == MySiteTabType.DASHBOARD) {</span>
+<span class="nc" id="L708">            cardsTracker.trackQuickStartCardItemClicked(type)</span>
+        } else {
+<span class="nc" id="L710">            quickStartTracker.track(Stat.QUICK_START_TAPPED, mapOf(TYPE to type.toString()))</span>
+        }
+<span class="nc" id="L712">        _onNavigation.value = Event(</span>
+<span class="nc" id="L713">                SiteNavigationAction.OpenQuickStartFullScreenDialog(type, quickStartCardBuilder.getTitle(type))</span>
+        )
+<span class="nc" id="L715">    }</span>
+
+    fun onQuickStartTaskCardClick(task: QuickStartTask) {
+<span class="nc" id="L718">        quickStartRepository.setActiveTask(task)</span>
+<span class="nc" id="L719">    }</span>
+
+    fun onQuickStartFullScreenDialogDismiss() {
+<span class="nc" id="L722">        mySiteSourceManager.refreshQuickStart()</span>
+<span class="nc" id="L723">    }</span>
+
+    private fun titleClick() {
+<span class="nc bnc" id="L726" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc bnc" id="L727" title="All 2 branches missed.">        if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L728">            _onSnackbarMessage.value = Event(SnackbarMessageHolder(UiStringRes(R.string.error_network_connection)))</span>
+<span class="nc bnc" id="L729" title="All 4 branches missed.">        } else if (!SiteUtils.isAccessedViaWPComRest(selectedSite) || !selectedSite.hasCapabilityManageOptions) {</span>
+<span class="nc" id="L730">            _onSnackbarMessage.value = Event(</span>
+<span class="nc" id="L731">                    SnackbarMessageHolder(UiStringRes(R.string.my_site_title_changer_dialog_not_allowed_hint))</span>
+            )
+        } else {
+<span class="nc" id="L734">            _onTechInputDialogShown.value = Event(</span>
+<span class="nc" id="L735">                    TextInputDialogModel(</span>
+<span class="nc" id="L736">                            callbackId = SITE_NAME_CHANGE_CALLBACK_ID,</span>
+<span class="nc" id="L737">                            title = R.string.my_site_title_changer_dialog_title,</span>
+<span class="nc" id="L738">                            initialText = selectedSite.name,</span>
+<span class="nc" id="L739">                            hint = R.string.my_site_title_changer_dialog_hint,</span>
+<span class="nc" id="L740">                            isMultiline = false,</span>
+<span class="nc" id="L741">                            isInputEnabled = true</span>
+                    )
+            )
+        }
+<span class="nc" id="L745">    }</span>
+
+    private fun iconClick() {
+<span class="nc bnc" id="L748" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L749">        analyticsTrackerWrapper.track(Stat.MY_SITE_ICON_TAPPED)</span>
+<span class="nc bnc" id="L750" title="All 2 branches missed.">        val hasIcon = selectedSite.iconUrl != null</span>
+<span class="nc bnc" id="L751" title="All 4 branches missed.">        if (selectedSite.hasCapabilityManageOptions &amp;&amp; selectedSite.hasCapabilityUploadFiles) {</span>
+<span class="nc bnc" id="L752" title="All 2 branches missed.">            if (hasIcon) {</span>
+<span class="nc" id="L753">                _onBasicDialogShown.value = Event(ChangeSiteIconDialogModel)</span>
+            } else {
+<span class="nc" id="L755">                _onBasicDialogShown.value = Event(AddSiteIconDialogModel)</span>
+            }
+        } else {
+<span class="nc" id="L758">            val message = when {</span>
+<span class="nc bnc" id="L759" title="All 2 branches missed.">                !selectedSite.isUsingWpComRestApi -&gt; {</span>
+<span class="nc" id="L760">                    R.string.my_site_icon_dialog_change_requires_jetpack_message</span>
+                }
+<span class="nc bnc" id="L762" title="All 2 branches missed.">                hasIcon -&gt; {</span>
+<span class="nc" id="L763">                    R.string.my_site_icon_dialog_change_requires_permission_message</span>
+                }
+                else -&gt; {
+<span class="nc" id="L766">                    R.string.my_site_icon_dialog_add_requires_permission_message</span>
+                }
+            }
+<span class="nc" id="L769">            _onSnackbarMessage.value = Event(SnackbarMessageHolder(UiStringRes(message)))</span>
+        }
+<span class="nc" id="L771">    }</span>
+
+    private fun urlClick() {
+<span class="nc bnc" id="L774" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L775">        quickStartRepository.completeTask(</span>
+<span class="nc" id="L776">                quickStartRepository.quickStartType.getTaskFromString(QUICK_START_VIEW_SITE_LABEL)</span>
+        )
+<span class="nc" id="L778">        _onNavigation.value = Event(SiteNavigationAction.OpenSite(selectedSite))</span>
+<span class="nc" id="L779">    }</span>
+
+    private fun switchSiteClick() {
+<span class="nc bnc" id="L782" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L783">        trackWithTabSourceIfNeeded(Stat.MY_SITE_SITE_SWITCHER_TAPPED)</span>
+<span class="nc" id="L784">        _onNavigation.value = Event(SiteNavigationAction.OpenSitePicker(selectedSite))</span>
+<span class="nc" id="L785">    }</span>
+
+    private fun quickActionStatsClick() {
+<span class="nc bnc" id="L788" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L789">        trackWithTabSourceIfNeeded(Stat.QUICK_ACTION_STATS_TAPPED)</span>
+<span class="nc" id="L790">        quickStartRepository.completeTask(</span>
+<span class="nc" id="L791">                quickStartRepository.quickStartType.getTaskFromString(QUICK_START_CHECK_STATS_LABEL)</span>
+        )
+<span class="nc" id="L793">        _onNavigation.value = Event(getStatsNavigationActionForSite(selectedSite))</span>
+<span class="nc" id="L794">    }</span>
+
+    private fun quickActionPagesClick() {
+<span class="nc bnc" id="L797" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L798">        trackWithTabSourceIfNeeded(Stat.QUICK_ACTION_PAGES_TAPPED)</span>
+<span class="nc" id="L799">        quickStartRepository.completeTask(QuickStartNewSiteTask.REVIEW_PAGES)</span>
+<span class="nc" id="L800">        _onNavigation.value = Event(SiteNavigationAction.OpenPages(selectedSite))</span>
+<span class="nc" id="L801">    }</span>
+
+    private fun quickActionPostsClick() {
+<span class="nc bnc" id="L804" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L805">        trackWithTabSourceIfNeeded(Stat.QUICK_ACTION_POSTS_TAPPED)</span>
+<span class="nc" id="L806">        _onNavigation.value = Event(SiteNavigationAction.OpenPosts(selectedSite))</span>
+<span class="nc" id="L807">    }</span>
+
+    private fun quickActionMediaClick() {
+<span class="nc bnc" id="L810" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L811">        trackWithTabSourceIfNeeded(Stat.QUICK_ACTION_MEDIA_TAPPED)</span>
+<span class="nc" id="L812">        quickStartRepository.requestNextStepOfTask(</span>
+<span class="nc" id="L813">                quickStartRepository.quickStartType.getTaskFromString(QUICK_START_UPLOAD_MEDIA_LABEL)</span>
+        )
+<span class="nc" id="L815">        _onNavigation.value = Event(SiteNavigationAction.OpenMedia(selectedSite))</span>
+<span class="nc" id="L816">    }</span>
+
+    private fun onQuickLinkRibbonStatsClick() {
+<span class="nc bnc" id="L819" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L820">        trackWithTabSourceIfNeeded(Stat.QUICK_LINK_RIBBON_STATS_TAPPED)</span>
+<span class="nc" id="L821">        quickStartRepository.completeTask(</span>
+<span class="nc" id="L822">                quickStartRepository.quickStartType.getTaskFromString(QUICK_START_CHECK_STATS_LABEL)</span>
+        )
+<span class="nc" id="L824">        _onNavigation.value = Event(getStatsNavigationActionForSite(selectedSite))</span>
+<span class="nc" id="L825">    }</span>
+
+    private fun onQuickLinkRibbonPagesClick() {
+<span class="nc bnc" id="L828" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L829">        trackWithTabSourceIfNeeded(Stat.QUICK_LINK_RIBBON_PAGES_TAPPED)</span>
+<span class="nc" id="L830">        quickStartRepository.completeTask(QuickStartNewSiteTask.REVIEW_PAGES)</span>
+<span class="nc" id="L831">        _onNavigation.value = Event(SiteNavigationAction.OpenPages(selectedSite))</span>
+<span class="nc" id="L832">    }</span>
+
+    private fun onQuickLinkRibbonPostsClick() {
+<span class="nc bnc" id="L835" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L836">        trackWithTabSourceIfNeeded(Stat.QUICK_LINK_RIBBON_POSTS_TAPPED)</span>
+<span class="nc" id="L837">        _onNavigation.value = Event(SiteNavigationAction.OpenPosts(selectedSite))</span>
+<span class="nc" id="L838">    }</span>
+
+    private fun onQuickLinkRibbonMediaClick() {
+<span class="nc bnc" id="L841" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L842">        trackWithTabSourceIfNeeded(Stat.QUICK_LINK_RIBBON_MEDIA_TAPPED)</span>
+<span class="nc" id="L843">        quickStartRepository.requestNextStepOfTask(</span>
+<span class="nc" id="L844">                quickStartRepository.quickStartType.getTaskFromString(QUICK_START_UPLOAD_MEDIA_LABEL)</span>
+        )
+<span class="nc" id="L846">        _onNavigation.value = Event(SiteNavigationAction.OpenMedia(selectedSite))</span>
+<span class="nc" id="L847">    }</span>
+
+    private fun domainRegistrationClick() {
+<span class="nc bnc" id="L850" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L851">        analyticsTrackerWrapper.track(Stat.DOMAIN_CREDIT_REDEMPTION_TAPPED, selectedSite)</span>
+<span class="nc" id="L852">        _onNavigation.value = Event(SiteNavigationAction.OpenDomainRegistration(selectedSite))</span>
+<span class="nc" id="L853">    }</span>
+
+<span class="nc" id="L855">    fun refresh(isPullToRefresh: Boolean = false) {</span>
+<span class="nc bnc" id="L856" title="All 2 branches missed.">        if (isPullToRefresh) trackWithTabSourceIfNeeded(Stat.MY_SITE_PULL_TO_REFRESH)</span>
+<span class="nc" id="L857">        mySiteSourceManager.refresh()</span>
+<span class="nc" id="L858">    }</span>
+
+    fun onResume() {
+<span class="nc" id="L861">        mySiteSourceManager.onResume(isSiteSelected)</span>
+<span class="nc" id="L862">        isSiteSelected = false</span>
+<span class="nc" id="L863">        checkAndShowQuickStartNotice()</span>
+<span class="nc" id="L864">    }</span>
+
+    fun clearActiveQuickStartTask() {
+<span class="nc" id="L867">        quickStartRepository.clearActiveTask()</span>
+<span class="nc" id="L868">    }</span>
+
+    fun checkAndShowQuickStartNotice() {
+<span class="nc" id="L871">        quickStartRepository.checkAndShowQuickStartNotice()</span>
+<span class="nc" id="L872">    }</span>
+
+    fun dismissQuickStartNotice() {
+<span class="nc bnc" id="L875" title="All 2 branches missed.">        if (quickStartRepository.isQuickStartNoticeShown) snackbarSequencer.dismissLastSnackbar()</span>
+<span class="nc" id="L876">    }</span>
+
+    fun onSiteNameChosen(input: String) {
+<span class="nc bnc" id="L879" title="All 2 branches missed.">        if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L880">            _onSnackbarMessage.postValue(</span>
+<span class="nc" id="L881">                    Event(SnackbarMessageHolder(UiStringRes(R.string.error_update_site_title_network)))</span>
+            )
+        } else {
+<span class="nc" id="L884">            selectedSiteRepository.updateTitle(input)</span>
+        }
+<span class="nc" id="L886">    }</span>
+
+    fun onSiteNameChooserDismissed() {
+        // This callback is called even when the dialog interaction is positive,
+        // otherwise we would need to call 'completeTask' on 'onSiteNameChosen' as well.
+<span class="nc" id="L891">        quickStartRepository.completeTask(QuickStartNewSiteTask.UPDATE_SITE_TITLE)</span>
+<span class="nc" id="L892">        quickStartRepository.checkAndShowQuickStartNotice()</span>
+<span class="nc" id="L893">    }</span>
+
+    fun onDialogInteraction(interaction: DialogInteraction) {
+<span class="nc" id="L896">        when (interaction) {</span>
+<span class="nc bnc" id="L897" title="All 5 branches missed.">            is Positive -&gt; when (interaction.tag) {</span>
+                TAG_ADD_SITE_ICON_DIALOG, TAG_CHANGE_SITE_ICON_DIALOG -&gt; {
+<span class="nc" id="L899">                    quickStartRepository.completeTask(QuickStartNewSiteTask.UPLOAD_SITE_ICON)</span>
+<span class="nc" id="L900">                    _onNavigation.postValue(</span>
+<span class="nc" id="L901">                            Event(</span>
+<span class="nc" id="L902">                                    SiteNavigationAction.OpenMediaPicker(</span>
+<span class="nc bnc" id="L903" title="All 2 branches missed.">                                            requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+                                    )
+                            )
+                    )
+                }
+<span class="nc" id="L908">                TAG_REMOVE_NEXT_STEPS_DIALOG -&gt; onRemoveNextStepsDialogPositiveButtonClicked()</span>
+            }
+<span class="nc bnc" id="L910" title="All 6 branches missed.">            is Negative -&gt; when (interaction.tag) {</span>
+                TAG_ADD_SITE_ICON_DIALOG -&gt; {
+<span class="nc" id="L912">                    quickStartRepository.completeTask(QuickStartNewSiteTask.UPLOAD_SITE_ICON)</span>
+<span class="nc" id="L913">                    quickStartRepository.checkAndShowQuickStartNotice()</span>
+                }
+                TAG_CHANGE_SITE_ICON_DIALOG -&gt; {
+<span class="nc" id="L916">                    analyticsTrackerWrapper.track(Stat.MY_SITE_ICON_REMOVED)</span>
+<span class="nc" id="L917">                    quickStartRepository.completeTask(QuickStartNewSiteTask.UPLOAD_SITE_ICON)</span>
+<span class="nc" id="L918">                    quickStartRepository.checkAndShowQuickStartNotice()</span>
+<span class="nc" id="L919">                    selectedSiteRepository.updateSiteIconMediaId(0, true)</span>
+                }
+<span class="nc" id="L921">                TAG_REMOVE_NEXT_STEPS_DIALOG -&gt; onRemoveNextStepsDialogNegativeButtonClicked()</span>
+            }
+<span class="nc bnc" id="L923" title="All 2 branches missed.">            is Dismissed -&gt; when (interaction.tag) {</span>
+<span class="nc bnc" id="L924" title="All 4 branches missed.">                TAG_ADD_SITE_ICON_DIALOG, TAG_CHANGE_SITE_ICON_DIALOG -&gt; {</span>
+<span class="nc" id="L925">                    quickStartRepository.completeTask(QuickStartNewSiteTask.UPLOAD_SITE_ICON)</span>
+<span class="nc" id="L926">                    quickStartRepository.checkAndShowQuickStartNotice()</span>
+                }
+            }
+        }
+<span class="nc" id="L930">    }</span>
+
+    private fun onRemoveNextStepsDialogPositiveButtonClicked() {
+<span class="nc" id="L933">        quickStartTracker.track(Stat.QUICK_START_REMOVE_DIALOG_POSITIVE_TAPPED)</span>
+<span class="nc" id="L934">        quickStartRepository.skipQuickStart()</span>
+<span class="nc" id="L935">        refresh()</span>
+<span class="nc" id="L936">        clearActiveQuickStartTask()</span>
+<span class="nc" id="L937">    }</span>
+
+    private fun onRemoveNextStepsDialogNegativeButtonClicked() {
+<span class="nc" id="L940">        quickStartTracker.track(Stat.QUICK_START_REMOVE_DIALOG_NEGATIVE_TAPPED)</span>
+<span class="nc" id="L941">    }</span>
+
+    fun handleTakenSiteIcon(iconUrl: String?, source: PhotoPickerMediaSource?) {
+<span class="nc bnc" id="L944" title="All 2 branches missed.">        val stat = if (source == ANDROID_CAMERA) Stat.MY_SITE_ICON_SHOT_NEW else Stat.MY_SITE_ICON_GALLERY_PICKED</span>
+<span class="nc" id="L945">        analyticsTrackerWrapper.track(stat)</span>
+<span class="nc bnc" id="L946" title="All 2 branches missed.">        val imageUri = Uri.parse(iconUrl)?.let { UriWrapper(it) }</span>
+<span class="nc bnc" id="L947" title="All 2 branches missed.">        if (imageUri != null) {</span>
+<span class="nc bnc" id="L948" title="All 2 branches missed.">            launch(bgDispatcher) {</span>
+<span class="nc" id="L949">                val fetchMedia = wpMediaUtilsWrapper.fetchMediaToUriWrapper(imageUri)</span>
+<span class="nc bnc" id="L950" title="All 2 branches missed.">                if (fetchMedia != null) {</span>
+<span class="nc" id="L951">                    _onNavigation.postValue(Event(SiteNavigationAction.OpenCropActivity(fetchMedia)))</span>
+                }
+<span class="nc" id="L953">            }</span>
+        }
+<span class="nc" id="L955">    }</span>
+
+    fun handleSelectedSiteIcon(mediaId: Long) {
+<span class="nc" id="L958">        selectedSiteRepository.updateSiteIconMediaId(mediaId.toInt(), true)</span>
+<span class="nc" id="L959">    }</span>
+
+    fun handleCropResult(croppedUri: Uri?, success: Boolean) {
+<span class="nc bnc" id="L962" title="All 4 branches missed.">        if (success &amp;&amp; croppedUri != null) {</span>
+<span class="nc" id="L963">            analyticsTrackerWrapper.track(Stat.MY_SITE_ICON_CROPPED)</span>
+<span class="nc" id="L964">            selectedSiteRepository.showSiteIconProgressBar(true)</span>
+<span class="nc bnc" id="L965" title="All 2 branches missed.">            launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L966" title="All 4 branches missed.">                wpMediaUtilsWrapper.fetchMediaToUriWrapper(UriWrapper(croppedUri))?.let { fetchMedia -&gt;</span>
+<span class="nc" id="L967">                    mediaUtilsWrapper.getRealPathFromURI(fetchMedia.uri)</span>
+<span class="nc" id="L968">                }?.let {</span>
+<span class="nc" id="L969">                    startSiteIconUpload(it)</span>
+<span class="nc" id="L970">                }</span>
+<span class="nc" id="L971">            }</span>
+        } else {
+<span class="nc" id="L973">            _onSnackbarMessage.postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.error_cropping_image))))</span>
+        }
+<span class="nc" id="L975">    }</span>
+
+    fun handleSuccessfulLoginResult() {
+<span class="nc bnc" id="L978" title="All 2 branches missed.">        selectedSiteRepository.getSelectedSite()?.let { site -&gt;</span>
+<span class="nc" id="L979">            _onNavigation.value = Event(</span>
+<span class="nc" id="L980">                    SiteNavigationAction.OpenStats(site)</span>
+            )
+<span class="nc" id="L982">        }</span>
+<span class="nc" id="L983">    }</span>
+
+    fun handleSuccessfulDomainRegistrationResult(email: String?) {
+<span class="nc" id="L986">        analyticsTrackerWrapper.track(Stat.DOMAIN_CREDIT_REDEMPTION_SUCCESS)</span>
+<span class="nc" id="L987">        _onSnackbarMessage.postValue(Event(SnackbarMessageHolder(getEmailValidationMessage(email))))</span>
+<span class="nc" id="L988">    }</span>
+
+    @Suppress(&quot;ReturnCount&quot;)
+    private fun startSiteIconUpload(filePath: String) {
+<span class="nc bnc" id="L992" title="All 2 branches missed.">        if (TextUtils.isEmpty(filePath)) {</span>
+<span class="nc" id="L993">            _onSnackbarMessage.postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.error_locating_image))))</span>
+<span class="nc" id="L994">            return</span>
+        }
+<span class="nc" id="L996">        val file = File(filePath)</span>
+<span class="nc bnc" id="L997" title="All 2 branches missed.">        if (!file.exists()) {</span>
+<span class="nc" id="L998">            _onSnackbarMessage.postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.file_error_create))))</span>
+<span class="nc" id="L999">            return</span>
+        }
+<span class="nc" id="L1001">        val selectedSite = selectedSiteRepository.getSelectedSite()</span>
+<span class="nc bnc" id="L1002" title="All 2 branches missed.">        if (selectedSite != null) {</span>
+<span class="nc" id="L1003">            val media = buildMediaModel(file, selectedSite)</span>
+<span class="nc bnc" id="L1004" title="All 2 branches missed.">            if (media == null) {</span>
+<span class="nc" id="L1005">                _onSnackbarMessage.postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.file_not_found))))</span>
+<span class="nc" id="L1006">                return</span>
+            }
+<span class="nc" id="L1008">            _onMediaUpload.postValue(Event(media))</span>
+        } else {
+<span class="nc" id="L1010">            _onSnackbarMessage.postValue(Event(SnackbarMessageHolder(UiStringRes(R.string.error_generic))))</span>
+        }
+<span class="nc" id="L1012">    }</span>
+
+    private fun buildMediaModel(file: File, site: SiteModel): MediaModel? {
+<span class="nc" id="L1015">        val uri = Uri.Builder().path(file.path).build()</span>
+<span class="nc" id="L1016">        val mimeType = contextProvider.getContext().contentResolver.getType(uri)</span>
+<span class="nc" id="L1017">        return fluxCUtilsWrapper.mediaModelFromLocalUri(uri, mimeType, site.id)</span>
+    }
+
+<span class="nc" id="L1020">    private fun getStatsNavigationActionForSite(site: SiteModel) = when {</span>
+        // If the user is not logged in and the site is already connected to Jetpack, ask to login.
+<span class="nc bnc" id="L1022" title="All 4 branches missed.">        !accountStore.hasAccessToken() &amp;&amp; site.isJetpackConnected -&gt; SiteNavigationAction.StartWPComLoginForJetpackStats</span>
+
+        // If it's a WordPress.com or Jetpack site, show the Stats screen.
+<span class="nc bnc" id="L1025" title="All 6 branches missed.">        site.isWPCom || site.isJetpackInstalled &amp;&amp; site.isJetpackConnected -&gt; SiteNavigationAction.OpenStats(site)</span>
+
+        // If it's a self-hosted site, ask to connect to Jetpack.
+<span class="nc" id="L1028">        else -&gt; SiteNavigationAction.ConnectJetpackForStats(site)</span>
+<span class="nc" id="L1029">    }</span>
+
+    fun onAvatarPressed() {
+<span class="nc" id="L1032">        _onNavigation.value = Event(SiteNavigationAction.OpenMeScreen)</span>
+<span class="nc" id="L1033">    }</span>
+
+    fun onAddSitePressed() {
+<span class="nc" id="L1036">        _onNavigation.value = Event(</span>
+<span class="nc" id="L1037">                SiteNavigationAction.AddNewSite(</span>
+<span class="nc" id="L1038">                        accountStore.hasAccessToken(),</span>
+<span class="nc" id="L1039">                        SiteCreationSource.MY_SITE_NO_SITES</span>
+                )
+        )
+<span class="nc" id="L1042">        analyticsTrackerWrapper.track(Stat.MY_SITE_NO_SITES_VIEW_ACTION_TAPPED)</span>
+<span class="nc" id="L1043">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L1046">        siteIconUploadHandler.clear()</span>
+<span class="nc" id="L1047">        siteStoriesHandler.clear()</span>
+<span class="nc" id="L1048">        quickStartRepository.clear()</span>
+<span class="nc" id="L1049">        mySiteSourceManager.clear()</span>
+<span class="nc" id="L1050">        dispatcher.unregister(this)</span>
+<span class="nc" id="L1051">        super.onCleared()</span>
+<span class="nc" id="L1052">    }</span>
+
+    fun handleStoriesPhotoPickerResult(data: Intent) {
+<span class="nc bnc" id="L1055" title="All 2 branches missed.">        selectedSiteRepository.getSelectedSite()?.let {</span>
+<span class="nc" id="L1056">            siteStoriesHandler.handleStoriesResult(it, data, STORY_FROM_MY_SITE)</span>
+<span class="nc" id="L1057">        }</span>
+<span class="nc" id="L1058">    }</span>
+
+    fun onCreateSiteResult() {
+<span class="nc" id="L1061">        isDefaultABExperimentTabSet = false</span>
+<span class="nc" id="L1062">        selectDefaultTabIfNeeded()</span>
+<span class="nc" id="L1063">    }</span>
+
+    fun onSitePicked() {
+<span class="nc bnc" id="L1066" title="All 2 branches missed.">        selectedSiteRepository.getSelectedSite()?.let {</span>
+<span class="nc" id="L1067">            val siteLocalId = it.id.toLong()</span>
+<span class="nc" id="L1068">            val lastSelectedQuickStartType = appPrefsWrapper.getLastSelectedQuickStartTypeForSite(siteLocalId)</span>
+<span class="nc" id="L1069">            quickStartRepository.checkAndSetQuickStartType(lastSelectedQuickStartType == NewSiteQuickStartType)</span>
+<span class="nc" id="L1070">        }</span>
+<span class="nc" id="L1071">        mySiteSourceManager.refreshQuickStart()</span>
+<span class="nc" id="L1072">    }</span>
+
+    fun performFirstStepAfterSiteCreation(
+        siteLocalId: Int,
+        isSiteTitleTaskCompleted: Boolean,
+        isNewSite: Boolean
+    ) {
+<span class="nc bnc" id="L1079" title="All 2 branches missed.">        if (landOnTheEditorFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L1080">            checkAndStartLandOnTheEditor(isNewSite)</span>
+        } else {
+<span class="nc" id="L1082">            checkAndStartQuickStart(siteLocalId, isSiteTitleTaskCompleted, isNewSite)</span>
+        }
+<span class="nc" id="L1084">    }</span>
+
+    private fun checkAndStartLandOnTheEditor(isNewSite: Boolean) {
+<span class="nc bnc" id="L1087" title="All 2 branches missed.">        selectedSiteRepository.getSelectedSite()?.let { selectedSite -&gt;</span>
+<span class="nc" id="L1088">            launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L1089" title="All 2 branches missed.">                homePageDataLoader.loadHomepage(selectedSite)?.pageId?.let { localHomepageId -&gt;</span>
+<span class="nc" id="L1090">                    val landOnTheEditorAction = SiteNavigationAction</span>
+<span class="nc bnc" id="L1091" title="All 2 branches missed.">                            .OpenHomepage(selectedSite, localHomepageId, isNewSite)</span>
+<span class="nc" id="L1092">                    _onNavigation.postValue(Event(landOnTheEditorAction))</span>
+<span class="nc" id="L1093">                    analyticsTrackerWrapper.track(Stat.LANDING_EDITOR_SHOWN)</span>
+<span class="nc" id="L1094">                }</span>
+<span class="nc" id="L1095">            }</span>
+        }
+<span class="nc" id="L1097">    }</span>
+
+    fun checkAndStartQuickStart(
+        siteLocalId: Int,
+        isSiteTitleTaskCompleted: Boolean,
+        isNewSite: Boolean
+    ) {
+<span class="nc" id="L1104">        quickStartRepository.checkAndSetQuickStartType(isNewSite = isNewSite)</span>
+<span class="nc bnc" id="L1105" title="All 2 branches missed.">        if (quickStartDynamicCardsFeatureConfig.isEnabled()) {</span>
+<span class="nc" id="L1106">            startQuickStart(siteLocalId, isSiteTitleTaskCompleted)</span>
+        } else {
+<span class="nc" id="L1108">            shouldMarkUpdateSiteTitleTaskComplete = isSiteTitleTaskCompleted</span>
+<span class="nc" id="L1109">            showQuickStartDialog(selectedSiteRepository.getSelectedSite())</span>
+        }
+<span class="nc" id="L1111">    }</span>
+
+    private fun startQuickStart(siteLocalId: Int, isSiteTitleTaskCompleted: Boolean) {
+<span class="nc bnc" id="L1114" title="All 2 branches missed.">        if (siteLocalId != SelectedSiteRepository.UNAVAILABLE) {</span>
+<span class="nc" id="L1115">            quickStartUtilsWrapper</span>
+<span class="nc" id="L1116">                    .startQuickStart(</span>
+<span class="nc" id="L1117">                            siteLocalId,</span>
+<span class="nc" id="L1118">                            isSiteTitleTaskCompleted,</span>
+<span class="nc" id="L1119">                            quickStartRepository.quickStartType,</span>
+<span class="nc" id="L1120">                            quickStartTracker</span>
+                    )
+<span class="nc" id="L1122">            mySiteSourceManager.refreshQuickStart()</span>
+        }
+<span class="nc" id="L1124">    }</span>
+
+    fun onQuickStartMenuInteraction(interaction: DynamicCardMenuInteraction) {
+<span class="nc" id="L1127">        launch { mySiteSourceManager.onQuickStartMenuInteraction(interaction) }</span>
+<span class="nc" id="L1128">    }</span>
+
+    private fun showQuickStartDialog(siteModel: SiteModel?) {
+<span class="nc bnc" id="L1131" title="All 4 branches missed.">        if (siteModel != null &amp;&amp; quickStartUtilsWrapper.isQuickStartAvailableForTheSite(siteModel)) {</span>
+<span class="nc" id="L1132">            _onNavigation.postValue(</span>
+<span class="nc" id="L1133">                    Event(</span>
+<span class="nc" id="L1134">                            SiteNavigationAction.ShowQuickStartDialog(</span>
+<span class="nc" id="L1135">                                    R.string.quick_start_dialog_need_help_manage_site_title,</span>
+<span class="nc" id="L1136">                                    R.string.quick_start_dialog_need_help_manage_site_message,</span>
+<span class="nc" id="L1137">                                    R.string.quick_start_dialog_need_help_manage_site_button_positive,</span>
+<span class="nc" id="L1138">                                    R.string.quick_start_dialog_need_help_button_negative</span>
+                            )
+                    )
+            )
+        }
+<span class="nc" id="L1143">    }</span>
+
+    fun startQuickStart() {
+<span class="nc" id="L1146">        quickStartTracker.track(Stat.QUICK_START_REQUEST_DIALOG_POSITIVE_TAPPED)</span>
+<span class="nc" id="L1147">        startQuickStart(selectedSiteRepository.getSelectedSiteLocalId(), shouldMarkUpdateSiteTitleTaskComplete)</span>
+<span class="nc" id="L1148">        shouldMarkUpdateSiteTitleTaskComplete = false</span>
+<span class="nc" id="L1149">    }</span>
+
+    fun ignoreQuickStart() {
+<span class="nc" id="L1152">        shouldMarkUpdateSiteTitleTaskComplete = false</span>
+<span class="nc" id="L1153">        quickStartTracker.track(Stat.QUICK_START_REQUEST_DIALOG_NEGATIVE_TAPPED)</span>
+<span class="nc" id="L1154">    }</span>
+
+    private fun onPostItemClick(params: PostItemClickParams) {
+<span class="nc bnc" id="L1157" title="All 2 branches missed.">        selectedSiteRepository.getSelectedSite()?.let { site -&gt;</span>
+<span class="nc" id="L1158">            cardsTracker.trackPostItemClicked(params.postCardType)</span>
+<span class="nc bnc" id="L1159" title="All 4 branches missed.">            when (params.postCardType) {</span>
+<span class="nc" id="L1160">                PostCardType.CREATE_FIRST, PostCardType.CREATE_NEXT -&gt; _onNavigation.value =</span>
+<span class="nc" id="L1161">                        Event(SiteNavigationAction.OpenEditorToCreateNewPost(site))</span>
+<span class="nc" id="L1162">                PostCardType.DRAFT -&gt; _onNavigation.value =</span>
+<span class="nc" id="L1163">                        Event(SiteNavigationAction.EditDraftPost(site, params.postId))</span>
+<span class="nc" id="L1164">                PostCardType.SCHEDULED -&gt; _onNavigation.value =</span>
+<span class="nc" id="L1165">                        Event(SiteNavigationAction.EditScheduledPost(site, params.postId))</span>
+            }
+<span class="nc" id="L1167">        }</span>
+<span class="nc" id="L1168">    }</span>
+
+    private fun onDashboardErrorRetry() {
+<span class="nc" id="L1171">        mySiteSourceManager.refresh()</span>
+<span class="nc" id="L1172">    }</span>
+
+    private fun onPostCardFooterLinkClick(postCardType: PostCardType) {
+<span class="nc bnc" id="L1175" title="All 2 branches missed.">        selectedSiteRepository.getSelectedSite()?.let { site -&gt;</span>
+<span class="nc" id="L1176">            cardsTracker.trackPostCardFooterLinkClicked(postCardType)</span>
+<span class="nc bnc" id="L1177" title="All 3 branches missed.">            _onNavigation.value = when (postCardType) {</span>
+                PostCardType.CREATE_FIRST, PostCardType.CREATE_NEXT -&gt;
+<span class="nc" id="L1179">                    Event(SiteNavigationAction.OpenEditorToCreateNewPost(site))</span>
+<span class="nc" id="L1180">                PostCardType.DRAFT -&gt; Event(SiteNavigationAction.OpenDraftsPosts(site))</span>
+<span class="nc" id="L1181">                PostCardType.SCHEDULED -&gt; Event(SiteNavigationAction.OpenScheduledPosts(site))</span>
+            }
+<span class="nc" id="L1183">        }</span>
+<span class="nc" id="L1184">    }</span>
+
+    private fun onBloggingPromptShareClick(message: String) {
+<span class="nc" id="L1187">        onShare.postValue(Event(message))</span>
+<span class="nc" id="L1188">    }</span>
+
+    private fun onBloggingPromptAnswerClick(promptId: Int) {
+<span class="nc" id="L1191">        bloggingPromptsCardAnalyticsTracker.trackMySiteCardAnswerPromptClicked()</span>
+<span class="nc bnc" id="L1192" title="All 2 branches missed.">        val selectedSite = requireNotNull(selectedSiteRepository.getSelectedSite())</span>
+<span class="nc" id="L1193">        _onAnswerBloggingPrompt.postValue(Event(Pair(selectedSite, promptId)))</span>
+<span class="nc" id="L1194">    }</span>
+
+    private fun onBloggingPromptSkipClicked() {
+<span class="nc bnc" id="L1197" title="All 2 branches missed.">        selectedSiteRepository.getSelectedSite()?.let { site -&gt;</span>
+<span class="nc" id="L1198">            val siteId = site.localId().value</span>
+
+<span class="nc" id="L1200">            appPrefsWrapper.setSkippedPromptDay(Date(), siteId)</span>
+<span class="nc" id="L1201">            mySiteSourceManager.refreshBloggingPrompts(true)</span>
+
+<span class="nc" id="L1203">            val snackbar = SnackbarMessageHolder(</span>
+<span class="nc" id="L1204">                    message = UiStringRes(R.string.my_site_blogging_prompt_card_skipped_snackbar),</span>
+<span class="nc" id="L1205">                    buttonTitle = UiStringRes(R.string.undo),</span>
+                    buttonAction = {
+<span class="nc" id="L1207">                        appPrefsWrapper.setSkippedPromptDay(null, siteId)</span>
+<span class="nc" id="L1208">                        mySiteSourceManager.refreshBloggingPrompts(true)</span>
+<span class="nc" id="L1209">                    },</span>
+<span class="nc" id="L1210">                    isImportant = true</span>
+            )
+
+<span class="nc" id="L1213">            _onSnackbarMessage.postValue(Event(snackbar))</span>
+<span class="nc" id="L1214">        }</span>
+<span class="nc" id="L1215">    }</span>
+
+<span class="nc" id="L1217">    fun isRefreshing() = mySiteSourceManager.isRefreshing()</span>
+
+    fun setActionableEmptyViewGone(isVisible: Boolean, setGone: () -&gt; Unit) {
+<span class="nc bnc" id="L1220" title="All 2 branches missed.">        if (isVisible) analyticsTrackerWrapper.track(Stat.MY_SITE_NO_SITES_VIEW_HIDDEN)</span>
+<span class="nc" id="L1221">        setGone()</span>
+<span class="nc" id="L1222">    }</span>
+
+    fun setActionableEmptyViewVisible(isVisible: Boolean, setVisible: () -&gt; Unit) {
+<span class="nc bnc" id="L1225" title="All 2 branches missed.">        if (!isVisible) analyticsTrackerWrapper.track(Stat.MY_SITE_NO_SITES_VIEW_DISPLAYED)</span>
+<span class="nc" id="L1226">        setVisible()</span>
+<span class="nc" id="L1227">    }</span>
+
+    fun trackWithTabSource(event: MySiteTrackWithTabSource) {
+<span class="nc bnc" id="L1230" title="All 2 branches missed.">        if (event.currentTab == MySiteTabType.ALL) {</span>
+<span class="nc bnc" id="L1231" title="All 2 branches missed.">            analyticsTrackerWrapper.track(event.stat, event.properties ?: emptyMap())</span>
+        } else {
+<span class="nc" id="L1233">            val props: MutableMap&lt;String, Any&gt; = mutableMapOf(event.key to event.currentTab.trackingLabel)</span>
+<span class="nc bnc" id="L1234" title="All 6 branches missed.">            if (!event.properties.isNullOrEmpty()) {</span>
+<span class="nc" id="L1235">                props.putAll(event.properties)</span>
+            }
+<span class="nc" id="L1237">            analyticsTrackerWrapper.track(event.stat, props)</span>
+        }
+<span class="nc" id="L1239">    }</span>
+
+    fun onBloggingPromptsLearnMoreClicked() {
+<span class="nc" id="L1242">        _onBloggingPromptsLearnMore.postValue(Event(Unit))</span>
+<span class="nc" id="L1243">    }</span>
+
+<span class="nc" id="L1245">    private fun trackWithTabSourceIfNeeded(stat: Stat, properties: HashMap&lt;String, *&gt;? = null) {</span>
+<span class="nc bnc" id="L1246" title="All 2 branches missed.">        if (isMySiteDashboardTabsFeatureConfigEnabled) {</span>
+<span class="nc" id="L1247">            _onTrackWithTabSource.postValue(Event(MySiteTrackWithTabSource(stat, properties)))</span>
+        } else {
+<span class="nc bnc" id="L1249" title="All 2 branches missed.">            analyticsTrackerWrapper.track(stat, properties ?: emptyMap())</span>
+        }
+<span class="nc" id="L1251">    }</span>
+
+    @Suppress(&quot;NestedBlockDepth&quot;)
+    private fun selectDefaultTabIfNeeded() {
+<span class="nc bnc" id="L1255" title="All 2 branches missed.">        if (!isMySiteTabsEnabled) return</span>
+<span class="nc" id="L1256">        val index = orderedTabTypes.indexOf(defaultABExperimentTab)</span>
+<span class="nc bnc" id="L1257" title="All 2 branches missed.">        if (index != -1) {</span>
+<span class="nc bnc" id="L1258" title="All 2 branches missed.">            if (isDefaultABExperimentTabSet) {</span>
+                // This logic checks if the current default tab is the same as the tab
+                // set as initial screen, if yes then return
+<span class="nc bnc" id="L1261" title="All 2 branches missed.">                _selectTab.value?.let { tab -&gt;</span>
+<span class="nc" id="L1262">                    val currentDefaultTab = tab.peekContent().position</span>
+<span class="nc bnc" id="L1263" title="All 2 branches missed.">                    if (currentDefaultTab == index) return</span>
+<span class="nc" id="L1264">                }</span>
+            }
+<span class="nc" id="L1266">            quickStartRepository.quickStartTaskOriginTab = orderedTabTypes[index]</span>
+<span class="nc" id="L1267">            _selectTab.postValue(Event(TabNavigation(index, smoothAnimation = false)))</span>
+<span class="nc" id="L1268">            isDefaultABExperimentTabSet = true</span>
+        }
+<span class="nc" id="L1270">    }</span>
+
+    private fun trackCardsAndItemsShownIfNeeded(siteSelected: SiteSelected) {
+<span class="nc" id="L1273">        siteSelected.cardAndItems.filterIsInstance&lt;DomainRegistrationCard&gt;()</span>
+<span class="nc" id="L1274">                .forEach { domainRegistrationCardShownTracker.trackShown(it.type) }</span>
+<span class="nc" id="L1275">        siteSelected.cardAndItems.filterIsInstance&lt;DashboardCards&gt;().forEach { cardsTracker.trackShown(it) }</span>
+<span class="nc" id="L1276">        siteSelected.cardAndItems.filterIsInstance&lt;QuickStartCard&gt;()</span>
+<span class="nc bnc" id="L1277" title="All 2 branches missed.">                .firstOrNull()?.let { quickStartTracker.trackShown(it.type, defaultABExperimentTab) }</span>
+<span class="nc" id="L1278">        siteSelected.dashboardCardsAndItems.filterIsInstance&lt;QuickStartCard&gt;()</span>
+<span class="nc bnc" id="L1279" title="All 2 branches missed.">                .firstOrNull()?.let { cardsTracker.trackQuickStartCardShown(quickStartRepository.quickStartType) }</span>
+<span class="nc" id="L1280">    }</span>
+
+    private fun resetShownTrackers() {
+<span class="nc" id="L1283">        domainRegistrationCardShownTracker.resetShown()</span>
+<span class="nc" id="L1284">        cardsTracker.resetShown()</span>
+<span class="nc" id="L1285">        quickStartTracker.resetShown()</span>
+<span class="nc" id="L1286">    }</span>
+
+    private fun trackTabChanged(isSiteMenu: Boolean) {
+<span class="nc bnc" id="L1289" title="All 2 branches missed.">        if (isSiteMenu) {</span>
+<span class="nc" id="L1290">            analyticsTrackerWrapper.track(</span>
+<span class="nc" id="L1291">                    Stat.MY_SITE_TAB_TAPPED,</span>
+<span class="nc" id="L1292">                    mapOf(MY_SITE_TAB to MySiteTabType.SITE_MENU.trackingLabel)</span>
+            )
+<span class="nc" id="L1294">            analyticsTrackerWrapper.track(Stat.MY_SITE_SITE_MENU_SHOWN)</span>
+        } else {
+<span class="nc" id="L1296">            analyticsTrackerWrapper.track(</span>
+<span class="nc" id="L1297">                    Stat.MY_SITE_TAB_TAPPED,</span>
+<span class="nc" id="L1298">                    mapOf(MY_SITE_TAB to MySiteTabType.DASHBOARD.trackingLabel)</span>
+            )
+<span class="nc" id="L1300">            analyticsTrackerWrapper.track(Stat.MY_SITE_DASHBOARD_SHOWN)</span>
+        }
+<span class="nc" id="L1302">    }</span>
+
+    private fun findUiStateForTab(tabType: MySiteTabType) =
+<span class="nc bnc" id="L1305" title="All 8 branches missed.">            tabsUiState.value?.tabUiStates?.firstOrNull { it.tabType == tabType }</span>
+
+<span class="nc" id="L1307">    private fun createTabsUiState() = TabsUiState(</span>
+<span class="nc" id="L1308">            showTabs = isMySiteTabsEnabled,</span>
+<span class="nc" id="L1309">            tabUiStates = orderedTabTypes.mapToTabUiStates(),</span>
+<span class="nc" id="L1310">            shouldUpdateViewPager = shouldUpdateViewPager()</span>
+<span class="nc" id="L1311">    )</span>
+
+<span class="nc" id="L1313">    private fun List&lt;MySiteTabType&gt;.mapToTabUiStates() = map {</span>
+<span class="nc" id="L1314">        TabUiState(</span>
+<span class="nc" id="L1315">                label = UiStringRes(it.stringResId),</span>
+<span class="nc" id="L1316">                tabType = it,</span>
+<span class="nc bnc" id="L1317" title="All 2 branches missed.">                showQuickStartFocusPoint = findUiStateForTab(it)?.showQuickStartFocusPoint ?: false</span>
+        )
+<span class="nc" id="L1319">    }</span>
+
+<span class="nc bnc" id="L1321" title="All 12 branches missed.">    private fun shouldUpdateViewPager() = uiModel.value?.state?.tabsUiState?.tabUiStates?.size != orderedTabTypes.size</span>
+
+    private fun hasSiteHeaderUpdates(nextSiteInfoHeaderCard: SiteInfoHeaderCard): Boolean {
+<span class="nc bnc" id="L1324" title="All 12 branches missed.">        return !((uiModel.value?.state as? SiteSelected)?.siteInfoHeaderState?.siteInfoHeader?.equals(</span>
+<span class="nc" id="L1325">                nextSiteInfoHeaderCard</span>
+<span class="nc" id="L1326">        ) ?: false)</span>
+    }
+
+    // FluxC events
+    @Subscribe(threadMode = MAIN)
+    fun onPostUploaded(event: OnPostUploaded) {
+<span class="nc bnc" id="L1332" title="All 2 branches missed.">        if (!event.isError) {</span>
+<span class="nc bnc" id="L1333" title="All 2 branches missed.">            event.post?.let {</span>
+<span class="nc bnc" id="L1334" title="All 4 branches missed.">                if (event.post.answeredPromptId &gt; 0 &amp;&amp; event.isFirstTimePublish) {</span>
+<span class="nc" id="L1335">                    mySiteSourceManager.refreshBloggingPrompts(true)</span>
+                }
+<span class="nc" id="L1337">            }</span>
+        }
+<span class="nc" id="L1339">    }</span>
+
+<span class="nc" id="L1341">    data class UiModel(</span>
+<span class="nc" id="L1342">        val accountAvatarUrl: String,</span>
+<span class="nc" id="L1343">        val state: State</span>
+    )
+
+    sealed class State {
+        abstract val tabsUiState: TabsUiState
+        abstract val siteInfoToolbarViewParams: SiteInfoToolbarViewParams
+
+<span class="nc" id="L1350">        data class SiteSelected(</span>
+<span class="nc" id="L1351">            override val tabsUiState: TabsUiState,</span>
+<span class="nc" id="L1352">            override val siteInfoToolbarViewParams: SiteInfoToolbarViewParams,</span>
+<span class="nc" id="L1353">            val siteInfoHeaderState: SiteInfoHeaderState,</span>
+<span class="nc" id="L1354">            val cardAndItems: List&lt;MySiteCardAndItem&gt;,</span>
+<span class="nc" id="L1355">            val siteMenuCardsAndItems: List&lt;MySiteCardAndItem&gt;,</span>
+<span class="nc" id="L1356">            val dashboardCardsAndItems: List&lt;MySiteCardAndItem&gt;</span>
+<span class="nc" id="L1357">        ) : State()</span>
+
+<span class="nc" id="L1359">        data class NoSites(</span>
+<span class="nc" id="L1360">            override val tabsUiState: TabsUiState,</span>
+<span class="nc" id="L1361">            override val siteInfoToolbarViewParams: SiteInfoToolbarViewParams,</span>
+<span class="nc" id="L1362">            val shouldShowImage: Boolean</span>
+<span class="nc" id="L1363">        ) : State()</span>
+    }
+
+<span class="nc" id="L1366">    data class SiteInfoHeaderState(</span>
+<span class="nc" id="L1367">        val hasUpdates: Boolean,</span>
+<span class="nc" id="L1368">        val siteInfoHeader: SiteInfoHeaderCard</span>
+    )
+
+<span class="nc" id="L1371">    data class TabsUiState(</span>
+<span class="nc" id="L1372">        val showTabs: Boolean = false,</span>
+<span class="nc" id="L1373">        val tabUiStates: List&lt;TabUiState&gt;,</span>
+<span class="nc" id="L1374">        val shouldUpdateViewPager: Boolean = false</span>
+    ) {
+<span class="nc" id="L1376">        data class TabUiState(</span>
+<span class="nc" id="L1377">            val label: UiString,</span>
+<span class="nc" id="L1378">            val tabType: MySiteTabType,</span>
+<span class="nc" id="L1379">            val showQuickStartFocusPoint: Boolean = false,</span>
+<span class="nc" id="L1380">            val pendingTask: QuickStartTask? = null</span>
+<span class="nc" id="L1381">        )</span>
+
+<span class="nc" id="L1383">        fun update(quickStartTabStep: QuickStartTabStep?) = tabUiStates.map { tabUiState -&gt;</span>
+<span class="nc" id="L1384">            tabUiState.copy(</span>
+<span class="nc bnc" id="L1385" title="All 4 branches missed.">                    showQuickStartFocusPoint = quickStartTabStep?.mySiteTabType == tabUiState.tabType &amp;&amp;</span>
+<span class="nc bnc" id="L1386" title="All 2 branches missed.">                            quickStartTabStep.isStarted,</span>
+<span class="nc bnc" id="L1387" title="All 2 branches missed.">                    pendingTask = quickStartTabStep?.task</span>
+            )
+<span class="nc" id="L1389">        }</span>
+<span class="nc" id="L1390">    }</span>
+
+<span class="nc" id="L1392">    data class SiteInfoToolbarViewParams(</span>
+<span class="nc" id="L1393">        @DimenRes val appBarHeight: Int,</span>
+<span class="nc" id="L1394">        @DimenRes val toolbarBottomMargin: Int,</span>
+<span class="nc" id="L1395">        val headerVisible: Boolean = true,</span>
+<span class="nc" id="L1396">        val appBarLiftOnScroll: Boolean = false</span>
+<span class="nc" id="L1397">    )</span>
+
+<span class="nc" id="L1399">    data class TabNavigation(val position: Int, val smoothAnimation: Boolean)</span>
+
+<span class="nc" id="L1401">    data class TextInputDialogModel(</span>
+<span class="nc" id="L1402">        val callbackId: Int = SITE_NAME_CHANGE_CALLBACK_ID,</span>
+<span class="nc" id="L1403">        @StringRes val title: Int,</span>
+<span class="nc" id="L1404">        val initialText: String,</span>
+<span class="nc" id="L1405">        @StringRes val hint: Int,</span>
+<span class="nc" id="L1406">        val isMultiline: Boolean,</span>
+<span class="nc" id="L1407">        val isInputEnabled: Boolean</span>
+<span class="nc" id="L1408">    )</span>
+
+<span class="nc" id="L1410">    private data class SiteIdToState(val siteId: Int?, val state: MySiteUiState = MySiteUiState()) {</span>
+        fun update(partialState: PartialState): SiteIdToState {
+<span class="nc" id="L1412">            return this.copy(state = state.update(partialState))</span>
+        }
+<span class="nc" id="L1414">    }</span>
+
+<span class="nc" id="L1416">    data class MySiteTrackWithTabSource(</span>
+<span class="nc" id="L1417">        val stat: Stat,</span>
+<span class="nc" id="L1418">        val properties: HashMap&lt;String, *&gt;? = null,</span>
+<span class="nc" id="L1419">        val key: String = TAB_SOURCE,</span>
+<span class="nc" id="L1420">        val currentTab: MySiteTabType = MySiteTabType.ALL</span>
+<span class="nc" id="L1421">    )</span>
+
+    companion object {
+        private const val MIN_DISPLAY_PX_HEIGHT_NO_SITE_IMAGE = 600
+        private const val LIST_INDEX_NO_ACTIVE_QUICK_START_ITEM = -1
+        private const val TYPE = &quot;type&quot;
+        const val TAG_ADD_SITE_ICON_DIALOG = &quot;TAG_ADD_SITE_ICON_DIALOG&quot;
+        const val TAG_CHANGE_SITE_ICON_DIALOG = &quot;TAG_CHANGE_SITE_ICON_DIALOG&quot;
+        const val TAG_REMOVE_NEXT_STEPS_DIALOG = &quot;TAG_REMOVE_NEXT_STEPS_DIALOG&quot;
+        const val SITE_NAME_CHANGE_CALLBACK_ID = 1
+        const val ARG_QUICK_START_TASK = &quot;ARG_QUICK_START_TASK&quot;
+        const val HIDE_WP_ADMIN_GMT_TIME_ZONE = &quot;GMT&quot;
+        const val LIST_SCROLL_DELAY_MS = 500L
+        const val MY_SITE_TAB = &quot;tab&quot;
+        const val TAB_SOURCE = &quot;tab_source&quot;
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

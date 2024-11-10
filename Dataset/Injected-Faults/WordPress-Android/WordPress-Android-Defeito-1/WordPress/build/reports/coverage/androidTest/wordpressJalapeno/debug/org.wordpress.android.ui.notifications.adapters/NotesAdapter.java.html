@@ -1,0 +1,405 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>NotesAdapter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.notifications.adapters</a> &gt; <span class="el_source">NotesAdapter.java</span></div><h1>NotesAdapter.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.notifications.adapters;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.os.AsyncTask;
+import android.os.AsyncTask.Status;
+import android.text.Spanned;
+import android.text.TextUtils;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.widget.TextView;
+
+import androidx.core.graphics.ColorUtils;
+import androidx.core.text.BidiFormatter;
+import androidx.core.view.ViewCompat;
+import androidx.recyclerview.widget.RecyclerView;
+
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.datasets.NotificationsTable;
+import org.wordpress.android.fluxc.model.CommentStatus;
+import org.wordpress.android.models.Note;
+import org.wordpress.android.models.NoticonUtils;
+import org.wordpress.android.ui.comments.CommentUtils;
+import org.wordpress.android.ui.notifications.NotificationsListFragmentPage.OnNoteClickListener;
+import org.wordpress.android.ui.notifications.blocks.NoteBlockClickableSpan;
+import org.wordpress.android.ui.notifications.utils.NotificationsUtilsWrapper;
+import org.wordpress.android.util.extensions.ContextExtensionsKt;
+import org.wordpress.android.util.GravatarUtils;
+import org.wordpress.android.util.RtlUtils;
+import org.wordpress.android.util.image.ImageManager;
+import org.wordpress.android.util.image.ImageType;
+import org.wordpress.android.widgets.BadgedImageView;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+import javax.inject.Inject;
+
+public class NotesAdapter extends RecyclerView.Adapter&lt;NotesAdapter.NoteViewHolder&gt; {
+    private final int mAvatarSz;
+    private final int mColorUnread;
+    private final int mTextIndentSize;
+
+    private final DataLoadedListener mDataLoadedListener;
+    private final OnLoadMoreListener mOnLoadMoreListener;
+<span class="nc" id="L50">    private final ArrayList&lt;Note&gt; mNotes = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L51">    private final ArrayList&lt;Note&gt; mFilteredNotes = new ArrayList&lt;&gt;();</span>
+    @Inject protected ImageManager mImageManager;
+    @Inject protected NotificationsUtilsWrapper mNotificationsUtilsWrapper;
+    @Inject protected NoticonUtils mNoticonUtils;
+
+<span class="nc" id="L56">    public enum FILTERS {</span>
+<span class="nc" id="L57">        FILTER_ALL,</span>
+<span class="nc" id="L58">        FILTER_COMMENT,</span>
+<span class="nc" id="L59">        FILTER_FOLLOW,</span>
+<span class="nc" id="L60">        FILTER_LIKE,</span>
+<span class="nc" id="L61">        FILTER_UNREAD;</span>
+
+        public String toString() {
+<span class="nc bnc" id="L64" title="All 6 branches missed.">            switch (this) {</span>
+                case FILTER_ALL:
+<span class="nc" id="L66">                    return &quot;all&quot;;</span>
+                case FILTER_COMMENT:
+<span class="nc" id="L68">                    return &quot;comment&quot;;</span>
+                case FILTER_FOLLOW:
+<span class="nc" id="L70">                    return &quot;follow&quot;;</span>
+                case FILTER_LIKE:
+<span class="nc" id="L72">                    return &quot;like&quot;;</span>
+                case FILTER_UNREAD:
+<span class="nc" id="L74">                    return &quot;unread&quot;;</span>
+                default:
+<span class="nc" id="L76">                    return &quot;all&quot;;</span>
+            }
+        }
+    }
+
+<span class="nc" id="L81">    private FILTERS mCurrentFilter = FILTERS.FILTER_ALL;</span>
+    private ReloadNotesFromDBTask mReloadNotesFromDBTask;
+
+    public interface DataLoadedListener {
+        void onDataLoaded(int itemsCount);
+    }
+
+    public interface OnLoadMoreListener {
+        void onLoadMore(long timestamp);
+    }
+
+    private OnNoteClickListener mOnNoteClickListener;
+
+    public NotesAdapter(Context context, DataLoadedListener dataLoadedListener, OnLoadMoreListener onLoadMoreListener) {
+<span class="nc" id="L95">        super();</span>
+<span class="nc" id="L96">        ((WordPress) context.getApplicationContext()).component().inject(this);</span>
+<span class="nc" id="L97">        mDataLoadedListener = dataLoadedListener;</span>
+<span class="nc" id="L98">        mOnLoadMoreListener = onLoadMoreListener;</span>
+
+        // this is on purpose - we don't show more than a hundred or so notifications at a time so no need to set
+        // stable IDs. This helps prevent crashes in case a note comes with no ID (we've code checking for that
+        // elsewhere, but telling the RecyclerView.Adapter the notes have stable Ids and then failing to provide them
+        // will make things go south as in https://github.com/wordpress-mobile/WordPress-Android/issues/8741
+<span class="nc" id="L104">        setHasStableIds(false);</span>
+
+<span class="nc" id="L106">        mAvatarSz = (int) context.getResources().getDimension(R.dimen.notifications_avatar_sz);</span>
+<span class="nc" id="L107">        mColorUnread = ColorUtils</span>
+<span class="nc" id="L108">                .setAlphaComponent(ContextExtensionsKt.getColorFromAttribute(context, R.attr.colorOnSurface),</span>
+<span class="nc" id="L109">                        context.getResources().getInteger(R.integer.selected_list_item_opacity));</span>
+<span class="nc" id="L110">        mTextIndentSize = context.getResources().getDimensionPixelSize(R.dimen.notifications_text_indent_sz);</span>
+<span class="nc" id="L111">    }</span>
+
+    public void setFilter(FILTERS newFilter) {
+<span class="nc" id="L114">        mCurrentFilter = newFilter;</span>
+<span class="nc" id="L115">    }</span>
+
+    public FILTERS getCurrentFilter() {
+<span class="nc" id="L118">        return mCurrentFilter;</span>
+    }
+
+    public void addAll(List&lt;Note&gt; notes, boolean clearBeforeAdding) {
+<span class="nc" id="L122">        Collections.sort(notes, new Note.TimeStampComparator());</span>
+        try {
+<span class="nc bnc" id="L124" title="All 2 branches missed.">            if (clearBeforeAdding) {</span>
+<span class="nc" id="L125">                mNotes.clear();</span>
+            }
+<span class="nc" id="L127">            mNotes.addAll(notes);</span>
+        } finally {
+<span class="nc" id="L129">            myNotifyDatasetChanged();</span>
+        }
+<span class="nc" id="L131">    }</span>
+
+    private void myNotifyDatasetChanged() {
+<span class="nc" id="L134">        buildFilteredNotesList(mFilteredNotes, mNotes, mCurrentFilter);</span>
+<span class="nc" id="L135">        notifyDataSetChanged();</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (mDataLoadedListener != null) {</span>
+<span class="nc" id="L137">            mDataLoadedListener.onDataLoaded(getItemCount());</span>
+        }
+<span class="nc" id="L139">    }</span>
+
+    @Override
+    public NoteViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+<span class="nc" id="L143">        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.notifications_list_item, parent, false);</span>
+
+<span class="nc" id="L145">        return new NoteViewHolder(view);</span>
+    }
+
+    // Instead of building the filtered notes list dynamically, create it once and re-use it.
+    // Otherwise it's re-created so many times during layout.
+    public static void buildFilteredNotesList(ArrayList&lt;Note&gt; filteredNotes, ArrayList&lt;Note&gt; notes, FILTERS filter) {
+<span class="nc" id="L151">        filteredNotes.clear();</span>
+<span class="nc bnc" id="L152" title="All 4 branches missed.">        if (notes.isEmpty() || filter == FILTERS.FILTER_ALL) {</span>
+<span class="nc" id="L153">            filteredNotes.addAll(notes);</span>
+<span class="nc" id="L154">            return;</span>
+        }
+<span class="nc bnc" id="L156" title="All 2 branches missed.">        for (Note currentNote : notes) {</span>
+<span class="nc bnc" id="L157" title="All 5 branches missed.">            switch (filter) {</span>
+                case FILTER_COMMENT:
+<span class="nc bnc" id="L159" title="All 2 branches missed.">                    if (currentNote.isCommentType()) {</span>
+<span class="nc" id="L160">                        filteredNotes.add(currentNote);</span>
+                    }
+                    break;
+                case FILTER_FOLLOW:
+<span class="nc bnc" id="L164" title="All 2 branches missed.">                    if (currentNote.isFollowType()) {</span>
+<span class="nc" id="L165">                        filteredNotes.add(currentNote);</span>
+                    }
+                    break;
+                case FILTER_UNREAD:
+<span class="nc bnc" id="L169" title="All 2 branches missed.">                    if (currentNote.isUnread()) {</span>
+<span class="nc" id="L170">                        filteredNotes.add(currentNote);</span>
+                    }
+                    break;
+                case FILTER_LIKE:
+<span class="nc bnc" id="L174" title="All 2 branches missed.">                    if (currentNote.isLikeType()) {</span>
+<span class="nc" id="L175">                        filteredNotes.add(currentNote);</span>
+                    }
+                    break;
+            }
+<span class="nc" id="L179">        }</span>
+<span class="nc" id="L180">    }</span>
+
+    private Note getNoteAtPosition(int position) {
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        if (isValidPosition(position)) {</span>
+<span class="nc" id="L184">            return mFilteredNotes.get(position);</span>
+        }
+
+<span class="nc" id="L187">        return null;</span>
+    }
+
+    public void replaceNote(Note newNote) {
+<span class="nc bnc" id="L191" title="All 2 branches missed.">        if (newNote != null) {</span>
+<span class="nc" id="L192">            int position = getPositionForNoteUnfiltered(newNote.getId());</span>
+<span class="nc bnc" id="L193" title="All 4 branches missed.">            if (position != RecyclerView.NO_POSITION &amp;&amp; position &lt; mNotes.size()) {</span>
+<span class="nc" id="L194">                mNotes.set(position, newNote);</span>
+            }
+        }
+<span class="nc" id="L197">    }</span>
+
+    private boolean isValidPosition(int position) {
+<span class="nc bnc" id="L200" title="All 4 branches missed.">        return (position &gt;= 0 &amp;&amp; position &lt; mFilteredNotes.size());</span>
+    }
+
+    @Override
+    public int getItemCount() {
+<span class="nc" id="L205">        return mFilteredNotes.size();</span>
+    }
+
+    @Override
+    public void onBindViewHolder(NoteViewHolder noteViewHolder, int position) {
+<span class="nc" id="L210">        final Note note = getNoteAtPosition(position);</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">        if (note == null) {</span>
+<span class="nc" id="L212">            return;</span>
+        }
+<span class="nc" id="L214">        noteViewHolder.mContentView.setTag(note.getId());</span>
+
+        // Display group header
+<span class="nc" id="L217">        Note.NoteTimeGroup timeGroup = Note.getTimeGroupForTimestamp(note.getTimestamp());</span>
+
+<span class="nc" id="L219">        Note.NoteTimeGroup previousTimeGroup = null;</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">        if (position &gt; 0) {</span>
+<span class="nc" id="L221">            Note previousNote = getNoteAtPosition(position - 1);</span>
+<span class="nc" id="L222">            previousTimeGroup = Note.getTimeGroupForTimestamp(previousNote.getTimestamp());</span>
+        }
+
+<span class="nc bnc" id="L225" title="All 4 branches missed.">        if (previousTimeGroup != null &amp;&amp; previousTimeGroup == timeGroup) {</span>
+<span class="nc" id="L226">            noteViewHolder.mHeaderText.setVisibility(View.GONE);</span>
+<span class="nc" id="L227">            noteViewHolder.mHeaderDivider.setVisibility(View.GONE);</span>
+        } else {
+<span class="nc" id="L229">            noteViewHolder.mHeaderText.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L230">            noteViewHolder.mHeaderDivider.setVisibility(View.VISIBLE);</span>
+
+<span class="nc bnc" id="L232" title="All 2 branches missed.">            if (timeGroup == Note.NoteTimeGroup.GROUP_TODAY) {</span>
+<span class="nc" id="L233">                noteViewHolder.mHeaderText.setText(R.string.stats_timeframe_today);</span>
+<span class="nc bnc" id="L234" title="All 2 branches missed.">            } else if (timeGroup == Note.NoteTimeGroup.GROUP_YESTERDAY) {</span>
+<span class="nc" id="L235">                noteViewHolder.mHeaderText.setText(R.string.stats_timeframe_yesterday);</span>
+<span class="nc bnc" id="L236" title="All 2 branches missed.">            } else if (timeGroup == Note.NoteTimeGroup.GROUP_OLDER_TWO_DAYS) {</span>
+<span class="nc" id="L237">                noteViewHolder.mHeaderText.setText(R.string.older_two_days);</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">            } else if (timeGroup == Note.NoteTimeGroup.GROUP_OLDER_WEEK) {</span>
+<span class="nc" id="L239">                noteViewHolder.mHeaderText.setText(R.string.older_last_week);</span>
+            } else {
+<span class="nc" id="L241">                noteViewHolder.mHeaderText.setText(R.string.older_month);</span>
+            }
+        }
+
+<span class="nc" id="L245">        CommentStatus commentStatus = CommentStatus.ALL;</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">        if (note.getCommentStatus() == CommentStatus.UNAPPROVED) {</span>
+<span class="nc" id="L247">            commentStatus = CommentStatus.UNAPPROVED;</span>
+        }
+
+<span class="nc bnc" id="L250" title="All 2 branches missed.">        if (!TextUtils.isEmpty(note.getLocalStatus())) {</span>
+<span class="nc" id="L251">            commentStatus = CommentStatus.fromString(note.getLocalStatus());</span>
+        }
+
+        // Subject is stored in db as html to preserve text formatting
+<span class="nc" id="L255">        Spanned noteSubjectSpanned = note.getFormattedSubject(mNotificationsUtilsWrapper);</span>
+        // Trim the '\n\n' added by Html.fromHtml()
+<span class="nc" id="L257">        noteSubjectSpanned =</span>
+<span class="nc" id="L258">                (Spanned) noteSubjectSpanned.subSequence(0, TextUtils.getTrimmedLength(noteSubjectSpanned));</span>
+
+<span class="nc" id="L260">        NoteBlockClickableSpan[] spans =</span>
+<span class="nc" id="L261">                noteSubjectSpanned.getSpans(0, noteSubjectSpanned.length(), NoteBlockClickableSpan.class);</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">        for (NoteBlockClickableSpan span : spans) {</span>
+<span class="nc" id="L263">            span.enableColors(noteViewHolder.mContentView.getContext());</span>
+        }
+
+<span class="nc" id="L266">        noteViewHolder.mTxtSubject.setText(noteSubjectSpanned);</span>
+
+<span class="nc" id="L268">        String noteSubjectNoticon = note.getCommentSubjectNoticon();</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">        if (!TextUtils.isEmpty(noteSubjectNoticon)) {</span>
+<span class="nc" id="L270">            ViewParent parent = noteViewHolder.mTxtSubject.getParent();</span>
+            // Fix position of the subject noticon in the RtL mode
+<span class="nc bnc" id="L272" title="All 2 branches missed.">            if (parent instanceof ViewGroup) {</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">                int textDirection = BidiFormatter.getInstance().isRtl(noteViewHolder.mTxtSubject.getText())</span>
+<span class="nc" id="L274">                        ? ViewCompat.LAYOUT_DIRECTION_RTL : ViewCompat.LAYOUT_DIRECTION_LTR;</span>
+<span class="nc" id="L275">                ViewCompat.setLayoutDirection((ViewGroup) parent, textDirection);</span>
+            }
+            // mirror noticon in the rtl mode
+<span class="nc bnc" id="L278" title="All 2 branches missed.">            if (RtlUtils.isRtl(noteViewHolder.itemView.getContext())) {</span>
+<span class="nc" id="L279">                noteViewHolder.mTxtSubjectNoticon.setScaleX(-1);</span>
+            }
+<span class="nc" id="L281">            CommentUtils.indentTextViewFirstLine(noteViewHolder.mTxtSubject, mTextIndentSize);</span>
+<span class="nc" id="L282">            noteViewHolder.mTxtSubjectNoticon.setText(noteSubjectNoticon);</span>
+<span class="nc" id="L283">            noteViewHolder.mTxtSubjectNoticon.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L284">        } else {</span>
+<span class="nc" id="L285">            noteViewHolder.mTxtSubjectNoticon.setVisibility(View.GONE);</span>
+        }
+
+<span class="nc" id="L288">        String noteSnippet = note.getCommentSubject();</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">        if (!TextUtils.isEmpty(noteSnippet)) {</span>
+<span class="nc" id="L290">            noteViewHolder.mTxtSubject.setMaxLines(2);</span>
+<span class="nc" id="L291">            noteViewHolder.mTxtDetail.setText(noteSnippet);</span>
+<span class="nc" id="L292">            noteViewHolder.mTxtDetail.setVisibility(View.VISIBLE);</span>
+        } else {
+<span class="nc" id="L294">            noteViewHolder.mTxtSubject.setMaxLines(3);</span>
+<span class="nc" id="L295">            noteViewHolder.mTxtDetail.setVisibility(View.GONE);</span>
+        }
+
+<span class="nc" id="L298">        String avatarUrl = GravatarUtils.fixGravatarUrl(note.getIconURL(), mAvatarSz);</span>
+<span class="nc" id="L299">        mImageManager.loadIntoCircle(noteViewHolder.mImgAvatar, ImageType.AVATAR_WITH_BACKGROUND, avatarUrl);</span>
+
+<span class="nc" id="L301">        boolean isUnread = note.isUnread();</span>
+
+<span class="nc" id="L303">        int gridicon = mNoticonUtils.noticonToGridicon(note.getNoticonCharacter());</span>
+<span class="nc" id="L304">        noteViewHolder.mImgAvatar.setBadgeIcon(gridicon);</span>
+<span class="nc bnc" id="L305" title="All 2 branches missed.">        if (commentStatus == CommentStatus.UNAPPROVED) {</span>
+<span class="nc" id="L306">            noteViewHolder.mImgAvatar.setBadgeBackground(R.drawable.bg_oval_warning_dark);</span>
+<span class="nc bnc" id="L307" title="All 2 branches missed.">        } else if (isUnread) {</span>
+<span class="nc" id="L308">            noteViewHolder.mImgAvatar.setBadgeBackground(R.drawable.bg_note_avatar_badge);</span>
+        } else {
+<span class="nc" id="L310">            noteViewHolder.mImgAvatar.setBadgeBackground(R.drawable.bg_oval_neutral_20);</span>
+        }
+
+<span class="nc bnc" id="L313" title="All 2 branches missed.">        if (isUnread) {</span>
+<span class="nc" id="L314">            noteViewHolder.mContentView.setBackgroundColor(mColorUnread);</span>
+        } else {
+<span class="nc" id="L316">            noteViewHolder.mContentView.setBackgroundColor(0);</span>
+        }
+
+        // request to load more comments when we near the end
+<span class="nc bnc" id="L320" title="All 4 branches missed.">        if (mOnLoadMoreListener != null &amp;&amp; position &gt;= getItemCount() - 1) {</span>
+<span class="nc" id="L321">            mOnLoadMoreListener.onLoadMore(note.getTimestamp());</span>
+        }
+<span class="nc" id="L323">    }</span>
+
+    private int getPositionForNoteUnfiltered(String noteId) {
+<span class="nc" id="L326">        return getPositionForNoteInArray(noteId, mNotes);</span>
+    }
+
+    private int getPositionForNoteInArray(String noteId, ArrayList&lt;Note&gt; notes) {
+<span class="nc bnc" id="L330" title="All 4 branches missed.">        if (notes != null &amp;&amp; noteId != null) {</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">            for (int i = 0; i &lt; notes.size(); i++) {</span>
+<span class="nc" id="L332">                String noteKey = notes.get(i).getId();</span>
+<span class="nc bnc" id="L333" title="All 4 branches missed.">                if (noteKey != null &amp;&amp; noteKey.equals(noteId)) {</span>
+<span class="nc" id="L334">                    return i;</span>
+                }
+            }
+        }
+<span class="nc" id="L338">        return RecyclerView.NO_POSITION;</span>
+    }
+
+    public void setOnNoteClickListener(OnNoteClickListener mNoteClickListener) {
+<span class="nc" id="L342">        mOnNoteClickListener = mNoteClickListener;</span>
+<span class="nc" id="L343">    }</span>
+
+    public void cancelReloadNotesTask() {
+<span class="nc bnc" id="L346" title="All 4 branches missed.">        if (mReloadNotesFromDBTask != null &amp;&amp; mReloadNotesFromDBTask.getStatus() != Status.FINISHED) {</span>
+<span class="nc" id="L347">            mReloadNotesFromDBTask.cancel(true);</span>
+<span class="nc" id="L348">            mReloadNotesFromDBTask = null;</span>
+        }
+<span class="nc" id="L350">    }</span>
+
+    public void reloadNotesFromDBAsync() {
+<span class="nc" id="L353">        cancelReloadNotesTask();</span>
+<span class="nc" id="L354">        mReloadNotesFromDBTask = new ReloadNotesFromDBTask();</span>
+<span class="nc" id="L355">        mReloadNotesFromDBTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);</span>
+<span class="nc" id="L356">    }</span>
+
+    @SuppressLint(&quot;StaticFieldLeak&quot;)
+<span class="nc" id="L359">    private class ReloadNotesFromDBTask extends AsyncTask&lt;Void, Void, ArrayList&lt;Note&gt;&gt; {</span>
+        @Override
+        protected ArrayList&lt;Note&gt; doInBackground(Void... voids) {
+<span class="nc" id="L362">            return NotificationsTable.getLatestNotes();</span>
+        }
+
+        @Override
+        protected void onPostExecute(ArrayList&lt;Note&gt; notes) {
+<span class="nc" id="L367">            mNotes.clear();</span>
+<span class="nc" id="L368">            mNotes.addAll(notes);</span>
+<span class="nc" id="L369">            myNotifyDatasetChanged();</span>
+<span class="nc" id="L370">        }</span>
+    }
+
+    class NoteViewHolder extends RecyclerView.ViewHolder {
+        private final View mContentView;
+        private final TextView mHeaderText;
+        private final View mHeaderDivider;
+        private final TextView mTxtSubject;
+        private final TextView mTxtSubjectNoticon;
+        private final TextView mTxtDetail;
+        private final BadgedImageView mImgAvatar;
+
+<span class="nc" id="L382">        NoteViewHolder(View view) {</span>
+<span class="nc" id="L383">            super(view);</span>
+<span class="nc" id="L384">            mContentView = view.findViewById(R.id.note_content_container);</span>
+<span class="nc" id="L385">            mHeaderText = view.findViewById(R.id.header_text);</span>
+<span class="nc" id="L386">            mHeaderDivider = view.findViewById(R.id.header_divider);</span>
+<span class="nc" id="L387">            mTxtSubject = view.findViewById(R.id.note_subject);</span>
+<span class="nc" id="L388">            mTxtSubjectNoticon = view.findViewById(R.id.note_subject_noticon);</span>
+<span class="nc" id="L389">            mTxtDetail = view.findViewById(R.id.note_detail);</span>
+<span class="nc" id="L390">            mImgAvatar = view.findViewById(R.id.note_avatar);</span>
+
+<span class="nc" id="L392">            mContentView.setOnClickListener(mOnClickListener);</span>
+<span class="nc" id="L393">        }</span>
+    }
+
+<span class="nc" id="L396">    private final View.OnClickListener mOnClickListener = new View.OnClickListener() {</span>
+        @Override
+        public void onClick(View v) {
+<span class="nc bnc" id="L399" title="All 4 branches missed.">            if (mOnNoteClickListener != null &amp;&amp; v.getTag() instanceof String) {</span>
+<span class="nc" id="L400">                mOnNoteClickListener.onClickNote((String) v.getTag());</span>
+            }
+<span class="nc" id="L402">        }</span>
+    };
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

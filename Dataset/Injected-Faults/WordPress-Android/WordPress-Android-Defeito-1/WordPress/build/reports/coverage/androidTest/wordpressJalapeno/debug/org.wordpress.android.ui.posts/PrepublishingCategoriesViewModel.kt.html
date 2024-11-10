@@ -1,0 +1,299 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PrepublishingCategoriesViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.posts</a> &gt; <span class="el_source">PrepublishingCategoriesViewModel.kt</span></div><h1>PrepublishingCategoriesViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.posts
+
+import android.os.Bundle
+import androidx.annotation.DimenRes
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import org.wordpress.android.R
+import org.wordpress.android.R.string
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.fluxc.action.TaxonomyAction
+import org.wordpress.android.fluxc.model.PostImmutableModel
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.store.TaxonomyStore.OnTaxonomyChanged
+import org.wordpress.android.fluxc.store.TaxonomyStore.OnTermUploaded
+import org.wordpress.android.models.CategoryNode
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.posts.EditPostRepository.UpdatePostResult
+import org.wordpress.android.ui.posts.EditPostRepository.UpdatePostResult.Updated
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+<span class="nc" id="L34">class PrepublishingCategoriesViewModel @Inject constructor(</span>
+<span class="nc" id="L35">    private val getCategoriesUseCase: GetCategoriesUseCase,</span>
+<span class="nc" id="L36">    private val addCategoryUseCase: AddCategoryUseCase,</span>
+<span class="nc" id="L37">    private val analyticsTrackerWrapper: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L38">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L39">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+<span class="nc" id="L40">) : ScopedViewModel(bgDispatcher) {</span>
+    private var isStarted = false
+    private lateinit var editPostRepository: EditPostRepository
+    private lateinit var siteModel: SiteModel
+    private var updateCategoriesJob: Job? = null
+    private var addCategoryJob: Job? = null
+    private lateinit var selectedCategoryIds: List&lt;Long&gt;
+
+<span class="nc" id="L48">    private val _navigateToHomeScreen = MutableLiveData&lt;Event&lt;Unit&gt;&gt;()</span>
+<span class="nc" id="L49">    val navigateToHomeScreen: LiveData&lt;Event&lt;Unit&gt;&gt; = _navigateToHomeScreen</span>
+
+<span class="nc" id="L51">    private val _navigateToAddCategoryScreen = MutableLiveData&lt;Bundle&gt;()</span>
+<span class="nc" id="L52">    val navigateToAddCategoryScreen: LiveData&lt;Bundle&gt; = _navigateToAddCategoryScreen</span>
+
+<span class="nc" id="L54">    private val _toolbarTitleUiState = MutableLiveData&lt;UiString&gt;()</span>
+<span class="nc" id="L55">    val toolbarTitleUiState: LiveData&lt;UiString&gt; = _toolbarTitleUiState</span>
+
+<span class="nc" id="L57">    private val _snackbarEvents = MediatorLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L58">    val snackbarEvents: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _snackbarEvents</span>
+
+<span class="nc" id="L60">    private val _uiState: MutableLiveData&lt;UiState&gt; = MutableLiveData()</span>
+<span class="nc" id="L61">    val uiState: LiveData&lt;UiState&gt; = _uiState</span>
+
+<span class="nc" id="L63">    fun start(</span>
+        editPostRepository: EditPostRepository,
+        siteModel: SiteModel,
+<span class="nc" id="L66">        addCategoryRequest: PrepublishingAddCategoryRequest? = null,</span>
+        selectedCategoryIds: List&lt;Long&gt;
+    ) {
+<span class="nc" id="L69">        this.editPostRepository = editPostRepository</span>
+<span class="nc" id="L70">        this.siteModel = siteModel</span>
+<span class="nc" id="L71">        this.selectedCategoryIds = selectedCategoryIds</span>
+
+<span class="nc bnc" id="L73" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc" id="L74">        isStarted = true</span>
+
+<span class="nc" id="L76">        initialize(addCategoryRequest)</span>
+<span class="nc" id="L77">    }</span>
+
+    private fun initialize(
+        addCategoryRequest: PrepublishingAddCategoryRequest?
+    ) {
+<span class="nc" id="L82">        setToolbarTitleUiState()</span>
+
+<span class="nc" id="L84">        updateCategoriesListItemUiState(addCategoryRequest)</span>
+
+<span class="nc bnc" id="L86" title="All 4 branches missed.">        addCategoryRequest?.let {</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">            addCategoryJob?.cancel()</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">            addCategoryJob = launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">                addCategoryUseCase.addCategory(it.categoryText, it.categoryParentId, siteModel)</span>
+<span class="nc" id="L90">            }</span>
+<span class="nc" id="L91">        } ?: run {</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">            getCategoriesUseCase.fetchSiteCategories(siteModel)</span>
+<span class="nc" id="L93">        }</span>
+<span class="nc" id="L94">    }</span>
+
+<span class="nc" id="L96">    private fun updateCategoriesListItemUiState(addCategoryRequest: PrepublishingAddCategoryRequest? = null) {</span>
+<span class="nc bnc" id="L97" title="All 6 branches missed.">        val selectedIds = if (selectedCategoryIds.isNotEmpty()) {</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">            selectedCategoryIds</span>
+        } else {
+<span class="nc" id="L100">            getPostCategories()</span>
+        }
+
+<span class="nc" id="L103">        val siteCategories = getSiteCategories()</span>
+<span class="nc" id="L104">        _uiState.value = UiState(</span>
+<span class="nc" id="L105">                categoriesListItemUiState = buildListOfCategoriesItemUiState(</span>
+<span class="nc" id="L106">                        siteCategories = siteCategories,</span>
+<span class="nc" id="L107">                        selectedCategoryIds = selectedIds</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">                ), progressVisibility = addCategoryRequest != null</span>
+        )
+<span class="nc" id="L110">    }</span>
+
+    private fun setToolbarTitleUiState() {
+<span class="nc" id="L113">        _toolbarTitleUiState.value = UiStringRes(string.prepublishing_nudges_toolbar_title_categories)</span>
+<span class="nc" id="L114">    }</span>
+
+    private fun saveAndFinish() {
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        if (hasChanges()) {</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">            _uiState.value = uiState.value?.copy(progressVisibility = true)</span>
+<span class="nc" id="L119">            updateCategories()</span>
+        } else {
+<span class="nc" id="L121">            _navigateToHomeScreen.postValue(Event(Unit))</span>
+        }
+<span class="nc" id="L123">    }</span>
+
+    private fun updateCategories() {
+<span class="nc bnc" id="L126" title="All 2 branches missed.">        if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L127">            _snackbarEvents.postValue(</span>
+<span class="nc" id="L128">                    Event(SnackbarMessageHolder(UiStringRes(string.no_network_message)))</span>
+            )
+<span class="nc" id="L130">            return</span>
+        }
+
+<span class="nc" id="L133">        val categoryList = getSelectedIds()</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        updateCategoriesJob?.cancel()</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">        updateCategoriesJob = launch(bgDispatcher) {</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">            postUpdatedCategories(categoryList.toList(), editPostRepository)</span>
+<span class="nc" id="L137">        }</span>
+<span class="nc" id="L138">    }</span>
+
+    private fun postUpdatedCategories(
+        categoryList: List&lt;Long&gt;,
+        editPostRepository: EditPostRepository
+    ) {
+<span class="nc" id="L144">        editPostRepository.updateAsync({ postModel -&gt;</span>
+<span class="nc" id="L145">            postModel.setCategoryIdList(categoryList)</span>
+<span class="nc" id="L146">            true</span>
+        }, { _: PostImmutableModel?, result: UpdatePostResult -&gt;
+<span class="nc bnc" id="L148" title="All 2 branches missed.">            if (result == Updated) {</span>
+<span class="nc" id="L149">                analyticsTrackerWrapper.trackPrepublishingNudges(Stat.EDITOR_POST_CATEGORIES_ADDED)</span>
+<span class="nc bnc" id="L150" title="All 2 branches missed.">                _uiState.value = uiState.value?.copy(progressVisibility = false)</span>
+            }
+<span class="nc" id="L152">            _navigateToHomeScreen.postValue(Event(Unit))</span>
+<span class="nc" id="L153">        })</span>
+<span class="nc" id="L154">    }</span>
+
+    private fun getSelectedIds(): List&lt;Long&gt; {
+<span class="nc bnc" id="L157" title="All 2 branches missed.">        val uiState = uiState.value as UiState</span>
+<span class="nc" id="L158">        return uiState.categoriesListItemUiState.toMutableList()</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">                .filter { x -&gt; x.checked }</span>
+<span class="nc" id="L160">                .map { id -&gt; id.categoryNode.categoryId }</span>
+<span class="nc" id="L161">                .toList()</span>
+    }
+
+    private fun getSiteCategories() =
+<span class="nc bnc" id="L165" title="All 2 branches missed.">            getCategoriesUseCase.getSiteCategories(siteModel)</span>
+
+    private fun getPostCategories() =
+<span class="nc bnc" id="L168" title="All 2 branches missed.">            getCategoriesUseCase.getPostCategories(editPostRepository)</span>
+
+    private fun hasChanges(): Boolean {
+<span class="nc" id="L171">        val postCategories = getPostCategories()</span>
+<span class="nc" id="L172">        val stateSelectedCategories = getSelectedIds()</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">        return (stateSelectedCategories != postCategories)</span>
+    }
+
+    private fun onCategoryToggled(position: Int, checked: Boolean) {
+<span class="nc bnc" id="L177" title="All 2 branches missed.">        uiState.value?.let {</span>
+<span class="nc" id="L178">            val currentUiState = it</span>
+<span class="nc" id="L179">            val updatedUiState = getUpdatedListState(position, checked)</span>
+
+<span class="nc" id="L181">            _uiState.value = currentUiState.copy(categoriesListItemUiState = updatedUiState)</span>
+<span class="nc" id="L182">        }</span>
+<span class="nc" id="L183">    }</span>
+
+    fun onBackButtonClick() {
+<span class="nc" id="L186">        saveAndFinish()</span>
+<span class="nc" id="L187">    }</span>
+
+    fun onAddCategoryClick() {
+<span class="nc" id="L190">        val bundle = Bundle().apply {</span>
+<span class="nc" id="L191">            putSerializable(</span>
+<span class="nc" id="L192">                    PrepublishingCategoriesFragment.SELECTED_CATEGORY_IDS,</span>
+<span class="nc" id="L193">                    getSelectedIds().toLongArray()</span>
+            )
+<span class="nc" id="L195">        }</span>
+<span class="nc" id="L196">        _navigateToAddCategoryScreen.postValue(bundle)</span>
+<span class="nc" id="L197">    }</span>
+
+    fun onTermUploadedComplete(event: OnTermUploaded) {
+        // Sometimes the API will return a success response with a null name which we will
+        // treat as an error because without a name, there is no category
+<span class="nc bnc" id="L202" title="All 6 branches missed.">        val isError = event.isError || event.term?.name == null</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">        val message = if (isError) {</span>
+<span class="nc" id="L204">            string.adding_cat_failed</span>
+        } else {
+<span class="nc" id="L206">            string.adding_cat_success</span>
+        }
+<span class="nc" id="L208">        _snackbarEvents.postValue(Event(SnackbarMessageHolder(UiStringRes(message))))</span>
+
+<span class="nc bnc" id="L210" title="All 2 branches missed.">        if (!isError) {</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">            val currentState = uiState.value as UiState</span>
+<span class="nc" id="L212">            val selectedIds = currentState.categoriesListItemUiState.toMutableList()</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                    .filter { x -&gt; x.checked }</span>
+<span class="nc" id="L214">                    .map { id -&gt; id.categoryNode.categoryId }</span>
+<span class="nc" id="L215">                    .toMutableList()</span>
+<span class="nc" id="L216">            selectedIds.add(event.term.remoteTermId)</span>
+<span class="nc" id="L217">            val categoryLevels = getSiteCategories()</span>
+<span class="nc" id="L218">            val recreatedListItemUiState = buildListOfCategoriesItemUiState(</span>
+<span class="nc" id="L219">                    categoryLevels,</span>
+<span class="nc" id="L220">                    selectedIds</span>
+            )
+<span class="nc bnc" id="L222" title="All 2 branches missed.">            _uiState.value = uiState.value?.copy(</span>
+<span class="nc" id="L223">                    categoriesListItemUiState = recreatedListItemUiState, progressVisibility = false</span>
+            )
+        } else {
+<span class="nc bnc" id="L226" title="All 2 branches missed.">            _uiState.value = uiState.value?.copy(progressVisibility = false)</span>
+        }
+<span class="nc" id="L228">    }</span>
+
+    fun onTaxonomyChanged(event: OnTaxonomyChanged) {
+<span class="nc bnc" id="L231" title="All 2 branches missed.">        if (event.isError) {</span>
+<span class="nc" id="L232">            AppLog.e(T.POSTS, &quot;An error occurred while updating taxonomy with type: &quot; + event.error.type)</span>
+<span class="nc" id="L233">            return</span>
+        }
+
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        if (event.causeOfChange == TaxonomyAction.FETCH_CATEGORIES) {</span>
+<span class="nc" id="L237">            updateCategoriesListItemUiState()</span>
+        }
+<span class="nc" id="L239">    }</span>
+
+    // State UI modifiers
+    private fun getUpdatedListState(
+        position: Int,
+        checked: Boolean
+    ): List&lt;PrepublishingCategoriesListItemUiState&gt; {
+<span class="nc bnc" id="L246" title="All 2 branches missed.">        val currentUiState = uiState.value as UiState</span>
+<span class="nc" id="L247">        val newListItemUiState = currentUiState.categoriesListItemUiState.toMutableList()</span>
+<span class="nc" id="L248">        newListItemUiState[position] = currentUiState.categoriesListItemUiState[position].copy(</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                checked = checked, onItemTapped = { onCategoryToggled(position, !checked) }</span>
+        )
+<span class="nc" id="L251">        return newListItemUiState</span>
+    }
+
+    private fun buildListOfCategoriesItemUiState(
+        siteCategories: ArrayList&lt;CategoryNode&gt;,
+        selectedCategoryIds: List&lt;Long&gt;
+    ): List&lt;PrepublishingCategoriesListItemUiState&gt; {
+<span class="nc" id="L258">        val items: ArrayList&lt;PrepublishingCategoriesListItemUiState&gt; = arrayListOf()</span>
+<span class="nc" id="L259">        siteCategories.forEachIndexed { index, categoryNode -&gt;</span>
+<span class="nc" id="L260">            val itemUiState =</span>
+<span class="nc" id="L261">                    buildCategoriesListItemUiState(</span>
+<span class="nc" id="L262">                            categoryNode,</span>
+<span class="nc" id="L263">                            selectedCategoryIds.contains(categoryNode.categoryId),</span>
+<span class="nc" id="L264">                            index</span>
+                    )
+<span class="nc" id="L266">            items.add(itemUiState)</span>
+<span class="nc" id="L267">        }</span>
+
+<span class="nc" id="L269">        return items</span>
+    }
+
+    private fun buildCategoriesListItemUiState(
+        categoryNode: CategoryNode,
+        checked: Boolean,
+        index: Int
+    ): PrepublishingCategoriesListItemUiState =
+<span class="nc" id="L277">            PrepublishingCategoriesListItemUiState(</span>
+<span class="nc" id="L278">                    categoryNode = categoryNode,</span>
+<span class="nc" id="L279">                    checked = checked,</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">                    onItemTapped = { onCategoryToggled(index, !checked) }</span>
+<span class="nc" id="L281">            )</span>
+
+<span class="nc" id="L283">    data class UiState(</span>
+<span class="nc" id="L284">        val addCategoryActionButtonVisibility: Boolean = true,</span>
+<span class="nc" id="L285">        val categoriesListItemUiState: List&lt;PrepublishingCategoriesListItemUiState&gt; = listOf(),</span>
+<span class="nc" id="L286">        val categoryListVisibility: Boolean = true,</span>
+<span class="nc" id="L287">        val progressVisibility: Boolean = false</span>
+<span class="nc" id="L288">    )</span>
+
+<span class="nc" id="L290">    data class PrepublishingCategoriesListItemUiState(</span>
+<span class="nc" id="L291">        val onItemTapped: ((Int) -&gt; Unit),</span>
+<span class="nc" id="L292">        val clickable: Boolean = true,</span>
+<span class="nc" id="L293">        val categoryNode: CategoryNode,</span>
+<span class="nc" id="L294">        val checked: Boolean = false,</span>
+<span class="nc" id="L295">        @DimenRes val verticalPaddingResId: Int = R.dimen.margin_large,</span>
+<span class="nc" id="L296">        @DimenRes val horizontalPaddingResId: Int = R.dimen.margin_extra_large</span>
+<span class="nc" id="L297">    )</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

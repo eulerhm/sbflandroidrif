@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SiteCreationMainVM.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.sitecreation</a> &gt; <span class="el_source">SiteCreationMainVM.kt</span></div><h1>SiteCreationMainVM.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.sitecreation
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.os.Bundle
+import android.os.Parcelable
+import androidx.annotation.StringRes
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.Transformations
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.parcelize.Parcelize
+import org.wordpress.android.R
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.networking.MShot
+import org.wordpress.android.ui.sitecreation.SiteCreationMainVM.SiteCreationScreenTitle.ScreenTitleEmpty
+import org.wordpress.android.ui.sitecreation.SiteCreationMainVM.SiteCreationScreenTitle.ScreenTitleGeneral
+import org.wordpress.android.ui.sitecreation.SiteCreationMainVM.SiteCreationScreenTitle.ScreenTitleStepCount
+import org.wordpress.android.ui.sitecreation.SiteCreationStep.DOMAINS
+import org.wordpress.android.ui.sitecreation.SiteCreationStep.SITE_DESIGNS
+import org.wordpress.android.ui.sitecreation.SiteCreationStep.SITE_PREVIEW
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationSource
+import org.wordpress.android.ui.sitecreation.misc.SiteCreationTracker
+import org.wordpress.android.ui.sitecreation.previews.SitePreviewViewModel.CreateSiteState
+import org.wordpress.android.ui.sitecreation.usecases.FetchHomePageLayoutsUseCase
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.NetworkUtilsWrapper
+import org.wordpress.android.util.image.ImageManager
+import org.wordpress.android.util.wizard.WizardManager
+import org.wordpress.android.util.wizard.WizardNavigationTarget
+import org.wordpress.android.util.wizard.WizardState
+import org.wordpress.android.viewmodel.SingleEventObservable
+import org.wordpress.android.viewmodel.SingleLiveEvent
+import org.wordpress.android.viewmodel.helpers.DialogHolder
+import javax.inject.Inject
+
+const val TAG_WARNING_DIALOG = &quot;back_pressed_warning_dialog&quot;
+const val KEY_CURRENT_STEP = &quot;key_current_step&quot;
+const val KEY_SITE_CREATION_COMPLETED = &quot;key_site_creation_completed&quot;
+const val KEY_SITE_CREATION_STATE = &quot;key_site_creation_state&quot;
+
+<span class="nc" id="L46">@Parcelize</span>
+@SuppressLint(&quot;ParcelCreator&quot;)
+<span class="nc" id="L48">data class SiteCreationState(</span>
+<span class="nc" id="L49">    val siteIntent: String? = null,</span>
+<span class="nc" id="L50">    val siteName: String? = null,</span>
+<span class="nc" id="L51">    val segmentId: Long? = null,</span>
+<span class="nc" id="L52">    val siteDesign: String? = null,</span>
+<span class="nc" id="L53">    val domain: String? = null</span>
+<span class="nc" id="L54">) : WizardState, Parcelable</span>
+
+typealias NavigationTarget = WizardNavigationTarget&lt;SiteCreationStep, SiteCreationState&gt;
+
+@HiltViewModel
+<span class="nc" id="L59">class SiteCreationMainVM @Inject constructor(</span>
+<span class="nc" id="L60">    private val tracker: SiteCreationTracker,</span>
+<span class="nc" id="L61">    private val wizardManager: WizardManager&lt;SiteCreationStep&gt;,</span>
+<span class="nc" id="L62">    private val networkUtils: NetworkUtilsWrapper,</span>
+<span class="nc" id="L63">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L64">    private val fetchHomePageLayoutsUseCase: FetchHomePageLayoutsUseCase,</span>
+<span class="nc" id="L65">    private val imageManager: ImageManager</span>
+<span class="nc" id="L66">) : ViewModel() {</span>
+<span class="nc" id="L67">    init {</span>
+<span class="nc" id="L68">        dispatcher.register(fetchHomePageLayoutsUseCase)</span>
+<span class="nc" id="L69">    }</span>
+
+    override fun onCleared() {
+<span class="nc" id="L72">        super.onCleared()</span>
+<span class="nc" id="L73">        dispatcher.unregister(fetchHomePageLayoutsUseCase)</span>
+<span class="nc" id="L74">    }</span>
+
+    private var isStarted = false
+    private var siteCreationCompleted = false
+
+    private lateinit var siteCreationState: SiteCreationState
+
+<span class="nc" id="L81">    internal var preloadingJob: Job? = null</span>
+
+<span class="nc" id="L83">    val navigationTargetObservable: SingleEventObservable&lt;NavigationTarget&gt; by lazy {</span>
+<span class="nc" id="L84">        SingleEventObservable(</span>
+<span class="nc" id="L85">                Transformations.map(wizardManager.navigatorLiveData) {</span>
+<span class="nc" id="L86">                    clearOldSiteCreationState(it)</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">                    WizardNavigationTarget(it, siteCreationState)</span>
+                }
+        )
+    }
+
+<span class="nc" id="L92">    private val _dialogAction = SingleLiveEvent&lt;DialogHolder&gt;()</span>
+<span class="nc" id="L93">    val dialogActionObservable: LiveData&lt;DialogHolder&gt; = _dialogAction</span>
+
+<span class="nc" id="L95">    private val _wizardFinishedObservable = SingleLiveEvent&lt;CreateSiteState&gt;()</span>
+<span class="nc" id="L96">    val wizardFinishedObservable: LiveData&lt;CreateSiteState&gt; = _wizardFinishedObservable</span>
+
+<span class="nc" id="L98">    private val _exitFlowObservable = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L99">    val exitFlowObservable: LiveData&lt;Unit&gt; = _exitFlowObservable</span>
+
+<span class="nc" id="L101">    private val _onBackPressedObservable = SingleLiveEvent&lt;Unit&gt;()</span>
+<span class="nc" id="L102">    val onBackPressedObservable: LiveData&lt;Unit&gt; = _onBackPressedObservable</span>
+
+    fun start(savedInstanceState: Bundle?, siteCreationSource: SiteCreationSource) {
+<span class="nc bnc" id="L105" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L107">            tracker.trackSiteCreationAccessed(siteCreationSource)</span>
+<span class="nc" id="L108">            siteCreationState = SiteCreationState()</span>
+        } else {
+<span class="nc" id="L110">            siteCreationCompleted = savedInstanceState.getBoolean(KEY_SITE_CREATION_COMPLETED, false)</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">            siteCreationState = requireNotNull(savedInstanceState.getParcelable(KEY_SITE_CREATION_STATE))</span>
+<span class="nc" id="L112">            val currentStepIndex = savedInstanceState.getInt(KEY_CURRENT_STEP)</span>
+<span class="nc" id="L113">            wizardManager.setCurrentStepIndex(currentStepIndex)</span>
+        }
+<span class="nc" id="L115">        isStarted = true</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+            // Show the next step only if it's a fresh activity so we can handle the navigation
+<span class="nc" id="L118">            wizardManager.showNextStep()</span>
+        }
+<span class="nc" id="L120">    }</span>
+
+    fun preloadThumbnails(context: Context) {
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        if (preloadingJob == null) {</span>
+<span class="nc" id="L124">            preloadingJob = viewModelScope.launch(Dispatchers.IO) {</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">                if (networkUtils.isNetworkAvailable()) {</span>
+<span class="nc" id="L126">                    val response = fetchHomePageLayoutsUseCase.fetchStarterDesigns()</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">                    for (design in response.designs) {</span>
+<span class="nc" id="L128">                        imageManager.preload(context, MShot(design.previewMobile))</span>
+                    }
+                }
+<span class="nc" id="L131">                preloadingJob = null</span>
+<span class="nc" id="L132">            }</span>
+        }
+<span class="nc" id="L134">    }</span>
+
+    fun writeToBundle(outState: Bundle) {
+<span class="nc" id="L137">        outState.putBoolean(KEY_SITE_CREATION_COMPLETED, siteCreationCompleted)</span>
+<span class="nc" id="L138">        outState.putInt(KEY_CURRENT_STEP, wizardManager.currentStep)</span>
+<span class="nc bnc" id="L139" title="All 2 branches missed.">        outState.putParcelable(KEY_SITE_CREATION_STATE, siteCreationState)</span>
+<span class="nc" id="L140">    }</span>
+
+    fun onSiteIntentSelected(intent: String?) {
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        siteCreationState = siteCreationState.copy(siteIntent = intent)</span>
+<span class="nc" id="L144">        wizardManager.showNextStep()</span>
+<span class="nc" id="L145">    }</span>
+
+    fun onSiteIntentSkipped() {
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        siteCreationState = siteCreationState.copy(siteIntent = null)</span>
+<span class="nc" id="L149">        wizardManager.showNextStep()</span>
+<span class="nc" id="L150">    }</span>
+
+    fun onSiteNameSkipped() {
+<span class="nc bnc" id="L153" title="All 2 branches missed.">        siteCreationState = siteCreationState.copy(siteName = null)</span>
+<span class="nc" id="L154">        wizardManager.showNextStep()</span>
+<span class="nc" id="L155">    }</span>
+
+    fun onSiteNameEntered(siteName: String) {
+<span class="nc bnc" id="L158" title="All 2 branches missed.">        siteCreationState = siteCreationState.copy(siteName = siteName)</span>
+<span class="nc" id="L159">        wizardManager.showNextStep()</span>
+<span class="nc" id="L160">    }</span>
+
+    fun onSiteDesignSelected(siteDesign: String) {
+<span class="nc bnc" id="L163" title="All 2 branches missed.">        siteCreationState = siteCreationState.copy(siteDesign = siteDesign)</span>
+<span class="nc" id="L164">        wizardManager.showNextStep()</span>
+<span class="nc" id="L165">    }</span>
+
+    fun onBackPressed() {
+<span class="nc bnc" id="L168" title="All 2 branches missed.">        return if (wizardManager.isLastStep()) {</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">            if (siteCreationCompleted) {</span>
+<span class="nc" id="L170">                exitFlow(false)</span>
+            } else {
+<span class="nc" id="L172">                _dialogAction.value = DialogHolder(</span>
+<span class="nc" id="L173">                        tag = TAG_WARNING_DIALOG,</span>
+<span class="nc" id="L174">                        title = null,</span>
+<span class="nc" id="L175">                        message = UiStringRes(R.string.new_site_creation_preview_back_pressed_warning),</span>
+<span class="nc" id="L176">                        positiveButton = UiStringRes(R.string.exit),</span>
+<span class="nc" id="L177">                        negativeButton = UiStringRes(R.string.cancel)</span>
+                )
+            }
+        } else {
+<span class="nc" id="L181">            wizardManager.onBackPressed()</span>
+<span class="nc" id="L182">            _onBackPressedObservable.call()</span>
+        }
+    }
+
+    private fun clearOldSiteCreationState(wizardStep: SiteCreationStep) {
+<span class="nc bnc" id="L187" title="All 3 branches missed.">        when (wizardStep) {</span>
+            SITE_DESIGNS -&gt; { }
+<span class="nc bnc" id="L189" title="All 4 branches missed.">            DOMAINS -&gt; siteCreationState.domain?.let {</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">                siteCreationState = siteCreationState.copy(domain = null)</span>
+<span class="nc" id="L191">            }</span>
+            SITE_PREVIEW -&gt; {} // intentionally left empty
+        }
+<span class="nc" id="L194">    }</span>
+
+    fun onDomainsScreenFinished(domain: String) {
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        siteCreationState = siteCreationState.copy(domain = domain)</span>
+<span class="nc" id="L198">        wizardManager.showNextStep()</span>
+<span class="nc" id="L199">    }</span>
+
+    fun screenTitleForWizardStep(step: SiteCreationStep): SiteCreationScreenTitle {
+<span class="nc" id="L202">        val stepPosition = wizardManager.stepPosition(step)</span>
+<span class="nc" id="L203">        val stepCount = wizardManager.stepsCount</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">        val firstStep = stepPosition == 1</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">        val lastStep = stepPosition == stepCount</span>
+<span class="nc" id="L206">        val singleInBetweenStepDomains = step.name == DOMAINS.name</span>
+
+<span class="nc" id="L208">        return when {</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">            firstStep -&gt; ScreenTitleGeneral(R.string.new_site_creation_screen_title_general)</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">            lastStep -&gt; ScreenTitleEmpty</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">            singleInBetweenStepDomains -&gt; ScreenTitleGeneral(R.string.new_site_creation_domain_header_title)</span>
+<span class="nc" id="L212">            else -&gt; ScreenTitleStepCount(</span>
+<span class="nc" id="L213">                    R.string.new_site_creation_screen_title_step_count,</span>
+<span class="nc" id="L214">                    stepCount - 2, // -2 -&gt; first = general title (Create Site), last item = empty title</span>
+<span class="nc" id="L215">                    stepPosition - 1 // -1 -&gt; first item has general title - Create Site</span>
+            )
+        }
+    }
+
+    fun onSiteCreationCompleted() {
+<span class="nc" id="L221">        siteCreationCompleted = true</span>
+<span class="nc" id="L222">    }</span>
+
+    /**
+     * Exits the flow and tracks an event when the user force-exits the &quot;site creation in progress&quot; before it completes.
+     */
+    private fun exitFlow(forceExit: Boolean) {
+<span class="nc bnc" id="L228" title="All 2 branches missed.">        if (forceExit) {</span>
+<span class="nc" id="L229">            tracker.trackFlowExited()</span>
+        }
+<span class="nc" id="L231">        _exitFlowObservable.call()</span>
+<span class="nc" id="L232">    }</span>
+
+    fun onSitePreviewScreenFinished(createSiteState: CreateSiteState) {
+<span class="nc" id="L235">        _wizardFinishedObservable.value = createSiteState</span>
+<span class="nc" id="L236">    }</span>
+
+    fun onPositiveDialogButtonClicked(instanceTag: String) {
+<span class="nc" id="L239">        when (instanceTag) {</span>
+<span class="nc bnc" id="L240" title="All 2 branches missed.">            TAG_WARNING_DIALOG -&gt; {</span>
+<span class="nc" id="L241">                exitFlow(true)</span>
+            }
+<span class="nc" id="L243">            else -&gt; NotImplementedError(&quot;Unknown dialog tag: $instanceTag&quot;)</span>
+        }
+<span class="nc" id="L245">    }</span>
+
+    fun onNegativeDialogButtonClicked(instanceTag: String) {
+<span class="nc" id="L248">        when (instanceTag) {</span>
+<span class="nc bnc" id="L249" title="All 2 branches missed.">            TAG_WARNING_DIALOG -&gt; {</span>
+                // do nothing
+            }
+<span class="nc" id="L252">            else -&gt; NotImplementedError(&quot;Unknown dialog tag: $instanceTag&quot;)</span>
+        }
+<span class="nc" id="L254">    }</span>
+
+    sealed class SiteCreationScreenTitle {
+<span class="nc" id="L257">        data class ScreenTitleStepCount(@StringRes val resId: Int, val stepsCount: Int, val stepPosition: Int) :</span>
+<span class="nc" id="L258">                SiteCreationScreenTitle()</span>
+
+<span class="nc" id="L260">        data class ScreenTitleGeneral(@StringRes val resId: Int) :</span>
+<span class="nc" id="L261">                SiteCreationScreenTitle()</span>
+
+<span class="nc" id="L263">        object ScreenTitleEmpty : SiteCreationScreenTitle() {</span>
+            const val screenTitle = &quot;&quot;
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

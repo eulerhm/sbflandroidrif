@@ -1,0 +1,295 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>EngagedPeopleListViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.engagement</a> &gt; <span class="el_source">EngagedPeopleListViewModel.kt</span></div><h1>EngagedPeopleListViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.engagement
+
+import androidx.annotation.VisibleForTesting
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MediatorLiveData
+import androidx.lifecycle.MutableLiveData
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import org.wordpress.android.R.string
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.engagement.EngageItem.LikedItem
+import org.wordpress.android.ui.engagement.EngageItem.NextLikesPageLoader
+import org.wordpress.android.ui.engagement.EngagedListNavigationEvent.OpenUserProfileBottomSheet
+import org.wordpress.android.ui.engagement.EngagedListNavigationEvent.OpenUserProfileBottomSheet.UserProfile
+import org.wordpress.android.ui.engagement.EngagedListNavigationEvent.PreviewCommentInReader
+import org.wordpress.android.ui.engagement.EngagedListNavigationEvent.PreviewPostInReader
+import org.wordpress.android.ui.engagement.EngagedListNavigationEvent.PreviewSiteById
+import org.wordpress.android.ui.engagement.EngagedListNavigationEvent.PreviewSiteByUrl
+import org.wordpress.android.ui.engagement.EngagedListServiceRequestEvent.RequestBlogPost
+import org.wordpress.android.ui.engagement.EngagedListServiceRequestEvent.RequestComment
+import org.wordpress.android.ui.engagement.EngagementNavigationSource.LIKE_NOTIFICATION_LIST
+import org.wordpress.android.ui.engagement.EngagementNavigationSource.LIKE_READER_LIST
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.Failure
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.LikesData
+import org.wordpress.android.ui.engagement.GetLikesUseCase.GetLikesState.Loading
+import org.wordpress.android.ui.engagement.GetLikesUseCase.LikeGroupFingerPrint
+import org.wordpress.android.ui.engagement.GetLikesUseCase.PagingInfo
+import org.wordpress.android.ui.engagement.ListScenarioType.LOAD_COMMENT_LIKES
+import org.wordpress.android.ui.engagement.ListScenarioType.LOAD_POST_LIKES
+import org.wordpress.android.ui.engagement.PreviewBlogByUrlSource.LIKED_COMMENT_USER_HEADER
+import org.wordpress.android.ui.pages.SnackbarMessageHolder
+import org.wordpress.android.ui.reader.comments.ThreadedCommentsActionSource.COMMENT_LIKE_NOTIFICATION
+import org.wordpress.android.ui.reader.tracker.ReaderTracker
+import org.wordpress.android.ui.reader.utils.ReaderUtilsWrapper
+import org.wordpress.android.ui.utils.UiString
+import org.wordpress.android.ui.utils.UiString.UiStringRes
+import org.wordpress.android.util.analytics.AnalyticsUtilsWrapper
+import org.wordpress.android.util.map
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+<span class="nc" id="L46">class EngagedPeopleListViewModel @Inject constructor(</span>
+<span class="nc" id="L47">    @Named(UI_THREAD) private val mainDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L48">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher,</span>
+<span class="nc" id="L49">    private val getLikesHandler: GetLikesHandler,</span>
+<span class="nc" id="L50">    private val readerUtilsWrapper: ReaderUtilsWrapper,</span>
+<span class="nc" id="L51">    private val engagementUtils: EngagementUtils,</span>
+<span class="nc" id="L52">    private val analyticsUtilsWrapper: AnalyticsUtilsWrapper</span>
+<span class="nc" id="L53">) : ScopedViewModel(mainDispatcher) {</span>
+    private var isStarted = false
+    private var getLikesJob: Job? = null
+
+    private var listScenario: ListScenario? = null
+
+<span class="nc" id="L59">    private val _onSnackbarMessage = MediatorLiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt;()</span>
+<span class="nc" id="L60">    private val _updateLikesState = MediatorLiveData&lt;GetLikesState&gt;()</span>
+<span class="nc" id="L61">    private val _onNavigationEvent = MutableLiveData&lt;Event&lt;EngagedListNavigationEvent&gt;&gt;()</span>
+<span class="nc" id="L62">    private val _onServiceRequestEvent = MutableLiveData&lt;Event&lt;EngagedListServiceRequestEvent&gt;&gt;()</span>
+
+<span class="nc" id="L64">    val onSnackbarMessage: LiveData&lt;Event&lt;SnackbarMessageHolder&gt;&gt; = _onSnackbarMessage</span>
+<span class="nc" id="L65">    val uiState: LiveData&lt;EngagedPeopleListUiState&gt; = _updateLikesState.map { state -&gt;</span>
+<span class="nc" id="L66">        buildUiState(state, listScenario)</span>
+    }
+<span class="nc" id="L68">    val onNavigationEvent: LiveData&lt;Event&lt;EngagedListNavigationEvent&gt;&gt; = _onNavigationEvent</span>
+<span class="nc" id="L69">    val onServiceRequestEvent: LiveData&lt;Event&lt;EngagedListServiceRequestEvent&gt;&gt; = _onServiceRequestEvent</span>
+
+<span class="nc" id="L71">    data class EngagedPeopleListUiState(</span>
+<span class="nc" id="L72">        val numLikes: Int = 0,</span>
+<span class="nc" id="L73">        val showLoading: Boolean,</span>
+<span class="nc" id="L74">        val engageItemsList: List&lt;EngageItem&gt;,</span>
+<span class="nc" id="L75">        val showEmptyState: Boolean,</span>
+<span class="nc" id="L76">        val emptyStateTitle: UiString? = null,</span>
+<span class="nc" id="L77">        val emptyStateAction: (() -&gt; Unit)? = null,</span>
+<span class="nc" id="L78">        val emptyStateButtonText: UiString? = null</span>
+<span class="nc" id="L79">    )</span>
+
+    fun start(listScenario: ListScenario) {
+<span class="nc bnc" id="L82" title="All 2 branches missed.">        if (isStarted) return</span>
+<span class="nc" id="L83">        isStarted = true</span>
+
+<span class="nc" id="L85">        this.listScenario = listScenario</span>
+
+<span class="nc" id="L87">        _onSnackbarMessage.addSource(getLikesHandler.snackbarEvents) { event -&gt;</span>
+<span class="nc" id="L88">            _onSnackbarMessage.value = event</span>
+<span class="nc" id="L89">        }</span>
+
+<span class="nc" id="L91">        _updateLikesState.addSource(getLikesHandler.likesStatusUpdate) { state -&gt;</span>
+<span class="nc" id="L92">            _updateLikesState.value = state</span>
+<span class="nc" id="L93">        }</span>
+
+<span class="nc" id="L95">        onRefreshData()</span>
+<span class="nc" id="L96">    }</span>
+
+    private fun onRefreshData() {
+<span class="nc" id="L99">        loadRequest(listScenario, requestPostOrComment = true, requestNextPage = false)</span>
+<span class="nc" id="L100">    }</span>
+
+    private fun requestPostOrCommentIfNeeded(
+        listScenarioType: ListScenarioType,
+        siteId: Long,
+        postOrCommentId: Long,
+        commentPostId: Long
+    ) {
+<span class="nc bnc" id="L108" title="All 2 branches missed.">        val postId = if (listScenarioType == LOAD_POST_LIKES) postOrCommentId else commentPostId</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">        val commentId = if (listScenarioType == LOAD_COMMENT_LIKES) postOrCommentId else 0L</span>
+
+<span class="nc bnc" id="L111" title="All 2 branches missed.">        if (!readerUtilsWrapper.postExists(</span>
+<span class="nc" id="L112">                        siteId,</span>
+<span class="nc" id="L113">                        postId</span>
+                )) {
+<span class="nc" id="L115">            _onServiceRequestEvent.value = Event(RequestBlogPost(siteId, postId))</span>
+        }
+
+<span class="nc bnc" id="L118" title="All 4 branches missed.">        if (listScenarioType == LOAD_COMMENT_LIKES &amp;&amp; !readerUtilsWrapper.commentExists(</span>
+<span class="nc" id="L119">                        siteId,</span>
+<span class="nc" id="L120">                        postId,</span>
+<span class="nc" id="L121">                        commentId</span>
+                )) {
+<span class="nc" id="L123">            _onServiceRequestEvent.value = Event(RequestComment(siteId, postId, commentId))</span>
+        }
+<span class="nc" id="L125">    }</span>
+
+    private fun loadRequest(
+        listScenario: ListScenario?,
+        requestPostOrComment: Boolean,
+        requestNextPage: Boolean
+    ) {
+<span class="nc bnc" id="L132" title="All 2 branches missed.">        if (listScenario == null) return</span>
+
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        if (requestPostOrComment) {</span>
+<span class="nc" id="L135">            requestPostOrCommentIfNeeded(</span>
+<span class="nc" id="L136">                    listScenario.type,</span>
+<span class="nc" id="L137">                    listScenario.siteId,</span>
+<span class="nc" id="L138">                    listScenario.postOrCommentId,</span>
+<span class="nc" id="L139">                    listScenario.commentPostId</span>
+            )
+        }
+
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        getLikesJob?.cancel()</span>
+<span class="nc" id="L144">        getLikesJob = launch(bgDispatcher) {</span>
+            // TODO: currently API is not sorting the likes as the list in notifications does,
+            // use case logic has code to sort based on a list of ids (ideally the available likers ids taken
+            // from the notification).
+            // Keeping the logic for now, but remove empty listOf and relevant logic when API will sort likes
+<span class="nc bnc" id="L149" title="All 3 branches missed.">            when (listScenario.type) {</span>
+<span class="nc" id="L150">                LOAD_POST_LIKES -&gt; getLikesHandler.handleGetLikesForPost(</span>
+<span class="nc" id="L151">                        LikeGroupFingerPrint(</span>
+<span class="nc" id="L152">                                listScenario.siteId,</span>
+<span class="nc" id="L153">                                listScenario.postOrCommentId,</span>
+<span class="nc" id="L154">                                listScenario.headerData.numLikes</span>
+                        ),
+<span class="nc" id="L156">                        requestNextPage</span>
+                )
+<span class="nc" id="L158">                LOAD_COMMENT_LIKES -&gt; getLikesHandler.handleGetLikesForComment(</span>
+<span class="nc" id="L159">                        LikeGroupFingerPrint(</span>
+<span class="nc" id="L160">                                listScenario.siteId,</span>
+<span class="nc" id="L161">                                listScenario.postOrCommentId,</span>
+<span class="nc" id="L162">                                listScenario.headerData.numLikes</span>
+                        ),
+<span class="nc" id="L164">                        requestNextPage</span>
+                )
+            }
+<span class="nc" id="L167">        }</span>
+<span class="nc" id="L168">    }</span>
+
+    private fun buildUiState(updateLikesState: GetLikesState?, listScenario: ListScenario?): EngagedPeopleListUiState {
+<span class="nc bnc" id="L171" title="All 6 branches missed.">        val likedItem = listScenario?.headerData?.let {</span>
+<span class="nc" id="L172">            listOf(LikedItem(</span>
+<span class="nc" id="L173">                            author = it.authorName,</span>
+<span class="nc" id="L174">                            postOrCommentText = it.snippetText,</span>
+<span class="nc" id="L175">                            authorAvatarUrl = it.authorAvatarUrl,</span>
+<span class="nc" id="L176">                            likedItemId = listScenario.postOrCommentId,</span>
+<span class="nc" id="L177">                            likedItemSiteId = listScenario.siteId,</span>
+<span class="nc" id="L178">                            likedItemSiteUrl = listScenario.commentSiteUrl,</span>
+<span class="nc" id="L179">                            likedItemPostId = listScenario.commentPostId,</span>
+<span class="nc" id="L180">                            authorUserId = it.authorUserId,</span>
+<span class="nc" id="L181">                            authorPreferredSiteId = it.authorPreferredSiteId,</span>
+<span class="nc" id="L182">                            authorPreferredSiteUrl = it.authorPreferredSiteUrl,</span>
+<span class="nc" id="L183">                            onGravatarClick = ::onSiteLinkHolderClicked,</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">                            blogPreviewSource = when (listScenario.source) {</span>
+<span class="nc" id="L185">                                LIKE_NOTIFICATION_LIST -&gt; ReaderTracker.SOURCE_NOTIFICATION</span>
+<span class="nc" id="L186">                                LIKE_READER_LIST -&gt; ReaderTracker.SOURCE_READER_LIKE_LIST</span>
+                            },
+<span class="nc" id="L188">                            onHeaderClicked = ::onHeaderClicked</span>
+            ))
+<span class="nc" id="L190">        } ?: listOf()</span>
+
+<span class="nc" id="L192">        val likers = when (updateLikesState) {</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">            is LikesData -&gt; {</span>
+<span class="nc" id="L194">                engagementUtils.likesToEngagedPeople(</span>
+<span class="nc" id="L195">                        updateLikesState.likes,</span>
+<span class="nc" id="L196">                        ::onUserProfileHolderClicked,</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                        listScenario?.source</span>
+<span class="nc" id="L198">                ) + appendNextPageLoaderIfNeeded(updateLikesState.hasMore, true, updateLikesState.pageInfo)</span>
+            }
+<span class="nc bnc" id="L200" title="All 2 branches missed.">            is Failure -&gt; {</span>
+<span class="nc" id="L201">                engagementUtils.likesToEngagedPeople(</span>
+<span class="nc" id="L202">                        updateLikesState.cachedLikes,</span>
+<span class="nc" id="L203">                        ::onUserProfileHolderClicked,</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">                        listScenario?.source</span>
+<span class="nc" id="L205">                ) + appendNextPageLoaderIfNeeded(updateLikesState.hasMore, false, updateLikesState.pageInfo)</span>
+            }
+<span class="nc bnc" id="L207" title="All 4 branches missed.">            Loading, null -&gt; listOf()</span>
+        }
+
+<span class="nc" id="L210">        var showEmptyState = false</span>
+<span class="nc" id="L211">        var emptyStateTitle: UiString? = null</span>
+<span class="nc" id="L212">        var emptyStateAction: (() -&gt; Unit)? = null</span>
+
+<span class="nc bnc" id="L214" title="All 2 branches missed.">        if (updateLikesState is Failure) {</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">            updateLikesState.emptyStateData?.let {</span>
+<span class="nc" id="L216">                showEmptyState = it.showEmptyState</span>
+<span class="nc" id="L217">                emptyStateTitle = it.title</span>
+<span class="nc" id="L218">                emptyStateAction = ::onRefreshData</span>
+<span class="nc" id="L219">            }</span>
+        }
+
+<span class="nc" id="L222">        return EngagedPeopleListUiState(</span>
+<span class="nc" id="L223">                showLoading = updateLikesState is Loading,</span>
+<span class="nc" id="L224">                engageItemsList = likedItem + likers,</span>
+<span class="nc" id="L225">                showEmptyState = showEmptyState,</span>
+<span class="nc" id="L226">                emptyStateTitle = emptyStateTitle,</span>
+<span class="nc" id="L227">                emptyStateAction = emptyStateAction,</span>
+<span class="nc bnc" id="L228" title="All 2 branches missed.">                emptyStateButtonText = emptyStateAction?.let { UiStringRes(string.retry) }</span>
+        )
+    }
+
+    private fun appendNextPageLoaderIfNeeded(
+        hasMore: Boolean,
+        isLoading: Boolean,
+        pageInfo: PagingInfo
+    ): List&lt;EngageItem&gt; {
+<span class="nc bnc" id="L237" title="All 2 branches missed.">        return if (hasMore) {</span>
+<span class="nc" id="L238">            listOf(NextLikesPageLoader(isLoading) {</span>
+<span class="nc" id="L239">                loadRequest(listScenario, requestPostOrComment = false, requestNextPage = true)</span>
+<span class="nc" id="L240">                    analyticsUtilsWrapper.trackLikeListFetchedMore(</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">                            EngagementNavigationSource.getSourceDescription(listScenario?.source),</span>
+<span class="nc bnc" id="L242" title="All 2 branches missed.">                            ListScenarioType.getSourceDescription(listScenario?.type),</span>
+<span class="nc" id="L243">                            pageInfo.page + 1,</span>
+<span class="nc" id="L244">                            pageInfo.pageLength</span>
+                    )
+<span class="nc" id="L246">            })</span>
+        } else {
+<span class="nc" id="L248">            listOf()</span>
+        }
+    }
+
+    private fun onUserProfileHolderClicked(userProfile: UserProfile, source: EngagementNavigationSource?) {
+<span class="nc" id="L253">        _onNavigationEvent.value = Event(</span>
+<span class="nc" id="L254">                OpenUserProfileBottomSheet(</span>
+<span class="nc" id="L255">                        userProfile,</span>
+<span class="nc" id="L256">                        ::onSiteLinkHolderClicked,</span>
+<span class="nc" id="L257">                        source</span>
+                )
+        )
+<span class="nc" id="L260">    }</span>
+
+    private fun onSiteLinkHolderClicked(siteId: Long, siteUrl: String, source: String) {
+<span class="nc bnc" id="L263" title="All 2 branches missed.">        if (ReaderTracker.isUserProfileSource(source)) {</span>
+<span class="nc" id="L264">            analyticsUtilsWrapper.trackUserProfileSiteShown()</span>
+        }
+
+<span class="nc bnc" id="L267" title="All 6 branches missed.">        if (siteId &lt;= 0L &amp;&amp; siteUrl.isNotEmpty()) {</span>
+<span class="nc" id="L268">            _onNavigationEvent.value = Event(PreviewSiteByUrl(siteUrl, source))</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">        } else if (siteId &gt; 0L) {</span>
+<span class="nc" id="L270">            _onNavigationEvent.value = Event(PreviewSiteById(siteId, source))</span>
+        }
+<span class="nc" id="L272">    }</span>
+
+    private fun onHeaderClicked(siteId: Long, siteUrl: String, postOrCommentId: Long, commentPostId: Long) {
+<span class="nc" id="L275">        _onNavigationEvent.value = Event(</span>
+<span class="nc bnc" id="L276" title="All 2 branches missed.">                if (commentPostId &gt; 0) {</span>
+<span class="nc bnc" id="L277" title="All 2 branches missed.">                    if (readerUtilsWrapper.postAndCommentExists(siteId, commentPostId, postOrCommentId)) {</span>
+<span class="nc" id="L278">                        PreviewCommentInReader(siteId, commentPostId, postOrCommentId, COMMENT_LIKE_NOTIFICATION)</span>
+                    } else {
+<span class="nc" id="L280">                        PreviewSiteByUrl(siteUrl, LIKED_COMMENT_USER_HEADER.sourceDescription)</span>
+                    }
+                } else {
+<span class="nc" id="L283">                    PreviewPostInReader(siteId, postOrCommentId)</span>
+                }
+        )
+<span class="nc" id="L286">    }</span>
+
+    @VisibleForTesting(otherwise = VisibleForTesting.NONE)
+    public override fun onCleared() {
+<span class="nc" id="L290">        super.onCleared()</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">        getLikesJob?.cancel()</span>
+<span class="nc" id="L292">        getLikesHandler.clear()</span>
+<span class="nc" id="L293">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

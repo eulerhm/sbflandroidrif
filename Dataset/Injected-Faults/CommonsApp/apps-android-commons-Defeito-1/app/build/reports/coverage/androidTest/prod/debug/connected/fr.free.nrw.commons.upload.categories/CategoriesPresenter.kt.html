@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CategoriesPresenter.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">prodDebug</a> &gt; <a href="index.source.html" class="el_package">fr.free.nrw.commons.upload.categories</a> &gt; <span class="el_source">CategoriesPresenter.kt</span></div><h1>CategoriesPresenter.kt</h1><pre class="source lang-java linenums">package fr.free.nrw.commons.upload.categories
+
+import android.text.TextUtils
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import fr.free.nrw.commons.Media
+import fr.free.nrw.commons.R
+import fr.free.nrw.commons.category.CategoryEditHelper
+import fr.free.nrw.commons.category.CategoryItem
+import fr.free.nrw.commons.di.CommonsApplicationModule
+import fr.free.nrw.commons.repository.UploadRepository
+import fr.free.nrw.commons.upload.depicts.proxy
+import io.reactivex.Observable
+import io.reactivex.Scheduler
+import io.reactivex.android.schedulers.AndroidSchedulers
+import io.reactivex.disposables.CompositeDisposable
+import io.reactivex.schedulers.Schedulers
+import io.reactivex.subjects.PublishSubject
+import timber.log.Timber
+import javax.inject.Inject
+import javax.inject.Named
+import javax.inject.Singleton
+
+/**
+ * The presenter class for UploadCategoriesFragment
+ */
+<span class="nc" id="L27">@Singleton</span>
+<span class="nc" id="L28">class CategoriesPresenter @Inject constructor(</span>
+<span class="nc" id="L29">    private val repository: UploadRepository,</span>
+<span class="nc" id="L30">    @param:Named(CommonsApplicationModule.IO_THREAD) private val ioScheduler: Scheduler,</span>
+<span class="nc" id="L31">    @param:Named(CommonsApplicationModule.MAIN_THREAD) private val mainThreadScheduler: Scheduler</span>
+) : CategoriesContract.UserActionListener {
+
+    companion object {
+<span class="nc" id="L35">        private val DUMMY: CategoriesContract.View = proxy()</span>
+    }
+
+<span class="nc" id="L38">    var view = DUMMY</span>
+<span class="nc" id="L39">    private val compositeDisposable = CompositeDisposable()</span>
+<span class="nc" id="L40">    private val searchTerms = PublishSubject.create&lt;String&gt;()</span>
+<span class="nc" id="L41">    private var categoryList: MutableLiveData&lt;List&lt;CategoryItem&gt;&gt; = MutableLiveData()</span>
+    /**
+     * Current media
+     */
+    private var media: Media? = null
+
+    /**
+     * helper class for editing categories
+     */
+    @Inject
+<span class="nc bnc" id="L51" title="All 2 branches missed.">    lateinit var categoryEditHelper: CategoryEditHelper</span>
+
+    override fun onAttachView(view: CategoriesContract.View) {
+<span class="nc" id="L54">        this.view = view</span>
+<span class="nc" id="L55">        compositeDisposable.add(</span>
+<span class="nc" id="L56">            searchTerms</span>
+<span class="nc" id="L57">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L58">                .doOnNext {</span>
+<span class="nc" id="L59">                    view.showProgress(true)</span>
+<span class="nc" id="L60">                }</span>
+<span class="nc" id="L61">                .switchMap(::searchResults)</span>
+<span class="nc" id="L62">                .map { repository.selectedCategories + it }</span>
+<span class="nc" id="L63">                .map { it.distinctBy { categoryItem -&gt; categoryItem.name } }</span>
+<span class="nc" id="L64">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L65">                .subscribe(</span>
+<span class="nc" id="L66">                    {</span>
+<span class="nc" id="L67">                        setCategoryListValue(it)</span>
+<span class="nc" id="L68">                        view.showProgress(false)</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">                        if (it.isEmpty()) {</span>
+<span class="nc" id="L70">                            view.showError(R.string.no_categories_found)</span>
+                        }
+<span class="nc" id="L72">                    },</span>
+<span class="nc" id="L73">                    { t: Throwable? -&gt;</span>
+<span class="nc" id="L74">                        view.showProgress(false)</span>
+<span class="nc" id="L75">                        view.showError(R.string.no_categories_found)</span>
+<span class="nc" id="L76">                        Timber.e(t)</span>
+<span class="nc" id="L77">                    }</span>
+                )
+        )
+<span class="nc" id="L80">    }</span>
+
+    /**
+     * If media is null : Fetches categories from server according to the term
+     * Else : Fetches existing categories by their name, fetches categories from server according
+     * to the term and combines both in a list
+     */
+    private fun searchResults(term: String): Observable&lt;List&lt;CategoryItem&gt;&gt;? {
+<span class="nc bnc" id="L88" title="All 2 branches missed.">        if (media == null) {</span>
+<span class="nc" id="L89">            return repository.searchAll(term, getImageTitleList(), repository.selectedDepictions)</span>
+<span class="nc" id="L90">                .subscribeOn(ioScheduler)</span>
+<span class="nc bnc" id="L91" title="All 2 branches missed.">                .map { it.filter { categoryItem -&gt; !repository.containsYear(categoryItem.name)</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">                        || categoryItem.name==term } }</span>
+        } else {
+<span class="nc" id="L94">            return Observable.zip(</span>
+<span class="nc" id="L95">                repository.getCategories(repository.selectedExistingCategories)</span>
+<span class="nc" id="L96">                    .map { list -&gt; list.map {</span>
+<span class="nc" id="L97">                        CategoryItem(it.name, it.description, it.thumbnail, true)</span>
+                    }
+                    },
+<span class="nc" id="L100">                repository.searchAll(term, getImageTitleList(), repository.selectedDepictions)</span>
+<span class="nc" id="L101">            ) { it1, it2 -&gt;</span>
+<span class="nc" id="L102">                it1 + it2</span>
+            }
+<span class="nc" id="L104">                .subscribeOn(ioScheduler)</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                .map { it.filter { categoryItem -&gt; !repository.containsYear(categoryItem.name)</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">                        || categoryItem.name==term } }</span>
+<span class="nc" id="L107">                .map { it.filterNot { categoryItem -&gt; categoryItem.thumbnail == &quot;hidden&quot; } }</span>
+        }
+    }
+
+    override fun onDetachView() {
+<span class="nc" id="L112">        view = DUMMY</span>
+<span class="nc" id="L113">        compositeDisposable.clear()</span>
+<span class="nc" id="L114">    }</span>
+
+    /**
+     * asks the repository to fetch categories for the query
+     * @param query
+     */
+    override fun searchForCategories(query: String) {
+<span class="nc" id="L121">        searchTerms.onNext(query)</span>
+<span class="nc" id="L122">    }</span>
+
+    /**
+     * Returns image title list from UploadItem
+     * @return
+     */
+    private fun getImageTitleList(): List&lt;String&gt; {
+<span class="nc" id="L129">        return repository.uploads</span>
+<span class="nc" id="L130">            .map { it.uploadMediaDetails[0].captionText }</span>
+<span class="nc" id="L131">            .filterNot { TextUtils.isEmpty(it) }</span>
+    }
+
+    /**
+     * Verifies the number of categories selected, prompts the user if none selected
+     */
+    override fun verifyCategories() {
+<span class="nc" id="L138">        val selectedCategories = repository.selectedCategories</span>
+<span class="nc bnc" id="L139" title="All 4 branches missed.">        if (selectedCategories.isNotEmpty()) {</span>
+<span class="nc" id="L140">            repository.setSelectedCategories(selectedCategories.map { it.name })</span>
+<span class="nc" id="L141">            view.goToNextScreen()</span>
+        } else {
+<span class="nc" id="L143">            view.showNoCategorySelected()</span>
+        }
+<span class="nc" id="L145">    }</span>
+
+    /**
+     * ask repository to handle category clicked
+     *
+     * @param categoryItem
+     */
+    override fun onCategoryItemClicked(categoryItem: CategoryItem) {
+<span class="nc" id="L153">        repository.onCategoryClicked(categoryItem, media)</span>
+<span class="nc" id="L154">    }</span>
+
+    /**
+     * Attaches view and media
+     */
+    override fun onAttachViewWithMedia(view: CategoriesContract.View, media: Media) {
+<span class="nc" id="L160">        this.view = view</span>
+<span class="nc" id="L161">        this.media = media</span>
+<span class="nc" id="L162">        repository.selectedExistingCategories = view.existingCategories</span>
+<span class="nc" id="L163">        compositeDisposable.add(</span>
+<span class="nc" id="L164">            searchTerms</span>
+<span class="nc" id="L165">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L166">                .doOnNext {</span>
+<span class="nc" id="L167">                    view.showProgress(true)</span>
+<span class="nc" id="L168">                }</span>
+<span class="nc" id="L169">                .switchMap(::searchResults)</span>
+<span class="nc" id="L170">                .map { repository.selectedCategories + it }</span>
+<span class="nc" id="L171">                .map { it.distinctBy { categoryItem -&gt; categoryItem.name } }</span>
+<span class="nc" id="L172">                .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L173">                .subscribe(</span>
+<span class="nc" id="L174">                    {</span>
+<span class="nc" id="L175">                        setCategoryListValue(it)</span>
+<span class="nc" id="L176">                        view.showProgress(false)</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">                        if (it.isEmpty()) {</span>
+<span class="nc" id="L178">                            view.showError(R.string.no_categories_found)</span>
+                        }
+<span class="nc" id="L180">                    },</span>
+<span class="nc" id="L181">                    { t: Throwable? -&gt;</span>
+<span class="nc" id="L182">                        view.showProgress(false)</span>
+<span class="nc" id="L183">                        view.showError(R.string.no_categories_found)</span>
+<span class="nc" id="L184">                        Timber.e(t)</span>
+<span class="nc" id="L185">                    }</span>
+                )
+        )
+<span class="nc" id="L188">    }</span>
+
+    /**
+     * Clears previous selections
+     */
+    override fun clearPreviousSelection() {
+<span class="nc" id="L194">        repository.cleanup()</span>
+<span class="nc" id="L195">    }</span>
+
+    /**
+     * Gets the selected categories and send them for posting to the server
+     *
+     * @param media media
+     * @param wikiText current WikiText from server
+     */
+    override fun updateCategories(media: Media, wikiText: String) {
+<span class="nc bnc" id="L204" title="All 4 branches missed.">        if (repository.selectedCategories.isNotEmpty()</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">            || repository.selectedExistingCategories.size != view.existingCategories.size</span>
+        ) {
+<span class="nc" id="L207">            val selectedCategories: MutableList&lt;String&gt; =</span>
+<span class="nc" id="L208">                (repository.selectedCategories.map { it.name }.toMutableList()</span>
+<span class="nc" id="L209">                        + repository.selectedExistingCategories).toMutableList()</span>
+
+<span class="nc bnc" id="L211" title="All 4 branches missed.">            if (selectedCategories.isNotEmpty()) {</span>
+<span class="nc" id="L212">                view.showProgressDialog()</span>
+<span class="nc" id="L213">                compositeDisposable.add(</span>
+<span class="nc" id="L214">                    categoryEditHelper.makeCategoryEdit(view.fragmentContext, media,</span>
+<span class="nc" id="L215">                        selectedCategories, wikiText)</span>
+<span class="nc" id="L216">                        .subscribeOn(Schedulers.io())</span>
+<span class="nc" id="L217">                        .observeOn(AndroidSchedulers.mainThread())</span>
+<span class="nc" id="L218">                        .subscribe({</span>
+<span class="nc" id="L219">                            Timber.d(&quot;Categories are added.&quot;)</span>
+<span class="nc" id="L220">                            media.addedCategories = selectedCategories</span>
+<span class="nc" id="L221">                            repository.cleanup()</span>
+<span class="nc" id="L222">                            view.dismissProgressDialog()</span>
+<span class="nc" id="L223">                            view.refreshCategories()</span>
+<span class="nc" id="L224">                            view.goBackToPreviousScreen()</span>
+<span class="nc" id="L225">                        })</span>
+<span class="nc" id="L226">                        {</span>
+<span class="nc" id="L227">                            Timber.e(</span>
+<span class="nc" id="L228">                                &quot;Failed to update categories&quot;</span>
+                            )
+<span class="nc" id="L230">                        }</span>
+                )
+
+            }
+        } else {
+<span class="nc" id="L235">            repository.cleanup()</span>
+<span class="nc" id="L236">            view.showNoCategorySelected()</span>
+        }
+<span class="nc" id="L238">    }</span>
+
+    /**
+     * Selects each [CategoryItem] in a given list as if they were clicked by the user by calling
+     * [onCategoryItemClicked] for each category and adding the category to [categoryList]
+     */
+    private fun selectNewCategories(toSelect: List&lt;CategoryItem&gt;) {
+<span class="nc" id="L245">        toSelect.forEach{</span>
+<span class="nc" id="L246">                it.isSelected = true</span>
+<span class="nc" id="L247">                repository.onCategoryClicked(it, media)</span>
+<span class="nc" id="L248">            }</span>
+
+        // Add the new selections to the list of category items so that the selections appear
+        // immediately (i.e. without any search term queries)
+<span class="nc bnc" id="L252" title="All 2 branches missed.">        categoryList.value?.toMutableList()</span>
+<span class="nc bnc" id="L253" title="All 2 branches missed.">            ?.let { toSelect + it }</span>
+<span class="nc bnc" id="L254" title="All 2 branches missed.">            ?.distinctBy(CategoryItem::name)</span>
+<span class="nc" id="L255">            ?.let { setCategoryListValue(it) }</span>
+<span class="nc" id="L256">    }</span>
+
+    /**
+     * Livedata being used to observe category list inside
+     * @see UploadCategoriesFragment
+     * Any changes to category list reflect immediately to the adapter list
+     */
+    override fun getCategories(): LiveData&lt;List&lt;CategoryItem&gt;&gt; {
+<span class="nc" id="L264">        return categoryList</span>
+    }
+
+    /**
+     * needed for tests
+     */
+    fun setCategoryList(categoryList: MutableLiveData&lt;List&lt;CategoryItem&gt;&gt;) {
+<span class="nc" id="L271">        this.categoryList = categoryList</span>
+<span class="nc" id="L272">    }</span>
+
+    /**
+     * needed for tests
+     */
+    fun setCategoryListValue(categoryItems: List&lt;CategoryItem&gt;) {
+<span class="nc" id="L278">        categoryList.postValue(categoryItems)</span>
+<span class="nc" id="L279">    }</span>
+
+    override fun selectCategories() {
+<span class="nc" id="L282">        compositeDisposable.add(repository.placeCategories</span>
+<span class="nc" id="L283">            .subscribeOn(ioScheduler)</span>
+<span class="nc" id="L284">            .observeOn(mainThreadScheduler)</span>
+<span class="nc" id="L285">            .subscribe(::selectNewCategories)</span>
+        )
+<span class="nc" id="L287">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.0.2</div></body></html>

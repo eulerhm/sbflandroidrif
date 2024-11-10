@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FetchScanStateUseCase.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.jetpack.scan.usecases</a> &gt; <span class="el_source">FetchScanStateUseCase.kt</span></div><h1>FetchScanStateUseCase.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.jetpack.scan.usecases
+
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import org.wordpress.android.fluxc.model.SiteModel
+import org.wordpress.android.fluxc.model.scan.ScanStateModel
+import org.wordpress.android.fluxc.store.ScanStore
+import org.wordpress.android.fluxc.store.ScanStore.FetchScanStatePayload
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.ui.jetpack.restore.usecases.DELAY_FACTOR
+import org.wordpress.android.ui.jetpack.restore.usecases.DELAY_MILLIS
+import org.wordpress.android.ui.jetpack.scan.usecases.FetchScanStateUseCase.FetchScanState.Failure
+import org.wordpress.android.ui.jetpack.scan.usecases.FetchScanStateUseCase.FetchScanState.Success
+import org.wordpress.android.util.AppLog
+import org.wordpress.android.util.AppLog.T
+import org.wordpress.android.util.NetworkUtilsWrapper
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.math.max
+
+const val START_WITH_DELAY_MILLIS = 5000L
+const val FETCH_SCAN_STATE_DELAY_MILLIS = 1000L
+const val MAX_RETRY = 3
+
+<span class="nc" id="L29">class FetchScanStateUseCase @Inject constructor(</span>
+<span class="nc" id="L30">    private val networkUtilsWrapper: NetworkUtilsWrapper,</span>
+<span class="nc" id="L31">    private val scanStore: ScanStore,</span>
+<span class="nc" id="L32">    @Named(BG_THREAD) private val bgDispatcher: CoroutineDispatcher</span>
+) {
+<span class="nc" id="L34">    private val tag = javaClass.simpleName</span>
+
+    @Suppress(&quot;ComplexMethod&quot;, &quot;LoopWithTooManyJumpStatements&quot;)
+<span class="nc" id="L37">    suspend fun fetchScanState(</span>
+        site: SiteModel,
+<span class="nc" id="L39">        startWithDelay: Boolean = false</span>
+<span class="nc" id="L40">    ): Flow&lt;FetchScanState&gt; = flow {</span>
+<span class="nc" id="L41">        var retryAttempts = 0</span>
+<span class="nc bnc" id="L42" title="All 2 branches missed.">        if (startWithDelay) {</span>
+<span class="nc" id="L43">            delay(START_WITH_DELAY_MILLIS)</span>
+        }
+
+<span class="nc" id="L46">        while (true) {</span>
+<span class="nc bnc" id="L47" title="All 2 branches missed.">            if (!networkUtilsWrapper.isNetworkAvailable()) {</span>
+<span class="nc" id="L48">                val retryAttemptsExceeded = handleError(retryAttempts++, Failure.NetworkUnavailable)</span>
+<span class="nc bnc" id="L49" title="All 2 branches missed.">                if (retryAttemptsExceeded) break else continue</span>
+            }
+
+<span class="nc" id="L52">            val result = scanStore.fetchScanState(FetchScanStatePayload(site))</span>
+<span class="nc bnc" id="L53" title="All 2 branches missed.">            if (result.isError) {</span>
+<span class="nc" id="L54">                val retryAttemptsExceeded = handleError(retryAttempts++, Failure.RemoteRequestFailure)</span>
+<span class="nc bnc" id="L55" title="All 2 branches missed.">                if (retryAttemptsExceeded) break else continue</span>
+            }
+<span class="nc" id="L57">            val scanStateModel = scanStore.getScanStateForSite(site)</span>
+<span class="nc bnc" id="L58" title="All 2 branches missed.">            if (scanStateModel == null) {</span>
+<span class="nc" id="L59">                val retryAttemptsExceeded = handleError(retryAttempts++, Failure.RemoteRequestFailure)</span>
+<span class="nc bnc" id="L60" title="All 2 branches missed.">                if (retryAttemptsExceeded) break else continue</span>
+            }
+<span class="nc bnc" id="L62" title="All 2 branches missed.">            if (scanStateModel.reason == ScanStateModel.Reason.MULTISITE_NOT_SUPPORTED) {</span>
+<span class="nc" id="L63">                emit(Failure.MultisiteNotSupported)</span>
+<span class="nc" id="L64">                return@flow</span>
+            }
+<span class="nc bnc" id="L66" title="All 2 branches missed.">            if (scanStateModel.reason == ScanStateModel.Reason.VP_ACTIVE_ON_SITE) {</span>
+<span class="nc" id="L67">                emit(Failure.VaultPressActiveOnSite)</span>
+<span class="nc" id="L68">                return@flow</span>
+            }
+<span class="nc" id="L70">            emit(Success(scanStateModel))</span>
+
+<span class="nc bnc" id="L72" title="All 2 branches missed.">            if (scanStateModel.state != ScanStateModel.State.SCANNING) {</span>
+<span class="nc" id="L73">                return@flow</span>
+            }
+<span class="nc" id="L75">            retryAttempts = 0</span>
+<span class="nc" id="L76">            delay(FETCH_SCAN_STATE_DELAY_MILLIS)</span>
+        }
+<span class="nc" id="L78">    }.flowOn(bgDispatcher)</span>
+
+    private suspend fun FlowCollector&lt;FetchScanState&gt;.handleError(
+        retryAttempts: Int,
+        failure: Failure
+    ): Boolean {
+<span class="nc bnc" id="L84" title="All 2 branches missed.">        return if (retryAttempts &gt;= MAX_RETRY) {</span>
+<span class="nc" id="L85">            AppLog.d(T.JETPACK_BACKUP, &quot;$tag: Exceeded $MAX_RETRY retries while fetching status&quot;)</span>
+<span class="nc" id="L86">            emit(failure)</span>
+<span class="nc" id="L87">            true</span>
+        } else {
+<span class="nc" id="L89">            delay(DELAY_MILLIS * (max(1, DELAY_FACTOR * retryAttempts)))</span>
+<span class="nc" id="L90">            false</span>
+        }
+    }
+
+    sealed class FetchScanState {
+<span class="nc" id="L95">        data class Success(val scanStateModel: ScanStateModel) : FetchScanState()</span>
+<span class="nc" id="L96">        sealed class Failure : FetchScanState() {</span>
+<span class="nc" id="L97">            object NetworkUnavailable : Failure()</span>
+<span class="nc" id="L98">            object RemoteRequestFailure : Failure()</span>
+<span class="nc" id="L99">            object MultisiteNotSupported : Failure()</span>
+<span class="nc" id="L100">            object VaultPressActiveOnSite : Failure()</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

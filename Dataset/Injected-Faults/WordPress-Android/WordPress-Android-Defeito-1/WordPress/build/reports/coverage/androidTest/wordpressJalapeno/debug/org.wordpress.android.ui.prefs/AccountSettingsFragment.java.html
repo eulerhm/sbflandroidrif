@@ -1,0 +1,500 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AccountSettingsFragment.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.prefs</a> &gt; <span class="el_source">AccountSettingsFragment.java</span></div><h1>AccountSettingsFragment.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.prefs;
+
+import android.annotation.SuppressLint;
+import android.app.ProgressDialog;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.preference.Preference;
+import android.preference.Preference.OnPreferenceChangeListener;
+import android.preference.PreferenceFragment;
+import android.text.InputType;
+import android.text.TextUtils;
+import android.view.LayoutInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.ListView;
+import android.widget.TextView;
+
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.coordinatorlayout.widget.CoordinatorLayout;
+import androidx.core.view.ViewCompat;
+
+import com.google.android.material.snackbar.BaseTransientBottomBar;
+import com.google.android.material.snackbar.Snackbar;
+
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.generated.AccountActionBuilder;
+import org.wordpress.android.fluxc.model.AccountModel;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.store.AccountStore;
+import org.wordpress.android.fluxc.store.AccountStore.OnAccountChanged;
+import org.wordpress.android.fluxc.store.AccountStore.PushAccountSettingsPayload;
+import org.wordpress.android.fluxc.store.SiteStore;
+import org.wordpress.android.ui.FullScreenDialogFragment;
+import org.wordpress.android.ui.FullScreenDialogFragment.OnConfirmListener;
+import org.wordpress.android.ui.FullScreenDialogFragment.OnDismissListener;
+import org.wordpress.android.ui.FullScreenDialogFragment.OnShownListener;
+import org.wordpress.android.ui.accounts.signup.BaseUsernameChangerFullScreenDialogFragment;
+import org.wordpress.android.ui.accounts.signup.SettingsUsernameChangerFragment;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.NetworkUtils;
+import org.wordpress.android.util.SiteUtils;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.widgets.WPSnackbar;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.inject.Inject;
+
+@SuppressWarnings(&quot;deprecation&quot;)
+<span class="nc" id="L63">public class AccountSettingsFragment extends PreferenceFragment implements OnPreferenceChangeListener,</span>
+        OnConfirmListener, OnShownListener, OnDismissListener {
+    private Preference mUsernamePreference;
+    private EditTextPreferenceWithValidation mEmailPreference;
+    private DetailListPreference mPrimarySitePreference;
+    private EditTextPreferenceWithValidation mWebAddressPreference;
+    private EditTextPreferenceWithValidation mChangePasswordPreference;
+    private ProgressDialog mChangePasswordProgressDialog;
+    private Snackbar mEmailSnackbar;
+
+    private static final String SOURCE = &quot;source&quot;;
+    private static final String SOURCE_ACCOUNT_SETTINGS = &quot;account_settings&quot;;
+    private static final String TRACK_PROPERTY_FIELD_NAME = &quot;field_name&quot;;
+    private static final String TRACK_PROPERTY_EMAIL = &quot;email&quot;;
+    private static final String TRACK_PROPERTY_PRIMARY_SITE = &quot;primary_site&quot;;
+    private static final String TRACK_PROPERTY_WEB_ADDRESS = &quot;web_address&quot;;
+    private static final String TRACK_PROPERTY_PASSWORD = &quot;password&quot;;
+    private static final String TRACK_PROPERTY_USERNAME = &quot;username&quot;;
+    private static final String TRACK_PROPERTY_PAGE = &quot;page&quot;;
+    private static final String TRACK_PROPERTY_PAGE_ACCOUNT_SETTINGS = &quot;account_settings&quot;;
+    private static final String EMPTY_STRING = &quot;&quot;;
+
+    @Inject Dispatcher mDispatcher;
+    @Inject AccountStore mAccountStore;
+    @Inject SiteStore mSiteStore;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L91">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L92">        ((WordPress) getActivity().getApplication()).component().inject(this);</span>
+
+<span class="nc" id="L94">        setRetainInstance(true);</span>
+<span class="nc" id="L95">        addPreferencesFromResource(R.xml.account_settings);</span>
+
+<span class="nc" id="L97">        mUsernamePreference = findPreference(getString(R.string.pref_key_username));</span>
+<span class="nc" id="L98">        mEmailPreference = (EditTextPreferenceWithValidation) findPreference(getString(R.string.pref_key_email));</span>
+<span class="nc" id="L99">        mPrimarySitePreference = (DetailListPreference) findPreference(getString(R.string.pref_key_primary_site));</span>
+<span class="nc" id="L100">        mWebAddressPreference =</span>
+<span class="nc" id="L101">                (EditTextPreferenceWithValidation) findPreference(getString(R.string.pref_key_web_address));</span>
+<span class="nc" id="L102">        mChangePasswordPreference =</span>
+<span class="nc" id="L103">                (EditTextPreferenceWithValidation) findPreference(getString(R.string.pref_key_change_password));</span>
+
+<span class="nc" id="L105">        mEmailPreference.getEditText()</span>
+<span class="nc" id="L106">                        .setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);</span>
+<span class="nc" id="L107">        mEmailPreference.setValidationType(EditTextPreferenceWithValidation.ValidationType.EMAIL);</span>
+<span class="nc" id="L108">        mWebAddressPreference.getEditText().setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);</span>
+<span class="nc" id="L109">        mWebAddressPreference.setValidationType(EditTextPreferenceWithValidation.ValidationType.URL);</span>
+<span class="nc" id="L110">        mWebAddressPreference.setDialogMessage(R.string.web_address_dialog_hint);</span>
+<span class="nc" id="L111">        mChangePasswordPreference.getEditText().setInputType(InputType.TYPE_TEXT_VARIATION_PASSWORD);</span>
+<span class="nc" id="L112">        mChangePasswordPreference.setValidationType(EditTextPreferenceWithValidation.ValidationType.PASSWORD);</span>
+<span class="nc" id="L113">        mChangePasswordPreference.setDialogMessage(R.string.change_password_dialog_hint);</span>
+
+<span class="nc" id="L115">        mEmailPreference.setOnPreferenceChangeListener(this);</span>
+<span class="nc" id="L116">        mPrimarySitePreference.setOnPreferenceChangeListener(this);</span>
+<span class="nc" id="L117">        mWebAddressPreference.setOnPreferenceChangeListener(this);</span>
+<span class="nc" id="L118">        mChangePasswordPreference.setOnPreferenceChangeListener(this);</span>
+
+<span class="nc" id="L120">        setTextAlignment(mEmailPreference.getEditText());</span>
+<span class="nc" id="L121">        setTextAlignment(mWebAddressPreference.getEditText());</span>
+<span class="nc" id="L122">        setTextAlignment(mChangePasswordPreference.getEditText());</span>
+
+        // load site list asynchronously
+<span class="nc" id="L125">        new LoadSitesTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);</span>
+<span class="nc" id="L126">    }</span>
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+<span class="nc" id="L130">        View coordinatorView = inflater.inflate(R.layout.preference_coordinator, container, false);</span>
+<span class="nc" id="L131">        CoordinatorLayout coordinator = coordinatorView.findViewById(R.id.coordinator);</span>
+<span class="nc" id="L132">        View preferenceView = super.onCreateView(inflater, coordinator, savedInstanceState);</span>
+<span class="nc" id="L133">        final ListView listOfPreferences = preferenceView.findViewById(android.R.id.list);</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        if (listOfPreferences != null) {</span>
+<span class="nc" id="L135">            ViewCompat.setNestedScrollingEnabled(listOfPreferences, true);</span>
+        }
+<span class="nc" id="L137">        coordinator.addView(preferenceView);</span>
+<span class="nc" id="L138">        return coordinatorView;</span>
+    }
+
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState) {
+<span class="nc" id="L143">        super.onActivityCreated(savedInstanceState);</span>
+
+<span class="nc" id="L145">        refreshAccountDetails();</span>
+<span class="nc" id="L146">    }</span>
+
+    @Override
+    public void onResume() {
+<span class="nc" id="L150">        super.onResume();</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">        if (NetworkUtils.isNetworkAvailable(getActivity())) {</span>
+<span class="nc" id="L152">            mDispatcher.dispatch(AccountActionBuilder.newFetchSettingsAction());</span>
+        }
+<span class="nc" id="L154">    }</span>
+
+    @Override
+    public void onStart() {
+<span class="nc" id="L158">        super.onStart();</span>
+<span class="nc" id="L159">        mDispatcher.register(this);</span>
+<span class="nc" id="L160">    }</span>
+
+    @Override
+    public void onStop() {
+<span class="nc" id="L164">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L165">        super.onStop();</span>
+<span class="nc" id="L166">    }</span>
+
+    @Override
+    public boolean onPreferenceChange(Preference preference, Object newValue) {
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        if (newValue == null) {</span>
+<span class="nc" id="L171">            return false;</span>
+        }
+
+<span class="nc bnc" id="L174" title="All 2 branches missed.">        if (preference == mEmailPreference) {</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">            if (!mEmailPreference.getSummary().toString().equalsIgnoreCase(newValue.toString())) {</span>
+<span class="nc" id="L176">                trackSettingsDidChange(TRACK_PROPERTY_EMAIL);</span>
+            }
+<span class="nc" id="L178">            updateEmail(newValue.toString());</span>
+<span class="nc" id="L179">            showPendingEmailChangeSnackbar(newValue.toString());</span>
+<span class="nc" id="L180">            mEmailPreference.setEnabled(false);</span>
+<span class="nc" id="L181">            return false;</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">        } else if (preference == mPrimarySitePreference) {</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">            if (!mPrimarySitePreference.getValue().equals(newValue.toString())) {</span>
+<span class="nc" id="L184">                trackSettingsDidChange(TRACK_PROPERTY_PRIMARY_SITE);</span>
+            }
+<span class="nc" id="L186">            changePrimaryBlogPreference(Long.parseLong(newValue.toString()));</span>
+<span class="nc" id="L187">            updatePrimaryBlog(newValue.toString());</span>
+<span class="nc" id="L188">            return false;</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">        } else if (preference == mWebAddressPreference) {</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">            if (!mWebAddressPreference.getSummary().toString().equalsIgnoreCase(newValue.toString())) {</span>
+<span class="nc" id="L191">                trackSettingsDidChange(TRACK_PROPERTY_WEB_ADDRESS);</span>
+            }
+<span class="nc" id="L193">            mWebAddressPreference.setSummary(newValue.toString());</span>
+<span class="nc" id="L194">            updateWebAddress(newValue.toString());</span>
+<span class="nc" id="L195">            return false;</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">        } else if (preference == mChangePasswordPreference) {</span>
+<span class="nc" id="L197">            showChangePasswordProgressDialog(true);</span>
+<span class="nc bnc" id="L198" title="All 2 branches missed.">            if (!mChangePasswordPreference.getSummary().toString().equalsIgnoreCase(newValue.toString())) {</span>
+<span class="nc" id="L199">                trackSettingsDidChange(TRACK_PROPERTY_PASSWORD);</span>
+            }
+<span class="nc" id="L201">            updatePassword(newValue.toString());</span>
+        }
+<span class="nc" id="L203">        return true;</span>
+    }
+
+    private void trackSettingsDidChange(String fieldName) {
+<span class="nc" id="L207">        Map&lt;String, String&gt; props = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L208">        props.put(TRACK_PROPERTY_FIELD_NAME, fieldName);</span>
+<span class="nc" id="L209">        props.put(TRACK_PROPERTY_PAGE, TRACK_PROPERTY_PAGE_ACCOUNT_SETTINGS);</span>
+<span class="nc" id="L210">        AnalyticsTracker.track(Stat.SETTINGS_DID_CHANGE, props);</span>
+<span class="nc" id="L211">    }</span>
+
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc bnc" id="L214" title="All 2 branches missed.">        switch (item.getItemId()) {</span>
+            case android.R.id.home:
+<span class="nc" id="L216">                getActivity().finish();</span>
+        }
+<span class="nc" id="L218">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    private void setTextAlignment(EditText editText) {
+<span class="nc" id="L222">        editText.setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);</span>
+<span class="nc" id="L223">    }</span>
+
+    private void showChangePasswordProgressDialog(boolean show) {
+<span class="nc bnc" id="L226" title="All 4 branches missed.">        if (show &amp;&amp; mChangePasswordProgressDialog == null) {</span>
+<span class="nc" id="L227">            mChangePasswordProgressDialog = new ProgressDialog(getActivity());</span>
+<span class="nc" id="L228">            mChangePasswordProgressDialog.setCancelable(false);</span>
+<span class="nc" id="L229">            mChangePasswordProgressDialog.setIndeterminate(true);</span>
+<span class="nc" id="L230">            mChangePasswordProgressDialog.setMessage(getString(R.string.change_password_dialog_message));</span>
+<span class="nc" id="L231">            mChangePasswordProgressDialog.show();</span>
+<span class="nc bnc" id="L232" title="All 4 branches missed.">        } else if (!show &amp;&amp; mChangePasswordProgressDialog != null) {</span>
+<span class="nc" id="L233">            mChangePasswordProgressDialog.dismiss();</span>
+<span class="nc" id="L234">            mChangePasswordProgressDialog = null;</span>
+        }
+<span class="nc" id="L236">    }</span>
+
+    private void refreshAccountDetails() {
+<span class="nc" id="L239">        AccountModel account = mAccountStore.getAccount();</span>
+<span class="nc" id="L240">        mUsernamePreference.setSummary(account.getUserName());</span>
+<span class="nc" id="L241">        mEmailPreference.setSummary(account.getEmail());</span>
+<span class="nc" id="L242">        mChangePasswordPreference.setSummary(EMPTY_STRING);</span>
+<span class="nc" id="L243">        mWebAddressPreference.setSummary(account.getWebAddress());</span>
+<span class="nc" id="L244">        changePrimaryBlogPreference(account.getPrimarySiteId());</span>
+<span class="nc" id="L245">        checkIfEmailChangeIsPending();</span>
+<span class="nc" id="L246">        checkIfUsernameCanBeChanged();</span>
+<span class="nc" id="L247">    }</span>
+
+    private void checkIfEmailChangeIsPending() {
+<span class="nc" id="L250">        AccountModel account = mAccountStore.getAccount();</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">        if (account.getPendingEmailChange()) {</span>
+<span class="nc" id="L252">            showPendingEmailChangeSnackbar(account.getNewEmail());</span>
+<span class="nc bnc" id="L253" title="All 4 branches missed.">        } else if (mEmailSnackbar != null &amp;&amp; mEmailSnackbar.isShown()) {</span>
+<span class="nc" id="L254">            mEmailSnackbar.dismiss();</span>
+        }
+<span class="nc bnc" id="L256" title="All 2 branches missed.">        mEmailPreference.setEnabled(!account.getPendingEmailChange());</span>
+<span class="nc" id="L257">    }</span>
+
+    // BaseTransientBottomBar.LENGTH_LONG is pointing to Snackabr.LENGTH_LONG which confuses checkstyle
+    @SuppressLint(&quot;WrongConstant&quot;)
+    private void showPendingEmailChangeSnackbar(String newEmail) {
+<span class="nc bnc" id="L262" title="All 2 branches missed.">        if (getView() != null) {</span>
+<span class="nc bnc" id="L263" title="All 4 branches missed.">            if (mEmailSnackbar == null || !mEmailSnackbar.isShown()) {</span>
+<span class="nc" id="L264">                View.OnClickListener clickListener = new View.OnClickListener() {</span>
+                    @Override
+                    public void onClick(View v) {
+<span class="nc" id="L267">                        cancelPendingEmailChange();</span>
+<span class="nc" id="L268">                    }</span>
+                };
+
+<span class="nc" id="L271">                mEmailSnackbar = Snackbar</span>
+<span class="nc" id="L272">                        .make(getView(), &quot;&quot;, BaseTransientBottomBar.LENGTH_INDEFINITE)</span>
+<span class="nc" id="L273">                        .setAction(getString(R.string.button_discard), clickListener);</span>
+<span class="nc" id="L274">                TextView textView =</span>
+<span class="nc" id="L275">                        mEmailSnackbar.getView().findViewById(com.google.android.material.R.id.snackbar_text);</span>
+<span class="nc" id="L276">                textView.setMaxLines(4);</span>
+            }
+            // instead of creating a new snackbar, update the current one to avoid the jumping animation
+<span class="nc" id="L279">            mEmailSnackbar.setText(getString(R.string.pending_email_change_snackbar, newEmail));</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">            if (!mEmailSnackbar.isShown()) {</span>
+<span class="nc" id="L281">                mEmailSnackbar.show();</span>
+            }
+        }
+<span class="nc" id="L284">    }</span>
+
+    private void changePrimaryBlogPreference(long siteRemoteId) {
+<span class="nc" id="L287">        mPrimarySitePreference.setValue(String.valueOf(siteRemoteId));</span>
+<span class="nc" id="L288">        SiteModel site = mSiteStore.getSiteBySiteId(siteRemoteId);</span>
+<span class="nc bnc" id="L289" title="All 2 branches missed.">        if (site != null) {</span>
+<span class="nc" id="L290">            mPrimarySitePreference.setSummary(SiteUtils.getSiteNameOrHomeURL(site));</span>
+<span class="nc" id="L291">            mPrimarySitePreference.refreshAdapter();</span>
+        }
+<span class="nc" id="L293">    }</span>
+
+    private void cancelPendingEmailChange() {
+<span class="nc" id="L296">        PushAccountSettingsPayload payload = new PushAccountSettingsPayload();</span>
+<span class="nc" id="L297">        payload.params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L298">        payload.params.put(&quot;user_email_change_pending&quot;, &quot;false&quot;);</span>
+<span class="nc" id="L299">        mDispatcher.dispatch(AccountActionBuilder.newPushSettingsAction(payload));</span>
+<span class="nc bnc" id="L300" title="All 4 branches missed.">        if (mEmailSnackbar != null &amp;&amp; mEmailSnackbar.isShown()) {</span>
+<span class="nc" id="L301">            mEmailSnackbar.dismiss();</span>
+        }
+<span class="nc" id="L303">    }</span>
+
+    private void updateEmail(String newEmail) {
+<span class="nc" id="L306">        PushAccountSettingsPayload payload = new PushAccountSettingsPayload();</span>
+<span class="nc" id="L307">        payload.params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L308">        payload.params.put(&quot;user_email&quot;, newEmail);</span>
+<span class="nc" id="L309">        mDispatcher.dispatch(AccountActionBuilder.newPushSettingsAction(payload));</span>
+<span class="nc" id="L310">    }</span>
+
+    private void updatePrimaryBlog(String blogId) {
+<span class="nc" id="L313">        PushAccountSettingsPayload payload = new PushAccountSettingsPayload();</span>
+<span class="nc" id="L314">        payload.params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L315">        payload.params.put(&quot;primary_site_ID&quot;, blogId);</span>
+<span class="nc" id="L316">        mDispatcher.dispatch(AccountActionBuilder.newPushSettingsAction(payload));</span>
+<span class="nc" id="L317">    }</span>
+
+    public void updateWebAddress(String newWebAddress) {
+<span class="nc" id="L320">        PushAccountSettingsPayload payload = new PushAccountSettingsPayload();</span>
+<span class="nc" id="L321">        payload.params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L322">        payload.params.put(&quot;user_URL&quot;, newWebAddress);</span>
+<span class="nc" id="L323">        mDispatcher.dispatch(AccountActionBuilder.newPushSettingsAction(payload));</span>
+<span class="nc" id="L324">    }</span>
+
+    public void updatePassword(String newPassword) {
+<span class="nc" id="L327">        PushAccountSettingsPayload payload = new PushAccountSettingsPayload();</span>
+<span class="nc" id="L328">        payload.params = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L329">        payload.params.put(&quot;password&quot;, newPassword);</span>
+<span class="nc" id="L330">        mDispatcher.dispatch(AccountActionBuilder.newPushSettingsAction(payload));</span>
+<span class="nc" id="L331">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onAccountChanged(OnAccountChanged event) {
+<span class="nc bnc" id="L336" title="All 2 branches missed.">        if (!isAdded()) {</span>
+<span class="nc" id="L337">            return;</span>
+        }
+
+        // When account change is caused by password change, progress dialog will be shown (i.e. not null).
+<span class="nc bnc" id="L341" title="All 2 branches missed.">        if (mChangePasswordProgressDialog != null) {</span>
+<span class="nc" id="L342">            showChangePasswordProgressDialog(false);</span>
+
+<span class="nc bnc" id="L344" title="All 2 branches missed.">            if (event.isError()) {</span>
+                // We usually rely on event.error.type and provide our own localized message.
+                // This case is exceptional because:
+                // 1. The server-side error type is generic, but patching this server-side is quite involved
+                // 2. We know the error string return from the server has decent localization
+<span class="nc bnc" id="L349" title="All 2 branches missed.">                String errorMessage = !TextUtils.isEmpty(event.error.message) ? event.error.message</span>
+<span class="nc" id="L350">                        : getString(R.string.error_post_account_settings);</span>
+<span class="nc" id="L351">                ToastUtils.showToast(getActivity(), errorMessage, ToastUtils.Duration.LONG);</span>
+<span class="nc" id="L352">                AppLog.e(T.SETTINGS, event.error.message);</span>
+<span class="nc" id="L353">            } else {</span>
+<span class="nc" id="L354">                ToastUtils.showToast(getActivity(), R.string.change_password_confirmation, ToastUtils.Duration.LONG);</span>
+<span class="nc" id="L355">                refreshAccountDetails();</span>
+            }
+        } else {
+<span class="nc bnc" id="L358" title="All 2 branches missed.">            if (event.isError()) {</span>
+<span class="nc bnc" id="L359" title="All 4 branches missed.">                switch (event.error.type) {</span>
+                    case SETTINGS_FETCH_GENERIC_ERROR:
+<span class="nc" id="L361">                        ToastUtils.showToast(getActivity(), R.string.error_fetch_account_settings,</span>
+                                ToastUtils.Duration.LONG);
+<span class="nc" id="L363">                        break;</span>
+                    case SETTINGS_FETCH_REAUTHORIZATION_REQUIRED_ERROR:
+<span class="nc" id="L365">                        ToastUtils.showToast(getActivity(), R.string.error_disabled_apis,</span>
+                                ToastUtils.Duration.LONG);
+<span class="nc" id="L367">                        break;</span>
+                    case SETTINGS_POST_ERROR:
+                        // We usually rely on event.error.type and provide our own localized message.
+                        // This case is exceptional because:
+                        // 1. The server-side error type is generic, but patching this server-side is quite involved
+                        // 2. We know the error string return from the server has decent localization
+<span class="nc bnc" id="L373" title="All 2 branches missed.">                        String errorMessage = !TextUtils.isEmpty(event.error.message) ? event.error.message</span>
+<span class="nc" id="L374">                                : getString(R.string.error_post_account_settings);</span>
+<span class="nc" id="L375">                        ToastUtils.showToast(getActivity(), errorMessage, ToastUtils.Duration.LONG);</span>
+                        // we optimistically show the email change snackbar, if that request fails, we should
+                        // remove the snackbar
+<span class="nc" id="L378">                        checkIfEmailChangeIsPending();</span>
+<span class="nc" id="L379">                        break;</span>
+                }
+            } else {
+<span class="nc" id="L382">                refreshAccountDetails();</span>
+            }
+        }
+<span class="nc" id="L385">    }</span>
+
+    /**
+     * If the username can be changed then the control can be clicked to open to the
+     * Username Changer screen.
+     */
+    private void checkIfUsernameCanBeChanged() {
+<span class="nc" id="L392">        AccountModel account = mAccountStore.getAccount();</span>
+<span class="nc" id="L393">        mUsernamePreference.setEnabled(account.getUsernameCanBeChanged());</span>
+<span class="nc" id="L394">        mUsernamePreference.setOnPreferenceClickListener(preference -&gt; {</span>
+<span class="nc" id="L395">            showUsernameChangerFragment();</span>
+<span class="nc" id="L396">            return true;</span>
+        });
+<span class="nc" id="L398">    }</span>
+
+    private void showUsernameChangerFragment() {
+<span class="nc" id="L401">        AccountModel account = mAccountStore.getAccount();</span>
+
+<span class="nc" id="L403">        final Bundle bundle =</span>
+<span class="nc" id="L404">                SettingsUsernameChangerFragment.newBundle(account.getDisplayName(), account.getUserName());</span>
+
+<span class="nc" id="L406">        new FullScreenDialogFragment.Builder(getActivity())</span>
+<span class="nc" id="L407">                .setTitle(R.string.username_changer_title)</span>
+<span class="nc" id="L408">                .setAction(R.string.username_changer_action)</span>
+<span class="nc" id="L409">                .setOnConfirmListener(this)</span>
+<span class="nc" id="L410">                .setHideActivityBar(true)</span>
+<span class="nc" id="L411">                .setIsLifOnScroll(false)</span>
+<span class="nc" id="L412">                .setOnDismissListener(this)</span>
+<span class="nc" id="L413">                .setOnShownListener(this)</span>
+<span class="nc" id="L414">                .setContent(SettingsUsernameChangerFragment.class, bundle)</span>
+<span class="nc" id="L415">                .build()</span>
+<span class="nc" id="L416">                .show(((AppCompatActivity) getActivity()).getSupportFragmentManager(), FullScreenDialogFragment.TAG);</span>
+<span class="nc" id="L417">    }</span>
+
+    @Override public void onConfirm(@Nullable Bundle result) {
+<span class="nc bnc" id="L420" title="All 2 branches missed.">        if (result != null) {</span>
+<span class="nc" id="L421">            String username = result.getString(BaseUsernameChangerFullScreenDialogFragment.RESULT_USERNAME);</span>
+
+<span class="nc bnc" id="L423" title="All 2 branches missed.">            if (username != null) {</span>
+<span class="nc" id="L424">                WPSnackbar.make(getView(),</span>
+<span class="nc" id="L425">                        String.format(getString(R.string.settings_username_changer_toast_content), username),</span>
+<span class="nc" id="L426">                        Snackbar.LENGTH_LONG).show();</span>
+<span class="nc" id="L427">                mUsernamePreference.setSummary(username);</span>
+<span class="nc" id="L428">                trackSettingsDidChange(TRACK_PROPERTY_USERNAME);</span>
+            }
+        }
+<span class="nc" id="L431">    }</span>
+
+    public static String[] getSiteNamesFromSites(List&lt;SiteModel&gt; sites) {
+<span class="nc" id="L434">        List&lt;String&gt; blogNames = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">        for (SiteModel site : sites) {</span>
+<span class="nc" id="L436">            blogNames.add(SiteUtils.getSiteNameOrHomeURL(site));</span>
+<span class="nc" id="L437">        }</span>
+<span class="nc" id="L438">        return blogNames.toArray(new String[blogNames.size()]);</span>
+    }
+
+    public static String[] getHomeURLOrHostNamesFromSites(List&lt;SiteModel&gt; sites) {
+<span class="nc" id="L442">        List&lt;String&gt; urls = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">        for (SiteModel site : sites) {</span>
+<span class="nc" id="L444">            urls.add(SiteUtils.getHomeURLOrHostName(site));</span>
+<span class="nc" id="L445">        }</span>
+<span class="nc" id="L446">        return urls.toArray(new String[urls.size()]);</span>
+    }
+
+    public static String[] getSiteIdsFromSites(List&lt;SiteModel&gt; sites) {
+<span class="nc" id="L450">        List&lt;String&gt; ids = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">        for (SiteModel site : sites) {</span>
+<span class="nc" id="L452">            ids.add(String.valueOf(site.getSiteId()));</span>
+<span class="nc" id="L453">        }</span>
+<span class="nc" id="L454">        return ids.toArray(new String[ids.size()]);</span>
+    }
+
+    @Override public void onShown() {
+<span class="nc" id="L458">        Map&lt;String, String&gt; props = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L459">        props.put(SOURCE, SOURCE_ACCOUNT_SETTINGS);</span>
+<span class="nc" id="L460">        AnalyticsTracker.track(AnalyticsTracker.Stat.CHANGE_USERNAME_DISPLAYED, props);</span>
+<span class="nc" id="L461">    }</span>
+
+    @Override public void onDismiss() {
+<span class="nc" id="L464">        Map&lt;String, String&gt; props = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L465">        props.put(SOURCE, SOURCE_ACCOUNT_SETTINGS);</span>
+<span class="nc" id="L466">        AnalyticsTracker.track(Stat.CHANGE_USERNAME_DISMISSED, props);</span>
+<span class="nc" id="L467">    }</span>
+
+    /*
+     * AsyncTask which loads sites from database for primary site preference
+     */
+    @SuppressLint(&quot;StaticFieldLeak&quot;)
+<span class="nc" id="L473">    private class LoadSitesTask extends AsyncTask&lt;Void, Void, Void&gt; {</span>
+        @Override
+        protected void onPreExecute() {
+<span class="nc" id="L476">            super.onPreExecute();</span>
+<span class="nc" id="L477">        }</span>
+
+        @Override
+        protected void onCancelled() {
+<span class="nc" id="L481">            super.onCancelled();</span>
+<span class="nc" id="L482">        }</span>
+
+        @Override
+        protected Void doInBackground(Void... params) {
+<span class="nc" id="L486">            List&lt;SiteModel&gt; sites = mSiteStore.getSitesAccessedViaWPComRest();</span>
+<span class="nc" id="L487">            mPrimarySitePreference.setEntries(getSiteNamesFromSites(sites));</span>
+<span class="nc" id="L488">            mPrimarySitePreference.setEntryValues(getSiteIdsFromSites(sites));</span>
+<span class="nc" id="L489">            mPrimarySitePreference.setDetails(getHomeURLOrHostNamesFromSites(sites));</span>
+<span class="nc" id="L490">            return null;</span>
+        }
+
+        @Override
+        protected void onPostExecute(Void results) {
+<span class="nc" id="L495">            super.onPostExecute(results);</span>
+<span class="nc" id="L496">            mPrimarySitePreference.refreshAdapter();</span>
+<span class="nc" id="L497">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

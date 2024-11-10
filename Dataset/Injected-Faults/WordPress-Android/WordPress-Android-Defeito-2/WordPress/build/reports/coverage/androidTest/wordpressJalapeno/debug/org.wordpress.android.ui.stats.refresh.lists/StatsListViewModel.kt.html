@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StatsListViewModel.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.stats.refresh.lists</a> &gt; <span class="el_source">StatsListViewModel.kt</span></div><h1>StatsListViewModel.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.stats.refresh.lists
+
+import androidx.annotation.StringRes
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import org.wordpress.android.R
+import org.wordpress.android.analytics.AnalyticsTracker.Stat
+import org.wordpress.android.modules.UI_THREAD
+import org.wordpress.android.ui.stats.refresh.DAY_STATS_USE_CASE
+import org.wordpress.android.ui.stats.refresh.INSIGHTS_USE_CASE
+import org.wordpress.android.ui.stats.refresh.MONTH_STATS_USE_CASE
+import org.wordpress.android.ui.stats.refresh.NavigationTarget
+import org.wordpress.android.ui.stats.refresh.NavigationTarget.ViewInsightsManagement
+import org.wordpress.android.ui.stats.refresh.StatsViewModel.DateSelectorUiModel
+import org.wordpress.android.ui.stats.refresh.TOTAL_COMMENTS_DETAIL_USE_CASE
+import org.wordpress.android.ui.stats.refresh.TOTAL_FOLLOWERS_DETAIL_USE_CASE
+import org.wordpress.android.ui.stats.refresh.TOTAL_LIKES_DETAIL_USE_CASE
+import org.wordpress.android.ui.stats.refresh.VIEWS_AND_VISITORS_USE_CASE
+import org.wordpress.android.ui.stats.refresh.WEEK_STATS_USE_CASE
+import org.wordpress.android.ui.stats.refresh.YEAR_STATS_USE_CASE
+import org.wordpress.android.ui.stats.refresh.lists.StatsListViewModel.StatsSection.DAYS
+import org.wordpress.android.ui.stats.refresh.lists.StatsListViewModel.StatsSection.INSIGHTS
+import org.wordpress.android.ui.stats.refresh.lists.StatsListViewModel.StatsSection.MONTHS
+import org.wordpress.android.ui.stats.refresh.lists.StatsListViewModel.StatsSection.WEEKS
+import org.wordpress.android.ui.stats.refresh.lists.StatsListViewModel.StatsSection.YEARS
+import org.wordpress.android.ui.stats.refresh.utils.ActionCardHandler
+import org.wordpress.android.ui.stats.refresh.utils.ItemPopupMenuHandler
+import org.wordpress.android.ui.stats.refresh.utils.NewsCardHandler
+import org.wordpress.android.ui.stats.refresh.utils.StatsDateSelector
+import org.wordpress.android.util.analytics.AnalyticsTrackerWrapper
+import org.wordpress.android.util.mapNullable
+import org.wordpress.android.util.merge
+import org.wordpress.android.util.mergeNotNull
+import org.wordpress.android.util.throttle
+import org.wordpress.android.viewmodel.Event
+import org.wordpress.android.viewmodel.ScopedViewModel
+import javax.inject.Inject
+import javax.inject.Named
+
+const val SCROLL_EVENT_DELAY = 2000L
+
+@Suppress(&quot;TooManyFunctions&quot;, &quot;LongParameterList&quot;)
+<span class="nc" id="L48">abstract class StatsListViewModel(</span>
+    defaultDispatcher: CoroutineDispatcher,
+<span class="nc" id="L50">    private val statsUseCase: BaseListUseCase,</span>
+<span class="nc" id="L51">    private val analyticsTracker: AnalyticsTrackerWrapper,</span>
+<span class="nc" id="L52">    protected val dateSelector: StatsDateSelector,</span>
+<span class="nc" id="L53">    popupMenuHandler: ItemPopupMenuHandler? = null,</span>
+<span class="nc" id="L54">    private val newsCardHandler: NewsCardHandler? = null,</span>
+<span class="nc" id="L55">    actionCardHandler: ActionCardHandler? = null</span>
+<span class="nc" id="L56">) : ScopedViewModel(defaultDispatcher) {</span>
+    private var trackJob: Job? = null
+    private var isInitialized = false
+
+<span class="nc" id="L60">    enum class StatsSection(@StringRes val titleRes: Int) {</span>
+<span class="nc" id="L61">        INSIGHTS(R.string.stats_insights),</span>
+<span class="nc" id="L62">        DAYS(R.string.stats_timeframe_days),</span>
+<span class="nc" id="L63">        WEEKS(R.string.stats_timeframe_weeks),</span>
+<span class="nc" id="L64">        MONTHS(R.string.stats_timeframe_months),</span>
+<span class="nc" id="L65">        YEARS(R.string.stats_timeframe_years),</span>
+<span class="nc" id="L66">        DETAIL(R.string.stats),</span>
+<span class="nc" id="L67">        INSIGHT_DETAIL(R.string.stats_insights_views_and_visitors),</span>
+<span class="nc" id="L68">        TOTAL_LIKES_DETAIL(R.string.stats_view_total_likes),</span>
+<span class="nc" id="L69">        TOTAL_COMMENTS_DETAIL(R.string.stats_view_total_comments),</span>
+<span class="nc" id="L70">        TOTAL_FOLLOWERS_DETAIL(R.string.stats_view_total_followers),</span>
+<span class="nc" id="L71">        ANNUAL_STATS(R.string.stats_insights_annual_site_stats);</span>
+    }
+
+<span class="nc" id="L74">    val selectedDate = dateSelector.selectedDate</span>
+
+<span class="nc" id="L76">    private val mutableNavigationTarget = MutableLiveData&lt;Event&lt;NavigationTarget&gt;&gt;()</span>
+<span class="nc" id="L77">    val navigationTarget: LiveData&lt;Event&lt;NavigationTarget&gt;&gt; = mergeNotNull(</span>
+<span class="nc" id="L78">            statsUseCase.navigationTarget, mutableNavigationTarget</span>
+    )
+
+<span class="nc" id="L81">    val listSelected = statsUseCase.listSelected</span>
+
+<span class="nc" id="L83">    val uiModel: LiveData&lt;UiModel?&gt; by lazy {</span>
+<span class="nc" id="L84">        statsUseCase.data.throttle(viewModelScope, distinct = true)</span>
+    }
+
+<span class="nc" id="L87">    val dateSelectorData: LiveData&lt;DateSelectorUiModel&gt; = dateSelector.dateSelectorData.mapNullable {</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">        it ?: DateSelectorUiModel(false)</span>
+    }
+
+<span class="nc" id="L91">    val typesChanged = merge(</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">            popupMenuHandler?.typeMoved,</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">            newsCardHandler?.cardDismissed,</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">            actionCardHandler?.actionCard</span>
+    )
+
+<span class="nc bnc" id="L97" title="All 2 branches missed.">    val scrollTo = newsCardHandler?.scrollTo</span>
+
+<span class="nc" id="L99">    val scrollToNewCard = statsUseCase.scrollTo</span>
+
+    override fun onCleared() {
+<span class="nc" id="L102">        statsUseCase.onCleared()</span>
+<span class="nc" id="L103">        dateSelector.clear()</span>
+<span class="nc" id="L104">        super.onCleared()</span>
+<span class="nc" id="L105">    }</span>
+
+    fun onScrolledToBottom() {
+<span class="nc bnc" id="L108" title="All 6 branches missed.">        if (trackJob?.isCompleted != false) {</span>
+<span class="nc" id="L109">            trackJob = launch {</span>
+<span class="nc" id="L110">                analyticsTracker.track(Stat.STATS_SCROLLED_TO_BOTTOM)</span>
+<span class="nc" id="L111">                delay(SCROLL_EVENT_DELAY)</span>
+<span class="nc" id="L112">            }</span>
+        }
+<span class="nc" id="L114">    }</span>
+
+    fun onNextDateSelected() {
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        launch(Dispatchers.Default) {</span>
+<span class="nc" id="L118">            dateSelector.onNextDateSelected()</span>
+<span class="nc" id="L119">        }</span>
+<span class="nc" id="L120">    }</span>
+
+    fun onPreviousDateSelected() {
+<span class="nc bnc" id="L123" title="All 2 branches missed.">        launch(Dispatchers.Default) {</span>
+<span class="nc" id="L124">            dateSelector.onPreviousDateSelected()</span>
+<span class="nc" id="L125">        }</span>
+<span class="nc" id="L126">    }</span>
+
+    fun onRetryClick() {
+<span class="nc" id="L129">        launch {</span>
+<span class="nc" id="L130">            statsUseCase.refreshData(true)</span>
+<span class="nc" id="L131">        }</span>
+<span class="nc" id="L132">    }</span>
+
+    fun onDateChanged(selectedSection: StatsSection) {
+<span class="nc" id="L135">        launch {</span>
+<span class="nc" id="L136">            statsUseCase.onDateChanged(selectedSection)</span>
+<span class="nc" id="L137">        }</span>
+<span class="nc" id="L138">    }</span>
+
+    fun onListSelected() {
+<span class="nc" id="L141">        dateSelector.updateDateSelector()</span>
+<span class="nc" id="L142">    }</span>
+
+    fun onEmptyInsightsButtonClicked() {
+<span class="nc" id="L145">        mutableNavigationTarget.value = Event(ViewInsightsManagement)</span>
+<span class="nc" id="L146">    }</span>
+
+    fun onAddNewStatsButtonClicked() {
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        newsCardHandler?.dismiss()</span>
+<span class="nc" id="L150">        analyticsTracker.track(Stat.STATS_INSIGHTS_MANAGEMENT_ACCESSED, mapOf(&quot;source&quot; to &quot;button&quot;))</span>
+<span class="nc" id="L151">        mutableNavigationTarget.value = Event(ViewInsightsManagement)</span>
+<span class="nc" id="L152">    }</span>
+
+    fun start() {
+<span class="nc bnc" id="L155" title="All 2 branches missed.">        if (!isInitialized) {</span>
+<span class="nc" id="L156">            isInitialized = true</span>
+<span class="nc" id="L157">            launch {</span>
+<span class="nc" id="L158">                statsUseCase.loadData()</span>
+<span class="nc" id="L159">                dateSelector.updateDateSelector()</span>
+<span class="nc" id="L160">            }</span>
+        }
+<span class="nc" id="L162">        dateSelector.updateDateSelector()</span>
+<span class="nc" id="L163">    }</span>
+
+    sealed class UiModel {
+<span class="nc" id="L166">        data class Success(val data: List&lt;StatsBlock&gt;) : UiModel()</span>
+<span class="nc" id="L167">        data class Error(val message: Int = R.string.stats_loading_error) : UiModel()</span>
+<span class="nc" id="L168">        data class Empty(</span>
+<span class="nc" id="L169">            val title: Int,</span>
+<span class="nc" id="L170">            val subtitle: Int? = null,</span>
+<span class="nc" id="L171">            val image: Int? = null,</span>
+<span class="nc" id="L172">            val showButton: Boolean = false</span>
+<span class="nc" id="L173">        ) : UiModel()</span>
+    }
+
+    fun onTypesChanged() {
+<span class="nc" id="L177">        launch {</span>
+<span class="nc" id="L178">            statsUseCase.refreshTypes()</span>
+<span class="nc" id="L179">        }</span>
+<span class="nc" id="L180">    }</span>
+<span class="nc" id="L181">}</span>
+
+class InsightsListViewModel
+<span class="nc" id="L184">@Inject constructor(</span>
+    @Named(UI_THREAD) mainDispatcher: CoroutineDispatcher,
+<span class="nc" id="L186">    @Named(INSIGHTS_USE_CASE) private val insightsUseCase: BaseListUseCase,</span>
+    analyticsTracker: AnalyticsTrackerWrapper,
+    dateSelectorFactory: StatsDateSelector.Factory,
+    popupMenuHandler: ItemPopupMenuHandler,
+    newsCardHandler: NewsCardHandler,
+    actionCardHandler: ActionCardHandler
+<span class="nc" id="L192">) : StatsListViewModel(</span>
+<span class="nc" id="L193">        mainDispatcher,</span>
+<span class="nc" id="L194">        insightsUseCase,</span>
+<span class="nc" id="L195">        analyticsTracker,</span>
+<span class="nc" id="L196">        dateSelectorFactory.build(INSIGHTS),</span>
+<span class="nc" id="L197">        popupMenuHandler,</span>
+<span class="nc" id="L198">        newsCardHandler,</span>
+<span class="nc" id="L199">        actionCardHandler</span>
+)
+
+<span class="nc" id="L202">class YearsListViewModel @Inject constructor(</span>
+    @Named(UI_THREAD) mainDispatcher: CoroutineDispatcher,
+    @Named(YEAR_STATS_USE_CASE) statsUseCase: BaseListUseCase,
+    analyticsTracker: AnalyticsTrackerWrapper,
+    dateSelectorFactory: StatsDateSelector.Factory
+<span class="nc" id="L207">) : StatsListViewModel(mainDispatcher, statsUseCase, analyticsTracker, dateSelectorFactory.build(YEARS))</span>
+
+<span class="nc" id="L209">class MonthsListViewModel @Inject constructor(</span>
+    @Named(UI_THREAD) mainDispatcher: CoroutineDispatcher,
+    @Named(MONTH_STATS_USE_CASE) statsUseCase: BaseListUseCase,
+    analyticsTracker: AnalyticsTrackerWrapper,
+    dateSelectorFactory: StatsDateSelector.Factory
+<span class="nc" id="L214">) : StatsListViewModel(mainDispatcher, statsUseCase, analyticsTracker, dateSelectorFactory.build(MONTHS))</span>
+
+<span class="nc" id="L216">class WeeksListViewModel @Inject constructor(</span>
+    @Named(UI_THREAD) mainDispatcher: CoroutineDispatcher,
+    @Named(WEEK_STATS_USE_CASE) statsUseCase: BaseListUseCase,
+    analyticsTracker: AnalyticsTrackerWrapper,
+    dateSelectorFactory: StatsDateSelector.Factory
+<span class="nc" id="L221">) : StatsListViewModel(mainDispatcher, statsUseCase, analyticsTracker, dateSelectorFactory.build(WEEKS))</span>
+
+<span class="nc" id="L223">class DaysListViewModel @Inject constructor(</span>
+    @Named(UI_THREAD) mainDispatcher: CoroutineDispatcher,
+    @Named(DAY_STATS_USE_CASE) statsUseCase: BaseListUseCase,
+    analyticsTracker: AnalyticsTrackerWrapper,
+    dateSelectorFactory: StatsDateSelector.Factory
+<span class="nc" id="L228">) : StatsListViewModel(mainDispatcher, statsUseCase, analyticsTracker, dateSelectorFactory.build(DAYS))</span>
+
+// Using Weeks granularity on new insight details screens
+<span class="nc" id="L231">class InsightsDetailListViewModel @Inject constructor(</span>
+    @Named(UI_THREAD) mainDispatcher: CoroutineDispatcher,
+    @Named(VIEWS_AND_VISITORS_USE_CASE) statsUseCase: BaseListUseCase,
+    analyticsTracker: AnalyticsTrackerWrapper,
+    dateSelectorFactory: StatsDateSelector.Factory
+<span class="nc" id="L236">) : StatsListViewModel(mainDispatcher, statsUseCase, analyticsTracker, dateSelectorFactory.build(WEEKS))</span>
+
+<span class="nc" id="L238">class TotalLikesDetailListViewModel @Inject constructor(</span>
+    @Named(UI_THREAD) mainDispatcher: CoroutineDispatcher,
+    @Named(TOTAL_LIKES_DETAIL_USE_CASE) statsUseCase: BaseListUseCase,
+    analyticsTracker: AnalyticsTrackerWrapper,
+    dateSelectorFactory: StatsDateSelector.Factory
+<span class="nc" id="L243">) : StatsListViewModel(mainDispatcher, statsUseCase, analyticsTracker, dateSelectorFactory.build(WEEKS))</span>
+
+<span class="nc" id="L245">class TotalCommentsDetailListViewModel @Inject constructor(</span>
+    @Named(UI_THREAD) mainDispatcher: CoroutineDispatcher,
+    @Named(TOTAL_COMMENTS_DETAIL_USE_CASE) statsUseCase: BaseListUseCase,
+    analyticsTracker: AnalyticsTrackerWrapper,
+    dateSelectorFactory: StatsDateSelector.Factory
+<span class="nc" id="L250">) : StatsListViewModel(mainDispatcher, statsUseCase, analyticsTracker, dateSelectorFactory.build(WEEKS))</span>
+
+<span class="nc" id="L252">class TotalFollowersDetailListViewModel @Inject constructor(</span>
+    @Named(UI_THREAD) mainDispatcher: CoroutineDispatcher,
+    @Named(TOTAL_FOLLOWERS_DETAIL_USE_CASE) statsUseCase: BaseListUseCase,
+    analyticsTracker: AnalyticsTrackerWrapper,
+    dateSelectorFactory: StatsDateSelector.Factory
+<span class="nc" id="L257">) : StatsListViewModel(mainDispatcher, statsUseCase, analyticsTracker, dateSelectorFactory.build(WEEKS))</span>
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

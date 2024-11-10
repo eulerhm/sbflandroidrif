@@ -1,0 +1,415 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ThemeBrowserActivity.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.ui.themes</a> &gt; <span class="el_source">ThemeBrowserActivity.java</span></div><h1>ThemeBrowserActivity.java</h1><pre class="source lang-java linenums">package org.wordpress.android.ui.themes;
+
+import android.content.Intent;
+import android.os.Bundle;
+import android.text.TextUtils;
+import android.view.MenuItem;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.widget.Toolbar;
+import androidx.fragment.app.FragmentManager;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+
+import org.greenrobot.eventbus.Subscribe;
+import org.greenrobot.eventbus.ThreadMode;
+import org.jetbrains.annotations.NotNull;
+import org.wordpress.android.R;
+import org.wordpress.android.WordPress;
+import org.wordpress.android.analytics.AnalyticsTracker.Stat;
+import org.wordpress.android.fluxc.Dispatcher;
+import org.wordpress.android.fluxc.action.ThemeAction;
+import org.wordpress.android.fluxc.generated.ThemeActionBuilder;
+import org.wordpress.android.fluxc.model.SiteModel;
+import org.wordpress.android.fluxc.model.ThemeModel;
+import org.wordpress.android.fluxc.store.ThemeStore;
+import org.wordpress.android.fluxc.store.ThemeStore.OnCurrentThemeFetched;
+import org.wordpress.android.fluxc.store.ThemeStore.OnSiteThemesChanged;
+import org.wordpress.android.fluxc.store.ThemeStore.OnThemeActivated;
+import org.wordpress.android.fluxc.store.ThemeStore.OnThemeInstalled;
+import org.wordpress.android.fluxc.store.ThemeStore.OnWpComThemesChanged;
+import org.wordpress.android.fluxc.store.ThemeStore.SiteThemePayload;
+import org.wordpress.android.ui.ActivityId;
+import org.wordpress.android.ui.LocaleAwareActivity;
+import org.wordpress.android.ui.prefs.AppPrefs;
+import org.wordpress.android.ui.themes.ThemeBrowserFragment.ThemeBrowserFragmentCallback;
+import org.wordpress.android.util.AppLog;
+import org.wordpress.android.util.AppLog.T;
+import org.wordpress.android.util.ToastUtils;
+import org.wordpress.android.util.analytics.AnalyticsUtils;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.inject.Inject;
+
+<span class="nc" id="L48">public class ThemeBrowserActivity extends LocaleAwareActivity implements ThemeBrowserFragmentCallback {</span>
+    public static final int ACTIVATE_THEME = 1;
+    public static final String THEME_ID = &quot;theme_id&quot;;
+
+    // refresh WP.com themes every 3 days
+    private static final long WP_COM_THEMES_SYNC_TIMEOUT = 1000 * 60 * 60 * 24 * 3;
+
+    private ThemeBrowserFragment mThemeBrowserFragment;
+    private ThemeModel mCurrentTheme;
+    private boolean mIsFetchingInstalledThemes;
+    private SiteModel mSite;
+
+    @Inject ThemeStore mThemeStore;
+    @Inject Dispatcher mDispatcher;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+<span class="nc" id="L65">        super.onCreate(savedInstanceState);</span>
+<span class="nc" id="L66">        ((WordPress) getApplication()).component().inject(this);</span>
+<span class="nc" id="L67">        mDispatcher.register(this);</span>
+
+<span class="nc bnc" id="L69" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L70">            mSite = (SiteModel) getIntent().getSerializableExtra(WordPress.SITE);</span>
+        } else {
+<span class="nc" id="L72">            mSite = (SiteModel) savedInstanceState.getSerializable(WordPress.SITE);</span>
+        }
+<span class="nc bnc" id="L74" title="All 2 branches missed.">        if (mSite == null) {</span>
+<span class="nc" id="L75">            ToastUtils.showToast(this, R.string.blog_not_found, ToastUtils.Duration.SHORT);</span>
+<span class="nc" id="L76">            finish();</span>
+<span class="nc" id="L77">            return;</span>
+        }
+
+<span class="nc" id="L80">        setContentView(R.layout.theme_browser_activity);</span>
+
+<span class="nc bnc" id="L82" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L83">            addBrowserFragment();</span>
+<span class="nc" id="L84">            fetchInstalledThemesIfJetpackSite();</span>
+<span class="nc" id="L85">            fetchWpComThemesIfSyncTimedOut(false);</span>
+        } else {
+<span class="nc" id="L87">            mThemeBrowserFragment =</span>
+<span class="nc" id="L88">                    (ThemeBrowserFragment) getSupportFragmentManager().findFragmentByTag(ThemeBrowserFragment.TAG);</span>
+        }
+
+<span class="nc" id="L91">        Toolbar toolbar = findViewById(R.id.toolbar_main);</span>
+<span class="nc" id="L92">        setSupportActionBar(toolbar);</span>
+
+<span class="nc" id="L94">        ActionBar actionBar = getSupportActionBar();</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (actionBar != null) {</span>
+<span class="nc" id="L96">            actionBar.setDisplayShowTitleEnabled(true);</span>
+<span class="nc" id="L97">            actionBar.setDisplayHomeAsUpEnabled(true);</span>
+        }
+<span class="nc" id="L99">    }</span>
+
+    @Override
+    protected void onResume() {
+<span class="nc" id="L103">        super.onResume();</span>
+<span class="nc" id="L104">        ActivityId.trackLastActivity(ActivityId.THEMES);</span>
+<span class="nc" id="L105">        fetchCurrentTheme();</span>
+<span class="nc" id="L106">    }</span>
+
+    @Override
+    protected void onSaveInstanceState(@NotNull Bundle outState) {
+<span class="nc" id="L110">        super.onSaveInstanceState(outState);</span>
+<span class="nc" id="L111">        outState.putSerializable(WordPress.SITE, mSite);</span>
+<span class="nc" id="L112">    }</span>
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+<span class="nc" id="L116">        int i = item.getItemId();</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        if (i == android.R.id.home) {</span>
+<span class="nc" id="L118">            onBackPressed();</span>
+<span class="nc" id="L119">            return true;</span>
+        }
+
+<span class="nc" id="L122">        return super.onOptionsItemSelected(item);</span>
+    }
+
+    @Override
+    public void onBackPressed() {
+<span class="nc" id="L127">        FragmentManager fm = getSupportFragmentManager();</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">        if (fm.getBackStackEntryCount() &gt; 0) {</span>
+<span class="nc" id="L129">            fm.popBackStack();</span>
+        } else {
+<span class="nc" id="L131">            super.onBackPressed();</span>
+        }
+<span class="nc" id="L133">    }</span>
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+<span class="nc" id="L137">        super.onActivityResult(requestCode, resultCode, data);</span>
+<span class="nc bnc" id="L138" title="All 6 branches missed.">        if (requestCode == ACTIVATE_THEME &amp;&amp; resultCode == RESULT_OK &amp;&amp; data != null) {</span>
+<span class="nc" id="L139">            String themeId = data.getStringExtra(THEME_ID);</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">            if (!TextUtils.isEmpty(themeId)) {</span>
+<span class="nc" id="L141">                activateTheme(themeId);</span>
+            }
+        }
+<span class="nc" id="L144">    }</span>
+
+    @Override
+    public void onDestroy() {
+<span class="nc" id="L148">        super.onDestroy();</span>
+<span class="nc" id="L149">        mDispatcher.unregister(this);</span>
+<span class="nc" id="L150">    }</span>
+
+    @Override
+    public void onActivateSelected(String themeId) {
+<span class="nc" id="L154">        activateTheme(themeId);</span>
+<span class="nc" id="L155">    }</span>
+
+    @Override
+    public void onTryAndCustomizeSelected(String themeId) {
+<span class="nc" id="L159">        startWebActivity(themeId, ThemeWebActivity.ThemeWebActivityType.PREVIEW);</span>
+<span class="nc" id="L160">    }</span>
+
+    @Override
+    public void onViewSelected(String themeId) {
+<span class="nc" id="L164">        startWebActivity(themeId, ThemeWebActivity.ThemeWebActivityType.DEMO);</span>
+<span class="nc" id="L165">    }</span>
+
+    @Override
+    public void onDetailsSelected(String themeId) {
+<span class="nc" id="L169">        startWebActivity(themeId, ThemeWebActivity.ThemeWebActivityType.DETAILS);</span>
+<span class="nc" id="L170">    }</span>
+
+    @Override
+    public void onSupportSelected(String themeId) {
+<span class="nc" id="L174">        startWebActivity(themeId, ThemeWebActivity.ThemeWebActivityType.SUPPORT);</span>
+<span class="nc" id="L175">    }</span>
+
+    @Override
+    public void onSwipeToRefresh() {
+<span class="nc" id="L179">        fetchInstalledThemesIfJetpackSite();</span>
+<span class="nc" id="L180">        fetchWpComThemesIfSyncTimedOut(true);</span>
+<span class="nc" id="L181">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onWpComThemesChanged(OnWpComThemesChanged event) {
+        // always unset refreshing status to remove progress indicator
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        if (mThemeBrowserFragment != null) {</span>
+<span class="nc" id="L188">            mThemeBrowserFragment.setRefreshing(false);</span>
+<span class="nc" id="L189">            mThemeBrowserFragment.refreshView();</span>
+        }
+
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L193">            AppLog.e(T.THEMES, &quot;Error fetching themes: &quot; + event.error.message);</span>
+<span class="nc" id="L194">            ToastUtils.showToast(this, R.string.theme_fetch_failed, ToastUtils.Duration.SHORT);</span>
+        } else {
+<span class="nc" id="L196">            AppLog.d(T.THEMES, &quot;WordPress.com Theme fetch successful!&quot;);</span>
+        }
+<span class="nc" id="L198">        AppPrefs.setLastWpComThemeSync(System.currentTimeMillis());</span>
+<span class="nc" id="L199">    }</span>
+
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onSiteThemesChanged(OnSiteThemesChanged event) {
+<span class="nc bnc" id="L205" title="All 2 branches missed.">        if (event.site.getId() != mSite.getId()) {</span>
+            // ignore this event as it's not related to the currently selected site
+<span class="nc" id="L207">            return;</span>
+        }
+<span class="nc bnc" id="L209" title="All 2 branches missed.">        if (event.origin == ThemeAction.FETCH_INSTALLED_THEMES) {</span>
+            // always unset refreshing status to remove progress indicator
+<span class="nc bnc" id="L211" title="All 2 branches missed.">            if (mThemeBrowserFragment != null) {</span>
+<span class="nc" id="L212">                mThemeBrowserFragment.setRefreshing(false);</span>
+<span class="nc" id="L213">                mThemeBrowserFragment.refreshView();</span>
+            }
+
+<span class="nc" id="L216">            mIsFetchingInstalledThemes = false;</span>
+
+<span class="nc bnc" id="L218" title="All 2 branches missed.">            if (event.isError()) {</span>
+<span class="nc" id="L219">                AppLog.e(T.THEMES, &quot;Error fetching themes: &quot; + event.error.message);</span>
+<span class="nc" id="L220">                ToastUtils.showToast(this, R.string.theme_fetch_failed, ToastUtils.Duration.SHORT);</span>
+            } else {
+<span class="nc" id="L222">                AppLog.d(T.THEMES, &quot;Installed themes fetch successful!&quot;);</span>
+            }
+<span class="nc bnc" id="L224" title="All 2 branches missed.">        } else if (event.origin == ThemeAction.REMOVE_SITE_THEMES) {</span>
+            // Since this is a logout event, we don't need to do anything
+<span class="nc" id="L226">            AppLog.d(T.THEMES, &quot;Site themes removed for site: &quot; + event.site.getDisplayName());</span>
+        }
+<span class="nc" id="L228">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onCurrentThemeFetched(OnCurrentThemeFetched event) {
+<span class="nc bnc" id="L233" title="All 2 branches missed.">        if (event.site.getId() != mSite.getId()) {</span>
+            // ignore this event as it's not related to the currently selected site
+<span class="nc" id="L235">            return;</span>
+        }
+<span class="nc bnc" id="L237" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L238">            AppLog.e(T.THEMES, &quot;Error fetching current theme: &quot; + event.error.message);</span>
+<span class="nc" id="L239">            ToastUtils.showToast(this, R.string.theme_fetch_failed, ToastUtils.Duration.SHORT);</span>
+
+            // set the new current theme to update header
+<span class="nc bnc" id="L242" title="All 4 branches missed.">            if (mCurrentTheme != null &amp;&amp; mThemeBrowserFragment != null) {</span>
+<span class="nc bnc" id="L243" title="All 2 branches missed.">                if (mThemeBrowserFragment.getCurrentThemeTextView() != null) {</span>
+<span class="nc" id="L244">                    mThemeBrowserFragment.getCurrentThemeTextView().setText(mCurrentTheme.getName());</span>
+<span class="nc" id="L245">                    mThemeBrowserFragment.setCurrentThemeId(mCurrentTheme.getThemeId());</span>
+                }
+            }
+        } else {
+<span class="nc" id="L249">            AppLog.d(T.THEMES, &quot;Current Theme fetch successful!&quot;);</span>
+<span class="nc" id="L250">            mCurrentTheme = mThemeStore.getActiveThemeForSite(event.site);</span>
+<span class="nc bnc" id="L251" title="All 2 branches missed.">            AppLog.d(T.THEMES, &quot;Current theme is &quot; + (mCurrentTheme == null ? &quot;(null)&quot; : mCurrentTheme.getName()));</span>
+<span class="nc" id="L252">            updateCurrentThemeView();</span>
+        }
+<span class="nc" id="L254">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onThemeInstalled(OnThemeInstalled event) {
+<span class="nc bnc" id="L259" title="All 2 branches missed.">        if (event.site.getId() != mSite.getId()) {</span>
+            // ignore this event as it's not related to the currently selected site
+<span class="nc" id="L261">            return;</span>
+        }
+<span class="nc bnc" id="L263" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L264">            AppLog.e(T.THEMES, &quot;Error installing theme: &quot; + event.error.message);</span>
+        } else {
+<span class="nc" id="L266">            AppLog.d(T.THEMES, &quot;Theme installation successful! Installed theme: &quot; + event.theme.getName());</span>
+<span class="nc" id="L267">            activateTheme(event.theme.getThemeId());</span>
+        }
+<span class="nc" id="L269">    }</span>
+
+    @SuppressWarnings(&quot;unused&quot;)
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    public void onThemeActivated(OnThemeActivated event) {
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        if (event.site.getId() != mSite.getId()) {</span>
+            // ignore this event as it's not related to the currently selected site
+<span class="nc" id="L276">            return;</span>
+        }
+<span class="nc bnc" id="L278" title="All 2 branches missed.">        if (event.isError()) {</span>
+<span class="nc" id="L279">            AppLog.e(T.THEMES, &quot;Error activating theme: &quot; + event.error.message);</span>
+<span class="nc" id="L280">            ToastUtils.showToast(this, R.string.theme_activation_error, ToastUtils.Duration.SHORT);</span>
+        } else {
+<span class="nc" id="L282">            AppLog.d(T.THEMES, &quot;Theme activation successful! New theme: &quot; + event.theme.getName());</span>
+
+<span class="nc" id="L284">            mCurrentTheme = mThemeStore.getActiveThemeForSite(event.site);</span>
+<span class="nc bnc" id="L285" title="All 2 branches missed.">            if (mCurrentTheme == null) {</span>
+<span class="nc" id="L286">                AppLog.e(T.THEMES, &quot;NOT A CRASH: OnThemeActivated event is ignored as `getActiveThemeForSite` &quot;</span>
+                                   + &quot;returned null.&quot;);
+<span class="nc" id="L288">                return;</span>
+            }
+<span class="nc" id="L290">            updateCurrentThemeView();</span>
+
+<span class="nc" id="L292">            Map&lt;String, Object&gt; themeProperties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L293">            themeProperties.put(THEME_ID, mCurrentTheme.getThemeId());</span>
+<span class="nc" id="L294">            AnalyticsUtils.trackWithSiteDetails(Stat.THEMES_CHANGED_THEME, mSite, themeProperties);</span>
+
+<span class="nc bnc" id="L296" title="All 2 branches missed.">            if (!isFinishing()) {</span>
+<span class="nc" id="L297">                showAlertDialogOnNewSettingNewTheme(mCurrentTheme);</span>
+            }
+        }
+<span class="nc" id="L300">    }</span>
+
+    private void updateCurrentThemeView() {
+<span class="nc bnc" id="L303" title="All 4 branches missed.">        if (mCurrentTheme != null &amp;&amp; mThemeBrowserFragment != null</span>
+<span class="nc bnc" id="L304" title="All 2 branches missed.">            &amp;&amp; mThemeBrowserFragment.getCurrentThemeTextView() != null) {</span>
+            String text =
+<span class="nc bnc" id="L306" title="All 2 branches missed.">                    TextUtils.isEmpty(mCurrentTheme.getName()) ? getString(R.string.unknown) : mCurrentTheme.getName();</span>
+<span class="nc" id="L307">            mThemeBrowserFragment.getCurrentThemeTextView().setText(text);</span>
+<span class="nc" id="L308">            mThemeBrowserFragment.setCurrentThemeId(mCurrentTheme.getThemeId());</span>
+        }
+<span class="nc" id="L310">    }</span>
+
+    private void fetchCurrentTheme() {
+<span class="nc" id="L313">        mDispatcher.dispatch(ThemeActionBuilder.newFetchCurrentThemeAction(mSite));</span>
+<span class="nc" id="L314">    }</span>
+
+    private void fetchWpComThemesIfSyncTimedOut(boolean force) {
+<span class="nc" id="L317">        long currentTime = System.currentTimeMillis();</span>
+<span class="nc bnc" id="L318" title="All 4 branches missed.">        if (force || currentTime - AppPrefs.getLastWpComThemeSync() &gt; WP_COM_THEMES_SYNC_TIMEOUT) {</span>
+<span class="nc" id="L319">            mDispatcher.dispatch(ThemeActionBuilder.newFetchWpComThemesAction());</span>
+        }
+<span class="nc" id="L321">    }</span>
+
+    private void fetchInstalledThemesIfJetpackSite() {
+<span class="nc bnc" id="L324" title="All 6 branches missed.">        if (mSite.isJetpackConnected() &amp;&amp; mSite.isUsingWpComRestApi() &amp;&amp; !mIsFetchingInstalledThemes) {</span>
+<span class="nc" id="L325">            mDispatcher.dispatch(ThemeActionBuilder.newFetchInstalledThemesAction(mSite));</span>
+<span class="nc" id="L326">            mIsFetchingInstalledThemes = true;</span>
+        }
+<span class="nc" id="L328">    }</span>
+
+    private void activateTheme(String themeId) {
+<span class="nc bnc" id="L331" title="All 2 branches missed.">        if (!mSite.isUsingWpComRestApi()) {</span>
+<span class="nc" id="L332">            AppLog.i(T.THEMES, &quot;Theme activation requires a site using WP.com REST API. Aborting request.&quot;);</span>
+<span class="nc" id="L333">            return;</span>
+        }
+
+<span class="nc" id="L336">        ThemeModel theme = mThemeStore.getInstalledThemeByThemeId(mSite, themeId);</span>
+<span class="nc bnc" id="L337" title="All 2 branches missed.">        if (theme == null) {</span>
+<span class="nc" id="L338">            theme = mThemeStore.getWpComThemeByThemeId(themeId);</span>
+<span class="nc bnc" id="L339" title="All 2 branches missed.">            if (theme == null) {</span>
+<span class="nc" id="L340">                AppLog.w(T.THEMES, &quot;Theme unavailable to activate. Fetch it and try again.&quot;);</span>
+<span class="nc" id="L341">                return;</span>
+            }
+
+<span class="nc bnc" id="L344" title="All 2 branches missed.">            if (mSite.isJetpackConnected()) {</span>
+                // first install the theme, then activate it
+<span class="nc" id="L346">                mDispatcher.dispatch(ThemeActionBuilder.newInstallThemeAction(new SiteThemePayload(mSite, theme)));</span>
+<span class="nc" id="L347">                return;</span>
+            }
+        }
+
+<span class="nc" id="L351">        mDispatcher.dispatch(ThemeActionBuilder.newActivateThemeAction(new SiteThemePayload(mSite, theme)));</span>
+<span class="nc" id="L352">    }</span>
+
+    private void addBrowserFragment() {
+<span class="nc" id="L355">        mThemeBrowserFragment = ThemeBrowserFragment.newInstance(mSite);</span>
+<span class="nc" id="L356">        getSupportFragmentManager().beginTransaction()</span>
+<span class="nc" id="L357">                                   .add(R.id.fragment_container, mThemeBrowserFragment, ThemeBrowserFragment.TAG)</span>
+<span class="nc" id="L358">                                   .commit();</span>
+<span class="nc" id="L359">    }</span>
+
+    private void showAlertDialogOnNewSettingNewTheme(ThemeModel newTheme) {
+<span class="nc" id="L362">        AlertDialog.Builder dialogBuilder = new MaterialAlertDialogBuilder(this);</span>
+
+<span class="nc" id="L364">        String thanksMessage = String.format(getString(R.string.theme_prompt), newTheme.getName());</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">        if (!TextUtils.isEmpty(newTheme.getAuthorName())) {</span>
+<span class="nc" id="L366">            String append = String.format(getString(R.string.theme_by_author_prompt_append), newTheme.getAuthorName());</span>
+<span class="nc" id="L367">            thanksMessage = thanksMessage + &quot; &quot; + append;</span>
+        }
+
+<span class="nc" id="L370">        dialogBuilder.setMessage(thanksMessage);</span>
+<span class="nc" id="L371">        dialogBuilder.setNegativeButton(R.string.theme_done, null);</span>
+<span class="nc" id="L372">        dialogBuilder.setPositiveButton(R.string.theme_manage_site, (dialog, which) -&gt; finish());</span>
+
+<span class="nc" id="L374">        AlertDialog alertDialog = dialogBuilder.create();</span>
+<span class="nc" id="L375">        alertDialog.show();</span>
+<span class="nc" id="L376">    }</span>
+
+    private void startWebActivity(String themeId, ThemeWebActivity.ThemeWebActivityType type) {
+        ThemeModel theme =
+<span class="nc bnc" id="L380" title="All 2 branches missed.">                TextUtils.isEmpty(themeId) ? null : mThemeStore.getWpComThemeByThemeId(themeId.replace(&quot;-wpcom&quot;, &quot;&quot;));</span>
+<span class="nc bnc" id="L381" title="All 2 branches missed.">        if (theme == null) {</span>
+<span class="nc" id="L382">            theme = mThemeStore.getInstalledThemeByThemeId(mSite, themeId);</span>
+<span class="nc bnc" id="L383" title="All 2 branches missed.">            if (theme == null) {</span>
+<span class="nc" id="L384">                ToastUtils.showToast(this, R.string.could_not_load_theme);</span>
+<span class="nc" id="L385">                return;</span>
+            }
+        }
+
+<span class="nc" id="L389">        Map&lt;String, Object&gt; themeProperties = new HashMap&lt;&gt;();</span>
+<span class="nc" id="L390">        themeProperties.put(THEME_ID, themeId);</span>
+<span class="nc" id="L391">        theme.setActive(isActiveThemeForSite(theme.getThemeId()));</span>
+
+<span class="nc bnc" id="L393" title="All 5 branches missed.">        switch (type) {</span>
+            case PREVIEW:
+<span class="nc" id="L395">                AnalyticsUtils.trackWithSiteDetails(Stat.THEMES_PREVIEWED_SITE, mSite, themeProperties);</span>
+<span class="nc" id="L396">                break;</span>
+            case DEMO:
+<span class="nc" id="L398">                AnalyticsUtils.trackWithSiteDetails(Stat.THEMES_DEMO_ACCESSED, mSite, themeProperties);</span>
+<span class="nc" id="L399">                break;</span>
+            case DETAILS:
+<span class="nc" id="L401">                AnalyticsUtils.trackWithSiteDetails(Stat.THEMES_DETAILS_ACCESSED, mSite, themeProperties);</span>
+<span class="nc" id="L402">                break;</span>
+            case SUPPORT:
+<span class="nc" id="L404">                AnalyticsUtils.trackWithSiteDetails(Stat.THEMES_SUPPORT_ACCESSED, mSite, themeProperties);</span>
+                break;
+        }
+<span class="nc" id="L407">        ThemeWebActivity.openTheme(this, mSite, theme, type);</span>
+<span class="nc" id="L408">    }</span>
+
+    private boolean isActiveThemeForSite(@NonNull String themeId) {
+<span class="nc" id="L411">        final ThemeModel storedActiveTheme = mThemeStore.getActiveThemeForSite(mSite);</span>
+<span class="nc bnc" id="L412" title="All 4 branches missed.">        return storedActiveTheme != null &amp;&amp; themeId.equals(storedActiveTheme.getThemeId().replace(&quot;-wpcom&quot;, &quot;&quot;));</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>

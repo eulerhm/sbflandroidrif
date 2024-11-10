@@ -1,0 +1,9 @@
+package org.wordpress.android.viewmodel.pages;
+
+import java.lang.System;
+
+@kotlin.Metadata(mv = {1, 6, 0}, k = 2, d1 = {"\u0000\n\n\u0000\n\u0002\u0010\t\n\u0002\b\u0002\"\u000e\u0010\u0000\u001a\u00020\u0001X\u0082T\u00a2\u0006\u0002\n\u0000\"\u000e\u0010\u0002\u001a\u00020\u0001X\u0082T\u00a2\u0006\u0002\n\u0000\u00a8\u0006\u0003"}, d2 = {"SEARCH_COLLAPSE_DELAY", "", "SEARCH_DELAY", "org.wordpress.android_wordpressJalapenoDebug"})
+public final class PageParentViewModelKt {
+    private static final long SEARCH_DELAY = 200L;
+    private static final long SEARCH_COLLAPSE_DELAY = 500L;
+}

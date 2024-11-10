@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ActionPerformer.kt</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">wordpressJalapenoDebug</a> &gt; <a href="index.source.html" class="el_package">org.wordpress.android.viewmodel.pages</a> &gt; <span class="el_source">ActionPerformer.kt</span></div><h1>ActionPerformer.kt</h1><pre class="source lang-java linenums">package org.wordpress.android.viewmodel.pages
+
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
+import org.wordpress.android.fluxc.Dispatcher
+import org.wordpress.android.fluxc.model.CauseOfOnPostChanged
+import org.wordpress.android.fluxc.store.PostStore.OnPostChanged
+import org.wordpress.android.fluxc.store.PostStore.OnPostUploaded
+import org.wordpress.android.modules.BG_THREAD
+import org.wordpress.android.util.coroutines.suspendCoroutineWithTimeout
+import org.wordpress.android.viewmodel.pages.ActionPerformer.PageAction.EventType
+import org.wordpress.android.viewmodel.pages.ActionPerformer.PageAction.EventType.DELETE
+import org.wordpress.android.viewmodel.pages.ActionPerformer.PageAction.EventType.UPDATE
+import org.wordpress.android.viewmodel.pages.ActionPerformer.PageAction.EventType.UPLOAD
+import javax.inject.Inject
+import javax.inject.Named
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+
+<span class="nc" id="L23">class ActionPerformer</span>
+<span class="nc" id="L24">@Inject constructor(</span>
+<span class="nc" id="L25">    private val dispatcher: Dispatcher,</span>
+<span class="nc" id="L26">    @Named(BG_THREAD) private val defaultDispatcher: CoroutineDispatcher</span>
+) {
+<span class="nc" id="L28">    private val coroutineScope = CoroutineScope(defaultDispatcher)</span>
+<span class="nc" id="L29">    private var continuations: MutableMap&lt;Pair&lt;Long, EventType&gt;, Continuation&lt;Pair&lt;Boolean, Long&gt;&gt;&gt; = mutableMapOf()</span>
+
+    companion object {
+        private const val ACTION_TIMEOUT = 10L * 1000
+    }
+
+<span class="nc" id="L35">    init {</span>
+<span class="nc" id="L36">        dispatcher.register(this)</span>
+<span class="nc" id="L37">    }</span>
+
+    fun onCleanup() {
+<span class="nc" id="L40">        dispatcher.unregister(this)</span>
+<span class="nc" id="L41">    }</span>
+
+    suspend fun performAction(action: PageAction) {
+<span class="nc" id="L44">        val result = suspendCoroutineWithTimeout&lt;Pair&lt;Boolean, Long&gt;&gt;(ACTION_TIMEOUT) { continuation -&gt;</span>
+            continuations[action.remoteId to action.event] = continuation
+<span class="nc" id="L46">            coroutineScope.launch { action.perform() }</span>
+        }
+<span class="nc" id="L48">        continuations.remove(action.remoteId to action.event)</span>
+
+<span class="nc bnc" id="L50" title="All 2 branches missed.">        result?.let { (success, remoteId) -&gt;</span>
+<span class="nc bnc" id="L51" title="All 2 branches missed.">            if (success) {</span>
+<span class="nc" id="L52">                action.remoteId = remoteId</span>
+<span class="nc bnc" id="L53" title="All 2 branches missed.">                action.onSuccess?.let { it() }</span>
+            } else {
+<span class="nc bnc" id="L55" title="All 2 branches missed.">                action.onError?.let { it() }</span>
+            }
+        }
+<span class="nc" id="L58">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    @SuppressWarnings(&quot;unused&quot;)
+    fun onPostUploaded(event: OnPostUploaded) {
+        // negative local page ID used as a temp remote post ID for local-only pages (assigned by the PageStore)
+<span class="nc bnc" id="L64" title="All 2 branches missed.">        val continuation = continuations[event.post.remotePostId to UPLOAD]</span>
+<span class="nc" id="L65">                ?: continuations[-event.post.id.toLong() to UPLOAD]</span>
+<span class="nc bnc" id="L66" title="All 4 branches missed.">        continuation?.resume(!event.isError to event.post.remotePostId)</span>
+<span class="nc" id="L67">    }</span>
+
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    @SuppressWarnings(&quot;unused&quot;)
+    fun onPostChange(event: OnPostChanged) {
+<span class="nc bnc" id="L72" title="All 2 branches missed.">        postCauseOfChangeToPostAction(event.causeOfChange)?.let { (remoteId, localId, eventType) -&gt;</span>
+            // negative local page ID used as a temp remote post ID for local-only pages (assigned by the PageStore)
+<span class="nc bnc" id="L74" title="All 2 branches missed.">            val continuation = continuations[remoteId to eventType] ?: continuations[-localId.toLong() to eventType]</span>
+<span class="nc bnc" id="L75" title="All 4 branches missed.">            continuation?.resume(!event.isError to remoteId)</span>
+        }
+<span class="nc" id="L77">    }</span>
+
+    private fun postCauseOfChangeToPostAction(postCauseOfChange: CauseOfOnPostChanged): Triple&lt;Long, Int, EventType&gt;? =
+<span class="nc" id="L80">            when (postCauseOfChange) {</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">                is CauseOfOnPostChanged.DeletePost -&gt;</span>
+<span class="nc" id="L82">                    Triple(postCauseOfChange.remotePostId, postCauseOfChange.localPostId, DELETE)</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">                is CauseOfOnPostChanged.UpdatePost -&gt;</span>
+<span class="nc" id="L84">                    Triple(postCauseOfChange.remotePostId, postCauseOfChange.localPostId, UPDATE)</span>
+<span class="nc" id="L85">                else -&gt; null</span>
+<span class="nc" id="L86">            }</span>
+
+<span class="nc" id="L88">    data class PageAction(var remoteId: Long, val event: EventType, val perform: suspend () -&gt; Unit) {</span>
+<span class="nc" id="L89">        var onSuccess: (() -&gt; Unit)? = null</span>
+<span class="nc" id="L90">        var onError: (() -&gt; Unit)? = null</span>
+<span class="nc" id="L91">        var undo: (() -&gt; Unit)? = null</span>
+
+<span class="nc" id="L93">        enum class EventType { UPLOAD, UPDATE, DELETE }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.7.202105040129</span>Generated by the Android Gradle plugin 7.1.1</div></body></html>
