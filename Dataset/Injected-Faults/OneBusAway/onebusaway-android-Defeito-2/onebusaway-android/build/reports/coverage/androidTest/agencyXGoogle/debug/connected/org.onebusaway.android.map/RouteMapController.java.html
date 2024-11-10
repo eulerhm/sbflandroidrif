@@ -1,0 +1,563 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RouteMapController.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">agencyXGoogleDebug</a> &gt; <a href="index.source.html" class="el_package">org.onebusaway.android.map</a> &gt; <span class="el_source">RouteMapController.java</span></div><h1>RouteMapController.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (C) 2011-2014 Paul Watts (paulcwatts@gmail.com),
+ * University of South Florida (sjbarbeau@gmail.com), and individual contributors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.map;
+
+import org.onebusaway.android.R;
+import org.onebusaway.android.app.Application;
+import org.onebusaway.android.io.ObaApi;
+import org.onebusaway.android.io.elements.ObaRoute;
+import org.onebusaway.android.io.elements.ObaStop;
+import org.onebusaway.android.io.request.ObaStopsForRouteRequest;
+import org.onebusaway.android.io.request.ObaStopsForRouteResponse;
+import org.onebusaway.android.io.request.ObaTripsForRouteRequest;
+import org.onebusaway.android.io.request.ObaTripsForRouteResponse;
+import org.onebusaway.android.map.googlemapsv2.BaseMapFragment;
+import org.onebusaway.android.util.LocationUtils;
+import org.onebusaway.android.util.UIUtils;
+
+import android.app.Activity;
+import android.content.Context;
+import android.location.Location;
+import android.os.Bundle;
+import android.os.Handler;
+import android.text.TextUtils;
+import android.util.Log;
+import android.view.View;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import androidx.loader.app.LoaderManager;
+import androidx.loader.content.AsyncTaskLoader;
+import androidx.loader.content.Loader;
+
+public class RouteMapController implements MapModeController {
+
+    private static final String TAG = &quot;RouteMapController&quot;;
+
+    private static final int ROUTES_LOADER = 5677;
+
+    private static final int VEHICLES_LOADER = 5678;
+
+    private final Callback mFragment;
+
+    private String mRouteId;
+
+    private boolean mZoomToRoute;
+
+    private boolean mZoomIncludeClosestVehicle;
+
+    private int mLineOverlayColor;
+
+    private RoutePopup mRoutePopup;
+
+    private int mShortAnimationDuration;
+
+    // In lieu of using an actual LoaderManager, which isn't
+    // available in SherlockMapActivity
+    private Loader&lt;ObaStopsForRouteResponse&gt; mRouteLoader;
+
+    private RouteLoaderListener mRouteLoaderListener;
+
+    private Loader&lt;ObaTripsForRouteResponse&gt; mVehiclesLoader;
+
+    private VehicleLoaderListener mVehicleLoaderListener;
+
+    private long mLastUpdatedTimeVehicles;
+
+<span class="nc" id="L85">    public RouteMapController(Callback callback) {</span>
+<span class="nc" id="L86">        mFragment = callback;</span>
+<span class="nc" id="L87">        mLineOverlayColor = mFragment.getActivity()</span>
+<span class="nc" id="L88">                .getResources()</span>
+<span class="nc" id="L89">                .getColor(R.color.route_line_color_default);</span>
+<span class="nc" id="L90">        mShortAnimationDuration = mFragment.getActivity().getResources().getInteger(</span>
+                android.R.integer.config_shortAnimTime);
+<span class="nc" id="L92">        mRoutePopup = new RoutePopup();</span>
+<span class="nc" id="L93">        mRouteLoaderListener = new RouteLoaderListener();</span>
+<span class="nc" id="L94">        mVehicleLoaderListener = new VehicleLoaderListener();</span>
+<span class="nc" id="L95">    }</span>
+
+    @Override
+    public void setState(Bundle args) {
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        if (args == null) {</span>
+<span class="nc" id="L100">            throw new IllegalArgumentException(&quot;args cannot be null&quot;);</span>
+        }
+<span class="nc" id="L102">        String routeId = args.getString(MapParams.ROUTE_ID);</span>
+
+        // If the previous map zoom isn't the default, then zoom to that level as a start
+<span class="nc" id="L105">        float mapZoom = args.getFloat(MapParams.ZOOM, MapParams.DEFAULT_ZOOM);</span>
+<span class="nc bnc" id="L106" title="All 2 branches missed.">        if (mapZoom != MapParams.DEFAULT_ZOOM) {</span>
+<span class="nc" id="L107">            mFragment.getMapView().setZoom(mapZoom);</span>
+        }
+
+<span class="nc" id="L110">        mZoomToRoute = args.getBoolean(MapParams.ZOOM_TO_ROUTE, false);</span>
+<span class="nc" id="L111">        mZoomIncludeClosestVehicle = args</span>
+<span class="nc" id="L112">                .getBoolean(MapParams.ZOOM_INCLUDE_CLOSEST_VEHICLE, false);</span>
+<span class="nc bnc" id="L113" title="All 2 branches missed.">        if (!routeId.equals(mRouteId)) {</span>
+<span class="nc bnc" id="L114" title="All 2 branches missed.">            if (mRouteId != null) {</span>
+<span class="nc" id="L115">                clearCurrentState();</span>
+            }
+
+            // Set up the new route
+<span class="nc" id="L119">            mRouteId = routeId;</span>
+<span class="nc" id="L120">            mRoutePopup.showLoading();</span>
+<span class="nc" id="L121">            mFragment.showProgress(true);</span>
+            //mFragment.getLoaderManager().restartLoader(ROUTES_LOADER, null, this);
+<span class="nc" id="L123">            mRouteLoader = mRouteLoaderListener.onCreateLoader(ROUTES_LOADER, null);</span>
+<span class="nc" id="L124">            mRouteLoader.registerListener(0, mRouteLoaderListener);</span>
+<span class="nc" id="L125">            mRouteLoader.startLoading();</span>
+
+<span class="nc" id="L127">            mVehiclesLoader = mVehicleLoaderListener.onCreateLoader(VEHICLES_LOADER, null);</span>
+<span class="nc" id="L128">            mVehiclesLoader.registerListener(0, mVehicleLoaderListener);</span>
+<span class="nc" id="L129">            mVehiclesLoader.startLoading();</span>
+        } else {
+            // We are returning to the route view with the route already set, so show the header
+<span class="nc" id="L132">            mRoutePopup.show();</span>
+        }
+<span class="nc" id="L134">    }</span>
+
+    /**
+     * Clears the current state of the controller, so a new route can be loaded
+     */
+    private void clearCurrentState() {
+        // Stop loaders and refresh handler
+<span class="nc" id="L141">        mRouteLoader.stopLoading();</span>
+<span class="nc" id="L142">        mRouteLoader.reset();</span>
+<span class="nc" id="L143">        mVehiclesLoader.stopLoading();</span>
+<span class="nc" id="L144">        mVehiclesLoader.reset();</span>
+<span class="nc" id="L145">        mVehicleRefreshHandler.removeCallbacks(mVehicleRefresh);</span>
+
+        // Clear the existing route and vehicle overlays
+<span class="nc" id="L148">        mFragment.getMapView().removeRouteOverlay();</span>
+<span class="nc" id="L149">        mFragment.getMapView().removeVehicleOverlay();</span>
+
+        // Clear the existing stop icons, but leave the currently focused stop
+<span class="nc" id="L152">        mFragment.getMapView().removeStopOverlay(false);</span>
+<span class="nc" id="L153">    }</span>
+
+    @Override
+    public String getMode() {
+<span class="nc" id="L157">        return MapParams.MODE_ROUTE;</span>
+    }
+
+    @Override
+    public void destroy() {
+<span class="nc" id="L162">        mRoutePopup.hide();</span>
+<span class="nc" id="L163">        mFragment.getMapView().removeRouteOverlay();</span>
+<span class="nc" id="L164">        mVehicleRefreshHandler.removeCallbacks(mVehicleRefresh);</span>
+<span class="nc" id="L165">        mFragment.getMapView().removeVehicleOverlay();</span>
+<span class="nc" id="L166">    }</span>
+
+    @Override
+    public void onPause() {
+<span class="nc" id="L170">        mVehicleRefreshHandler.removeCallbacks(mVehicleRefresh);</span>
+<span class="nc" id="L171">    }</span>
+
+    /**
+     * This is called when fm.beginTransaction().hide() or fm.beginTransaction().show() is called
+     *
+     * @param hidden True if the fragment is now hidden, false if it is not visible.
+     */
+    @Override
+    public void onHidden(boolean hidden) {
+        // If the fragment is no longer visible, hide the route header - otherwise, show it
+<span class="nc bnc" id="L181" title="All 2 branches missed.">        if (hidden) {</span>
+<span class="nc" id="L182">            mRoutePopup.hide();</span>
+        } else {
+<span class="nc" id="L184">            mRoutePopup.show();</span>
+        }
+<span class="nc" id="L186">    }</span>
+
+    @Override
+    public void onResume() {
+        // Make sure we schedule a future update for vehicles
+<span class="nc" id="L191">        mVehicleRefreshHandler.removeCallbacks(mVehicleRefresh);</span>
+
+<span class="nc bnc" id="L193" title="All 2 branches missed.">        if (mLastUpdatedTimeVehicles == 0) {</span>
+            // We haven't loaded any vehicles yet - schedule the refresh for the full period and defer
+            // to the loader to reschedule when load is complete
+<span class="nc" id="L196">            mVehicleRefreshHandler.postDelayed(mVehicleRefresh, VEHICLE_REFRESH_PERIOD);</span>
+<span class="nc" id="L197">            return;</span>
+        }
+
+<span class="nc" id="L200">        long elapsedTimeMillis = TimeUnit.NANOSECONDS.toMillis(UIUtils.getCurrentTimeForComparison()</span>
+                - mLastUpdatedTimeVehicles);
+        long refreshPeriod;
+<span class="nc bnc" id="L203" title="All 2 branches missed.">        if (elapsedTimeMillis &gt; VEHICLE_REFRESH_PERIOD) {</span>
+            // Schedule an immediate update, if we're past the normal period after a load
+<span class="nc" id="L205">            refreshPeriod = 100;</span>
+        } else {
+            // Schedule an update so a total of VEHICLE_REFRESH_PERIOD has elapsed since the last update
+<span class="nc" id="L208">            refreshPeriod = VEHICLE_REFRESH_PERIOD - elapsedTimeMillis;</span>
+        }
+<span class="nc" id="L210">        mVehicleRefreshHandler.postDelayed(mVehicleRefresh, refreshPeriod);</span>
+<span class="nc" id="L211">    }</span>
+
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+<span class="nc" id="L215">        outState.putString(MapParams.ROUTE_ID, mRouteId);</span>
+<span class="nc" id="L216">        outState.putBoolean(MapParams.ZOOM_TO_ROUTE, mZoomToRoute);</span>
+<span class="nc" id="L217">        outState.putBoolean(MapParams.ZOOM_INCLUDE_CLOSEST_VEHICLE, mZoomIncludeClosestVehicle);</span>
+
+<span class="nc" id="L219">        Location centerLocation = mFragment.getMapView().getMapCenterAsLocation();</span>
+<span class="nc" id="L220">        outState.putDouble(MapParams.CENTER_LAT, centerLocation.getLatitude());</span>
+<span class="nc" id="L221">        outState.putDouble(MapParams.CENTER_LON, centerLocation.getLongitude());</span>
+<span class="nc" id="L222">        outState.putFloat(MapParams.ZOOM, mFragment.getMapView().getZoomLevelAsFloat());</span>
+<span class="nc" id="L223">    }</span>
+
+    @Override
+    public void onViewStateRestored(Bundle savedInstanceState) {
+<span class="nc bnc" id="L227" title="All 2 branches missed.">        if (savedInstanceState == null) {</span>
+<span class="nc" id="L228">            return;</span>
+        }
+
+<span class="nc" id="L231">        String stopId = savedInstanceState.getString(MapParams.STOP_ID);</span>
+<span class="nc bnc" id="L232" title="All 2 branches missed.">        if (stopId == null) {</span>
+            // If there is no focused stop then restore the map state otherwise
+            // let the BaseMapFragment to handle map state with focused stop
+
+<span class="nc" id="L236">            float mapZoom = savedInstanceState.getFloat(MapParams.ZOOM, MapParams.DEFAULT_ZOOM);</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">            if (mapZoom != MapParams.DEFAULT_ZOOM) {</span>
+<span class="nc" id="L238">                mFragment.getMapView().setZoom(mapZoom);</span>
+            }
+
+<span class="nc" id="L241">            double lat = savedInstanceState.getDouble(MapParams.CENTER_LAT);</span>
+<span class="nc" id="L242">            double lon = savedInstanceState.getDouble(MapParams.CENTER_LON);</span>
+<span class="nc bnc" id="L243" title="All 4 branches missed.">            if (lat != 0.0d &amp;&amp; lon != 0.0d) {</span>
+<span class="nc" id="L244">                Location location = LocationUtils.makeLocation(lat, lon);</span>
+<span class="nc" id="L245">                mFragment.getMapView().setMapCenter(location, false, false);</span>
+            }
+        }
+<span class="nc" id="L248">    }</span>
+
+    @Override
+    public void onLocation() {
+        // Don't care
+<span class="nc" id="L253">    }</span>
+
+    @Override
+    public void onNoLocation() {
+        // Don't care
+<span class="nc" id="L258">    }</span>
+
+    @Override
+    public void notifyMapChanged() {
+        // Don't care
+<span class="nc" id="L263">    }</span>
+
+    //
+    // Map popup
+    //
+    private class RoutePopup {
+
+        private final Activity mActivity;
+
+        private final View mView;
+
+        private final TextView mRouteShortName;
+
+        private final TextView mRouteLongName;
+
+        private final TextView mAgencyName;
+
+        private final ProgressBar mProgressBar;
+
+        // Prevents completely hiding vehicle markers at top of route
+        private int VEHICLE_MARKER_PADDING;
+
+<span class="nc" id="L285">        RoutePopup() {</span>
+<span class="nc" id="L286">            mActivity = mFragment.getActivity();</span>
+<span class="nc" id="L287">            float paddingDp =</span>
+<span class="nc" id="L288">                    mActivity.getResources().getDimension(R.dimen.map_route_vehicle_markers_padding)</span>
+<span class="nc" id="L289">                            / mActivity.getResources().getDisplayMetrics().density;</span>
+<span class="nc" id="L290">            VEHICLE_MARKER_PADDING = UIUtils.dpToPixels(mActivity, paddingDp);</span>
+<span class="nc" id="L291">            mView = mActivity.findViewById(R.id.route_info);</span>
+<span class="nc" id="L292">            mFragment.getMapView()</span>
+<span class="nc" id="L293">                    .setPadding(null, mView.getHeight() + VEHICLE_MARKER_PADDING, null, null);</span>
+<span class="nc" id="L294">            mRouteShortName = (TextView) mView.findViewById(R.id.short_name);</span>
+<span class="nc" id="L295">            mRouteLongName = (TextView) mView.findViewById(R.id.long_name);</span>
+<span class="nc" id="L296">            mAgencyName = (TextView) mView.findViewById(R.id.agency);</span>
+<span class="nc" id="L297">            mProgressBar = (ProgressBar) mView.findViewById(R.id.route_info_loading_spinner);</span>
+
+            // Make sure the cancel button is shown
+<span class="nc" id="L300">            View cancel = mView.findViewById(R.id.cancel_route_mode);</span>
+<span class="nc" id="L301">            cancel.setVisibility(View.VISIBLE);</span>
+<span class="nc" id="L302">            cancel.setOnClickListener(new View.OnClickListener() {</span>
+                @Override
+                public void onClick(View v) {
+<span class="nc" id="L305">                    ObaMapView obaMapView = mFragment.getMapView();</span>
+                    // We want to preserve the current zoom and center.
+<span class="nc" id="L307">                    Bundle bundle = new Bundle();</span>
+<span class="nc" id="L308">                    bundle.putBoolean(MapParams.DO_N0T_CENTER_ON_LOCATION, true);</span>
+<span class="nc" id="L309">                    bundle.putFloat(MapParams.ZOOM, obaMapView.getZoomLevelAsFloat());</span>
+<span class="nc" id="L310">                    Location point = obaMapView.getMapCenterAsLocation();</span>
+<span class="nc" id="L311">                    bundle.putDouble(MapParams.CENTER_LAT, point.getLatitude());</span>
+<span class="nc" id="L312">                    bundle.putDouble(MapParams.CENTER_LON, point.getLongitude());</span>
+<span class="nc" id="L313">                    mFragment.setMapMode(MapParams.MODE_STOP, bundle);</span>
+<span class="nc" id="L314">                }</span>
+            });
+<span class="nc" id="L316">        }</span>
+
+        void showLoading() {
+<span class="nc" id="L319">            mFragment.getMapView()</span>
+<span class="nc" id="L320">                    .setPadding(null, mView.getHeight() + VEHICLE_MARKER_PADDING, null, null);</span>
+<span class="nc" id="L321">            UIUtils.hideViewWithoutAnimation(mRouteShortName);</span>
+<span class="nc" id="L322">            UIUtils.hideViewWithoutAnimation(mRouteLongName);</span>
+<span class="nc" id="L323">            UIUtils.showViewWithoutAnimation(mView);</span>
+<span class="nc" id="L324">            UIUtils.showViewWithoutAnimation(mProgressBar);</span>
+<span class="nc" id="L325">        }</span>
+
+        /**
+         * Show the route header and populate it with the provided information
+         * @param route route information to show in the header
+         * @param agencyName agency name to show in the header
+         */
+        void show(ObaRoute route, String agencyName) {
+<span class="nc" id="L333">            mRouteShortName.setText(UIUtils.formatDisplayText(UIUtils.getRouteDisplayName(route)));</span>
+<span class="nc" id="L334">            mRouteLongName.setText(UIUtils.formatDisplayText(UIUtils.getRouteDescription(route)));</span>
+<span class="nc" id="L335">            mAgencyName.setText(agencyName);</span>
+<span class="nc" id="L336">            show();</span>
+<span class="nc" id="L337">        }</span>
+
+        /**
+         * Show the route header with the existing route information
+         */
+        void show() {
+<span class="nc" id="L343">            UIUtils.hideViewWithAnimation(mProgressBar, mShortAnimationDuration);</span>
+<span class="nc" id="L344">            UIUtils.showViewWithAnimation(mRouteShortName, mShortAnimationDuration);</span>
+<span class="nc" id="L345">            UIUtils.showViewWithAnimation(mRouteLongName, mShortAnimationDuration);</span>
+<span class="nc" id="L346">            UIUtils.showViewWithAnimation(mView, mShortAnimationDuration);</span>
+<span class="nc" id="L347">            mFragment.getMapView()</span>
+<span class="nc" id="L348">                    .setPadding(null, mView.getHeight() + VEHICLE_MARKER_PADDING, null, null);</span>
+<span class="nc" id="L349">        }</span>
+
+        void hide() {
+<span class="nc" id="L352">            mFragment.getMapView().setPadding(null, 0, null, null);</span>
+<span class="nc" id="L353">            UIUtils.hideViewWithAnimation(mView, mShortAnimationDuration);</span>
+<span class="nc" id="L354">        }</span>
+    }
+
+<span class="nc" id="L357">    private static final long VEHICLE_REFRESH_PERIOD = TimeUnit.SECONDS.toMillis(10);</span>
+
+<span class="nc" id="L359">    private final Handler mVehicleRefreshHandler = new Handler();</span>
+
+<span class="nc" id="L361">    private final Runnable mVehicleRefresh = new Runnable() {</span>
+        public void run() {
+<span class="nc" id="L363">            refresh();</span>
+<span class="nc" id="L364">        }</span>
+    };
+
+    /**
+     * Refresh vehicle data from the OBA server
+     */
+    private void refresh() {
+<span class="nc bnc" id="L371" title="All 2 branches missed.">        if (mVehiclesLoader != null) {</span>
+<span class="nc" id="L372">            mVehiclesLoader.onContentChanged();</span>
+        }
+<span class="nc" id="L374">    }</span>
+
+    //
+    // Loaders
+    //
+
+    private static class RoutesLoader extends AsyncTaskLoader&lt;ObaStopsForRouteResponse&gt; {
+
+        private final String mRouteId;
+
+        public RoutesLoader(Context context, String routeId) {
+<span class="nc" id="L385">            super(context);</span>
+<span class="nc" id="L386">            mRouteId = routeId;</span>
+<span class="nc" id="L387">        }</span>
+
+        @Override
+        public ObaStopsForRouteResponse loadInBackground() {
+<span class="nc bnc" id="L391" title="All 2 branches missed.">            if (Application.get().getCurrentRegion() == null &amp;&amp;</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">                    TextUtils.isEmpty(Application.get().getCustomApiUrl())) {</span>
+                //We don't have region info or manually entered API to know what server to contact
+<span class="nc" id="L394">                Log.d(TAG, &quot;Trying to load stops for route from server &quot; +</span>
+                            &quot;without OBA REST API endpoint, aborting...&quot;);
+<span class="nc" id="L396">                return null;</span>
+            }
+            //Make OBA REST API call to the server and return result
+<span class="nc" id="L399">            return new ObaStopsForRouteRequest.Builder(getContext(), mRouteId)</span>
+<span class="nc" id="L400">                    .setIncludeShapes(true)</span>
+<span class="nc" id="L401">                    .build()</span>
+<span class="nc" id="L402">                    .call();</span>
+        }
+
+        @Override
+        public void deliverResult(ObaStopsForRouteResponse data) {
+            //mResponse = data;
+<span class="nc" id="L408">            super.deliverResult(data);</span>
+<span class="nc" id="L409">        }</span>
+
+        @Override
+        public void onStartLoading() {
+<span class="nc" id="L413">            forceLoad();</span>
+<span class="nc" id="L414">        }</span>
+    }
+
+<span class="nc" id="L417">    class RouteLoaderListener implements LoaderManager.LoaderCallbacks&lt;ObaStopsForRouteResponse&gt;,</span>
+            Loader.OnLoadCompleteListener&lt;ObaStopsForRouteResponse&gt; {
+
+        @Override
+        public Loader&lt;ObaStopsForRouteResponse&gt; onCreateLoader(int id,
+                Bundle args) {
+<span class="nc" id="L423">            return new RoutesLoader(mFragment.getActivity(), mRouteId);</span>
+        }
+
+        @Override
+        public void onLoadFinished(Loader&lt;ObaStopsForRouteResponse&gt; loader,
+                ObaStopsForRouteResponse response) {
+
+<span class="nc" id="L430">            ObaMapView obaMapView = mFragment.getMapView();</span>
+
+<span class="nc bnc" id="L432" title="All 4 branches missed.">            if (response == null || response.getCode() != ObaApi.OBA_OK) {</span>
+<span class="nc" id="L433">                BaseMapFragment.showMapError(response);</span>
+<span class="nc" id="L434">                return;</span>
+            }
+
+<span class="nc" id="L437">            ObaRoute route = response.getRoute(response.getRouteId());</span>
+
+<span class="nc" id="L439">            mRoutePopup.show(route, response.getAgency(route.getAgencyId()).getName());</span>
+
+<span class="nc bnc" id="L441" title="All 2 branches missed.">            if (route.getColor() != null) {</span>
+<span class="nc" id="L442">                mLineOverlayColor = route.getColor();</span>
+            }
+
+<span class="nc" id="L445">            obaMapView.setRouteOverlay(mLineOverlayColor, response.getShapes());</span>
+
+            // Set the stops for this route
+<span class="nc" id="L448">            List&lt;ObaStop&gt; stops = response.getStops();</span>
+<span class="nc" id="L449">            mFragment.showStops(stops, response);</span>
+<span class="nc" id="L450">            mFragment.showProgress(false);</span>
+
+<span class="nc bnc" id="L452" title="All 2 branches missed.">            if (mZoomToRoute) {</span>
+<span class="nc" id="L453">                obaMapView.zoomToRoute();</span>
+<span class="nc" id="L454">                mZoomToRoute = false;</span>
+            }
+            //
+            // wait to zoom till we have the right response
+<span class="nc" id="L458">            obaMapView.postInvalidate();</span>
+<span class="nc" id="L459">        }</span>
+
+        @Override
+        public void onLoaderReset(Loader&lt;ObaStopsForRouteResponse&gt; loader) {
+<span class="nc" id="L463">            mFragment.getMapView().removeRouteOverlay();</span>
+<span class="nc" id="L464">            mFragment.getMapView().removeVehicleOverlay();</span>
+<span class="nc" id="L465">        }</span>
+
+        @Override
+        public void onLoadComplete(Loader&lt;ObaStopsForRouteResponse&gt; loader,
+                ObaStopsForRouteResponse response) {
+<span class="nc" id="L470">            onLoadFinished(loader, response);</span>
+<span class="nc" id="L471">        }</span>
+    }
+
+    private static class VehiclesLoader extends AsyncTaskLoader&lt;ObaTripsForRouteResponse&gt; {
+
+        private final String mRouteId;
+
+        public VehiclesLoader(Context context, String routeId) {
+<span class="nc" id="L479">            super(context);</span>
+<span class="nc" id="L480">            mRouteId = routeId;</span>
+<span class="nc" id="L481">        }</span>
+
+        @Override
+        public ObaTripsForRouteResponse loadInBackground() {
+<span class="nc bnc" id="L485" title="All 2 branches missed.">            if (Application.get().getCurrentRegion() == null &amp;&amp;</span>
+<span class="nc bnc" id="L486" title="All 2 branches missed.">                    TextUtils.isEmpty(Application.get().getCustomApiUrl())) {</span>
+                //We don't have region info or manually entered API to know what server to contact
+<span class="nc" id="L488">                Log.d(TAG, &quot;Trying to load trips (vehicles) for route from server &quot; +</span>
+                        &quot;without OBA REST API endpoint, aborting...&quot;);
+<span class="nc" id="L490">                return null;</span>
+            }
+            //Make OBA REST API call to the server and return result
+<span class="nc" id="L493">            return new ObaTripsForRouteRequest.Builder(getContext(), mRouteId)</span>
+<span class="nc" id="L494">                    .setIncludeStatus(true)</span>
+<span class="nc" id="L495">                    .build()</span>
+<span class="nc" id="L496">                    .call();</span>
+        }
+
+        @Override
+        public void deliverResult(ObaTripsForRouteResponse data) {
+<span class="nc" id="L501">            super.deliverResult(data);</span>
+<span class="nc" id="L502">        }</span>
+
+        @Override
+        public void onStartLoading() {
+<span class="nc" id="L506">            forceLoad();</span>
+<span class="nc" id="L507">        }</span>
+    }
+
+<span class="nc" id="L510">    class VehicleLoaderListener implements LoaderManager.LoaderCallbacks&lt;ObaTripsForRouteResponse&gt;,</span>
+            Loader.OnLoadCompleteListener&lt;ObaTripsForRouteResponse&gt; {
+
+<span class="nc" id="L513">        HashSet&lt;String&gt; routes = new HashSet&lt;&gt;(1);</span>
+
+        @Override
+        public Loader&lt;ObaTripsForRouteResponse&gt; onCreateLoader(int id,
+                Bundle args) {
+<span class="nc" id="L518">            return new VehiclesLoader(mFragment.getActivity(), mRouteId);</span>
+        }
+
+        @Override
+        public void onLoadFinished(Loader&lt;ObaTripsForRouteResponse&gt; loader,
+                ObaTripsForRouteResponse response) {
+
+<span class="nc" id="L525">            ObaMapView obaMapView = mFragment.getMapView();</span>
+
+<span class="nc bnc" id="L527" title="All 4 branches missed.">            if (response == null || response.getCode() != ObaApi.OBA_OK) {</span>
+<span class="nc" id="L528">                BaseMapFragment.showMapError(response);</span>
+<span class="nc" id="L529">                return;</span>
+            }
+
+<span class="nc" id="L532">            routes.clear();</span>
+<span class="nc" id="L533">            routes.add(mRouteId);</span>
+
+<span class="nc" id="L535">            obaMapView.updateVehicles(routes, response);</span>
+
+<span class="nc bnc" id="L537" title="All 2 branches missed.">            if (mZoomIncludeClosestVehicle) {</span>
+<span class="nc" id="L538">                obaMapView.zoomIncludeClosestVehicle(routes, response);</span>
+<span class="nc" id="L539">                mZoomIncludeClosestVehicle = false;</span>
+            }
+
+<span class="nc" id="L542">            mLastUpdatedTimeVehicles = UIUtils.getCurrentTimeForComparison();</span>
+
+            // Clear any pending refreshes
+<span class="nc" id="L545">            mVehicleRefreshHandler.removeCallbacks(mVehicleRefresh);</span>
+
+            // Post an update
+<span class="nc" id="L548">            mVehicleRefreshHandler.postDelayed(mVehicleRefresh, VEHICLE_REFRESH_PERIOD);</span>
+<span class="nc" id="L549">        }</span>
+
+        @Override
+        public void onLoaderReset(Loader&lt;ObaTripsForRouteResponse&gt; loader) {
+<span class="nc" id="L553">            mFragment.getMapView().removeVehicleOverlay();</span>
+<span class="nc" id="L554">        }</span>
+
+        @Override
+        public void onLoadComplete(Loader&lt;ObaTripsForRouteResponse&gt; loader,
+                ObaTripsForRouteResponse response) {
+<span class="nc" id="L559">            onLoadFinished(loader, response);</span>
+<span class="nc" id="L560">        }</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.2.0</div></body></html>

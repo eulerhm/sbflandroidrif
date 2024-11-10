@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>LocationHelper.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=0;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">agencyXGoogleDebug</a> &gt; <a href="index.source.html" class="el_package">org.onebusaway.android.util</a> &gt; <span class="el_source">LocationHelper.java</span></div><h1>LocationHelper.java</h1><pre class="source lang-java linenums">/*
+ * Copyright (C) 2014 Sean J. Barbeau (sjbarbeau@gmail.com), University of South Florida
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.onebusaway.android.util;
+
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.GoogleApiAvailability;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationCallback;
+import com.google.android.gms.location.LocationRequest;
+import com.google.android.gms.location.LocationResult;
+import com.google.android.gms.location.LocationServices;
+
+import org.onebusaway.android.app.Application;
+
+import android.content.Context;
+import android.location.Location;
+import android.location.LocationManager;
+import android.os.Bundle;
+import android.util.Log;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+import static com.google.android.gms.location.LocationServices.getFusedLocationProviderClient;
+import static org.onebusaway.android.util.PermissionUtils.LOCATION_PERMISSIONS;
+
+/**
+ * A helper class that keeps listeners updated with the best location available from
+ * multiple providers
+ */
+public class LocationHelper implements com.google.android.gms.location.LocationListener,
+        android.location.LocationListener, GoogleApiClient.ConnectionCallbacks,
+        GoogleApiClient.OnConnectionFailedListener {
+
+    public interface Listener {
+
+        /**
+         * Called every time there is an update to the best location available
+         */
+        void onLocationChanged(Location location);
+    }
+
+    static final String TAG = &quot;LocationHelper&quot;;
+
+    Context mContext;
+
+    LocationManager mLocationManager;
+
+<span class="nc" id="L64">    ArrayList&lt;Listener&gt; mListeners = new ArrayList&lt;Listener&gt;();</span>
+
+    /**
+     * GoogleApiClient being used for Location Services
+     */
+    protected GoogleApiClient mGoogleApiClient;
+
+    LocationRequest mLocationRequest;
+
+    LocationCallback mLocationCallback;
+
+    private static final int MILLISECONDS_PER_SECOND = 1000;
+
+    private static final int UPDATE_INTERVAL_IN_SECONDS = 5;
+
+<span class="nc" id="L79">    private long UPDATE_INTERVAL =</span>
+            MILLISECONDS_PER_SECOND * UPDATE_INTERVAL_IN_SECONDS;
+
+    private static final int FASTEST_INTERVAL_IN_SECONDS = 1;
+
+    private static final long FASTEST_INTERVAL =
+            MILLISECONDS_PER_SECOND * FASTEST_INTERVAL_IN_SECONDS;
+
+<span class="nc" id="L87">    public LocationHelper(Context context) {</span>
+<span class="nc" id="L88">        mContext = context;</span>
+<span class="nc" id="L89">        mLocationManager = (LocationManager) Application.get().getBaseContext()</span>
+<span class="nc" id="L90">                .getSystemService(Context.LOCATION_SERVICE);</span>
+        // Create the LocationRequest object
+<span class="nc" id="L92">        mLocationRequest = LocationRequest.create();</span>
+        // Use high accuracy
+<span class="nc" id="L94">        mLocationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);</span>
+        // Set the update interval to 5 seconds
+<span class="nc" id="L96">        mLocationRequest.setInterval(UPDATE_INTERVAL);</span>
+        // Set the fastest update interval to 1 second
+<span class="nc" id="L98">        mLocationRequest.setFastestInterval(FASTEST_INTERVAL);</span>
+<span class="nc" id="L99">    }</span>
+
+    /**
+     *
+     * @param context
+     * @param interval Faster interval in seconds.
+     */
+<span class="nc" id="L106">    public LocationHelper(Context context, int interval) {</span>
+<span class="nc" id="L107">        mContext = context;</span>
+<span class="nc" id="L108">        UPDATE_INTERVAL = interval*MILLISECONDS_PER_SECOND;</span>
+<span class="nc" id="L109">        mLocationManager = (LocationManager) Application.get().getBaseContext()</span>
+<span class="nc" id="L110">                .getSystemService(Context.LOCATION_SERVICE);</span>
+<span class="nc" id="L111">        setupGooglePlayServices();</span>
+<span class="nc" id="L112">    }</span>
+
+    /**
+     * Registers the provided listener for location updates, but first checks to see if Location
+     * permissions are granted.  If permissions haven't been granted, returns false and does not
+     * register any listeners.  After the caller has received permission from the user it can
+     * call this method again.
+     * @param listener listener for updates
+     * @return true if permissions have been granted and the listener was registered, false if
+     * permissions have not been granted and no listener was registered
+     */
+    public synchronized boolean registerListener(Listener listener) {
+<span class="nc bnc" id="L124" title="All 2 branches missed.">        if (!PermissionUtils.hasGrantedAtLeastOnePermission(mContext, LOCATION_PERMISSIONS)) {</span>
+<span class="nc" id="L125">            return false;</span>
+        }
+        // User has granted permissions - continue to register listener for location updates
+<span class="nc bnc" id="L128" title="All 2 branches missed.">        if (!mListeners.contains(listener)) {</span>
+<span class="nc" id="L129">            mListeners.add(listener);</span>
+        }
+
+        // If this is the first listener, make sure we're monitoring the sensors to provide updates
+<span class="nc bnc" id="L133" title="All 2 branches missed.">        if (mListeners.size() == 1) {</span>
+            // Listen for location
+<span class="nc" id="L135">            registerAllProviders();</span>
+        }
+<span class="nc" id="L137">        return true;</span>
+    }
+
+    public synchronized void unregisterListener(Listener listener) {
+<span class="nc" id="L141">        mListeners.remove(listener);</span>
+
+<span class="nc bnc" id="L143" title="All 2 branches missed.">        if (mListeners.size() == 0) {</span>
+            try {
+<span class="nc" id="L145">                mLocationManager.removeUpdates(this);</span>
+<span class="nc" id="L146">            } catch (SecurityException e) {</span>
+                // We're just unregistering listeners here, so just log exception if user revoked
+                // permissions after the listener was registered
+<span class="nc" id="L149">                Log.w(TAG, &quot;User may have denied location permission - &quot; + e);</span>
+<span class="nc" id="L150">            }</span>
+        }
+<span class="nc" id="L152">    }</span>
+
+    /**
+     * Returns the GoogleApiClient being used for fused provider location updates
+     *
+     * @return the GoogleApiClient being used for fused provider location updates
+     */
+    public GoogleApiClient getGoogleApiClient() {
+<span class="nc" id="L160">        return mGoogleApiClient;</span>
+    }
+
+    public synchronized void onResume() {
+        try {
+<span class="nc" id="L165">            registerAllProviders();</span>
+<span class="nc" id="L166">        } catch (SecurityException e) {</span>
+            // If we resume after the user has denied location permissions, log the warning and continue
+<span class="nc" id="L168">            Log.w(TAG, &quot;User may have denied location permission - &quot; + e);</span>
+<span class="nc" id="L169">        }</span>
+<span class="nc" id="L170">    }</span>
+
+    public synchronized void onPause() {
+        try {
+<span class="nc" id="L174">            mLocationManager.removeUpdates(this);</span>
+
+            // Tear down GoogleApiClient
+<span class="nc bnc" id="L177" title="All 6 branches missed.">            if (mGoogleApiClient != null &amp;&amp; mGoogleApiClient.isConnected()&amp;&amp; mLocationCallback != null) {</span>
+<span class="nc" id="L178">                FusedLocationProviderClient client = getFusedLocationProviderClient(mContext);</span>
+<span class="nc" id="L179">                client.removeLocationUpdates(mLocationCallback);</span>
+<span class="nc" id="L180">                mGoogleApiClient.disconnect();</span>
+            }
+<span class="nc" id="L182">        } catch (SecurityException e) {</span>
+            // We're just unregistering listeners here, so just log exception if user revoked
+            // permissions after the listener was registered
+<span class="nc" id="L185">            Log.w(TAG, &quot;User may have denied location permission - &quot; + e);</span>
+<span class="nc" id="L186">        }</span>
+<span class="nc" id="L187">    }</span>
+
+    @Override
+    public void onLocationChanged(Location location) {
+        // Offer this location to the centralized location store, it case its better than currently
+        // stored location
+<span class="nc" id="L193">        Application.setLastKnownLocation(location);</span>
+        // Notify listeners with the newest location from the central store (which could be the one
+        // that was just generated above)
+<span class="nc" id="L196">        Location lastLocation = Application.getLastKnownLocation(mContext, mGoogleApiClient);</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        if (lastLocation != null) {</span>
+            // We need to copy the location, it case this object is reset in Application
+<span class="nc" id="L199">            Location locationForListeners = new Location(&quot;for listeners&quot;);</span>
+<span class="nc" id="L200">            locationForListeners.set(lastLocation);</span>
+<span class="nc bnc" id="L201" title="All 2 branches missed.">            for (Listener l : mListeners) {</span>
+<span class="nc" id="L202">                l.onLocationChanged(locationForListeners);</span>
+<span class="nc" id="L203">            }</span>
+        }
+<span class="nc" id="L205">    }</span>
+
+    @Override
+    public void onStatusChanged(String provider, int status, Bundle extras) {
+
+<span class="nc" id="L210">    }</span>
+
+    @Override
+    public void onProviderEnabled(String provider) {
+
+<span class="nc" id="L215">    }</span>
+
+    @Override
+    public void onProviderDisabled(String provider) {
+
+<span class="nc" id="L220">    }</span>
+
+    private void registerAllProviders() throws SecurityException {
+        // Register the network and GPS provider (and anything else available)
+<span class="nc" id="L224">        List&lt;String&gt; providers = mLocationManager.getProviders(true);</span>
+<span class="nc bnc" id="L225" title="All 2 branches missed.">        for (Iterator&lt;String&gt; i = providers.iterator(); i.hasNext(); ) {</span>
+<span class="nc" id="L226">            mLocationManager.requestLocationUpdates(i.next(), 0, 0, this);</span>
+        }
+
+<span class="nc" id="L229">        setupGooglePlayServices();</span>
+<span class="nc" id="L230">    }</span>
+
+    /**
+     * Request connection to Google Play Services for the fused location provider.
+     * onConnected() will be called after connection.
+     */
+    private void setupGooglePlayServices() {
+<span class="nc" id="L237">        GoogleApiAvailability api = GoogleApiAvailability.getInstance();</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">        if (api.isGooglePlayServicesAvailable(mContext)</span>
+                == ConnectionResult.SUCCESS) {
+<span class="nc" id="L240">            mGoogleApiClient = new GoogleApiClient.Builder(mContext)</span>
+<span class="nc" id="L241">                    .addApi(LocationServices.API)</span>
+<span class="nc" id="L242">                    .addConnectionCallbacks(this)</span>
+<span class="nc" id="L243">                    .addOnConnectionFailedListener(this)</span>
+<span class="nc" id="L244">                    .build();</span>
+<span class="nc" id="L245">            mGoogleApiClient.connect();</span>
+        }
+<span class="nc" id="L247">    }</span>
+
+    @Override
+    public void onConnected(Bundle bundle) {
+<span class="nc" id="L251">        Log.d(TAG, &quot;Location Services connected&quot;);</span>
+        // Request location updates from the fused location provider
+<span class="nc" id="L253">        FusedLocationProviderClient client = getFusedLocationProviderClient(mContext);</span>
+
+<span class="nc bnc" id="L255" title="All 2 branches missed.">        if (mLocationCallback == null) {</span>
+<span class="nc" id="L256">            mLocationCallback = new LocationCallback() {</span>
+                @Override
+                public void onLocationResult(LocationResult locationResult) {
+<span class="nc" id="L259">                    onLocationChanged(locationResult.getLastLocation());</span>
+<span class="nc" id="L260">                }</span>
+            };
+        }
+        try {
+<span class="nc" id="L264">            client.requestLocationUpdates(mLocationRequest, mLocationCallback, null);</span>
+<span class="nc" id="L265">        } catch (SecurityException e) {</span>
+            // We only register the fused provider if permission was granted, so if it was revoked
+            // in between log the warning and continue
+<span class="nc" id="L268">            Log.w(TAG, &quot;User may have denied location permission - &quot; + e);</span>
+<span class="nc" id="L269">        }</span>
+<span class="nc" id="L270">    }</span>
+
+    @Override
+    public void onConnectionSuspended(int i) {
+<span class="nc" id="L274">    }</span>
+
+    @Override
+    public void onConnectionFailed(ConnectionResult connectionResult) {
+<span class="nc" id="L278">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.8.202204050719</span>Generated by the Android Gradle plugin 8.2.0</div></body></html>
