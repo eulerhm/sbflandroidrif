@@ -1,6 +1,6 @@
 ## Artifacts of the paper "Evaluating testing strategies for resource related failures in mobile applications"
 
-The dataset includes 10 mobile applications. These applications are from different categories named according to the Play Store categories, with a large variation of size and test code size. For instance, applications vary from 2,269 lines of code (CommmonsApp) to more than 347,000 lines of code (WordPress-Android). Similarly, test code size varies from 525 lines of code (Ground) to 5,564 (OneBusAway). Moreover, the number of test cases vary from 4 (Ground) to 164 (AnkiDroid).
+The dataset includes 10 mobile applications. These applications are from different categories named according to the Play Store categories, with a large variation of size and test code size. For instance, applications vary from 14,499 lines of code (OwnTracks) to more than 347,000 lines of code (WordPress-Android). Similarly, test code size varies from 525 lines of code (Ground) to 5,564 (OneBusAway). Moreover, the number of test cases vary from 4 (Ground) to 164 (AnkiDroid).
 
 |Name 	        |Category  | LOC|	Test LOC	|Test Cases|Resources|
 |-------        |-------|---------|---------|-------|--------|-------                   |
@@ -32,7 +32,7 @@ Our instrumentation was implemented for Java and Kotlin. There are particulariti
 
 3 - Fault seeding:
 
-We generated mutants and manually injected faults using bug-fix patterns.
+We generated mutants and manually injected faults using common bug-fix patterns.
 
 4 - Test suite execution: 
 
@@ -40,7 +40,7 @@ Requirements: A device running Android 10. This device must be rooted in order t
 The host machine must have Python 3 installed and the Android SDK and the Java SDK environment system variables properly set.
 
 
-5 - Test analysis: 
+5 - SBFL analysis: 
 
 All test reports are available in TestResults. The frequent item set mining analysis was performed using the Apriori implementation of the [mlxtend library](https://pypi.org/project/mlxtend/).
 
