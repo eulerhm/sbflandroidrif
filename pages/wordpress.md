@@ -2,4 +2,4 @@
 
 Description: WordPress for Android.
 
-[Repository](github.com/wordpress-mobile/WordPress-Android)
+[Repository](https://github.com/wordpress-mobile/WordPress-Android)
