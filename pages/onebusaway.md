@@ -2,4 +2,4 @@
 
 Description: The official Android app for OneBusAway.
 
-[Repository](github.com/OneBusAway/onebusaway-android)
+[Repository](https://github.com/OneBusAway/onebusaway-android)
