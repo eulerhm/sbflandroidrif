@@ -1,4 +1,4 @@
-## Artifacts of the paper "Evaluating testing strategies for resource related failures in mobile applications"
+## Artifacts of the paper "Fault Localization in Mobile Applications: An Empirical Study on Resource Interaction Failures"
 
 The dataset includes 10 mobile applications. These applications are from different categories named according to the Play Store categories, with a large variation of size and test code size. For instance, applications vary from 14,499 lines of code (OwnTracks) to more than 347,000 lines of code (WordPress-Android). Similarly, test code size vary between 525 lines of code (Ground) and 5,564 (OneBusAway). Moreover, the number of test cases vary from 4 (Ground) to 164 (AnkiDroid). The number of commits vary between 21 (Threema) to 68,148 (WordPress-Android).
 
@@ -26,7 +26,7 @@ Our study consists of three phases:
 
 The dataset includes 10 applications. The gradle build scripts and the AndroidManifest files were adapted to our instrumentation, for instance, to include suitable API dependencies and to allow control permissions (such as for accessing Wi-Fi state). Each application has the test classes of androidTest folder extended with our instrumentation.
 
-The [settings](https://github.com/eulerhm/samplingapptest/tree/master/Settings) were defined for five testing strategies (Random, One-Disabled, One-Enabled, Most-Enabled-Disabled, and Pairwise) 
+For RQ1 and RQ2, we use Pairwise as a sampling strategy. 
 
 2 - Fault Seeding: 
 
