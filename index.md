@@ -50,6 +50,6 @@ Due to some Github storage policies, some raw content of this repository was mov
 
 ### Contact
 
-- [Euler Marinho]: eulerhm at gmail dot com
-- [Fischer Ferreira]: fischer.ferreira at unifei dot edu dot br
+- Euler Marinho: eulerhm at gmail dot com
+- Fischer Ferreira: fischer.ferreira at unifei dot edu dot br
 - [Eduardo Figueiredo](http://www.dcc.ufmg.br/~figueiredo)
