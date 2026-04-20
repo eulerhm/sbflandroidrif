@@ -5,32 +5,22 @@ The dataset includes 10 mobile applications. These applications are from differe
 |Name 	        |Category  | LOC|	Test LOC	|Test Cases|Resources|	Commits	  |
 |-------        |-------|---------|---------|-------|--------|-------                   |
 |[AnkiDroid](pages/ankidroid.md)             |Education |158,607       |2,770   |164  |	Camera, Mobile Data, Wi-Fi      |13,643      |
-
 |[CommonsApp](pages/commonsapp.md)             |Education |40,171      |1,341   |28  |	Camera, Location, Mobile Data, Wi-Fi      |6,437     |
-
 |[Ground](pages/ground.md)             |Productivity |19,906      |525   |4  |	Camera, Location, Mobile Data, Wi-Fi      |4,936     |
-
 |[OneBusAway](pages/onebusaway.md)             |Maps, Navigation |35,217       |5,564   |126  |	Location, Mobile Data, Wi-Fi     |2,652      |
-
 |[Openscale](pages/openscale.md)             |Health, Fitness |27,781       |1,451   |14  |	Bluetooth, Location     |2,027      |
-
 |[OwnTracks](pages/owntracks.md)             |Travel, Local |14,499       |889   |27  |	Location, Mobile Data, Wi-Fi     |1,995      |
-
 |[PocketHub](pages/pockethub.md)             |Productivity |29,001       |1,663   |107  |	Mobile Data, Wi-Fi     |3,512      |
-
 |[RadioDroid](pages/radiodroid.md)             |Music, Audio |22,815       |1,735   |23  |	Bluetooth, Mobile Data, Wi-Fi    |1,186      |
-
 |[Threema](pages/threema.md)             |Communication |238,045       |1,931   |54  | Bluetooth, Camera, Location, Mobile Data, Wi-Fi    |21      |
-
 |[WordPress-Android](pages/wordpress.md)             |Productivity |347,897       |3,674   |115  | Camera, Mobile Data, Wi-Fi     |68,148      |
 
 
 
 ### Study phases
 
-Our study consists of three phases as illustrated bellow:
+Our study consists of three phases:
 
-![image](https://user-images.githubusercontent.com/2692168/178997322-d8177282-4367-4f2c-9107-355b22ad36d6.png)
 
 1 - Application Selection and Resource Control: 
 
